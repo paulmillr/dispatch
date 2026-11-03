@@ -2,8 +2,8 @@ import CoreText
 import SwiftUI
 import UIKit
 
-/// The chat tab's header controls (C1, C3, C4b, C5): the conversation's menu (Search, Conversation mode, Manage goal,
-/// the side conversations) and the host disc, which becomes a pink waveform disc while conversation mode is on (a tap
+/// The chat tab's header controls (C1, C3, C4b, C5): the conversation's menu (Search, the side conversations,
+/// Manage goal) and the host disc, which becomes a pink waveform disc while conversation mode is on (a tap
 /// ends it). Tabs' `TabScreen` puts them in the header's trailing slot on the Chat segment (`TabsContent.chatTrailing`).
 /// On the phone (X9b) the disc is the tab's menu and holds the conversation's items (`menuInDisc`); beside the Duo's
 /// sidebar, where the Terminal / Chat switch takes the disc's place, the ⋯ menu sits before the switch.
@@ -12,7 +12,8 @@ struct ChatHeaderControls<Disc: View>: View {
     /// Beside the Duo's sidebar `disc` is the Terminal / Chat switch, which stays: the waveform disc takes the menu's
     /// place instead of the disc's.
     var keepsDisc = false
-    /// `disc` is the tab's menu with `ChatThreadMenuItems` in it (X9b): no ⋯ beside it, and the waveform takes its place.
+    /// `disc` is the tab's menu with `ChatThreadMenuItems` in it (X9b), or the mode button with them in the host's menu
+    /// beside Back (a phone tab's header): no ⋯ beside it, and the waveform takes its place.
     var menuInDisc = false
     @ViewBuilder var disc: Disc
     @State private var voice = MobileVoiceConversation.shared
@@ -85,34 +86,28 @@ struct ChatThreadMenu: View {
     }
 }
 
-/// A conversation's menu items: Search, Conversation mode, Manage goal, the side conversations.
+/// A conversation's menu items: Search, the side conversations (read-only, with changes; the open one instead while it
+/// lasts), Manage goal. Conversation mode is the composer's ("+", and a long press on the mic).
 struct ChatThreadMenuItems: View {
     let session: MobileChatSession
-    @State private var voice = MobileVoiceConversation.shared
 
     var body: some View {
         Button("Search", systemImage: "magnifyingglass") { session.search.open() }
-        if voice.active(for: session) {
-            Button("End Conversation Mode", systemImage: "waveform.slash") { voice.stop() }
-        } else {
-            Button("Conversation Mode", systemImage: "waveform") { voice.start(session) }
-                .disabled(session.phase != .verified)
-        }
-        if session.goal != nil {
-            Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
-        }
         if session.side != nil {
-            Button("Side Conversation", systemImage: "arrow.triangle.branch") { session.showingSide = true }
-        } else if session.offersSide(.btw) || session.offersSide(.side) {
-            Section {
+            Button("Side Conversation", systemImage: "bubble.left.and.text.bubble.right") { session.showingSide = true }
+        } else {
+            Group {
                 if session.offersSide(.btw) {
-                    Button("Ask on the Side", systemImage: "arrow.triangle.branch") { session.openSide(.btw) }
+                    Button("Side Conversation", systemImage: "bubble.left.and.text.bubble.right") { session.openSide(.btw) }
                 }
                 if session.offersSide(.side) {
                     Button("Side Conversation with Changes", systemImage: "pencil") { session.openSide(.side) }
                 }
             }
             .disabled(session.phase != .verified)
+        }
+        if session.goal != nil {
+            Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
         }
     }
 }
@@ -384,6 +379,7 @@ struct ChatWaveform: View {
 struct ChatJumpPill: View {
     let count: Int
     let action: () -> Void
+    @ReduceMotion private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -394,9 +390,11 @@ struct ChatJumpPill: View {
                     Text("\(count)")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
+                        .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
                         .padding(.horizontal, 6)
                         .frame(minWidth: 18, minHeight: 18)
                         .background(Color.stateUnread, in: Capsule())
+                        .animation(.snappy(duration: 0.25), value: count)
                 }
             }
             .font(.subheadline.weight(.semibold))
@@ -448,8 +446,9 @@ struct ChatFollow: Equatable {
     var showsJump: Bool { shown.showsJump }
 
     /// The offset or the end's visibility changed. True: go back to the end now (a plain scroll; nothing else is
-    /// moving the thread).
-    mutating func moved(offset: CGFloat, atEnd: Bool) -> Bool {
+    /// moving the thread). `resized`: the insets or the visible height changed with it (a pushed screen's navigation bar
+    /// arriving after the first layout, the keyboard), so an offset toward older rows is the layout's, not the user's.
+    mutating func moved(offset: CGFloat, atEnd: Bool, resized: Bool = false) -> Bool {
         let previous = self.offset
         self.offset = offset
         if atEnd {
@@ -459,7 +458,7 @@ struct ChatFollow: Equatable {
             return false
         }
         guard following, !dragging, !scrollingToEnd else { return false }
-        if let previous, offset < previous - 0.5 {
+        if let previous, offset < previous - 0.5, !resized {
             // Toward older rows, and not the app: the user's (VoiceOver, the status bar, keys).
             following = false
             return false
@@ -558,7 +557,7 @@ struct ChatTurnCorner: View {
     }
 }
 
-/// What an agent bubble says in its corner (S6d, S6e) and how its text keeps room for it (`MobileChatMarkdownView`).
+/// What an agent reply says in its corner (S6d, its time) and how its text keeps room for it (`MobileChatMarkdownView`).
 struct ChatCorner {
     /// What the room is kept for: the widest the corner draws.
     var room: String
@@ -570,22 +569,69 @@ struct ChatCorner {
     /// nothing to read, and no element.
     var spoken: String?
     var hint: String? = nil
+    /// False for a corner VoiceOver alone reads (`spokenOnly`): the text keeps no room and nothing is drawn.
+    var drawn = true
+
+    /// An agent reply's corner, told against `now`: the ended turn's summary on its last one (S6d), which ends with
+    /// when the turn ended; else when the reply was written ("10:17", `ChatTurnSummary.time`), as a messenger dates
+    /// every message. Nil for a reply read without a time.
+    @MainActor static func reply(time: Date?, summary: ChatTurnSummary?, now: Date, metrics: ChatCornerMetrics) -> ChatCorner? {
+        let calendar = Calendar.autoupdatingCurrent
+        if let summary, let text = summary.corner(now: now, calendar: calendar, fits: metrics.fits) {
+            return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+                              spoken: summary.spokenCorner(now: now, calendar: calendar), hint: "Shows the steps")
+        }
+        guard let time else { return nil }
+        let text = ChatTurnSummary.time(time, now: now, calendar: calendar)
+        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+                          spoken: text)
+    }
+
+    /// A reply as Times on swipe shows it: nothing in its corner, and beside the bubble on the swipe its time
+    /// (`ChatRevealReceived`), under the turn's step count on the turn's last reply ("23 steps"; what it changed is the
+    /// message's details'). VoiceOver reads the full corner as the bubble's value (`spokenOnly`).
+    @MainActor static func swiped(time: Date?, summary: ChatTurnSummary?, now: Date,
+                                  metrics: ChatCornerMetrics) -> (corner: ChatCorner?, time: String?) {
+        let calendar = Calendar.autoupdatingCurrent
+        let when = (time ?? summary?.ended).map { ChatTurnSummary.time($0, now: now, calendar: calendar) }
+        let steps = summary.flatMap { $0.steps.isEmpty ? nil : ChatTurnSummary.count($0.steps.count, "step") }
+        let shown = [steps, when].compactMap { $0 }.joined(separator: "\n")
+        return (reply(time: time, summary: summary, now: now, metrics: metrics)?.spokenOnly, shown.isEmpty ? nil : shown)
+    }
 }
 
 /// The corner's font as UIKit measures it, against the width of the bubble's text: whether a corner can share a line.
-struct ChatCornerMetrics {
+/// Every bubble of the thread asks on each pass, so fonts and widths are kept per text size.
+@MainActor struct ChatCornerMetrics {
     let font: UIFont
+    let size: DynamicTypeSize
     /// The widest the bubble's text runs (`ChatMeasure.bubble` less the padding).
     let column: CGFloat
 
     init(column: CGFloat, measure: CGFloat, size: DynamicTypeSize) {
         self.column = ChatMeasure.bubble(user: false, column: column, measure: measure) - ChatMeasure.padding
-        font = Self.font(size)
+        self.size = size
+        if let font = Self.fonts[size] { self.font = font } else {
+            font = Self.font(size)
+            Self.fonts[size] = font
+        }
     }
+
+    private struct Measured: Hashable {
+        let text: String
+        let size: DynamicTypeSize
+    }
+    private static var fonts: [DynamicTypeSize: UIFont] = [:]
+    private static var widths: [Measured: CGFloat] = [:]
 
     /// The room's width for `text`: the gap and the text, in caption2 with monospaced digits at `size`.
     func width(_ text: String) -> CGFloat {
-        ceil((ChatTurnCorner.gap + text as NSString).size(withAttributes: [.font: font]).width)
+        let key = Measured(text: text, size: size)
+        if let width = Self.widths[key] { return width }
+        let width = ceil((ChatTurnCorner.gap + text as NSString).size(withAttributes: [.font: font]).width)
+        if Self.widths.count >= 2048 { Self.widths.removeAll(keepingCapacity: true) }
+        Self.widths[key] = width
+        return width
     }
 
     /// `text`'s room fits one line of the bubble's text, with a point to spare for rounding.
@@ -645,6 +691,76 @@ struct ChatSideReturn: View {
         .glassEffect(.regular.interactive(), in: Capsule())
         .accessibilityLabel("Return to the side conversation")
         .padding(.top, 4)
+    }
+}
+
+/// The agent's background shells, over the composer while any runs (they outlive their turn): one names what it does,
+/// more say how many; a tap lists them (`ChatShellsSheet`).
+struct ChatShellsLine: View {
+    let shells: [ChatShell]
+    let open: () -> Void
+
+    /// "Serve the docs" for one shell, "2 shells running" for more.
+    static func label(_ shells: [ChatShell]) -> String {
+        shells.count == 1 ? shells[0].title : ChatTurnSummary.count(shells.count, "shell") + " running"
+    }
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 6) {
+                Image(systemName: "apple.terminal").font(.caption.weight(.semibold))
+                Text(Self.label(shells)).font(.footnote).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityLabel(shells.count == 1 ? "1 shell running: \(shells[0].title)" : Self.label(shells))
+        .accessibilityHint("Lists the running shells")
+        .accessibilityIdentifier("chat-shells")
+        .padding(.top, 4)
+    }
+}
+
+/// The running shells, a medium sheet: one row per shell, oldest first, with what it does, its command and how long
+/// it has run. It closes with the last shell (`MobileChatSession.showingShells`).
+struct ChatShellsSheet: View {
+    let session: MobileChatSession
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(session.shells) { shell in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(shell.title)
+                        if let detail = shell.detail {
+                            Text(detail).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(ChatTurnSummary.elapsed(context.date.timeIntervalSince(shell.started)))
+                            .monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("chat-shell-\(shell.id)")
+            }
+            .navigationTitle("Running shells")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }.fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(Color.canvas)
     }
 }
 

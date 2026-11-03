@@ -62,7 +62,7 @@ struct HelperTopology: Codable, Equatable, Sendable {
     let size: Grid?
     /// The terminal's PTY device (macOS st_rdev), for attributing an ssh started in it.
     let tty: UInt64?
-    let agent: Binding?
+    private(set) var agent: Binding?
     /// Dismissed but still addressable; memberships.place or move restores it.
     let detached: Bool
 
@@ -71,7 +71,15 @@ struct HelperTopology: Codable, Equatable, Sendable {
     }
 
     // Older helpers omit optional fields; preserve omission separately from an explicit null.
-    private let fields: Set<CodingKeys>
+    private var fields: Set<CodingKeys>
+
+    /// The node bound to another agent session (the iPhone keeps the last helper's binding while a new one discovers).
+    func with(agent: Binding?) -> Node {
+      var node = self
+      node.agent = agent
+      node.fields.insert(.agent)
+      return node
+    }
 
     init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)

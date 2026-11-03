@@ -255,3 +255,34 @@ extension HostStatisticsStoreTests {
         XCTAssertTrue(local.disksStale)
     }
 }
+
+extension HostStatisticsStoreTests {
+    func testStatisticsWaitsEndOnTheSharedClock() {
+        func tick(_ now: Double, _ minimum: Double, _ grid: Double) -> Duration {
+            System.tick(after: .milliseconds(Int(now * 1000)), minimum: .milliseconds(Int(minimum * 1000)),
+                        grid: .milliseconds(Int(grid * 1000)))
+        }
+        // A 2 s loop that sampled late (0.3 s, 4.9 s) still wakes on the grid's next even second; one just past a tick
+        // skips the tick less than half an interval away.
+        XCTAssertEqual(tick(0.3, 1, 2), .seconds(2))
+        XCTAssertEqual(tick(4.9, 1, 2), .seconds(6))
+        XCTAssertEqual(tick(1.2, 1, 2), .seconds(4))
+        XCTAssertEqual(tick(0, 1, 2), .seconds(2))
+        // Loops of different hosts that drifted apart wake together, and a 60 s probe on a 15 s and a 2 s sample's tick.
+        XCTAssertEqual(tick(13.1, 7.5, 15), tick(14.6, 7.5, 15))
+        XCTAssertEqual(tick(50, 30, 60), .seconds(120))
+        XCTAssertEqual(tick(112.4, 7.5, 15), .seconds(120))
+        XCTAssertEqual(tick(118.5, 1, 2), .seconds(120))
+        // Chart expiry: a point that expires off the grid goes at the next 15 s tick, at most one tick late.
+        XCTAssertEqual(tick(100, 3.2, 15), .seconds(105))
+        XCTAssertEqual(tick(0, 0, 0.0002), .zero)
+    }
+
+    func testThisMacIsSampledEverySecondOnlyOnTheAdapter() {
+        XCTAssertEqual(StatisticsCadence.viewed(adapter: true, lowPower: false), .seconds(1))
+        XCTAssertEqual(StatisticsCadence.viewed(adapter: false, lowPower: false), .seconds(2))
+        XCTAssertEqual(StatisticsCadence.viewed(adapter: true, lowPower: true), .seconds(2))
+        // The 1 s ticks are a subset of every other stats grid (2 s hosts, 15 s background, 60 s probes).
+        XCTAssertEqual(System.tick(after: .seconds(117.4), minimum: .milliseconds(500), grid: .seconds(1)), .seconds(118))
+    }
+}

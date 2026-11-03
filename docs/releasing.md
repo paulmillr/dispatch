@@ -136,6 +136,7 @@ The install page and the manifest name their addresses, `DISPATCH_ADHOC_URL/<var
 With `DISPATCH_ADHOC_SITE` there too, the folder of a git clone that the host serves at `DISPATCH_ADHOC_URL`, each
 `bin/release-publish.sh --ad-hoc` copies the three files to `<variant>/<build>/` in it as the variant's only build,
 makes `<variant>/index.html` the newest build's install page, and rewrites the clone's branch to one commit, pushed
-with `--force-with-lease`, so no older `.ipa` stays in its history. Without it, serve `adhoc/` at that address
-yourself. Each run signs again (offline, quick): the files name their addresses, which may have changed. Testers open
+with `--force-with-lease`, so no older `.ipa` stays in its history. A plain folder works too (no commit); then
+`DISPATCH_ADHOC_DEPLOY`, a shell command run after the copy, puts it online, for a host that deploys from a folder.
+Without either, serve `adhoc/` at that address yourself. Each run signs again (offline, quick): the files name their addresses, which may have changed. Testers open
 `DISPATCH_ADHOC_URL/pilot/` in Safari on their iPhone and tap Install.

@@ -21,7 +21,6 @@ struct ChatSlashCommand: Identifiable, Equatable {
         case "claude": return "Claude Code"
         case "codex": return "Codex"
         case "pi": return "Pi"
-        case "nanocodex": return "Nanocodex"
         default: return label ?? key ?? "The agent"
         }
     }

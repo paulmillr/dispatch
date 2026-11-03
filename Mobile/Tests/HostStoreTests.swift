@@ -89,6 +89,7 @@ final class HostStoreTests: XCTestCase {
         studio.lastConnected = Date(timeIntervalSince1970: 1_800_000_000)
         studio.system = HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04.1 LTS")
         studio.osLabel = "Ubuntu 24.04"
+        studio.parked = true
         store.add(studio)
         store.add(host("ai"))
         XCTAssertEqual(store.hosts.map(\.order), [0, 1])

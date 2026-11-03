@@ -184,6 +184,7 @@ impl World {
                 waiting: None,
                 name: None,
                 version: Some("2.1.302".into()),
+                started_ms: None,
                 directory: dir.clone(),
                 registry: dir.join("sessions/4242.json"),
             },

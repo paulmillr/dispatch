@@ -38,8 +38,8 @@ final class ChatModelPicker: Identifiable {
     @ObservationIgnored private var previousSelection: AgentModelMenu.Selection?
     @ObservationIgnored private let currentModelID: String
     @ObservationIgnored private let claude: Bool
-    /// Agents with a structured settings API (Pi's extension, Nanocodex's
-    /// control socket) supply their catalog directly instead of a TUI menu.
+    /// Agents with a structured settings API (Pi's extension) supply their
+    /// catalog directly instead of a TUI menu.
     struct StructuredModel: Equatable, Sendable {
         let key: String
         let name: String

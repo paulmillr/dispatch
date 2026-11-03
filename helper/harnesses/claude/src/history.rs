@@ -82,6 +82,9 @@ pub struct Parser {
     pub changed: Option<String>,
     pub version: Option<String>,
     page: Option<(BTreeSet<String>, Option<String>)>,
+    /// The newest Bash calls, oldest first: (call id, description, command, time_ms). A result
+    /// that sends one to the background starts a shell (`state.shells`) with them.
+    bash: VecDeque<(String, Option<String>, Option<String>, i64)>,
 }
 impl Parser {
     pub fn new(session: String) -> Self {
@@ -100,7 +103,49 @@ impl Parser {
             changed: None,
             version: None,
             page: None,
+            bash: VecDeque::new(),
         }
+    }
+    /// A queued task notification (`queue-operation` enqueue, written when the task ends): its text.
+    pub(crate) fn notification(root: Value<'_>) -> Option<&str> {
+        (text(root, "type") == Some("queue-operation") && text(root, "operation") == Some("enqueue"))
+            .then(|| text(root, "content"))
+            .flatten()
+            .filter(|s| s.contains("<task-notification>"))
+    }
+    /// A task notification ends every shell it names (`<task-id>`).
+    fn notified(&mut self, s: &str) {
+        if !s.contains("<task-notification>") || self.state.shells.is_empty() {
+            return;
+        }
+        let mut rest = s;
+        while let Some((_, after)) = rest.split_once("<task-id>") {
+            let Some((id, after)) = after.split_once("</task-id>") else { break };
+            self.state.shells.retain(|shell| shell.id != id.trim());
+            rest = after;
+        }
+    }
+    /// A Bash result naming a `backgroundTaskId` (run in the background, or sent there when it
+    /// outran its timeout): a running shell, timed from its call.
+    fn backgrounded(&mut self, root: Value<'_>, call: &str, time: i64) {
+        let Some(task) = root.get("toolUseResult").and_then(|v| text(v, "backgroundTaskId")).filter(|s| !s.is_empty())
+        else {
+            return;
+        };
+        if self.state.shells.iter().any(|shell| shell.id == task) {
+            return;
+        }
+        let (name, command, started) = self
+            .bash
+            .iter()
+            .find(|(id, ..)| id == call)
+            .map_or((None, None, time), |(_, name, command, time)| (name.clone(), command.clone(), *time));
+        self.state.shells.push(Shell {
+            id: task.into(),
+            name,
+            command,
+            started_ms: u64::try_from(started).ok().filter(|ms| *ms > 0),
+        });
     }
     /// c1654cc ClaudeTranscript.swift:174-178: a title record (Some), with its title if it has one.
     fn title(root: Value<'_>) -> Option<Option<String>> {
@@ -268,6 +313,11 @@ impl Parser {
             }
             if self.version.is_none() {
                 self.version = text(root, "version").map(str::to_owned);
+            }
+            // Queued the moment its task ends; the notice handing it to the model can come much later.
+            if let Some(notification) = Self::notification(root) {
+                self.notified(notification);
+                continue;
             }
             let Some(id) = text(root, "uuid") else {
                 continue;
@@ -509,6 +559,11 @@ impl Parser {
         if kind == Some("attachment") {
             if let Some(queued) = root.get("attachment")
                 && text(queued, "type") == Some("queued_command")
+            {
+                self.notified(&content(queued.get("prompt")));
+            }
+            if let Some(queued) = root.get("attachment")
+                && text(queued, "type") == Some("queued_command")
                 && text(queued, "commandMode") == Some("prompt")
                 && queued.get("origin").and_then(|v| text(v, "kind")) == Some("human")
                 && let body = content(queued.get("prompt"))
@@ -549,6 +604,9 @@ impl Parser {
                             (block.get("is_error").and_then(|v| v.boolean()) == Some(true))
                                 .then_some(1)
                         });
+                    if results.len() == 1 {
+                        self.backgrounded(root, call, record.time_ms.unwrap_or(0));
+                    }
                     out.push(Record {
                         id: format!("tool-{call}"),
                         kind: RecordKind::Tool,
@@ -588,6 +646,9 @@ impl Parser {
             });
             let notice = text(root, "promptSource") == Some("system")
                 || root.get("origin").and_then(|v| text(v, "kind")) == Some("task-notification");
+            if notice {
+                self.notified(&body);
+            }
             let input = (!notice).then(|| Self::input(root, &body)).flatten();
             let attached = if notice || input.is_some() { None } else { attached(message.get("content"), &body) };
             out.push(Record {
@@ -634,6 +695,16 @@ impl Parser {
                     }
                     Some("tool_use") => {
                         if let (Some(call), Some(name)) = (text(*b, "id"), text(*b, "name")) {
+                            if name == "Bash"
+                                && let Some(input) = b.get("input")
+                            {
+                                let field = |key| text(input, key).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+                                if self.bash.len() == 64 {
+                                    self.bash.pop_front();
+                                }
+                                let time = record.time_ms.unwrap_or(0);
+                                self.bash.push_back((call.into(), field("description"), field("command"), time));
+                            }
                             let body = b
                                 .get("input")
                                 .and_then(|v| v.write_with(Format::PrettySorted).ok())
@@ -906,5 +977,67 @@ mod tests {
         let records = Parser::new(SESSION.into()).feed(pasted("u3", "hello", 0).as_bytes()).unwrap();
         let user = records.iter().find(|record| record.kind == RecordKind::User).unwrap();
         assert_eq!((user.text.as_str(), user.blocks.len(), user.attached.is_none()), ("hello", 0, true));
+    }
+
+    /// A Bash call and its result, as Claude 2.1.311 records them; `result` is the record's
+    /// `toolUseResult`.
+    fn bash(call: &str, input: &str, result: &str) -> String {
+        format!(
+            r#"{{"parentUuid":"p0","isSidechain":false,"type":"assistant","message":{{"role":"assistant","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{call}","name":"Bash","input":{input}}}],"stop_reason":"tool_use"}},"uuid":"a-{call}","timestamp":"2026-10-20T12:30:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n"
+            + &format!(
+                r#"{{"parentUuid":"a-{call}","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{call}","content":"done"}}]}},"toolUseResult":{result},"uuid":"r-{call}","timestamp":"2026-10-20T12:32:00.000Z","sessionId":"{SESSION}"}}"#
+            )
+            + "\n"
+    }
+
+    /// The task notification Claude queues when a background task ends.
+    fn queued(task: &str) -> String {
+        format!(
+            r#"{{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-20T12:40:00.000Z","sessionId":"{SESSION}","content":"<task-notification>\n<task-id>{task}</task-id>\n<status>completed</status>\n<summary>Background command \"Serve the docs\" completed (exit code 0)</summary>\n</task-notification>"}}"#
+        ) + "\n"
+    }
+
+    #[test]
+    fn a_background_bash_call_runs_a_shell_until_its_notification_is_queued() {
+        let mut parser = Parser::new(SESSION.into());
+        let input = r#"{"command":"python3 -m http.server 8000","description":"Serve the docs","run_in_background":true}"#;
+        parser.feed(bash("toolu_1", input, r#"{"stdout":"","backgroundTaskId":"b1x2y3z4"}"#).as_bytes()).unwrap();
+        parser.feed(bash("toolu_2", r#"{"command":"ls"}"#, r#"{"stdout":"a","exitCode":0}"#).as_bytes()).unwrap();
+        // Sent to the background when it outran its timeout: timed from its call, not its result.
+        let slow = r#"{"command":"make test"}"#;
+        parser.feed(bash("toolu_3", slow, r#"{"backgroundTaskId":"b5","timedOutAfterMs":120000}"#).as_bytes()).unwrap();
+        let shells = &parser.state.shells;
+        assert_eq!(shells.len(), 2);
+        assert_eq!(
+            (shells[0].id.as_str(), shells[0].name.as_deref(), shells[0].command.as_deref()),
+            ("b1x2y3z4", Some("Serve the docs"), Some("python3 -m http.server 8000"))
+        );
+        assert_eq!((shells[1].id.as_str(), shells[1].name.as_deref(), shells[1].command.as_deref()), ("b5", None, Some("make test")));
+        assert_eq!(shells[1].started_ms, Some(time("2026-10-20T12:30:00.000Z") as u64));
+        // The queued notification ends it at once; the notice that hands it to the model later is a repeat.
+        let records = parser.feed(queued("b1x2y3z4").as_bytes()).unwrap();
+        assert!(records.is_empty());
+        assert_eq!(parser.state.shells.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b5"]);
+        let notice = format!(
+            r#"{{"parentUuid":null,"isSidechain":false,"type":"user","origin":{{"kind":"task-notification"}},"message":{{"role":"user","content":"<task-notification>\n<task-id>b5</task-id>\n<status>failed</status>\n</task-notification>"}},"uuid":"n1","timestamp":"2026-10-20T12:41:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n";
+        parser.feed(notice.as_bytes()).unwrap();
+        assert!(parser.state.shells.is_empty());
+    }
+
+    #[test]
+    fn a_shell_whose_call_lies_before_the_page_still_runs() {
+        let mut parser = Parser::new(SESSION.into());
+        let result = format!(
+            r#"{{"parentUuid":"a0","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_9","content":"Command running in background with ID: b9"}}]}},"toolUseResult":{{"backgroundTaskId":"b9"}},"uuid":"r9","timestamp":"2026-10-20T12:32:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n";
+        parser.feed(result.as_bytes()).unwrap();
+        let shell = &parser.state.shells[0];
+        assert_eq!((shell.id.as_str(), shell.name.as_deref(), shell.command.as_deref()), ("b9", None, None));
+        assert_eq!(shell.started_ms, Some(time("2026-10-20T12:32:00.000Z") as u64));
+        // Another task's notification leaves it running.
+        parser.feed(queued("other").as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.len(), 1);
     }
 }

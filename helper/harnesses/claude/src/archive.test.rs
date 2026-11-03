@@ -338,3 +338,24 @@ fn an_opening_that_races_a_write_is_read_again_on_its_watch_event() {
         assert_eq!(world.shown.0, [("history", 205)], "event during the read: {during}");
     }
 }
+
+#[test]
+fn the_title_is_known_once_the_history_is_read() {
+    // chat.list asks for the history before the state: a helper that has not read this transcript
+    // knows no title for it until it has.
+    let title = format!("{{\"type\":\"ai-title\",\"aiTitle\":\"Fix the login form\",\"sessionId\":\"{SESSION}\"}}\n");
+    let mut world = World::new("title", &(turns(0..3) + &title + &turns(3..5)));
+    let state = |world: &mut World| {
+        let found = Rc::new(RefCell::new(None));
+        let saved = found.clone();
+        world.claude.state(&mut world.io, &world.binding.clone(), Box::new(move |_, result: Result<State, Error>| {
+            *saved.borrow_mut() = Some(result.ok().and_then(|state| state.title));
+        }));
+        world.settle();
+        found.take()
+    };
+    assert_eq!(state(&mut world), Some(None));
+    let _ = world.open();
+    world.settle();
+    assert_eq!(state(&mut world), Some(Some("Fix the login form".into())));
+}

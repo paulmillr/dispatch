@@ -66,8 +66,9 @@ struct CreateReviewSheet: View {
 
     private var toRow: some View {
         HStack(spacing: 12) {
-            Image(systemName: "sparkle").font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.dispatchPink)
-                .frame(width: 40, height: 40).background(Color.dispatchPink.opacity(0.15), in: Circle())
+            // The agent's chat by the Chat segment's bubble (Y5), as every agent's tab is marked.
+            Image(systemName: "text.bubble").font(.system(size: 18)).foregroundStyle(.secondary)
+                .frame(width: 40, height: 40).background(Color.chipFill, in: Circle())
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text("To").foregroundStyle(.secondary)

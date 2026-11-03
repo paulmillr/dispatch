@@ -50,13 +50,6 @@ struct CommitDetailBody: View {
                         Text(commit.body).font(.subheadline).foregroundStyle(.secondary)
                         HStack(spacing: 6) {
                             ForEach(Array(commit.refs.enumerated()), id: \.offset) { _, ref in RefChip(name: ref.0, kind: ref.1) }
-                            if commit.signed {
-                                HStack(spacing: 3) {
-                                    Image(systemName: "checkmark.seal.fill")
-                                    Text("Signed · SSH key")
-                                }
-                                .font(.caption2.weight(.semibold)).foregroundStyle(Color.added)
-                            }
                         }
                     }
                     .padding(16)
@@ -64,11 +57,12 @@ struct CommitDetailBody: View {
                     .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 12).padding(.top, 8)
                     VStack(spacing: 0) {
-                        DetailRow(label: "Author", value: "Alex Rivera")
+                        // The signature's verdict is the Author row's badge (CommitSignatureBadge); the parent opens its commit.
+                        DetailRow(label: "Author", value: "Alex Rivera", seal: commit.signed)
                         Hairline()
                         DetailRow(label: "Date", value: "Today, 1:43 AM")
                         Hairline()
-                        DetailRow(label: "Parent", value: "7d04e9b", mono: true)
+                        DetailRow(label: "Parent", value: "7d04e9b", mono: true, chevron: true)
                     }
                     .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 12).padding(.top, 12)
@@ -92,11 +86,15 @@ struct DetailRow: View {
     let label: String
     let value: String
     var mono = false
+    var seal = false
+    var chevron = false
     var body: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer()
             Text(value).font(mono ? .system(.subheadline, design: .monospaced) : .subheadline)
+            if seal { Image(systemName: "checkmark.seal.fill").font(.subheadline).foregroundStyle(Color.added) }
+            if chevron { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
         }
         .padding(.horizontal, 16).padding(.vertical, 11)
     }

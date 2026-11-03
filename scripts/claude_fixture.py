@@ -26,6 +26,8 @@ API_KEY = 'dispatch-local-fixture'
 MAX_BODY = 4 * 1024 * 1024
 MAX_LOG = 64 * 1024 * 1024
 TOOL_COMMAND = "printf 'DISPATCH_CLAUDE_TOOL_OK\\n'"
+# Runs in the background until the test creates its release file in the work directory.
+BACKGROUND_COMMAND = "while [ ! -e dispatch-shell-release ]; do sleep 0.1; done; printf 'DISPATCH_CLAUDE_SHELL_OK\\n'"
 
 
 def prepare(state):
@@ -178,6 +180,12 @@ def response(body):
         blocks += [{'type': 'text', 'text': 'I need a few choices before continuing.'},
                    {'type': 'tool_use', 'id': 'toolu_' + uuid.uuid4().hex, 'name': 'AskUserQuestion',
                     'input': {'questions': questions}}]
+        stop = 'tool_use'
+    elif 'background shell' in lowered and shell == 'Bash' and not results and '<task-notification>' not in prompt:
+        blocks += [{'type': 'text', 'text': 'I’ll start the fixture shell in the background.'},
+                   {'type': 'tool_use', 'id': 'toolu_' + uuid.uuid4().hex, 'name': shell,
+                    'input': {'command': BACKGROUND_COMMAND, 'description': 'Wait for the Dispatch fixture release',
+                              'run_in_background': True}}]
         stop = 'tool_use'
     elif 'tool' in lowered and shell and not results:
         tool_command = "python3 -c \"from pathlib import Path; Path('dispatch-approval-marker').write_text('approved')\"" if 'permission' in lowered else TOOL_COMMAND
@@ -390,7 +398,7 @@ def main():
                 print(f'Local Claude endpoint: http://127.0.0.1:{server.server_port}', flush=True)
                 print('In a Dispatch terminal: ' + shlex.join(['python3', str(Path(__file__).resolve()),
                       'launch', '--state', str(server.state)]), flush=True)
-                print('Try: hello, thinking, tool check, formatting, long reply. Stop with Ctrl-C.', flush=True)
+                print('Try: hello, thinking, tool check, background shell, formatting, long reply. Stop with Ctrl-C.', flush=True)
                 server.serve_forever()
         else:
             state = args.state.resolve()

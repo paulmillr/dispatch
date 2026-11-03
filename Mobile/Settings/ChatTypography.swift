@@ -9,16 +9,15 @@ enum MobileChatFont: String, CaseIterable, Identifiable, Sendable {
     case comicSans = "Comic Sans"
     case latinModernRoman = "Latin Modern Roman"
     case newYork = "New York"
-    case sfRounded = "SF Rounded"
 
     var id: Self { self }
 
-    /// The system font's own designs (San Francisco, New York, SF Rounded); nil for fonts drawn by name.
+    /// The system font's own designs; nil for fonts drawn by name. San Francisco draws in SF Rounded, whose missing
+    /// italic is San Francisco's own (`ChatTypography.emphasis`).
     var systemDesign: Font.Design? {
         switch self {
-        case .system: .default
+        case .system: .rounded
         case .newYork: .serif
-        case .sfRounded: .rounded
         case .sameAsCode, .comicSans, .latinModernRoman: nil
         }
     }
@@ -26,12 +25,11 @@ enum MobileChatFont: String, CaseIterable, Identifiable, Sendable {
     /// The sample bubble's text in G3; Same as code names the terminal's font and the chat's size.
     func sample(terminalFont: String, size: Int) -> String {
         switch self {
-        case .system: "The system font, as Messages."
+        case .system: "The system font, rounded."
         case .sameAsCode: "\(terminalFont) \(size), as the terminal."
         case .comicSans: "For the brave."
         case .latinModernRoman: "As set in TeX, Knuth's Computer Modern."
         case .newYork: "Apple's serif, as Books."
-        case .sfRounded: "The system font, rounded."
         }
     }
 
@@ -39,7 +37,7 @@ enum MobileChatFont: String, CaseIterable, Identifiable, Sendable {
     var sizeScale: CGFloat {
         switch self {
         case .latinModernRoman: 1.126
-        case .system, .sameAsCode, .comicSans, .newYork, .sfRounded: 1
+        case .system, .sameAsCode, .comicSans, .newYork: 1
         }
     }
 }
@@ -96,7 +94,7 @@ struct ChatTypography: Equatable, Sendable {
     /// The family a font choice draws in: nil for the system font's designs.
     func family(_ choice: MobileChatFont) -> String? {
         switch choice {
-        case .system, .newYork, .sfRounded: nil
+        case .system, .newYork: nil
         case .sameAsCode: terminalFont.name
         case .comicSans: "Chalkboard SE"
         // By PostScript name, as the Mac draws it.
@@ -112,6 +110,10 @@ struct ChatTypography: Equatable, Sendable {
         MobileFonts.register()
         return .custom(family, size: size.points * choice.sizeScale, relativeTo: size.style)
     }
+
+    /// Emphasis (`*text*`) in the bubbles: San Francisco's italic where the chat draws SF Rounded, which has none; nil
+    /// where the chosen font italicizes itself.
+    var emphasis: Font? { font.systemDesign == .rounded ? .system(size.style, design: .default).italic() : nil }
 
     /// Code blocks: the terminal's font three points under the chat text (13 at Default, a footnote), scaling with the
     /// chosen size and Dynamic Type.

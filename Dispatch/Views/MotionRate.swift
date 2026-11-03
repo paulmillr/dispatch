@@ -36,6 +36,13 @@ enum MotionRate {
         return Int.max
     }
 
+    /// Whether the Mac draws from an adapter now, watched from the first ask (also this Mac's stats cadence,
+    /// StatisticsCadence.viewed).
+    static var adapter: Bool {
+        observe()
+        return onAdapter
+    }
+
     private static var observing = false
     private static var source: CFRunLoopSource?
     private(set) static var onAdapter = true

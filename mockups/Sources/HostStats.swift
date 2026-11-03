@@ -44,13 +44,14 @@ struct FactRow: View {
 struct SpacesTreeMock: View {
     /// The Offline group folded to its header line.
     var offlineCollapsed = false
-    /// The sort / filter menu open, with "Show offline hosts".
+    /// The Offline header held: its menu, the "Show offline hosts" switch (Settings has it too).
     var menuOpen = false
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 22) {
-                    hostSection("mba2", glyph: "apple.logo", tint: hostTint, mux: "herdr", spaces: [("e2e", "1", false), ("app", "", true)])
+                    FilterRow(selected: 0)
+                    hostSection("mba2", glyph: "apple.logo", tint: hostTint, mux: "herdr", spaces: [("app", "1", true), ("e2e", "", false)])
                     hostSection("studio", glyph: "apple.logo", tint: .primary, mux: "tmux", spaces: [], collapsed: "2 spaces · 1")
                     VStack(alignment: .leading, spacing: 14) {
                         HStack(spacing: 6) {
@@ -60,6 +61,21 @@ struct SpacesTreeMock: View {
                             Image(systemName: offlineCollapsed ? "chevron.right" : "chevron.down").font(.caption.weight(.bold)).foregroundStyle(.tertiary)
                         }
                         .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 16)
+                        .overlay(alignment: .topLeading) {
+                            if menuOpen {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).frame(width: 18)
+                                    Text("Show offline hosts").font(.body)
+                                    Spacer()
+                                    Image(systemName: "wifi.slash").font(.body)
+                                }
+                                .padding(.horizontal, 14).padding(.vertical, 12)
+                                .frame(width: 270)
+                                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
+                                .offset(x: 8, y: 26)
+                            }
+                        }
+                        .zIndex(1)
                         if offlineCollapsed { EmptyView() } else {
                         hostSection("ai", glyph: "point.3.connected.trianglepath.dotted", tint: Color.codeType, mux: "herdr",
                                     spaces: [], offline: "2h ago")
@@ -72,43 +88,11 @@ struct SpacesTreeMock: View {
                 .padding(.horizontal, 16).padding(.top, 8)
             }
             .background(Color.canvas)
-            .overlay(alignment: .topLeading) {
-                if menuOpen {
-                    VStack(alignment: .leading, spacing: 0) {
-                        menuRow("Sort by activity", check: true)
-                        menuRow("Sort by name", check: false)
-                        Divider().padding(.vertical, 4)
-                        menuRow("Chats only", check: false)
-                        menuRow("Show offline hosts", check: true)
-                    }
-                    .padding(.vertical, 6)
-                    .frame(width: 250)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
-                    .padding(.leading, 16)
-                }
-            }
             .navigationTitle("Spaces")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 0) {
-                        Image(systemName: "list.bullet.indent").frame(width: 44, height: 44).background(Color.lens, in: Circle())
-                        Image(systemName: "line.3.horizontal.decrease").frame(width: 44, height: 44)
-                            .background { if menuOpen { Circle().fill(Color.lens) } }
-                    }
-                    .padding(2).glassEffect(.regular.interactive(), in: Capsule())
-                }
                 ToolbarItem(placement: .topBarTrailing) { Text("Edit").fixedSize().padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule()) }
             }
         }
-    }
-
-    private func menuRow(_ title: String, check: Bool) -> some View {
-        HStack {
-            Image(systemName: "checkmark").font(.subheadline.weight(.semibold)).opacity(check ? 1 : 0).frame(width: 20)
-            Text(title).font(.body)
-            Spacer()
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
     private func hostSection(_ name: String, glyph: String, tint: Color, mux: String, spaces: [(String, String, Bool)],
@@ -180,10 +164,29 @@ struct HostDetailStatsScreen: View {
                             FactRow(label: "Key", value: "ED25519 · Face ID").padding(.horizontal, 16)
                             Hairline()
                             FactRow(label: "Multiplexer", value: "herdr 0.9.5", chevron: true).padding(.horizontal, 16)
+                            // The helper's switches (HostHelperRows): Chat and Files & git go with it.
+                            ForEach(["Helper", "Chat", "Files & git"], id: \.self) { title in
+                                Hairline()
+                                Toggle(title, isOn: .constant(true)).tint(Color.stateConnected)
+                                    .padding(.horizontal, 16).padding(.vertical, 8)
+                            }
                         }
                         .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 14))
                     }
                     .padding(.horizontal, 12)
+                    VStack(alignment: .leading, spacing: 6) {
+                        SectionHeader(title: "Spaces · 2").padding(.leading, -16).padding(.top, -8)
+                        VStack(spacing: 0) {
+                            FactRow(label: "app", value: "dark-mode", chevron: true).padding(.horizontal, 16)
+                            Hairline()
+                            FactRow(label: "e2e", value: "", chevron: true).padding(.horizontal, 16)
+                        }
+                        .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    .padding(.horizontal, 12)
+                    Text("Remove host").font(.headline).foregroundStyle(Color.destructive).frame(maxWidth: .infinity).frame(height: 50)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .padding(.horizontal, 12)
                     Color.clear.frame(height: 40)
                 }
             }

@@ -21,10 +21,10 @@ struct TabsMultiplexer: Decodable, Equatable, Sendable {
 /// connection.
 struct MultiplexerChoice: Equatable, Sendable {
     let mux: UInt64
-    /// "herdr" or "tmux", as `multiplexers.list` names it (Host detail's line, the per-host override).
+    /// "herdr" or "tmux", as `multiplexers.list` names it (the host sheet's Multiplexer row, the per-host override).
     let name: String
     let route: HelperBackend.Route
-    /// "0.9.3", "3.7" when the helper reports versions (Host detail's "herdr 0.9.3" line).
+    /// "0.9.3", "3.7" when the helper reports versions (the host sheet's "herdr 0.9.3").
     var version: String? = nil
     /// The Mac's warning for a tmux older than 3.7, else nil.
     var warning: String? = nil
@@ -96,21 +96,11 @@ struct TabsRecentProject: Decodable, Equatable, Sendable {
     var time: Date? { time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
 }
 
-/// A `terminals.activity` row (the `terminals.activity` hello feature): when the server last saw activity in a node of
-/// the topology, by its key (node ids are per connection). tmux reports its windows (`#{window_activity}`, whole
-/// seconds); herdr reports nothing.
-struct TabsServerActivity: Decodable, Equatable, Sendable {
-    let node: UInt64
-    let key: String
-    let time_ms: UInt64
-
-    var time: Date { Date(timeIntervalSince1970: Double(time_ms) / 1000) }
-}
-
 /// The three ways to close, with the Mac's names (its tab and space menus: Close Tab, Detach, Terminate…).
 enum TabsClose: Equatable, Sendable {
-    /// Close Tab: terminate only when every pane is verified idle, else detach. A space always detaches, as on the Mac
-    /// (docs/integrations.md: "Close space, Detach, and quit always detach").
+    /// Close Tab: terminate a tab whose panes are verified idle; a busy one is left as it is (`busy`) for the user to
+    /// decide (the phone asks, then terminates). A space always detaches, as on the Mac (docs/integrations.md: "Close
+    /// space, Detach, and quit always detach").
     case close
     /// Keep the work running on the server; the tab leaves this connection's lists.
     case detach
@@ -120,6 +110,8 @@ enum TabsClose: Equatable, Sendable {
 
 enum TabsCloseOutcome: Equatable, Sendable {
     case terminated, detached
+    /// Close of a tab that runs work: nothing changed, the tab stays.
+    case busy
 }
 
 /// The Mac's confirmation for Terminate (AppDelegate.confirmTermination), word for word.
@@ -128,6 +120,30 @@ enum TabsTerminateCopy {
     static func title(space name: String) -> String { "Terminate space “\(name)”?" }
     static let message = "This ends its server windows or panes and the processes running inside them. To keep work running, use Detach."
     static let confirm = "Terminate"
+}
+
+/// Close of a tab that runs work asks first, naming what runs; an idle tab or an agent whose turn is over closes at once.
+enum TabsCloseCopy {
+    static func title(tab name: String) -> String { "Close “\(name)”?" }
+    static let consequence = "Terminating ends it. To keep it running, detach it from the tab’s menu."
+    static let confirm = "Terminate"
+
+    /// "Codex is still working.", "Claude Code is waiting for you.", "pnpm dev is still running.": the agent by its name
+    /// and state, else the window's program, else nothing named.
+    static func message(agent: String?, state: PaneUrgency?, program: String?) -> String {
+        let running = if let agent {
+            switch state {
+            case .running?: "\(agent) is still working."
+            case .waiting?: "\(agent) is waiting for you."
+            default: "\(agent) is still running."
+            }
+        } else if let program, !MobileTab.isShell(program) {
+            "\(program) is still running."
+        } else {
+            "Something is still running in it."
+        }
+        return "\(running) \(consequence)"
+    }
 }
 
 /// The Tabs area's operations on a host's helper. Stateless: each call is one or a few requests on `client`.
@@ -157,12 +173,6 @@ struct TabCommands: Sendable {
     func recentProjects(limit: Int = 30) async throws -> [TabsRecentProject] {
         struct Limit: Encodable { let limit: Int }
         return try await client.connection.request("projects.recent", params: Limit(limit: limit))
-    }
-
-    /// `terminals.activity {}` (needs the `terminals.activity` hello feature). A row this build cannot read is left out.
-    func serverActivity() async throws -> [TabsServerActivity] {
-        let rows: [Lenient<TabsServerActivity>] = try await client.connection.request("terminals.activity", params: [String: String]())
-        return rows.compactMap(\.value)
     }
 
     /// `backends.create`: makes sure the multiplexer's server is up and returns its backend id.
@@ -200,10 +210,21 @@ struct TabCommands: Sendable {
         try await client.rename(HelperClient.Rename(node: node, name: name))
     }
 
-    /// `close.request` with the Mac's policy. Closing a space detaches it. Closing a tab asks the helper first (`check`,
-    /// nothing changes): when every pane is verified idle the tab is terminated through `prompt`, which re-verifies on
-    /// the server and detaches what turned busy in between; otherwise, or when the check is unavailable, it is detached
-    /// and its work keeps running.
+    /// Whether every pane of `node` is verified idle (`close.request` `check`: nothing changes). An unavailable
+    /// inspection (an older multiplexer, a lost server) counts as busy: the user is asked.
+    func idle(_ node: UInt64) async throws -> Bool {
+        do {
+            let checked = try await client.close(.init(node: node, policy: .prompt, check: true))
+            return !checked.closed && !checked.confirmation
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return false
+        }
+    }
+
+    /// `close.request`. Closing a space detaches it, as the Mac's does. Closing a tab (after `idle` said so) goes
+    /// through `prompt`, which re-verifies on the server: a tab that turned busy in between is left as it is (`busy`).
     func close(_ node: UInt64, _ how: TabsClose, space: Bool = false) async throws -> TabsCloseOutcome {
         switch how {
         case .close where space, .detach:
@@ -213,24 +234,8 @@ struct TabCommands: Sendable {
             _ = try await client.close(.init(node: node, policy: .terminate))
             return .terminated
         case .close:
-            let idle: Bool
-            do {
-                let checked = try await client.close(.init(node: node, policy: .prompt, check: true))
-                idle = !checked.closed && !checked.confirmation
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // Inspection unavailable (an older multiplexer, a lost server): keep the work.
-                idle = false
-            }
-            guard idle else {
-                _ = try await client.close(.init(node: node, policy: .detach))
-                return .detached
-            }
             let closed = try await client.close(.init(node: node, policy: .prompt))
-            guard closed.confirmation else { return .terminated }
-            _ = try await client.close(.init(node: node, policy: .detach))
-            return .detached
+            return closed.confirmation ? .busy : .terminated
         }
     }
 }
@@ -404,11 +409,18 @@ extension MobileWorkspace {
         try await close(node: space.node, how, space: true)
     }
 
+    /// Whether the tab's panes are verified idle, so Close can end it without asking (`TabCommands.idle`).
+    func idle(tab: MobileTab) async throws -> Bool {
+        try await commands().idle(tab.node)
+    }
+
     private func close(node: UInt64, _ how: TabsClose, space: Bool) async throws -> TabsCloseOutcome {
         let commands = try commands()
         hide(node)
         do {
-            return try await commands.close(node, how, space: space)
+            let outcome = try await commands.close(node, how, space: space)
+            if outcome == .busy { reveal(node) }
+            return outcome
         } catch {
             reveal(node)
             throw error

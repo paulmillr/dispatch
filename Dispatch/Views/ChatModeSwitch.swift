@@ -6,12 +6,14 @@ import AppKit
 /// files, without an agent) and returns to it from chat or files; files on an agent tab is a hold, a right-click or ⇧⌘F.
 struct ModeSwitchState: Equatable {
     let mode: TabMode
-    /// An agent runs or ran here, so chat can open.
+    /// An agent runs or ran here, so a click opens chat.
     let chat: Bool
     /// Files can show here.
     let files: Bool
     /// The plain SSH login's host when files cannot show.
     let host: String?
+    /// The agent exited: its transcript opens from the menu (and ⇧⌘C), not the click, which goes where a terminal's does.
+    var retained = false
 
     /// `FilesCoordinator.nextMode`: where a click goes; nil when it can go nowhere (the button dims). Chat never leads on
     /// to files: a click there always returns to the terminal.
@@ -65,7 +67,7 @@ struct ModeSwitchState: Equatable {
     func reaches(_ mode: TabMode) -> Bool {
         switch mode {
         case .terminal: true
-        case .chat: chat || self.mode == .chat
+        case .chat: chat || retained || self.mode == .chat
         case .files: files || self.mode == .files
         }
     }
@@ -88,7 +90,9 @@ struct ChatModeSwitch: View {
     private var filesCoordinator: FilesCoordinator? { files ?? coordinator.files }
     private var state: ModeSwitchState {
         guard let files = filesCoordinator else {
-            return ModeSwitchState(mode: session.showChat ? .chat : .terminal, chat: coordinator.canEnterChat(session), files: false, host: nil)
+            let reachable = coordinator.canEnterChat(session), leads = coordinator.chatLeads(session)
+            return ModeSwitchState(mode: session.showChat ? .chat : .terminal, chat: leads, files: false, host: nil,
+                                   retained: reachable && !leads)
         }
         return files.switchState(session.id)
     }
@@ -123,7 +127,8 @@ struct ChatModeSwitch: View {
         .buttonStyle(.plain)
         .accessibilityLabel(state.label)
         .accessibilityValue(state.value)
-        .disabled(state.dimmed)
+        // Dimmed with a retained transcript, the menu still opens it.
+        .disabled(state.dimmed && !state.retained)
         .help(help)
         .contextMenu {
             ForEach(menuItems(state)) { item in

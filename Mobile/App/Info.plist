@@ -34,6 +34,8 @@
 	<string>Dispatch uses Face ID to unlock your SSH keys.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Dispatch connects to SSH hosts on your local network.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Dispatch saves images you open in Files to your photos.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Dispatch listens while you dictate a chat message.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

@@ -137,3 +137,23 @@ fn files_records_round_trip_as_schema_records() {
         object(vec![("status", Data::Signed(-1)), ("output", Data::String("fatal")), ("truncated", Data::Bool(false))]),
     );
 }
+
+#[test]
+fn a_state_carries_shells_only_while_one_runs() {
+    use crate::api::*;
+    let decoded = |state: &State| {
+        let mut body = SCHEMA.to_vec();
+        body.extend_from_slice(&crate::encode::value(state));
+        encode_plain(&decode(&body).unwrap()).unwrap()
+    };
+    // Without one, the layout every recording made before shells holds.
+    let idle = decoded(&State::default());
+    let idle = decode_plain(&idle).unwrap();
+    assert!(idle.get("agents").is_some() && idle.get("shells").is_none());
+    let shell = Shell { id: "b1".into(), name: Some("Serve the docs".into()), command: Some("make serve".into()), started_ms: Some(5) };
+    let running = decoded(&State { shells: vec![shell], ..State::default() });
+    let running = decode_plain(&running).unwrap();
+    let shells: Vec<_> = running.get("shells").and_then(|v| v.array()).unwrap().collect();
+    assert_eq!(shells.len(), 1);
+    assert_eq!(shells[0].get("command").and_then(|v| v.string()), Some("make serve"));
+}

@@ -64,19 +64,3 @@ timezone offsets retained where they exercise parsing or display behavior.
 When refreshing a capture, review every nested field and tool output before
 committing; replacing only the top-level session ID is insufficient. Raw
 `rollout-*.jsonl` files are ignored and excluded from test resources and VM sync.
-
-# Nanocodex fixtures
-
-`nanocodex-0.6.5.jsonl` and `nanocodex-control-0.6.5.jsonl` are one real turn from
-nanocodex 0.6.5 (with the prompt admission fix later merged as nanocodex #681) running against
-`scripts/codex_fixture.py` over its HTTPS transport. Chat submitted
-`SLOW_RESPONSE tool check` and steered it with `steer: keep it short` through the
-TUI control socket. The first file is the committed rollout for that turn after its
-`session_meta`; the second holds the matching `agent.event` payloads in socket order.
-Instructions, environment context, `world_state`, provider frames, and `model.*`
-timing events are omitted. Session, turn, message, call, and request IDs are
-synthetic, paths are `/work`, and timestamps are shifted to start at
-2000-01-01T00:00:00Z. The fixture server does not echo request metadata, so the
-assistant message carries the `internal_chat_message_metadata_passthrough.turn_id`
-(`<session>:<n>`) that OpenAI's backend writes from nanocodex's provider turn ID;
-it names no rollout turn.

@@ -36,13 +36,21 @@ enum FileImageZoom: Equatable {
     }
 }
 
+/// A picture an image preview drew, by the `FilePreviewState` that drew it: the next image's preview shows it in place of
+/// a blank checker while its own file is read and decoded.
+struct FileImageHandoff {
+    let owner: ObjectIdentifier
+    let image: CGImage
+    let pixelSize: CGSize
+}
+
 /// An image on a checker (F2d): fit to the area (never enlarged) or zoomed, one image pixel per point at 100 %,
 /// scrolling when larger than the area. A trackpad pinches, ⌘+ ⌘− step and ⌘0 toggles fit and actual size; the
 /// footer names the scale and opens the image full screen (`FileImageFullScreen`).
 struct FileImagePreview: View {
     @Environment(\.chatTheme) private var theme
-    /// The encoded file; decoded off the main actor at the size it draws.
-    let data: Data
+    /// The encoded file; decoded off the main actor at the size it draws. Nil while it is read: `handoff` shows.
+    let data: Data?
     /// Tells a reloaded file from the last one: its bytes are not compared.
     let revision: FileRevision?
     let pixelSize: CGSize
@@ -57,6 +65,10 @@ struct FileImagePreview: View {
     var toggleFullScreen: (() -> Void)?
     /// A click on the picture, which AppKit gets rather than SwiftUI: the pane takes the keyboard.
     var activate: () -> Void = {}
+    /// The last image's picture, shown until this one's is decoded: no blank frame between two images.
+    var handoff: FileImageHandoff?
+    /// Each picture decoded, for the next image's `handoff`.
+    var drew: (CGImage) -> Void = { _ in }
     /// The last decode; it keeps showing while a new size decodes, so a resize never blanks the picture.
     @State private var decoded: (key: DecodeKey, image: CGImage)?
 
@@ -93,18 +105,23 @@ struct FileImagePreview: View {
     var body: some View {
         GeometryReader { geometry in
             let area = CGSize(width: geometry.size.width, height: max(0, geometry.size.height - 24))
-            let fit = Self.fitScale(pixelSize, in: CGSize(width: area.width - Self.inset * 2,
-                                                          height: area.height - Self.inset * 2))
-            let key = DecodeKey(revision: revision, bytes: data.count,
+            let bytes = data?.count ?? 0
+            // A decode for another revision is another file's picture: the handoff's stands in, at its own size, until
+            // this one's arrives.
+            let own = decoded.flatMap { $0.key.revision == revision && $0.key.bytes == bytes ? $0.image : nil }
+            let standIn = own == nil ? handoff : nil
+            let image = own ?? standIn?.image
+            let pixels = standIn?.pixelSize ?? pixelSize
+            let fit = Self.fitScale(pixels, in: CGSize(width: area.width - Self.inset * 2,
+                                                       height: area.height - Self.inset * 2))
+            let key = DecodeKey(revision: revision, bytes: bytes,
                                 maxPixels: Self.decodeBound(pixelSize, area: area, zoomed: zoom != .fit))
-            // A decode for another revision is another file's picture: nothing shows until this one's arrives.
-            let image = decoded.flatMap { $0.key.revision == revision && $0.key.bytes == data.count ? $0.image : nil }
             VStack(spacing: 0) {
                 ZStack {
                     FileCheckerboard(dark: theme.window, light: theme.sidebar)
-                    FileImageCanvas(image: image, pixelSize: pixelSize, zoom: zoom, fit: fit,
+                    FileImageCanvas(image: image, pixelSize: pixels, zoom: zoom, fit: fit,
                                     shadowOpacity: theme.isDark ? 0.5 : 0.15,
-                                    label: "Image, \(Int(pixelSize.width)) × \(Int(pixelSize.height)) pixels",
+                                    label: "Image, \(Int(pixels.width)) × \(Int(pixels.height)) pixels",
                                     changed: { zoom = $0 }, activate: activate)
                 }
                 .frame(width: area.width, height: area.height)
@@ -114,10 +131,11 @@ struct FileImagePreview: View {
                 footer(fit: fit)
             }
             .task(id: key) {
-                guard decoded?.key != key else { return }
+                guard let data, decoded?.key != key else { return }
                 guard let image = await FilePreviewLoader.decodeImage(data, maxPixels: key.maxPixels),
                       !Task.isCancelled else { return }
                 decoded = (key, image)
+                drew(image)
             }
         }
     }

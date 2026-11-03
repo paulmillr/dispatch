@@ -190,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
         kind = 'title' if title_request else 'recap' if recap_request else 'conversation'
         title_request = title_request or recap_request
         # Never accept an accidental real credential, even on localhost.
-        # Nanocodex always authenticates; its tests pass this fixed sentinel.
+        # A custom provider's env_key (ChatSideCustomConfigTests) sends this fixed sentinel.
         if self.headers.get('Authorization') not in (None, 'Bearer dispatch-fixture'):
             self.send_error(400, 'Fixture requests must not include credentials')
             return

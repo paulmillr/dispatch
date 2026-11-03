@@ -109,7 +109,7 @@ final class WatchBridge: NSObject {
 
     init(composition: MobileComposition, session: any WatchSessioning, protectedDataAvailable: Bool = true,
          clock: @escaping () -> Date = Date.init,
-         backgroundTask: @escaping @MainActor (String) -> @MainActor () -> Void = WatchBridge.applicationBackgroundTask,
+         backgroundTask: @escaping @MainActor (String) -> @MainActor () -> Void = { WatchBridge.applicationBackgroundTask($0) },
          backgroundRemaining: @escaping @MainActor () -> TimeInterval = { UIApplication.shared.backgroundTimeRemaining }) {
         self.composition = composition
         self.session = session
@@ -417,12 +417,16 @@ final class WatchBridge: NSObject {
         return outcome
     }
 
-    /// `UIApplication.beginBackgroundTask`, ended by the returned closure or by the system's expiration, once.
-    static func applicationBackgroundTask(_ name: String) -> @MainActor () -> Void {
+    /// `UIApplication.beginBackgroundTask`, ended by the returned closure or by the system's expiration, once;
+    /// `expired` runs first on the expiration.
+    static func applicationBackgroundTask(_ name: String, expired: (@MainActor () -> Void)? = nil) -> @MainActor () -> Void {
         let task = BackgroundTaskEnd()
         task.identifier = UIApplication.shared.beginBackgroundTask(withName: name) {
             log.notice("Background task \(name, privacy: .public) expired")
-            MainActor.assumeIsolated { task.end() }
+            MainActor.assumeIsolated {
+                expired?()
+                task.end()
+            }
         }
         let remaining = UIApplication.shared.backgroundTimeRemaining
         log.debug("Background task \(name, privacy: .public) \(task.identifier.rawValue) began (\(remaining > 1e6 ? "foreground" : "\(Int(remaining)) s left", privacy: .public))")

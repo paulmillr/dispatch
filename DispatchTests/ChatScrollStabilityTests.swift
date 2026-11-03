@@ -391,7 +391,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         var preferences = Preferences()
         XCTAssertEqual(preferences.chatFont, .system)
         ChatThemeStore.shared.current.typography = ChatTypography(preferences: preferences)
-        XCTAssertEqual(ChatThemeStore.shared.current.typography.reply.familyName, NSFont.systemFont(ofSize: 12).familyName)
+        XCTAssertEqual(ChatThemeStore.shared.current.typography.reply.familyName, ChatFont.system.systemFont(ofSize: 12)?.familyName)
         try await testBottomFollowingSurvivesLargeRepliesAndStopsWhenReadingHistory()
         try await testExpandedToolsKeepMessagesStableWhileScrollingBothDirections()
     }
@@ -1347,5 +1347,47 @@ extension ChatScrollStabilityTests {
         XCTAssertEqual(attempts.last, true)
         fixture.markers.forEach { $0.isHidden = false }
         XCTAssertTrue(position.showsRows())
+    }
+}
+
+/// A blank mount whose layout has gone quiet is rebuilt at the first check, not at 0.4 s: switching to a chat of tall
+/// rows showed nothing for half a second, every time.
+extension ChatScrollStabilityTests {
+    func testAQuietBlankMountRebuildsAtTheFirstCheck() async throws {
+        let position = ChatScrollPosition()
+        var rebuilds: [TimeInterval] = []
+        position.hasContent = { true }
+        let start = ProcessInfo.processInfo.systemUptime
+        position.recoverViewport = { _, rebuild in if rebuild { rebuilds.append(ProcessInfo.processInfo.systemUptime - start) } }
+        let fixture = try NativeScrollFixture(rows: 8, position: position)
+        defer { fixture.close() }
+        fixture.markers.forEach { $0.isHidden = true }
+        try await TestSupport.eventually(timeout: .seconds(1)) { !rebuilds.isEmpty }
+        XCTAssertLessThan(rebuilds[0], 0.35, "Rebuilt before the 0.4 s check")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(rebuilds.count, 1, "One rebuild per mount")
+        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
+    }
+
+    func testABlankMountStillLayingOutWaitsForTheLateCheck() async throws {
+        let position = ChatScrollPosition()
+        var rebuilds: [TimeInterval] = []
+        position.hasContent = { true }
+        let start = ProcessInfo.processInfo.systemUptime
+        position.recoverViewport = { _, rebuild in if rebuild { rebuilds.append(ProcessInfo.processInfo.systemUptime - start) } }
+        let fixture = try NativeScrollFixture(rows: 8, position: position)
+        defer { fixture.close() }
+        fixture.markers.forEach { $0.isHidden = true }
+        // Lazy layout still placing rows may show them on its own: the early checks leave it alone.
+        let layout = Task { @MainActor in
+            while !Task.isCancelled, rebuilds.isEmpty {
+                position.geometryChanged()
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        defer { layout.cancel() }
+        try await TestSupport.eventually(timeout: .seconds(1)) { !rebuilds.isEmpty }
+        XCTAssertGreaterThanOrEqual(rebuilds[0], 0.38, "Not rebuilt while layout keeps changing")
+        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
     }
 }

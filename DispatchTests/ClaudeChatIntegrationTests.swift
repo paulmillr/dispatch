@@ -179,6 +179,22 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             }
             XCTAssertTrue(session.turns.flatMap(\.items).contains { $0.kind == .tool && $0.completed && $0.output.contains("DISPATCH_CLAUDE_TOOL_OK") })
             XCTAssertEqual(session.turns.flatMap(\.items).filter { $0.kind == .user }.count, 2)
+            // A background shell lists while it runs, past the turn that started it, and goes once it ends.
+            session.draft = "background shell check"
+            runtime.chat.submit(session)
+            try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "shells=\(session.shells.map(\.id)) \(screen())") {
+                !session.busy && session.shells.count == 1
+            }
+            let shell = try XCTUnwrap(session.shells.first)
+            XCTAssertEqual(shell.title, "Wait for the Dispatch fixture release")
+            XCTAssertEqual(shell.detail?.hasPrefix("while [ ! -e dispatch-shell-release ]"), true)
+            XCTAssertFalse(AgentWorkingState.isWorking(session), "A running shell is not the agent's work")
+            try System.write(Data(), to: state.appendingPathComponent("work/dispatch-shell-release"))
+            try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "shells=\(session.shells.map(\.id)) \(screen())") {
+                session.shells.isEmpty && !session.busy && session.activityCheck == nil && session.turns.flatMap(\.items).contains {
+                    $0.kind == .notice && $0.text.contains("Wait for the Dispatch fixture release")
+                }
+            }
             let beforeDecline = session.model
             runtime.chat.openModelPicker(session, column: .model)
             let declined = try XCTUnwrap(session.modelPicker)
@@ -255,7 +271,7 @@ final class ClaudeChatIntegrationTests: XCTestCase {
                     $0.kind == .assistant && $0.text == "Local Claude fixture reply: second queued turn"
                 }
             }
-            XCTAssertEqual(session.turns.flatMap(\.items).filter { $0.kind == .user }.count, 4)
+            XCTAssertEqual(session.turns.flatMap(\.items).filter { $0.kind == .user }.count, 5)
             // A bare /resume opens Claude's own session picker: Chat switches to Terminal, which takes the keys.
             try await TestSupport.eventually(diagnostic: "The test window must be key before /resume") {
                 if !window.isKeyWindow { NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil) }

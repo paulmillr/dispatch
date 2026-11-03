@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import UIKit
 
@@ -17,10 +18,11 @@ struct FilesPreviewActions {
 
 /// F2: a file pushed over the tab (its header, capsule and the modes' bar go with the push). The back pill names the
 /// screen it returns to; the title is the file's name, the subtitle its folder, size, age and kind; "…" holds Wrap lines
-/// (or Markdown's source), Copy path, Copy contents, Share, Attach to chat and Open in terminal. Code has line numbers
-/// and the syntax palette, scrolls both ways and zooms with a pinch (kept as the diff viewer's, `CodeFontSize`); Find
-/// counts and steps through matches; Ask attaches the file to the tab's chat. Markdown renders as chat does, images open
-/// in the attachment viewer, a binary shows its kind and size with Share, a long text its head with Load all.
+/// (or Markdown's source), Copy path, Copy contents, Share, Save to Photos (an image's), Attach to chat and Open in
+/// terminal. Code has line numbers and the syntax palette, scrolls both ways and zooms with a pinch (kept as the diff
+/// viewer's, `CodeFontSize`); Find counts and steps through matches; Ask attaches the file to the tab's chat (not shown
+/// under an image). Markdown renders as chat does, images zoom with a pinch or a double tap, a binary shows its kind and
+/// size with Share, a long text its head with Load all.
 struct FilePreviewScreen: View {
     @State private var preview: FilePreview
     let host: TabsHost
@@ -37,7 +39,6 @@ struct FilePreviewScreen: View {
     @State private var finding = false
     @State private var find = FileFind()
     @State private var sharing: FilesShareItem?
-    @State private var viewing = false
     @State private var problem: String?
     @FocusState private var findFocused: Bool
     @Environment(\.tabsColumnWidth) private var column
@@ -81,12 +82,6 @@ struct FilePreviewScreen: View {
             FilesActivityView(items: [item.url]).ignoresSafeArea()
                 // The sheet closed: the copy goes.
                 .onDisappear { item.remove() }
-        }
-        .fullScreenCover(isPresented: $viewing) {
-            if case .image(let data) = preview.content {
-                MobileAttachmentPreview(attachment: ChatAttachment(name: preview.name, kind: .image, size: data.count, path: preview.path),
-                                        read: { _ in data })
-            }
         }
         .alert(problem ?? "", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
             Button("OK", role: .cancel) {}
@@ -140,7 +135,7 @@ struct FilePreviewScreen: View {
                 .accessibilityIdentifier("file-markdown")
             }
         case .image(let data):
-            FilesImageView(data: data, name: preview.name) { viewing = true }
+            FilesImageView(data: data, name: preview.name)
         case .binary:
             binary
         case .failed(let message):
@@ -219,13 +214,14 @@ struct FilePreviewScreen: View {
 
     // MARK: Bars
 
-    /// Ask (with the tab's agent) on the leading side and Find on the trailing one; Find's field in their place.
+    /// Ask (with the tab's agent) on the leading side and Find on the trailing one; Find's field in their place. An image
+    /// keeps the whole screen (Attach to chat is in "…").
     @ViewBuilder private var bottomBar: some View {
         if finding {
             findBar
-        } else if hasText || (actions.ask != nil && asks) {
+        } else if hasText || (actions.ask != nil && asksBelow) {
             HStack(spacing: 10) {
-                if let ask = actions.ask, let agent = actions.agent, asks {
+                if let ask = actions.ask, let agent = actions.agent, asksBelow {
                     Button { ask(preview) } label: {
                         Label("Ask \(agent)", systemImage: "paperclip")
                             .font(.subheadline.weight(.semibold))
@@ -267,6 +263,14 @@ struct FilePreviewScreen: View {
         case .loading, .binary, .failed, .folder: false
         default: true
         }
+    }
+
+    /// The bar's Ask: what asks, except an image.
+    private var asksBelow: Bool { asks && !isImage }
+
+    private var isImage: Bool {
+        if case .image = preview.content { return true }
+        return false
     }
 
     /// Code is on screen (text, or Markdown's source): Find has lines to search.
@@ -346,6 +350,9 @@ struct FilePreviewScreen: View {
                     .disabled(preview.text == nil || preview.truncated)
                 Button("Share", systemImage: "square.and.arrow.up", action: share)
                     .disabled(preview.content == .loading)
+                if isImage {
+                    Button("Save to Photos", systemImage: "square.and.arrow.down", action: saveToPhotos)
+                }
             }
             Section {
                 if let ask = actions.ask, asks {
@@ -380,6 +387,19 @@ struct FilePreviewScreen: View {
                 sharing = try FilesShareItem.write(data, name: preview.name)
             } catch {
                 problem = (error as? FilesSourceError)?.message ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// Save to Photos: the file's bytes (read whole when a smaller copy shows), added to the library.
+    private func saveToPhotos() {
+        Task {
+            do {
+                try await FilesPhotos.save(try await preview.bytes(), name: preview.name)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                problem = (error as? FilesSourceError)?.message ?? (error as? FilesPhotos.Refused)?.message
+                    ?? error.localizedDescription
             }
         }
     }
@@ -471,33 +491,29 @@ struct FileCodeView: View {
     }
 }
 
-/// An image file fitted to the screen; a tap opens it full screen in the attachment viewer.
+/// An image file fitted to the screen, zoomed with a pinch or a double tap.
 struct FilesImageView: View {
     let data: Data
     let name: String
-    let open: () -> Void
     @State private var image: UIImage?
 
     var body: some View {
         Group {
             if let image {
-                Button(action: open) {
-                    Image(uiImage: image).resizable().scaledToFit()
-                        .padding(16)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Image, \(name)")
-                .accessibilityHint("Opens it full screen")
+                ZoomableImage(image: image, inset: 16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement()
+                    .accessibilityLabel("Image, \(name)")
+                    .accessibilityAddTraits(.isImage)
             } else {
                 ProgressView()
             }
         }
         .task(id: data) {
             let data = data
-            // Drawn from a copy at most 2,048 pixels on a side: the screen shows no more.
+            // Drawn from a copy at most 4,096 pixels on a side (what is loaded holds no more): zoomed in, it shows them.
             image = await Task.detached(priority: .userInitiated) {
-                FilesImage.thumbnail(data, edge: 2_048).map { UIImage(cgImage: $0) }
+                FilesImage.thumbnail(data, edge: FilesImage.thumbnailEdge).map { UIImage(cgImage: $0) }
             }.value
         }
         .accessibilityIdentifier("file-image")
@@ -525,6 +541,35 @@ struct FilesShareItem: Identifiable {
 
     /// At launch: copies a quit left behind go.
     static func sweep() { try? FileManager.default.removeItem(at: folder) }
+}
+
+/// Save to Photos: an image file added to the photo library (add-only access, asked the first time), as it is, or as a
+/// PNG of its picture when Photos does not take its kind.
+enum FilesPhotos {
+    struct Refused: Error {
+        var message: String { "Dispatch may not add to your photos. Allow it in Settings › Privacy & Security › Photos." }
+    }
+
+    static func save(_ data: Data, name: String) async throws {
+        switch await PHPhotoLibrary.requestAuthorization(for: .addOnly) {
+        case .authorized, .limited: break
+        default: throw Refused()
+        }
+        do {
+            try await add(data, name: name)
+        } catch {
+            guard let png = UIImage(data: data)?.pngData() else { throw error }
+            try await add(png, name: (name as NSString).deletingPathExtension + ".png")
+        }
+    }
+
+    private static func add(_ data: Data, name: String) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            let options = PHAssetResourceCreationOptions()
+            options.originalFilename = name
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: options)
+        }
+    }
 }
 
 /// The system's share sheet.

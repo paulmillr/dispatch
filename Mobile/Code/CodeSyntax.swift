@@ -211,9 +211,9 @@ enum CodePalette {
     static let type = UIColor.dispatch("CodeType")
     static let number = UIColor.dispatch("CodeNumber")
     static let comment = UIColor.dispatch("CodeComment")
-    /// Diff rows and counts.
-    static let added = UIColor.dispatch("Added")
-    static let removed = UIColor.dispatch("Destructive")
+    /// Diff rows and counts, in colorblind mode that vision's (`UIColor.change`).
+    static let added = UIColor.change("Added", added: true)
+    static let removed = UIColor.change("Destructive", added: false)
     static let addedRow = added.dynamic(alpha: 0.12)
     static let removedRow = removed.dynamic(alpha: 0.12)
     static let hunk = call

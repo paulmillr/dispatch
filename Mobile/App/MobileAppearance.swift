@@ -40,6 +40,8 @@ private struct MobileAppearanceModifier: ViewModifier {
     @AppStorage private var chatSize: String
     @AppStorage private var terminalFont: String
     @AppStorage private var lineSpacing: String
+    /// Colorblind-friendly: the change colours follow it (`ColorVisionTrait`).
+    @AppStorage private var colorVision: String
 
     init(defaults: UserDefaults) {
         _stored = AppStorage(wrappedValue: MobileAppearance.fallback.rawValue, MobileAppearance.key, store: defaults)
@@ -48,35 +50,41 @@ private struct MobileAppearanceModifier: ViewModifier {
         _chatSize = AppStorage(wrappedValue: ChatTextSize.standard.rawValue, MobileSettings.chatTextSizeKey, store: defaults)
         _terminalFont = AppStorage(wrappedValue: TerminalFont.sourceCodePro.name, MobileSettings.terminalFontKey, store: defaults)
         _lineSpacing = AppStorage(wrappedValue: LineSpacing.normal.rawValue, MobileSettings.lineSpacingKey, store: defaults)
+        _colorVision = AppStorage(wrappedValue: ColorVision.typical.rawValue, MobileSettings.colorVisionKey, store: defaults)
     }
 
     func body(content: Content) -> some View {
         let appearance = MobileAppearance(stored: stored)
         let theme = MobileTheme(stored: theme)
+        let vision = ColorVision(rawValue: colorVision) ?? .typical
         let typography = ChatTypography(font: MobileChatFont(rawValue: chatFont) ?? .system, size: ChatTextSize(rawValue: chatSize) ?? .standard,
                                         terminalFont: TerminalFont.named(terminalFont),
                                         lineSpacing: LineSpacing(rawValue: lineSpacing) ?? .normal)
         content
             .environment(\.mobileTheme, theme)
             .environment(\.chatTypography, typography)
+            .environment(\.colorVision, vision)
             .preferredColorScheme(theme.colorScheme ?? appearance.colorScheme)
             // The window too: going back to System must clear the override `preferredColorScheme` left on it, and UIKit
             // presentations (alerts, menus, the share sheet) read the window's style and theme.
-            .background(MobileWindowStyle(style: theme.interfaceStyle ?? appearance.interfaceStyle, theme: theme)
+            .background(MobileWindowStyle(style: theme.interfaceStyle ?? appearance.interfaceStyle, theme: theme, vision: vision)
                 .allowsHitTesting(false).accessibilityHidden(true))
     }
 }
 
-/// Sets the hosting window's `overrideUserInterfaceStyle` and theme trait (`MobileThemeTrait`).
+/// Sets the hosting window's `overrideUserInterfaceStyle`, theme trait (`MobileThemeTrait`) and colour vision trait
+/// (`ColorVisionTrait`).
 private struct MobileWindowStyle: UIViewRepresentable {
     let style: UIUserInterfaceStyle
     let theme: MobileTheme
+    let vision: ColorVision
 
     final class Probe: UIView {
         static let tint = UIColor.themed("AccentColor", \.accent)
         private weak var tinted: UIWindow?
         var style: UIUserInterfaceStyle = .unspecified { didSet { apply() } }
         var theme = MobileTheme.automatic { didSet { apply() } }
+        var vision = ColorVision.typical { didSet { apply() } }
         override func didMoveToWindow() {
             super.didMoveToWindow()
             apply()
@@ -87,6 +95,9 @@ private struct MobileWindowStyle: UIViewRepresentable {
             // Reading an override that was never set raises: ask whether there is one first.
             if !window.traitOverrides.contains(MobileThemeTrait.self) || window.traitOverrides[MobileThemeTrait.self] != theme {
                 window.traitOverrides[MobileThemeTrait.self] = theme
+            }
+            if !window.traitOverrides.contains(ColorVisionTrait.self) || window.traitOverrides[ColorVisionTrait.self] != vision {
+                window.traitOverrides[ColorVisionTrait.self] = vision
             }
             // UIKit's tint (menus, alerts, the terminal's selection) in the theme's accent, resolved by that trait.
             if tinted !== window {
@@ -100,12 +111,14 @@ private struct MobileWindowStyle: UIViewRepresentable {
         let probe = Probe()
         probe.style = style
         probe.theme = theme
+        probe.vision = vision
         return probe
     }
 
     func updateUIView(_ probe: Probe, context: Context) {
         probe.style = style
         probe.theme = theme
+        probe.vision = vision
     }
 }
 

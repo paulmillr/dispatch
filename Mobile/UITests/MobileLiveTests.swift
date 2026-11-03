@@ -290,7 +290,7 @@ final class MobileLiveTests: XCTestCase {
     }
 
     /// The Linux VM: its key file imported, the linux-aarch64 helper uploaded under the private HOME, its OS label and
-    /// multiplexer in host detail, one terminal tab.
+    /// multiplexer in the host sheet, one terminal tab.
     private func linuxHost(_ app: XCUIApplication, _ linux: Linux) throws {
         // Back to Spaces' root, then edit mode's Add host.
         while back(app).exists { back(app).tap() }
@@ -308,16 +308,17 @@ final class MobileLiveTests: XCTestCase {
             app.navigationBars["Import key"].buttons["Import"].tap()
             waitGone(app.navigationBars["Import key"])
         }
-        // M1f: the OS label and the multiplexer the helper reported (its version from multiplexers.versions).
+        // The host sheet (Info in edit mode): the OS label and, at the large detent, the multiplexer the helper
+        // reported (its version from multiplexers.versions).
         let detail = Date()
         app.buttons["\(linux.name) details"].tap()
         wait(text(containing: "Ubuntu 26.04", in: app), 30, "the OS label from the helper's host.identity")
-        wait(text(containing: "Connected", in: app), 30, "connected")
+        wait(app.buttons["Disconnect"], 30, "connected")
+        app.swipeUp()
         wait(text(containing: "tmux 3.6", in: app), 30, "the multiplexer line")
         measure("linux.detail_connected", since: detail)
-        shot("M1f-\(linux.name)")
-        // Host detail keeps the system back button.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        shot("W1-\(linux.name)")
+        app.buttons["Close"].tap()
         app.buttons["Done"].tap()
 
         // One terminal tab of the VM's private tmux session.

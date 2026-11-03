@@ -72,6 +72,12 @@ enum TerminalSchemes {
         return own + rest
     }
 
+    /// The schemes Settings lists for `vision` (the Mac's `ColorSchemes.filtered`): a colorblind mode only the schemes
+    /// made for it, typical vision none of those.
+    static func listed(_ schemes: [Scheme], for vision: ColorVision) -> [Scheme] {
+        schemes.filter { ColorVision(bundledScheme: $0.file) == vision }
+    }
+
     /// A Ghostty theme file's colours: `background`, `foreground` and `palette = N=#rrggbb`.
     static func parse(_ text: String, file: String) -> Scheme {
         var scheme = Scheme(file: file, title: title(file))

@@ -142,7 +142,7 @@ struct HostStatsView: View {
             // Keep the chosen account after its terminal disconnects. A new
             // account is selected only by the user, never as failover.
             if case .ssh(let key) = source { selected = key }
-            // Samples every 2 s only while on screen: a closed popover's view lives on hidden.
+            // Samples every 1 or 2 s only while on screen: a closed popover's view lives on hidden.
             guard samplesAutomatically, onScreen, let subscription = store.subscribe(source, preferred: preferred) else { return }
             let latencyKey: SSHStatisticsStore.Key? = if showsIdentity, case .ssh(let key) = source { key } else { nil }
             let latencyToken = latencyKey.flatMap { store.remote.subscribeLatency($0, preferred: preferred) }

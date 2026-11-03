@@ -1,9 +1,10 @@
 import Dictation
 import SwiftUI
 
-/// Settings (G1): appearance and the theme (G4), the terminal's font (G2), size, colour scheme and contrast, chat's
-/// font (G3) and dictation, notifications (G5) and background refresh, per host Chat and the multiplexer, whether Spaces
-/// shows the offline hosts, the Apple Watch, Remove all data, and last Security (unsafe pastes). Opened from the end of
+/// Settings (G1): appearance, the theme (G4) and the colour scheme, the terminal's font (G2), size, line spacing and
+/// contrast, chat's font (G3) and dictation, notifications (G5) and background refresh, Hosts (whether Spaces shows the
+/// offline hosts, host colours, unsafe pastes; a host's own choices are in Edit host), the Apple Watch, and last Remove
+/// all data. Opened from the end of
 /// Spaces' edit mode, beside Add host, where hosts are managed: the headers of M2a and M3a stay as the mockup draws them.
 struct SettingsView: View {
     let composition: MobileComposition
@@ -59,15 +60,27 @@ struct SettingsView: View {
                         NavigationLink(value: Route.theme) {
                             LabeledContent("Theme") { Text(settings.theme.title) }
                         }
-                        // The terminal's rows and chat's lines together, as on the Mac.
-                        Picker("Line spacing", selection: $settings.lineSpacing) {
-                            ForEach(LineSpacing.allCases) { Text($0.title).tag($0) }
+                        NavigationLink(value: Route.terminalScheme) {
+                            LabeledContent("Color scheme") { Text(TerminalSchemes.title(settings.terminalScheme)) }
+                        }
+                        // As the Mac's: on picks red-green, the most common; the picker below refines it.
+                        Toggle("Colorblind-friendly", isOn: Binding(get: { settings.colorVision != .typical },
+                                                                    set: { settings.colorVision = $0 ? .redGreen : .typical }))
+                        if settings.colorVision != .typical {
+                            Picker("Color blindness", selection: $settings.colorVision) {
+                                ForEach([ColorVision.redGreen, .blueYellow]) { Text($0.title).tag($0) }
+                            }
                         }
                     } header: {
                         Text("Appearance")
                     } footer: {
-                        if let scheme = settings.theme.colorScheme {
-                            Text("\(settings.theme.title) is \(scheme == .dark ? "dark" : "light"). Appearance applies to the Automatic theme.")
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let scheme = settings.theme.colorScheme {
+                                Text("\(settings.theme.title) is \(scheme == .dark ? "dark" : "light"). Appearance applies to the Automatic theme.")
+                            }
+                            if settings.colorVision != .typical {
+                                Text("Host colors, changes and Color scheme's list are made for \(settings.colorVision.title.lowercased()) color blindness (\(settings.colorVision.detail)).")
+                            }
                         }
                     }
 
@@ -86,8 +99,9 @@ struct SettingsView: View {
                             }
                             .accessibilityValue(MobileSettings.fontSizeLabel(settings.terminalFontSize))
                         }
-                        NavigationLink(value: Route.terminalScheme) {
-                            LabeledContent("Color scheme") { Text(TerminalSchemes.title(settings.terminalScheme)) }
+                        // The terminal's rows and chat's lines together, as on the Mac.
+                        Picker("Line spacing", selection: $settings.lineSpacing) {
+                            ForEach(LineSpacing.allCases) { Text($0.title).tag($0) }
                         }
                         Picker("Improve text contrast", selection: $settings.textContrast) {
                             ForEach(TextContrast.allCases) { Text($0.title).tag($0) }
@@ -111,6 +125,8 @@ struct SettingsView: View {
                         }
                     } header: {
                         Text("Chat")
+                    } footer: {
+                        Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
                     }
 
                     Section {
@@ -134,27 +150,21 @@ struct SettingsView: View {
                     }
 
                     Section {
-                        if sessions.ordered.isEmpty {
-                            Text("No hosts yet. Add one in Spaces.").foregroundStyle(.secondary)
-                        }
-                        ForEach(sessions.ordered) { session in
-                            NavigationLink {
-                                HostSettingsView(hostID: session.id)
-                            } label: {
-                                LabeledContent(session.host.name) {
-                                    Text(!session.host.helper ? HostSummary.plainSSH : session.host.chat ? "Chat on" : "Chat off")
-                                }
-                            }
-                        }
                         if !sessions.ordered.isEmpty {
                             Toggle("Show offline hosts", isOn: Binding(get: { composition.tabs.showOffline },
                                                                        set: { composition.tabs.showOffline = $0 }))
+                            Toggle("Color-code hosts", isOn: $settings.showHostColors)
                         }
+                        Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
+                            .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
                     } header: {
                         Text("Hosts")
                     } footer: {
-                        if !sessions.ordered.isEmpty {
-                            Text("Spaces lists the hosts it cannot reach under Offline, at the end.")
+                        VStack(alignment: .leading, spacing: 6) {
+                            if !sessions.ordered.isEmpty {
+                                Text("Spaces lists the hosts it cannot reach under Offline, at the end. With Color-code hosts off, every host is gray.")
+                            }
+                            Text("Turn off unsafe pastes to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                         }
                     }
 
@@ -182,15 +192,6 @@ struct SettingsView: View {
                         }
                     } message: { removal in
                         Text(removal.message)
-                    }
-
-                    Section {
-                        Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
-                            .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
-                    } header: {
-                        Text("Security")
-                    } footer: {
-                        Text("Turn off to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                     }
                 }
                 // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
@@ -223,68 +224,6 @@ extension SettingsView {
         case .notPaired: "Pair an Apple Watch to see your agents and answer them from your wrist."
         case .notInstalled: "Install Dispatch from the Watch app on this iPhone to see your agents and answer them from your wrist."
         case .installed: "Your watch shows your agents and spaces. Opening a conversation there connects its host from this iPhone, also in the background; remove Dispatch from the watch to stop that."
-        }
-    }
-}
-
-/// One host's settings: Chat and the multiplexer (the same control as host detail).
-struct HostSettingsView: View {
-    let hostID: UUID
-    @Environment(HostSessions.self) private var sessions
-    /// The host's stats sheet (W1).
-    @State private var statsHost: UUID?
-
-    var body: some View {
-        if let session = sessions.session(hostID) {
-            Form {
-                Section {
-                    Button { statsHost = hostID } label: {
-                        Label("Stats", systemImage: "chart.xyaxis.line")
-                    }
-                    .accessibilityHint("Shows CPU, memory, disk and processes of \(session.host.name)")
-                }
-                Section {
-                    Toggle("Chat", isOn: Binding(get: { session.host.chat }, set: { chat in
-                        var host = session.host
-                        host.chat = chat
-                        sessions.update(host)
-                    }))
-                    // Chat needs the helper (`HostRecord.chat`): host detail's Helper switch turns it back on.
-                    .disabled(!session.host.helper)
-                } footer: {
-                    if session.host.helper {
-                        Text("Off: Dispatch's helper runs on \(session.host.name) without agent hooks, and its agents show as terminals only. Turning Chat on again reconnects.")
-                    } else {
-                        Text("\(session.host.name) uses plain SSH without the helper, so it has no Chat. Turn the helper on in the host's details to use Chat.")
-                    }
-                }
-                Section {
-                    HostFilesSwitch(session: session)
-                } footer: {
-                    if session.host.helper {
-                        Text("The helper lists and reads files and runs read-only git commands (status, diff, log) in your tabs’ folders, for Files, Review and Commits. It never changes a file. Turning it on again reconnects.")
-                    } else {
-                        Text("\(session.host.name) uses plain SSH without the helper, so it has no Files. Turn the helper on in the host's details to use Files.")
-                    }
-                }
-                // A plain SSH host has no multiplexer's spaces.
-                if session.host.helper {
-                    Section {
-                        if session.multiplexerLine == "none" {
-                            LabeledContent("Multiplexer") { Text("none").monospaced() }
-                        } else {
-                            HostMultiplexerPicker(session: session)
-                        }
-                    } footer: {
-                        Text("Automatic follows herdr while its server runs, else tmux.")
-                    }
-                }
-            }
-            .navigationTitle(session.host.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .hostStatsSheet(host: $statsHost)
-        } else {
-            Color.clear
         }
     }
 }

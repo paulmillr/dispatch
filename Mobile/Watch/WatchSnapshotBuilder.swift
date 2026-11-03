@@ -97,7 +97,9 @@ struct WatchSnapshotBuilder {
     /// (`HostTint.color` with the dark tone), in sRGB.
     static func tint(_ tint: HostTint) -> String {
         let tone = HostTint.Tone.darkColor
-        let color = HostTint.oklch(tone.lightness, HostColorStore.shared.enabled ? tone.chroma : 0, (tint.choice ?? tint.automatic).hue)
+        // In colorblind mode the vision's hue and lightness step, as the phone's own wash (`HostTint.color`).
+        let store = HostColorStore.shared, look = (tint.choice ?? tint.automatic).look(for: store.vision)
+        let color = HostTint.oklch(tone.lightness + look.lift, store.enabled ? tone.chroma : 0, look.hue)
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         return WatchTint.hex(red: red, green: green, blue: blue)

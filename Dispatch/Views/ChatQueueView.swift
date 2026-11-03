@@ -214,7 +214,7 @@ struct ChatQueueView: View {
     /// The row's text: where a message flies to from the composer (hidden until it lands) and from here to its bubble.
     private func messageText(_ message: ChatQueuedMessage, editing: Bool, active: Bool) -> some View {
         Text(editing ? "editing below…" : Self.text(message))
-            .font(theme.typography.body).italic(editing)
+            .font(editing ? theme.typography.italic() : theme.typography.body)
             .foregroundStyle(editing ? theme.muted.opacity(0.65) : active ? theme.ink : theme.muted)
             .lineLimit(1).truncationMode(.tail)
             .background(ChatFlightAnchor(place: .queued(message.id), frames: session.flightFrames))

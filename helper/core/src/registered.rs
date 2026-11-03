@@ -178,6 +178,12 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
     fn host_screens(&mut self, enabled: bool) {
         self.part.host_screens(enabled);
     }
+    fn steady_sizes(&mut self) {
+        self.part.steady_sizes();
+    }
+    fn bound_topology(&mut self) {
+        self.part.bound_topology();
+    }
     fn restores(&self) -> bool {
         self.part.restores()
     }

@@ -582,7 +582,7 @@ extension TabsSpacesTreeTests {
         let claude = SpacesAgentChoice(key: "claude", label: "Claude")
         navigator.startAgent(claude, in: space)
         try await TestSupport.eventually { starts.value == 1 }
-        XCTAssertEqual(navigator.startingAgents, [space.ref], "its entries wait")
+        XCTAssertEqual(navigator.startingAgents, [space.ref: "Claude"], "its entries wait, New tab names what starts")
         navigator.startAgent(claude, in: space)
         navigator.startAgent(SpacesAgentChoice(key: "codex", label: "Codex"), in: space)
         starts.waiting?.resume()

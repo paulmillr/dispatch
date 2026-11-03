@@ -40,7 +40,7 @@ CAPABILITIES = ','.join(FULL)
 # The opt-in features the phone names in hello (helper/core/src/dispatch/features.rs). A client that
 # names none (the Mac app) gets exactly the replies its replay corpus recorded.
 FEATURES = ['interaction.options', 'chat.list', 'projects.recent', 'multiplexers.versions', 'terminals.coalesce',
-            'launch.names', 'stdio.liveness', 'terminals.activity', 'memberships.append']
+            'launch.names', 'stdio.liveness', 'memberships.append', 'sizes.steady']
 # With stdio.liveness the helper ends after 45 s without traffic; the phone pings this often.
 PING = 15
 # sshd's PATH for a non-login exec channel (macOS; Linux adds /usr/local/bin and /usr/games).
@@ -1844,7 +1844,8 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
         async def case():
             fixture = self.fixture
             session = await fixture.connect('ssh', 'activity')
-            hello, _ = await self.hello(session)
+            # The phone no longer asks for server times (docs/ios.md, Times); the helper still answers them.
+            hello, _ = await self.hello(session, features=FEATURES + ['terminals.activity'])
             self.assertIn('terminals.activity', hello['features'])
             self.assertIn('terminals.activity', hello['ops'])
             # Cases run by name: test_2 (after this one) expects no tmux server, so one started here is stopped.
@@ -1908,6 +1909,60 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 fixture.host.sh('rm -f "$1"', fixture.tmux_socket)
         run(self.closing(case()))
 
+
+    def test_14_sizes_steady(self):
+        """Attaching one tmux window at the phone's size leaves its sibling as it was with sizes.steady; without it
+        tmux sized the sibling to the control client's default 80x24 (and it redrew)."""
+        async def case():
+            fixture = self.fixture
+            started_server = not fixture.host.exists(fixture.tmux_socket)
+            phone = dict(GRID, rows=20, columns=50)
+
+            def size(window):
+                return fixture.tmux('display', '-p', '-t', window, '#{window_width}x#{window_height}').stdout.strip()
+
+            async def attempt(name, features):
+                session = await fixture.connect('ssh', name)
+                await self.hello(session, features=features)
+                backend, _ = await self.opened(session, TMUX, 'tmux', create=True)
+                fixture.tmux('set', '-g', 'default-size', '120x40')
+                space = next(n['id'] for n in session.nodes(backend) if n['kind'] == 'workspace')
+                work = fixture.root / f'work-{name}'
+                fixture.host.mkdir(work)
+                windows = []
+                for _ in range(2):
+                    terminal = await session.request('terminals.create', {'mux': TMUX, 'parent': space, 'cwd': str(work)},
+                                                     timeout=30)
+                    await session.until(lambda: self.node(session, backend, terminal), what='new window')
+                    tab = self.node(session, backend, terminal)['parent']
+                    windows.append((terminal, tab, next(n['key'] for n in session.nodes(backend) if n['id'] == tab).rsplit(':', 1)[1]))
+                (_, sibling_tab, sibling), (shown, shown_tab, window) = windows
+                self.assertEqual((size(sibling), size(window)), ('120x40', '120x40'))
+                attach, _ = await session.observe('terminals.attach', {'mux': TMUX, 'terminal': shown, 'size': phone,
+                                                                       'takeover': False}, wait=False)
+                await session.notification(attach, lambda m, p: m == 'terminal.attached', timeout=20)
+                deadline = time.monotonic() + 10
+                while size(window) != '50x20' and time.monotonic() < deadline:
+                    await asyncio.sleep(0.1)
+                self.assertEqual(size(window), '50x20', 'the attached window takes the phone size')
+                await asyncio.sleep(1)
+                result = size(sibling)
+                for tab in (shown_tab, sibling_tab):
+                    await session.request('close.request', {'mux': TMUX, 'node': tab, 'policy': 'prompt'})
+                await session.close()
+                return result
+
+            self.assertEqual(await attempt('steady', FEATURES), '120x40', 'the sibling stays as it was')
+            self.assertEqual(await attempt('unsteady', [f for f in FEATURES if f != 'sizes.steady']), '80x24',
+                             'without the feature tmux gives the sibling the control client default')
+            if started_server:
+                pid = int(fixture.tmux('display', '-p', '#{pid}').stdout.strip())
+                fixture.host.kill(pid)
+                deadline = time.monotonic() + 10
+                while fixture.host.alive(pid) and time.monotonic() < deadline:
+                    await asyncio.sleep(0.1)
+                fixture.host.sh('rm -f "$1"', fixture.tmux_socket)
+        run(self.closing(case()))
 
     # -- backpressure: requests during a flood, liveness, the output window ----------------------
     async def flooded(self, session, key, command='yes'):

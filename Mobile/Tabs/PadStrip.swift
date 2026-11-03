@@ -550,21 +550,28 @@ private struct PadPillCap: Layout {
 
 /// The strip's "+": a tap opens a shell in the space (New Tab, ⌘T), held the space screen's menu (P2e,
 /// `SpaceNewTabMenu`): Shell, the host's agents (started in a new tab of this space, as New chat starts them), and
-/// another space (New tab's picker).
+/// another space (New tab's picker). A spinner takes the "+" while an agent picked there starts.
 struct PadNewTabButton: View {
     let navigator: SpacesNavigator
     let space: MobileSpace
     let connected: Bool
 
+    private var starting: String? { navigator.startingAgents[space.ref] }
+
     var body: some View {
         Menu {
             SpaceNewTabMenu(navigator: navigator, space: space)
         } label: {
-            Image(systemName: "plus")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 38, height: 38)
-                .contentShape(Circle())
+            Group {
+                if starting != nil {
+                    ProgressView()
+                } else {
+                    Image(systemName: "plus").font(.body.weight(.semibold))
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 38, height: 38)
+            .contentShape(Circle())
         } primaryAction: {
             navigator.newTab(in: space)
         }
@@ -576,6 +583,7 @@ struct PadNewTabButton: View {
         .hoverEffect(.highlight)
         .disabled(!connected)
         .accessibilityLabel("New tab")
+        .accessibilityValue(starting.map { "Starting \($0)" } ?? "")
         .accessibilityHint("Hold for an agent or another space")
         .task(id: LaunchKey(host: space.ref.host, connected: connected)) {
             guard connected else { return }
@@ -593,7 +601,20 @@ struct PadNewTabButton: View {
 /// comment count. Each is a button labelled with its title inside the `tab-segments` container, as the phone's capsule
 /// is, so the UI tests find them the same way.
 struct PadModeSwitch: View {
+    /// A mode's slot (40 points), the gap between slots, the capsule's inset.
+    static let slot: CGFloat = 40, gap: CGFloat = 2, inset: CGFloat = 3
+
+    /// A slot's height stood on end (a phone's landscape rail).
+    static let railSlot: CGFloat = 36
+
+    /// The switch's length along its axis with `count` slots.
+    static func length(_ count: Int, axis: Axis = .horizontal) -> CGFloat {
+        CGFloat(count) * (axis == .vertical ? railSlot : slot) + CGFloat(max(count - 1, 0)) * gap + 2 * inset
+    }
+
     let modes: [PadMode]
+    /// Vertical in a phone's landscape rail (`TabRail`): the modes stacked, each slot as tall as wide is here.
+    var axis: Axis = .horizontal
     /// The modes that can be chosen now; the others hold their places, greyed (Review and Commits until the
     /// repository is known).
     var enabled: Set<PadMode>? = nil
@@ -603,7 +624,8 @@ struct PadModeSwitch: View {
     let choose: (PadMode) -> Void
 
     var body: some View {
-        HStack(spacing: 2) {
+        let layout = axis == .vertical ? AnyLayout(VStackLayout(spacing: Self.gap)) : AnyLayout(HStackLayout(spacing: Self.gap))
+        layout {
             ForEach(modes) { mode in
                 let on = mode == selected
                 let usable = enabled?.contains(mode) ?? true
@@ -611,7 +633,7 @@ struct PadModeSwitch: View {
                     Image(systemName: mode.symbol)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(on ? Color.dispatchPink : usable ? Color.primary : Color.secondary.opacity(0.5))
-                        .frame(width: 40, height: 32)
+                        .frame(width: Self.slot, height: axis == .vertical ? Self.railSlot : 32)
                         .background { if on { Capsule().fill(Color.lens) } }
                         .overlay(alignment: .topTrailing) {
                             if mode == .review, review > 0 {
@@ -637,7 +659,7 @@ struct PadModeSwitch: View {
                 .accessibilityShowsLargeContentViewer { Label(mode.title, systemImage: mode.symbol) }
             }
         }
-        .padding(3)
+        .padding(Self.inset)
         .glassEffect(.regular, in: Capsule())
         .fixedSize()
         .accessibilityElement(children: .contain)
@@ -658,9 +680,11 @@ struct PadBanner<Content: View>: View {
     }
 }
 
-/// Review's and Commits' list beside its pane (I2, I3): the list at 360 points, a hairline, the pane; before a row is
-/// chosen the pane says how to fill it (I2b, I3b).
+/// Review's and Commits' list beside its pane (I2, I3): the list at 360 points (300 on a phone on its side,
+/// `MobileLandscape.listWidth`), a hairline, the pane; before a row is chosen the pane says how to fill it (I2b, I3b).
 struct PadListPane<List: View, Pane: View>: View {
+    /// Nil: the iPad's `listWidth`.
+    var listWidth: CGFloat? = nil
     @ViewBuilder var list: List
     @ViewBuilder var pane: Pane
 
@@ -668,7 +692,7 @@ struct PadListPane<List: View, Pane: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            list.frame(width: Self.listWidth)
+            list.frame(width: listWidth ?? Self.listWidth)
             Rectangle().fill(Color.hairline).frame(width: 0.5).ignoresSafeArea(edges: .bottom)
             pane.frame(maxWidth: .infinity, maxHeight: .infinity)
         }

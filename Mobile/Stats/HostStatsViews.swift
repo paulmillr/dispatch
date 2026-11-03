@@ -286,18 +286,16 @@ struct FactRow: View {
     }
 }
 
-/// A row of the sheet's connection list: label, value in grey, an optional swatch and chevron.
+/// A row of the sheet's connection list: label, value in grey, an optional chevron.
 struct HostStatsListRow: View {
     let label: String
     let value: String
     var chevron = false
-    var swatch: Color? = nil
 
     var body: some View {
         HStack(spacing: 8) {
             Text(label).font(.body).foregroundStyle(Color.primary)
             Spacer()
-            if let swatch { Circle().fill(swatch).frame(width: 14, height: 14).accessibilityHidden(true) }
             Text(value).font(.body).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             if chevron { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary) }
         }

@@ -252,6 +252,7 @@ private struct ChatSelectableText: NSViewRepresentable {
             if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { font = font.bold() }
             if run.inlinePresentationIntent?.contains(.emphasized) == true { font = font.italic() }
             var resolved = font.resolve(in: fontContext).ctFont
+            if run.inlinePresentationIntent?.contains(.emphasized) == true, let italic = ChatFont.italic(for: resolved) { resolved = italic }
             if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true,
                let bold = ChatFont.boldPostScriptName(CTFontCopyPostScriptName(resolved) as String) {
                 resolved = CTFontCreateWithName(bold as CFString, CTFontGetSize(resolved), nil)

@@ -23,12 +23,6 @@ final class FidelityUITests: XCTestCase {
             appearance["M1d"]!,
             // Edit mode over the tree with ai collapsed, as drawn.
             Screen(id: "M1e", arguments: sample + ["-DispatchTabsCollapse", "ai", "-DispatchTabsShow", "edit"]),
-            Screen(id: "M1f", environment: ["DISPATCH_MOBILE_SCRIPTED": "1"], then: { app in
-                let edit = app.buttons["Edit"]
-                if edit.waitForExistence(timeout: 5) { edit.tap() }
-                let info = app.buttons["studio details"]
-                if info.waitForExistence(timeout: 5) { info.tap() }
-            }),
             appearance["M2a"]!,
             Screen(id: "M2b", arguments: sample + ["-DispatchTabsCollapse", "ai"]),
             appearance["M2c"]!,
@@ -101,7 +95,6 @@ final class FidelityUITests: XCTestCase {
             stats("W1", ["-DispatchHostStats", "mba2:large"]),
             stats("W2", ["-DispatchHostStats", "mba2:large:memory"]),
             stats("W3", ["-DispatchHostStats", "mba2:large:scrub"]),
-            stats("W4", ["-DispatchHostDetail", "mba2"]),
             stats("W5", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "offline"]),
             stats("W6", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "plain"]),
             stats("W7", ["-DispatchHostStats", "mba2:large", "-DispatchLowPower", "YES"]),

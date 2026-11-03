@@ -47,8 +47,10 @@ class Banner(unittest.TestCase):
                                         stdout=subprocess.PIPE, check=True).stdout
                 (case / 'three.rpl.zst').write_bytes(packed)
             lines = leak.banners([Path(directory)])
-        needles = [line.split('\t')[0] for line in lines]
-        values = [line.split('\t')[1] for line in lines]
+        needles = [line.split('\t')[0].removeprefix('Last login: ') for line in lines]
+        values = [line.split('\t')[1].removeprefix('Last login: ') for line in lines]
+        # Only a banner's time: the same second elsewhere (Claude Code's procStart) is no login.
+        self.assertTrue(all(line.startswith('Last login: ') and line.split('\t')[1].startswith('Last login: ') for line in lines))
         zstd = ['Sat Mar  7 09:08:07'] if shutil.which('zstd') else []
         self.assertEqual(needles, ['Fri Oct 16 14:44:47'] + zstd + ['Thu Jan  1 00:00:01', 'Tue Jun  9 04:32:50'])
         self.assertEqual(len(set(values)), len(needles))

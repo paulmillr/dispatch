@@ -44,8 +44,10 @@ extension Color {
     static let caution = Color("Caution")
     /// Close space, failed steps, removed lines.
     static let destructive = Color("Destructive")
-    /// Added lines and patch steps.
-    static let added = Color("Added")
+    /// Added lines and patch steps; removed lines (`destructive` outside changes). In colorblind mode that vision's
+    /// (`UIColor.change`).
+    static let added = Color(uiColor: CodePalette.added)
+    static let removed = Color(uiColor: CodePalette.removed)
     /// The commit graph's lanes: the current branch a vivid green, merged branches slate.
     static let graphCurrent = Color("GraphCurrent")
     static let graphMerged = Color("GraphMerged")

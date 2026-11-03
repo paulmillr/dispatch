@@ -3,7 +3,7 @@ import UIKit
 import XCTest
 @testable import DispatchMobile
 
-/// The stats sheet's states (W1a–W7), host detail's stats block (W4) and the popover's content (I5), read through
+/// The host sheet's states (W1a–W7) and the popover's content (I5), read through
 /// what VoiceOver gets, on scripted hosts whose helper answers as the demo's mba2.
 @MainActor
 final class HostStatsSheetTests: XCTestCase {
@@ -89,8 +89,8 @@ final class HostStatsSheetTests: XCTestCase {
         elements.first { $0.accessibilityLabel == label }
     }
 
-    /// W1: the strip's numbers, the processes by CPU and the connection list, with Edit and Disconnect; Memory orders
-    /// the processes by memory (W2). Disconnect keeps the host off.
+    /// W1: the strip's numbers, the processes by CPU and the connection list (Address, Key, Multiplexer), with the Edit
+    /// pencil and Disconnect; Memory orders the processes by memory (W2). Disconnect keeps the host off.
     func testLargeSheetLive() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected && session.latency != nil }
@@ -105,8 +105,11 @@ final class HostStatsSheetTests: XCTestCase {
         XCTAssertEqual(Self.element("Disk", in: elements)?.accessibilityValue, "48 GB free · 90% used")
         XCTAssertTrue(labels.contains { $0.hasPrefix("node") && $0.contains("50%") }, "\(labels)")
         XCTAssertTrue(labels.contains { $0.hasPrefix("Address") && $0.contains("alex@mba2.tail3f.ts.net") }, "\(labels)")
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Helper") && $0.contains("Full features") }, "\(labels)")
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Color") && $0.contains("Automatic") }, "\(labels)")
+        XCTAssertTrue(labels.contains { $0.hasPrefix("Key") && $0.contains("Password") }, "\(labels)")
+        XCTAssertTrue(labels.contains { $0.hasPrefix("Multiplexer") && $0.contains("herdr 0.9.5") }, "\(labels)")
+        for gone in ["Latency", "Helper", "Color", "Forget host"] {
+            XCTAssertFalse(labels.contains { $0.hasPrefix(gone) }, "\(gone) is the title's or Edit host's: \(labels)")
+        }
         XCTAssertTrue(session.stats.viewing, "the sheet asks for 2 s samples")
 
         _ = Self.element("Memory", in: elements)?.accessibilityActivate()
@@ -184,7 +187,7 @@ final class HostStatsSheetTests: XCTestCase {
         try await TestSupport.eventually { !session.parked && session.link.isConnected }
     }
 
-    /// W1a: the small detent shows the strip and Disconnect; what is below waits for the large one.
+    /// W1a: the small detent shows the strip, the Edit pencil and Disconnect; what is below waits for the large one.
     func testSmallSheetLive() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected }
@@ -192,13 +195,13 @@ final class HostStatsSheetTests: XCTestCase {
             Self.labels($0).contains("Disconnect")
         })
         XCTAssertTrue(labels.contains("CPU"), "\(labels)")
-        XCTAssertFalse(labels.contains("Edit"), "\(labels)")
+        XCTAssertTrue(labels.contains("Edit"), "the pencil at both detents: \(labels)")
         XCTAssertFalse(labels.contains("Top processes"), "\(labels)")
         XCTAssertFalse(labels.contains { $0.hasPrefix("Address") }, "\(labels)")
     }
 
-    /// W1c and W5: offline, the small sheet lists the connection facts with Connect; the large one the last numbers
-    /// dimmed under "Offline · last sample …", Forget host and Connect, which connects again.
+    /// W1c and W5: offline, the small sheet lists the connection with Connect; the large one the last numbers dimmed
+    /// under "Offline · last sample …" and Connect alone (Remove host is Edit host's), which connects again.
     func testOfflineSheets() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected }
@@ -206,21 +209,22 @@ final class HostStatsSheetTests: XCTestCase {
         let small = Self.labels(try await spoken(HostStatsSheet(hostID: session.id), sessions: sessions) {
             Self.labels($0).contains("Connect")
         })
-        for prefix in ["Address", "Port", "User", "Key", "Multiplexer"] {
+        for prefix in ["Address", "Key", "Multiplexer"] {
             XCTAssertTrue(small.contains { $0.hasPrefix(prefix) }, "\(prefix) in \(small)")
         }
+        XCTAssertTrue(small.contains("Edit"), "the pencil: \(small)")
         XCTAssertTrue(small.contains { $0.contains("Offline since") }, "\(small)")
         XCTAssertFalse(small.contains("CPU"), "no stale numbers on the small sheet: \(small)")
 
         let sample = try XCTUnwrap(session.stats.sample)
         let large = try await spoken(HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large)), sessions: sessions) {
-            Self.labels($0).contains("Forget host")
+            Self.labels($0).contains("Top processes") && Self.labels($0).contains("Connect")
         }
         let labels = Self.labels(large)
         XCTAssertTrue(labels.contains("Offline · last sample \(HostStatsFormat.time(sample.date))"), "\(labels)")
         XCTAssertTrue(labels.contains("CPU"), "\(labels)")
         XCTAssertTrue(labels.contains("Edit"), "the pencil: \(labels)")
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Latency") && $0.contains("—") }, "\(labels)")
+        XCTAssertFalse(labels.contains("Forget host"), "\(labels)")
         _ = Self.element("Connect", in: large)?.accessibilityActivate()
         try await TestSupport.eventually { !session.parked && session.link.isConnected }
     }
@@ -232,7 +236,6 @@ final class HostStatsSheetTests: XCTestCase {
         let presentation = HostStatsPresentation(session: session)
         XCTAssertEqual(presentation.phase, .plain)
         XCTAssertEqual(presentation.line, "Plain SSH", "no OS: no helper ever reported one")
-        XCTAssertEqual(presentation.helper, "Plain SSH")
         let elements = try await spoken(HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large)), sessions: sessions) {
             Self.labels($0).contains("Install helper…")
         }
@@ -240,19 +243,30 @@ final class HostStatsSheetTests: XCTestCase {
         XCTAssertTrue(labels.contains("Stats need the helper"), "\(labels)")
         XCTAssertFalse(labels.contains("CPU"), "\(labels)")
         XCTAssertTrue(labels.contains("Disconnect"), "\(labels)")
+        XCTAssertFalse(labels.contains(HostPlainStatsCard.usePlainSSH), "plain by choice already: \(labels)")
         _ = Self.element("Install helper…", in: elements)?.accessibilityActivate()
         try await TestSupport.eventually { session.host.helper && session.mode == .helper }
         XCTAssertEqual(HostStatsPresentation(session: session).phase, .live)
     }
 
-    /// A connection that fell back says why, and tries again.
+    /// A connection that fell back says why, tries again, or turns the Helper switch off ("Use plain SSH").
     func testFallbackSaysWhy() async throws {
-        let (_, session) = registry(plainReason: "the host’s system (Plan 9) is not supported")
+        let (sessions, session) = registry(plainReason: "the host’s system (Plan 9) is not supported")
         try await TestSupport.eventually { session.isPlain }
         let presentation = HostStatsPresentation(session: session)
         XCTAssertEqual(presentation.phase, .plain)
         XCTAssertEqual(presentation.plainText, "The helper could not start on mba2: the host’s system (Plan 9) is not supported")
         XCTAssertEqual(presentation.plainAction, "Try again")
+        let elements = try await spoken(HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large)), sessions: sessions) {
+            Self.labels($0).contains(HostPlainStatsCard.usePlainSSH)
+        }
+        XCTAssertTrue(Self.labels(elements).contains("Try again"), "\(Self.labels(elements))")
+        let action = try XCTUnwrap(Self.element(HostPlainStatsCard.usePlainSSH, in: elements))
+        XCTAssertEqual(action.accessibilityHint, "Turns the helper off: mba2 connects with plain SSH from now on")
+        _ = action.accessibilityActivate()
+        try await TestSupport.eventually { sessions.store.record(session.id)?.helper == false }
+        XCTAssertEqual(sessions.store.record(session.id)?.chat, false, "Chat goes with the helper")
+        XCTAssertFalse(HostSummary(session: session).offersPlainSSH, "plain by choice: no reason, no action")
     }
 
     /// W7: Low Power Mode samples every 30 s, and the sheet says so.
@@ -273,28 +287,13 @@ final class HostStatsSheetTests: XCTestCase {
         let (_, session) = registry()
         try await TestSupport.eventually { session.latency != nil }
         XCTAssertEqual(HostStatsPresentation(session: session).line, "macOS 26.1 · 18 ms")
-        XCTAssertEqual(HostStatsPresentation(session: session).address, "alex@mba2.tail3f.ts.net")
+        XCTAssertEqual(HostStatsPresentation(session: session).address, "alex@mba2.tail3f.ts.net", "port 22 unsaid")
         XCTAssertEqual(HostStatsPresentation(session: session).multiplexer, "herdr 0.9.5")
         XCTAssertNil(HostStatsPresentation(session: session).offlineBanner)
         session.park()
         XCTAssertEqual(HostStatsPresentation(session: session).line, "macOS 26.1 · offline")
         let updated = try XCTUnwrap(session.updated)
         XCTAssertEqual(HostStatsPresentation(session: session).offlineLine, "Offline since \(HostStatsFormat.time(updated))")
-    }
-
-    /// W4: host detail shows the strip between its header and Connection, and its disc opens the stats.
-    func testHostDetailShowsTheStrip() async throws {
-        let (sessions, session) = registry()
-        try await TestSupport.eventually { session.link.isConnected }
-        let elements = try await spoken(NavigationStack { HostDetail(hostID: session.id) }, sessions: sessions) {
-            Self.labels($0).contains("Remove host")
-        }
-        let labels = Self.labels(elements)
-        XCTAssertTrue(labels.contains("CPU"), "\(labels)")
-        XCTAssertTrue(labels.contains("mba2 stats"), "\(labels)")
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Port") && $0.contains("22") }, "\(labels)")
-        XCTAssertTrue(labels.contains("Helper"), "\(labels)")
-        XCTAssertTrue(labels.contains("Multiplexer"), "\(labels)")
     }
 
     /// I5: the popover's content, for the iPad's host glyph.
@@ -305,7 +304,31 @@ final class HostStatsSheetTests: XCTestCase {
             Self.labels($0).contains("Disconnect")
         })
         for label in ["CPU", "Top processes", "Edit", "Disconnect"] { XCTAssertTrue(labels.contains(label), "\(label) in \(labels)") }
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Helper") }, "\(labels)")
-        XCTAssertFalse(labels.contains { $0.hasPrefix("Latency") }, "the popover's list is shorter: \(labels)")
+        XCTAssertEqual(labels.filter { $0 == "Edit" }.count, 1, "the pencil alone: \(labels)")
+        XCTAssertTrue(labels.contains { $0.hasPrefix("Key") }, "the sheet's list: \(labels)")
+        XCTAssertFalse(labels.contains { $0.hasPrefix("Helper") }, "\(labels)")
+    }
+}
+
+extension HostStatsSheetTests {
+    /// While reconnecting the sheet offers Disconnect, not a disabled Connecting…; it stops the retries and is saved.
+    func testDisconnectWhileReconnecting() async throws {
+        let record = HostRecord(name: "mba2", address: "mba2.tail3f.ts.net", user: "alex", auth: .password)
+        let driver = ScriptedHostSessionDriver { _ in
+            [.event(.link(.reconnecting(attempt: 12, since: Date(), reason: "No route to host"))), .hold]
+        }
+        let sessions = HostSessions(store: HostStore(url: nil, hosts: [record]),
+                                    keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false),
+                                    knownHosts: KnownHostStore(url: nil), driver: driver, active: true)
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { if case .reconnecting = session.link { true } else { false } }
+        let sheet = HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large))
+        let elements = try await spoken(sheet, sessions: sessions) { Self.labels($0).contains("Disconnect") }
+        let labels = Self.labels(elements)
+        XCTAssertFalse(labels.contains("Connecting"), "\(labels)")
+        XCTAssertFalse(labels.contains("Connect"), "\(labels)")
+        _ = Self.element("Disconnect", in: elements)?.accessibilityActivate()
+        try await TestSupport.eventually { session.parked && session.link == .disconnected }
+        XCTAssertEqual(sessions.store.record(record.id)?.parked, true)
     }
 }

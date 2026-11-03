@@ -37,11 +37,12 @@ extension SpacesHostActions {
     func resetKnownHosts() {}
 }
 
-/// Hosts' views the Spaces tab embeds: New host (M8a; `done` gets the new host's id, or nil when cancelled) and host
-/// detail (M1f, pushed from the Info button).
+/// Hosts' sheets the Spaces tab presents: New host (M8a; `done` gets the new host's id, or nil when cancelled) and Edit
+/// host (Files' Change integration…). A host's own screen is the stats sheet (`hostStatsSheet`).
 struct SpacesHostViews {
     var newHost: @MainActor (_ done: @escaping (UUID?) -> Void) -> AnyView
-    var detail: @MainActor (UUID) -> AnyView
+    /// Edit host (`HostSessions.editHostSheet`).
+    var edit: @MainActor (UUID) -> AnyView
     /// The switcher's host row (P3): "34% cpu · 34% mem · 18 ms" from the host's stats, nil before any.
     var statsLine: @MainActor (UUID) -> String? = { _ in nil }
 }

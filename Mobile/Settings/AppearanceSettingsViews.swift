@@ -78,7 +78,8 @@ struct TerminalSchemeSettingsView: View {
     @State private var query = ""
 
     var body: some View {
-        let shown = query.isEmpty ? schemes : schemes.filter { $0.title.localizedStandardContains(query) }
+        let listed = TerminalSchemes.listed(schemes, for: settings.colorVision)
+        let shown = query.isEmpty ? listed : listed.filter { $0.title.localizedStandardContains(query) }
         let own = shown.filter { TerminalSchemes.dispatch[$0.file] != nil }
         let others = shown.filter { TerminalSchemes.dispatch[$0.file] == nil }
         List {
@@ -86,6 +87,11 @@ struct TerminalSchemeSettingsView: View {
                 if !own.isEmpty { Section("Dispatch") { rows(own) } }
                 sections(others.filter { $0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.dark, side: "Dark")
                 sections(others.filter { !$0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.light, side: "Light")
+                if settings.colorVision != .typical {
+                    Section {} footer: {
+                        Text("Colorblind-friendly lists only the schemes made for \(settings.colorVision.title.lowercased()) color blindness.")
+                    }
+                }
             }
             // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)

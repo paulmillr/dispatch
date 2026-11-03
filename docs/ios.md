@@ -111,13 +111,13 @@ Mac views built on the Mac chat stack are ported, not shared.
 
 | Area | Directory | Owns |
 | --- | --- | --- |
-| Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, plain SSH shell tabs (`ShellSessions`), New host, host detail, trust sheet |
+| Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, plain SSH shell tabs (`ShellSessions`), New host and Edit host, trust sheet |
 | Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, Spaces tree, a space's tabs, `TabScreen` and its header menu, the iPad split and strip (with the space switcher), the menu bar (`MobileCommands`) |
 | Chat | `Mobile/Chat`, `Mobile/Agents` | `MobileChatSession`, Agents list, thread, approvals, queue, side conversations, New chat |
 | Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed` (`PlainShellFeed` for plain SSH), `TerminalPresence`, key capsule, search |
 | Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec and shell (PTY) channels, bootstrap, plain SSH fallback, reconnect |
 | Code, Files, Commits, Reviews | `Mobile/Code`, `Files`, `Commits`, `Reviews` | Diff viewer and code composer; Files listing and preview; the Commits log; Review comments and sending |
-| Stats | `Mobile/Stats` | `HostStatistics` per `HostSession`, the stats sheet and popover |
+| Stats | `Mobile/Stats` | `HostStatistics` per `HostSession`, the host sheet and popover |
 | Resilience, Settings, Watch | `Mobile/Resilience`, `Settings`, `Watch` | Network watching, launch cache, background refresh, notifications; Settings; the phone's side of the watch link |
 
 - `HostSession` is the one object the UI observes per host. Other areas get a `HelperClient` and `HelperTopology`
@@ -128,7 +128,9 @@ Mac views built on the Mac chat stack are ported, not shared.
   and `ChatConversations.update`; Chat's urgency flows back into Spaces' dots. One `NavigationStack` holds the tab bar.
 - **Identity.** Node, tab, space and backend ids change with every helper connection. Everything kept on the phone
   (activity times, seen markers, split memory, the launch cache) is keyed by host plus topology `key`. A cached or
-  previous-helper snapshot is listed but not live (`topologyIsLive`) until the connection's first own topology.
+  previous-helper snapshot is listed but not live (`topologyIsLive`) until the connection's first own topology. A new
+  helper reports its first snapshots before its agent discovery has run: for 2 s after `ready` a terminal it reports
+  unbound keeps the binding the kept snapshot showed (`HostSession.bindingGrace`), then the helper's own snapshot stands.
 - Tests use one scripted peer over `Pipe()` (`ScriptedHelper`) and `ScriptedHostSessionDriver`.
 
 ### Transport
@@ -159,10 +161,17 @@ installed, started or used leaves the connection up without it: both are [plain 
 - Lost link or helper: `reconnecting` at once (keepalive 15 s × 3), backoff 1 s up to 60 s, raced by `retryNow()`
   (network change, foregrounding, pull to refresh; on a connected link it probes `echo` within 3 s, `:` on a plain
   one, and closes a dead one). Refusals (host key, login, missing key) are final; after a host-key mismatch nothing
-  retries until the user acts. Each connection decides again between the helper and plain SSH.
-- Foreground connects every host, background disconnects. **Disconnect** in a host's stats (`HostSession.park`) leaves
-  the host alone until a Connect or Reconnect the user asks for (`connectByUser`) or the next launch; nothing else
-  (network changes, pull to refresh, background refresh, watch requests) lifts it.
+  retries until the user acts. A failed attempt 5 minutes or more after the loss ends the retries too (about ten,
+  `HostConnection.giveUpAfter`): the host is offline ("Stopped reconnecting after 5 minutes: …") with Connect, and a
+  network change, foregrounding or pull to refresh starts a new run. Each connection decides again between the helper
+  and plain SSH.
+- Foreground connects every host, background disconnects: hosts still on their way at once, connected ones after 25 s
+  of background time (`HostSessions.lingerLength`, `beginBackgroundTask`; sooner when iOS takes the time back), so a
+  switch to another app and back keeps the connections; returning, each checks with `echo` that it still answers.
+  **Disconnect** in a host's sheet (`HostSession.park`; also
+  while connecting or reconnecting, where it stops the retries) leaves the host alone until a
+  Connect or Reconnect the user asks for (`connectByUser`); nothing else (network changes, pull to refresh, background
+  refresh, watch requests, a relaunch) lifts it. It is saved with the host (`HostRecord.parked` in `hosts.json`).
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs or the host asks for it; otherwise tmux, retried every 2 s. A preference change switches
   live without reconnecting; until the new one answers the host's spaces are unknown (`switchingMultiplexer`). The
@@ -217,6 +226,12 @@ they let the helper do on the host is in [security](security.md#dispatch-for-iph
   leaves the output held, so the presence attaches again (its replay repaints); a failed `false` keeps following. A
   new attach (a reconnect, Reset terminal, the last user leaving and coming back) follows: the helper forgot the old
   hold with its subscription.
+- **Steady sizes.** The hello names `sizes.steady`: attaching a tmux terminal at the phone's size resizes its window
+  alone. Without it tmux sized every other window of the session to the helper control client's default 80x24
+  (whichever window was current, and all of them when nothing else was attached), on the Mac too, and each redrew.
+- **Bound first topology.** The hello names `topology.bound`: a tmux server's first topology waits (at most 1 s) for
+  the helper's agent discovery, so a reconnect's tabs come back as the agents they are, not plain terminals the next
+  topology turns into agents. herdr's still come unbound first; `HostSession.bindingGrace` covers both.
 - **Reattach by key**, not id: after reconnecting, `backends.open`, find terminals by topology key, then `chat.open`
   and `terminals.attach` again.
 - **Follow binding changes.** A Codex conversation gets its thread id with the first prompt; reopen `chat.open` on a
@@ -254,8 +269,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   phone is locked; only a Secure Enclave key asks Face ID (the enclave's access control, at each signature) and never
   signs unattended. Software keys older builds kept behind `biometryCurrentSet` move once, at their first use in the
   foreground, with one Face ID prompt for all of them (`KeyStore.moveFaceIDKeys`, copy first so a cut-short move loses
-  nothing). A new host takes the colour the fewest hosts show and keeps it; colours are
-  drawn per machine (`HostColorStore`). Two hosts reaching one machine and account show its spaces and agents once,
+  nothing). A new host takes the colour the fewest hosts show and keeps it until Edit host's Color picks another
+  (Automatic gives back the free one); colours are drawn per machine (`HostColorStore`). Two hosts reaching one machine and account show its spaces and agents once,
   under the first in the list (`sameMachine`), as the Mac keys a host by machine and uid.
 - **Windows.** A window at least 600 points both ways (the unfolded iPhone Duo) or an iPad window from 655.5 points
   wide shows the Spaces tree in a sidebar beside the open tab (`MobileSplit`, by window size, never size class or
@@ -265,34 +280,69 @@ The policies below are the ones a change must keep; the screens themselves are d
   left. An iPad remembers the shown tab, mode and sidebar state across launches (`restoreSplit`, before the first
   body), keyed by topology key. The vertical bar of iOS 27.1 is off on windows wide enough for the split
   (`MobileVerticalBar`).
+- **Landscape.** A phone's window wider than tall that does not split (every iPhone on its side, the Duo's cover
+  screen; `MobileLandscape`, by the window's size, which the keyboard does not change) gives a tab the whole window:
+  no navigation bar, no capsule, no composer row, no key capsule at rest. The chrome is one rail (`TabRail` in
+  `TabScreen`) on the Dynamic Island's side, which follows the interface's orientation (`MobileOrientationReader`),
+  its glass 2 points clear of the island: the padding is the island's safe-area inset less 10 (`MobileLandscape.
+  railInset`; the inset measured from the window with its size, `MobileWindowReader`): 52 where it keeps 62 (iPhone
+  17, 18 Pro, Pro Max), 58 on the Air, whose island sits 6 points lower (68), 37 for the 17e's notch (47); the content
+  runs into the other side's inset to 12 points from the
+  glass. The rail holds Back with the needs-you count and the menu disc, the five modes stood on end (`PadModeSwitch`),
+  and the mode's action at its foot: Terminal's keyboard button (a tap raises the keyboard with the key row riding it;
+  held, Esc, Ctrl-C, Ctrl-D, Tab, Previous Command and Paste), Chat's Reply (the composer while empty and unfocused is
+  folded into it; Reply unfolds and focuses it), Review's Create review with the comment count (`FilesRailAction`).
+  Above a docked keyboard the rail keeps only Back and the disc. Review and Commits list beside their panes (a
+  300-point list headed by the mode's row); Files lists under its row. The tab's name shows in a chip for 2.5 s as
+  the tab opens. The segment and Files mode chosen on its side are the ones upright shows. Mockups L12–L15.
 - **Spaces.** herdr workspaces and tmux sessions are spaces; windows and tabs are tabs. A split tmux window shows one
   pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
-  Close follows the Mac's policy: Close Tab sends `close.request` `check` and terminates only verified idle work,
-  otherwise detaches; a space offers Detach and Terminate… and never ends by itself. Tab names, space names
+  Close Tab ends the tab, unlike the Mac's (whose busy tabs detach): a tab whose every pane runs an agent with its
+  turn over (idle, or a result not yet seen, as Chat knows it live) is terminated at once; otherwise `close.request`
+  `check` asks the helper, and verified idle work is closed through `prompt`, while busy work, or a check the
+  multiplexer cannot answer, asks first ("Close “name”?" naming the agent and its state or the program; Terminate).
+  A phone's Detach only hides the tab on that connection (the helper's per-connection selection; the Mac keeps it,
+  and it is back after a reconnect), so the swipe offers Close alone and Detach stays in the tab's menu. A space
+  offers Detach and Terminate… and never ends by itself. Tab names, space names
   (`usesDirectoryName`, kept on the server) and the Activity sort follow the Mac. New tab sends no folder, so the
   multiplexer opens it in its focused pane's directory. New space (the tab bar's New in Spaces, the host's line and
   its quick menu) always makes a space of its own with one shell tab and opens it over the space's screen; its tab
   counts only once it shows in a space that was not there before (a tmux window placed into a new space is waited
-  for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A
-  space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close. Reorders go to the server (`memberships.move`) and the rows
+  for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A space
+  lists its tabs by activity (their times, below): most recent first, tabs with no time yet last, ties in server order;
+  the iPad strip keeps server order. A
+  space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close, its rows in server
+  order. Reorders go to the server (`memberships.move`) and the rows
   keep the new order until the answer or a snapshot naming the moved tab. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
-- **A tab's header** (phone stack, X9b). Back is a 44-point chevron circle carrying the needs-you count as a badge;
-  VoiceOver reads "Back to <screen>" and the count as its value (other pushed screens keep their labelled pill). The
-  title block is two lines tall and top-aligned: a title that fits one line keeps `host · folder` under it (the
-  folder's last component; Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The trailing
-  44-point host disc with a ⋯ badge is the tab's one menu: the conversation's items on Chat (Search, Conversation
-  mode, Manage goal, side conversations), the pane picker when the segment can show more than one pane (on Chat only
-  the panes running an agent, the shown one checked), the tab's row menu (Rename…, Close, Detach, Terminate…) and the
-  host's Stats; conversation mode's waveform takes the disc's place while it is on. The
-  header never overflows into the bar's "…" menu (`TabsScreenHeader.leadingWidth`). The phone has no space
-  switcher (Back returns to the space); the iPad strip's space capsule opens it. Beside the unfolded Duo's sidebar
-  the header keeps its glyph switch, the conversation's ⋯ menu and the subtitle's pane picker.
-- **Times.** A tab's time is the later of the server's (`terminals.activity`, read on each live snapshot and every
-  30 s) and the last change the phone saw between two live snapshots of one connection; kept per host and topology
-  key (`TabActivityStore`). Changes found across a gap (cache against live, a reconnect) happened at an unknown time
-  and move nothing. herdr 0.9.5 reports no times.
+- **A tab's header** (phone stack, B7). Back and the host's glyph share one glass capsule at the leading end: Back
+  carries the needs-you count as a badge on its corner, and VoiceOver reads "Back to <screen>" and the count as its
+  value (other pushed screens keep their labelled pill). The host's glyph is the tab's one menu: the conversation's
+  items on Chat (Search, Side Conversation (read-only) and Side Conversation with Changes, or the open one, Manage
+  goal), the pane picker when the segment can show more than one pane (on Chat only the panes running an agent, the
+  shown one checked), the tab's row menu (Rename…, Close, Detach) and the host's Stats. The title block is two lines
+  tall and top-aligned: a title that fits one line keeps `host · folder` under it (the folder's last component;
+  Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The trailing control is the mode
+  button (`TabModeButton`), as the Mac strip's: a system bar item (a menu with a primary action, so the bar draws its
+  glass and a hold opens the menu; a button-style Toggle draws on as a pink prominent disc and takes no menu). On Chat
+  or Files it is on, its symbol filled in the accent, and a tap returns to Terminal; in Terminal it is off, its outline
+  in the label colour naming where a tap goes: Chat on a tab running an agent, else Files. Held, it lists Terminal,
+  Chat (dimmed without an agent), Files, and Review (with its comment count) and Commits inside a repository.
+  Conversation mode's waveform takes its place while on. No switch sits under the header; in Files the modes do, as a
+  capsule (`FilesModeCapsule`: Files · Review · Commits, Review's count), in place of the system tab bar, and the
+  mode's accessory (Create review, offline) sits in a glass capsule at the bottom (`TabFilesSegment.modesOnTop`). The
+  header never overflows into the bar's "…" menu (`TabsScreenHeader.leadingWidth`). The phone has no space switcher
+  (Back returns to the space); the iPad strip's space capsule opens it. Beside the unfolded Duo's sidebar the header
+  keeps its glyph switch, the conversation's ⋯ menu and the subtitle's pane picker, and Files its system tab bar; the
+  iPad strip and a phone on its side keep their own switches.
+- **Times.** A chat tab's time is its agent's newest record (the conversation's own timestamps). A terminal's, and a
+  chat's whose agent has written nothing yet, is the last change the phone saw between two live snapshots of one
+  connection: a new title (shell integration names a pane after the running command, then its folder), folder, agent
+  or window name; kept per host and topology key (`TabActivityStore`). Changes found across a gap (cache against live,
+  a reconnect) happened at an unknown time and move nothing. The server's output times (`terminals.activity`, tmux's
+  `#{window_activity}`) are not used: any resize redraws a window, and one control client sizing one window resizes
+  its siblings, so every tab beside the one just opened read "now".
 - **Files, Review and Commits** read only, through `MobileFilesSource` and `ReviewGitReader` (never `file.write`),
   only with a connected helper and the Files & git grant; their exact commands, bounds and cadences are the ones
   [security](security.md#dispatch-for-iphone) lists, and the Mac's shared parsers and placement rules apply. The
@@ -310,27 +360,47 @@ The policies below are the ones a change must keep; the screens themselves are d
   of an idle queue). Queued messages belong to the agent process they were typed for; Stop pauses the device's own
   until Resume, and Send now refuses paused or uncertain ones. Side conversations (`/btw`, `/side`) are forks the
   helper lists; a lost link ends one on the phone and the next verified connection closes the orphaned fork
-  (`closeOrphanedSides`). Attachments are offered only while the helper accepted `chat.attachments` and the
+  (`closeOrphanedSides`). Background shells the agent reports (`State.shells`, Claude Code) show as a line over the
+  composer while any runs (one names what it does, more say how many); a tap opens a sheet with each shell's
+  description, command and running time, which closes with the last shell. Attachments are offered only while the helper accepted `chat.attachments` and the
   conversation is verified; images lose their metadata before upload, uploads are session state, and a queued
   message counts as delivered after a reconnect only with as many attachments. An ended turn's last agent bubble
   carries the turn's summary in its bottom-right corner, where messengers put a message's time (S6d,
   `ChatTurnSummary.corner`): the changed file's name or the file count with the added and removed lines, else "Read 12
   files" or "40 steps" for three or more unchanged steps, then when the turn ended ("10:17", "Yesterday 10:17", "Thu
-  10:17", "Oct 12"); a plain answer has none, and message details keep "12 steps · 2m 4s". The text keeps the corner's
+  10:17", "Oct 12"); every other agent reply, and a plain answer, has when it was written there in the same words
+  (`ChatCorner.reply`; Claude's thinking and the user's messages have none), and message details keep "12 steps · 2m
+  4s". The text keeps the corner's
   room on its last line, or on a short line of its own; a file name too long for the line loses its middle, and after
   code, a table or a rule, beside a last paragraph running against the layout's direction, or when the corner is
-  wider than a line (the largest text sizes), it takes trailing lines of its own. While a turn runs and has agent text, its newest bubble (a
-  message or Claude's thinking) carries a spinner, the step and the turn's time in its corner ("step 4 · 38s", "step 4
-  · approve" or "· answer" while it waits for the user, S6e) and the working row stays away unless its step list is
-  unfolded. The room is fixed for the turn and holds the summary it would settle into. Records and busy state arrive
-  apart: for 3 s after the agent stops the corner keeps its progress, and after the turn ends a busy state that ran
-  through it keeps the working row away, so neither a blank corner nor the row flashes; busy work that starts after the
-  end (another device's prompt) shows the row at once, and a turn left open by an idle agent keeps only its room.
+  wider than a line (the largest text sizes), it takes trailing lines of its own. While a turn runs its replies have only their times and the
+  working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
+  agent last wrote (a message or Claude's thinking), as the Mac's live tool group counts them, and it holds Stop beside
+  the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware keyboard
+  still stops). While messages are queued its trailing side has the queue as a capsule with their count; a tap opens
+  the queue card under the row, and without the row (the agent stopped) the queue is the card's own "Queued · 2" line. An agent this phone starts (New chat, New
+  tab's agents) shows a spinner on Start or New tab until its tab shows, then "Starting Claude…" in the thread until
+  the conversation is verified (at most 15 s), as the Mac covers a launch until Chat opens. Records and busy state
+  arrive apart: for 3 s after the agent stops the row stays until the turn's end comes, and after the turn ends a busy
+  state that ran through it keeps the row away, so the row goes as the summary comes; busy work that starts after the
+  end (another device's prompt) shows the row at once, and a turn left open by an idle agent shows neither.
   The thread follows its end until something other than the app scrolls it toward older rows (`ChatFollow`): a drag
   stops following as it starts, and VoiceOver's scroll, the status bar's tap or Page Up leave it too; rows, the keyboard
   and the composer changing height never do (the thread goes back to the end), a drag that only took the keyboard down
   keeps following, a send or the pill returns to the end, and "Jump to latest" shows only while not following with
-  newer rows below, never at the end. Send's tap sends as the draft goes now; its long press only presents what the tap
+  newer rows below, never at the end. Left scrolled up (the space, a segment switch), the thread opens again where it
+  was read (`MobileChatSession.readingPosition`, in memory): the row at the visible top and how far past its top, kept
+  when a scroll stops and when the thread goes; it draws from that row, puts it back through the first layouts (the
+  navigation bar's inset comes late) until the user scrolls, does not follow, and the rows that came meanwhile count
+  into the pill. Left at its end, or with that row gone, it opens at its end, the queue and working row under it.
+  Opening a thread draws only its last rows, about two screens by an estimate from
+  their text (`ChatThreadView.tailStart`): the stack is not lazy, so rows keep their real heights for following the
+  end, and drawing the whole page made opening a tab take half a second. When the user's scroll comes within half a
+  screen of the top, older rows the phone holds draw above in steps while the thread keeps its distance from the end,
+  so the rows being read stay put; past the first of them the helper's earlier page is asked for (`chat.page`), never
+  on opening. Drawn while not following, they move the scroll view's offset by their height (a finger still
+  dragging included); following, the end stays in view. Parsed bubble text is kept per text and font
+  (`MobileChatMarkdownView.contents`). Send's tap sends as the draft goes now; its long press only presents what the tap
   can do: Send; Send now and Queue while the agent works; Queue alone while the tap queues and the agent cannot take it
   into its turn (terminal not attached, not verified, a command waiting for an idle agent: "Send" would promise what
   the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. The code keys above
@@ -339,8 +409,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
   light on "thinking": one 2.2 s ease-in-out sweep, leading to trailing, the label lit where and while the glint passes
   over it (`ChatThinkingSweep`, `ChatSweepTrack`).
-  Conversation mode
-  (`MobileVoiceConversation`) is half-duplex as the Mac's and never grants permission by voice. Composers are
+  The thread runs on under the composer (a bottom `safeAreaBar` with the soft scroll edge, as the side conversation's).
+  Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
+  (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Composers are
   `ChatEditorTextView`-based, as on the Mac.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line; the
   presence holds a whole helper reply (64 MiB) unparsed, since overflow ends the attachment. Only a lost stream of the
@@ -352,6 +423,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   terminal. Search is Ghostty's on the local emulator (`TerminalSearch`), newest match first. The iPad rules
   (software keyboard placement from `keyboardLayoutGuide`, the hardware keyboard taking every key without ⌘,
   pointer selection) are in `TerminalAdaptation` and `TerminalHostView`.
+- **The host sheet** (`HostStatsSheet`) is a host's one screen besides Edit host: the host's disc, name and status line
+  ("macOS 26.1 · 18 ms") with the Edit pencil at both detents. The small detent (the screen behind it still usable)
+  shows the stat strip and Disconnect, or offline the connection list and Connect; the large one adds the processes,
+  the banners and the connection list (Address "user@host" with a port that is not 22, Key, Multiplexer, leading to
+  the install hint when the host has none) over the same one action. The disc in Spaces, Info in edit mode and the
+  switcher's host row open it; an iPad's host glyph opens the same content as a popover (I5). Everything the user sets
+  is Edit host's (New host's form with the host's Color and, last, Remove host), saved with Save; Files' Change
+  integration… opens Edit host directly.
 - **Host stats.** `HostStatistics`, one per `HostSession`: `stats.sample` and `stats.processes` every 15 s in the
   foreground (one per chart bar), 2 s while a sheet shows the host, 30 s under Low Power Mode (a bar without its own
   sample takes the next one, `barHold` 35 s), `stats.disks` with a sample at most every 15 s; nothing in the
@@ -375,7 +454,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   muted conversation, a terminal the user closed from the phone in the last minute, or a stop the agent recovers from
   within 10 s. Permission is asked once a run. There is no Allow or Deny in a banner: an approval belongs to a live
   subscription.
-- **Settings.** Everything is `MobileSettings` in UserDefaults. Per host: Chat, Files & git, multiplexer. Terminal
+- **Settings.** Everything is `MobileSettings` in UserDefaults. The Settings app's Dispatch page
+  (`Mobile/App/Settings.bundle`) mirrors the fixed choices on the same keys (appearance, theme, line spacing, the
+  terminal's contrast, ligatures, bold, cursor, chat's font and size, the notification switches and sound, colour
+  vision, Color-code hosts, unsafe pastes; not the font lists, colour schemes, dictation or background refresh, which need live lists or a permission
+  prompt). What it changes arrives as `UserDefaults.didChangeNotification` when the app is back and goes through the
+  setters (`MobileSettings.reload`), so terminals restyle and the badge follows; `SettingsTests` keeps the page's
+  values and defaults equal to the models'. Per host (Edit host, not Settings): Chat, Files & git, multiplexer. Unsafe
+  pastes sit under Hosts. Terminal
   font (`TerminalFont.all`: the Mac's list in its order, Source Code Pro, Menlo, then every font the Mac bundles, in
   `TermFonts`), Ligatures (on, the Mac's `fontLigatures`: off writes `font-feature = -calt, -liga, -dlig`), colour scheme (Ghostty's bundled
   themes, `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
@@ -383,7 +469,20 @@ The policies below are the ones a change must keep; the screens themselves are d
   presence restyles at once, keeping its own size. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
   at the standard text size and drawn scaled as body text scales (`TerminalAdaptation.fontSize`, capped at XXXL's
   ×1.32); a text-size change moves every open terminal by the change; every font at Source Code Pro's apparent size
-  (`TerminalFontScale`, shared). Chat font and text size (`ChatTypography`, following Dynamic Type).
+  (`TerminalFontScale`, shared). Chat font and text size (`ChatTypography`, following Dynamic Type). Times on swipe
+  (`ChatReveal`, always), as Messages: nothing in the bubbles' corners, the text keeps no room and VoiceOver still
+  reads a reply's corner (time, or the turn's summary) as the bubble's value. A drag toward the leading edge (a pan
+  that begins only sideways, so scrolling is untouched) slides the user's messages over by a 72 pt column plus its
+  16 pt gap, then a fifth as far, their times coming in after them (`ChatRevealSent`); the replies stay put and their
+  times fade in at the trailing edge in the room the bubble leaves, on two lines where needed, the turn's last reply's
+  under its step count ("23 steps"; what it changed is the message's details') (`ChatRevealReceived`). Letting go
+  hides them again, in the thread and the side conversation.
+  Colorblind-friendly (`colorVision`, the Mac's `ColorVision`, red-green or blue-yellow): hosts take that vision's
+  colours (`HostColor.look` through `HostColorStore.shared`, the watch's tints too), added and removed (diffs, counts,
+  git's A and D) the green and red of the vision's first bundled light or dark scheme (`ColorVisionTrait`,
+  `UIColor.change`), Color scheme lists only the schemes made for it (`ColorVision.bundledSchemes`, shared), and
+  turning it on, off or over swaps the terminal's scheme for the vision's on the same side, or `dispatch-black`.
+  Color-code hosts (`hosts.colors`, on) off draws every host gray, as the Mac's `showHostColors`.
   Theme (the Mac's `SidebarPalette`s, resolved through `UIColor.themed` so UIKit and SwiftUI recolour live).
   Notifications, Background refresh, the Apple Watch status row.
 - **Appearance.** Dark by default, every colour with a light variant. System menus and segmented controls replace
@@ -413,8 +512,8 @@ A host can go without the helper: the phone opens interactive login shells on it
 PTY, and runs nothing else there. Terminal only: no Chat, Agents, server spaces, latency, background refresh or watch
 snapshot. `HostSession.mode` says how the current connection reaches the host, `.helper` or `.plain(reason:)`.
 
-- **The Helper switch** (`HostRecord.helper`, on by default) is in New host and host detail. Off turns Chat and
-  Files & git off with it and hides them; Settings lists such a host as "Plain SSH". Turning the switch on, or off on
+- **The Helper switch** (`HostRecord.helper`, on by default) is in New host and Edit host. Off turns Chat and
+  Files & git off with it and hides them; Spaces marks such a host "Plain SSH". Turning the switch on, or off on
   a helper connection, reconnects; turning it off on a connection that is already plain keeps the shells. With the
   switch off the driver stops after the login: no probe, no upload, nothing in `~/.dispatch`.
 - **Fallback.** With the switch on, a helper step that fails while the SSH connection stays up leaves the connection
@@ -422,9 +521,9 @@ snapshot. `HostSession.mode` says how the current connection reaches the host, `
   missing bundled binary, an upload or cache failure (a transient one tried once more), a refused exec channel, a
   helper that exited before greeting (after the one runtime-folder retry) or is unusable (`hello` failed, another
   protocol version). Login, host key and missing-key refusals stay final, and a connection that dropped meanwhile
-  is a loss that reconnects; an ambiguous failure is first checked with the `:` probe. Host detail then says "Plain
-  SSH · helper could not be installed: <reason>" and offers **Use plain SSH for this host**. Each connection decides
-  again.
+  is a loss that reconnects; an ambiguous failure is first checked with the `:` probe. The host sheet's card then says
+  "The helper could not start on <host>: <reason>" with Try again and **Use plain SSH**, which turns the switch off.
+  Each connection decides again.
 - **The Shell space.** A plain host shows one synthetic space, "Shell" (`MobileSpace.Kind.plainShell`), whose tabs are
   the phone's own shells (`ShellSessions`, keyed `shell:<uuid>`). New tab opens a shell at once, only while
   plain-connected; Close tab ends a live shell without asking; Close space asks while one is live; New space is not

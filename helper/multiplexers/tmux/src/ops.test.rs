@@ -131,3 +131,53 @@ fn a_repaint_of_a_pane_gone_or_sized_otherwise_fails() {
     assert_eq!(*answered.borrow(), ["Tmux pane size kept changing during capture", "Tmux pane detached during capture"]);
     assert!(tmux.updates.is_empty());
 }
+
+/// Session $1 with two windows of 120x40: @1 (pane %3, the session's current) and @2 (pane %4, terminal 8).
+fn two_windows(steady: bool) -> Tmux {
+    use crate::{snapshot::Window, topology::{Content, Layout}};
+    let mut tmux = Tmux::default();
+    tmux.steady = steady;
+    let pane = Pane { width: 120, height: 40, title: String::new(), pid: 0, tty: String::new() };
+    let layout = |pane| Layout { width: 120, height: 40, x: 0, y: 0, content: Content::Pane(pane) };
+    let window = |id, pane, active| Window {
+        id, name: "zsh".into(), layout: layout(pane), visible: layout(pane), active, pane, affinity: String::new(), renamed: None,
+    };
+    let mut client = Client::default();
+    client.snapshot = Some(Snapshot {
+        windows: vec![window(1, 3, true), window(2, 4, false)],
+        panes: BTreeMap::from([(3, pane.clone()), (4, pane)]),
+        session: 1,
+        client: 0,
+        server: 0,
+        socket: String::new(),
+        name: String::new(),
+    });
+    tmux.backends.insert(1, Backend {
+        key: "s1".into(),
+        endpoint: None,
+        clients: vec![client],
+        ids: BTreeMap::from([("$1:%3".to_owned(), 7), ("$1:%4".to_owned(), 8)]),
+        done: Vec::new(),
+        opening: 0,
+        views: BTreeMap::new(),
+        selection: Default::default(),
+        remote: false,
+        identity: None,
+        pending: BTreeMap::new(),
+        order: Default::default(),
+    });
+    tmux
+}
+
+#[test]
+fn a_steady_client_takes_the_current_window_size_before_it_sizes_one_window() {
+    let at = Location { backend: 1, client: 0, pane: 4 };
+    let grid = |columns, rows| Grid { pixels: None, columns, rows };
+    // tmux would count this control client's default 80x24 for @1 once it sized @2: @1 stays 120x40 instead.
+    let mut tmux = two_windows(true);
+    assert_eq!(tmux.grid(8, at, grid(50, 30)).unwrap(), ["refresh-client -C 120x40", "refresh-client -C @2:50x30"]);
+    assert_eq!(tmux.grid(8, at, grid(60, 30)).unwrap(), ["refresh-client -C @2:60x30"], "once per client");
+    // Without the feature the commands stay what recorded clients sent.
+    let mut tmux = two_windows(false);
+    assert_eq!(tmux.grid(8, at, grid(50, 30)).unwrap(), ["refresh-client -C @2:50x30"]);
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build the mockup apps and screenshot their screens in the simulator.
 
-    python3 mockups/shoot.py build [phone|ipad|watch]      # XcodeGen, xcodebuild, simctl install
-    python3 mockups/shoot.py rotate                        # once per iPad simulator boot: landscape
+    python3 mockups/shoot.py build [phone|ipad|landscape|watch]   # XcodeGen, xcodebuild, simctl install
+    python3 mockups/shoot.py rotate [ipad|landscape]       # once per simulator boot: landscape (the iPad, or an iPhone)
     python3 mockups/shoot.py H2-review [dark|light]        # one screen; both schemes by default
     python3 mockups/shoot.py all [phone|ipad|watch]        # every screen of the platform, then its sheets
     python3 mockups/shoot.py sheets [phone|ipad|watch]     # contact sheets from existing shots
@@ -30,16 +30,41 @@ GROUPS = {
         'host': ['W0-spaces-tree', 'W0b-offline-collapsed', 'W0c-offline-menu', 'W1a-host-small', 'W1b-host-dragging',
                  'W1c-host-small-offline', 'W1-host-cpu', 'W2-host-mem', 'W3-host-scrub', 'W4-host-detail', 'W5-host-stale',
                  'W6-host-plain', 'W7-host-lowpower'],
-        'states': ['S1-no-helper', 'S2-no-grant', 'S3-offline', 'S4-review-sent', 'S5-diff-fold-outdated', 'S6-chat-entry'],
+        'states': ['S1-no-helper', 'S2-no-grant', 'S3-offline', 'S4-review-sent', 'S5-diff-fold-outdated', 'S6-chat-entry', 'S6b-chat-corner-meta', 'S6c-chat-corner-meta-phrased',
+                   'S6d-chat-corner-time', 'S6e-chat-corner-working'],
         'settings': ['G1-settings', 'G2-terminal-font', 'G3-chat-font', 'G4-theme', 'G5-notifications'],
         'terminal': ['T1-terminal-search', 'T2-terminal-menu'],
         'chat': ['C1-chat-search', 'C2-chat-slash', 'C3-chat-side', 'C4-chat-goal', 'C4b-chat-goal-sheet',
                  'C5-chat-conversation', 'C6-chat-jump'],
+        'queue': ['Q0-queue-today', 'Q1-queue-capsule', 'Q1b-queue-capsule-open', 'Q2-queue-controls', 'Q3-queue-inline',
+                  'Q4-queue-bubbles', 'Q5-queue-glyphs', 'Q6-queue-paused'],
+        'message': ['M1-message-info', 'M1b-message-info-unfolded', 'M1c-message-info-short', 'M1d-message-info-stopped'],
+        'mode': ['B1-mode-chat', 'B1b-mode-chat-held', 'B2-mode-agent-terminal', 'B2b-mode-agent-terminal-held',
+                 'B3-mode-shell-terminal', 'B3b-mode-shell-terminal-held', 'B4-mode-files', 'B4b-mode-review', 'B5-mode-states', 'B6-mode-styles'],
+        'mode-host': ['B7-host-leading-chat', 'B7b-host-leading-terminal', 'B7c-host-leading-states', 'B7d-host-leading-apart-states',
+                      'B8-info-chat', 'B8b-info-terminal', 'B8c-info-states', 'B8d-ellipsis-states'],
+        'header': ['X0-header-today', 'X1-header-menu', 'X2-header-host-leading', 'X3-header-two-line',
+                   'X4-header-two-line-small', 'X5-header-host-trailing', 'X6-header-switch-in-bar',
+                   'X7-header-two-line-top', 'X7b-header-two-line-top-long',
+                   'X8-header-adaptive', 'X8b-header-adaptive-long',
+                   'X9-header-disc-chevron', 'X9b-header-disc-ellipsis', 'X9c-header-disc-chevron-long'],
+        'icons': ['Y0-icons-today', 'Y1-icons-tinted', 'Y2-icons-tiles', 'Y3-icons-soft', 'Y4-icons-compare'],
+        'chat-icon': ['Y5-chat-text-bubble', 'Y6-chat-text-bubble-primary', 'Y7-chat-bubble', 'Y8-chat-conversation',
+                      'Y9-chat-compare'],
     },
     'ipad': {
         'ipad': ['I1-split-files', 'I2-split-review', 'I2b-split-review-empty', 'I3-split-commits', 'I3b-split-commits-empty',
                  'I4-split-chat', 'I5-host-popover', 'I7-full-width-terminal', 'I8-sidebar-hidden'],
         'ipad-half': ['I6-half-width', 'I6b-half-width-spaces'],
+    },
+    'landscape': {
+        'landscape': ['L1-terminal', 'L2-terminal-keyboard', 'L3-chat', 'L4-chat-review', 'L5-review', 'L6-commits',
+                      'L7-spaces-split', 'L8-agents-board'],
+        'fullheight': ['L9-full-chat', 'L9b-full-chat-typing', 'L9c-full-chat-draft', 'L10-full-terminal',
+                       'L10b-full-terminal-chip', 'L11-full-review'],
+        'onerail': ['L12-one-rail-chat', 'L12b-one-rail-chat-typing', 'L12c-one-rail-chat-draft', 'L13-one-rail-review',
+                    'L14-one-rail-terminal', 'L14b-one-rail-terminal-typing', 'L14c-one-rail-terminal-keys',
+                    'L15-edge-terminal', 'L15b-edge-chat'],
     },
     'watch': {
         'watch': ['K1-list', 'K1b-list-scrolled', 'K2-thread', 'K3-approval', 'K4-question', 'K5-reply', 'K6-host',
@@ -51,6 +76,8 @@ PLATFORMS = {
                   bundle='dev.dispatch.mockups.Mockups', match=r'^iPhone', schemes=['dark', 'light'], cols='6', scale='0.25'),
     'ipad': dict(scheme='Mockups', sdk='iphonesimulator', product='Debug-iphonesimulator/Mockups.app',
                  bundle='dev.dispatch.mockups.Mockups', match=r'^iPad', schemes=['dark', 'light'], cols='3', scale='0.25'),
+    'landscape': dict(scheme='Mockups', sdk='iphonesimulator', product='Debug-iphonesimulator/Mockups.app',
+                      bundle='dev.dispatch.mockups.Mockups', match=r'^iPhone', schemes=['dark', 'light'], cols='3', scale='0.25'),
     'watch': dict(scheme='MockupsWatch', sdk='watchsimulator', product='Debug-watchsimulator/MockupsWatch.app',
                   bundle='dev.dispatch.mockups.MockupsWatch', match=r'^Apple Watch', schemes=[None], cols='6', scale='1'),
 }
@@ -107,8 +134,8 @@ def build(platform):
     return udid
 
 
-def rotate():
-    udid = device('ipad')
+def rotate(platform='ipad'):
+    udid = device(platform)
     result = run('xcodebuild', 'test', '-project', 'Mockups.xcodeproj', '-scheme', 'Mockups', '-destination', f'id={udid}',
                  '-derivedDataPath', 'build', '-only-testing:MockupsRotate', '-quiet', cwd=ROOT, check=False, capture_output=True)
     print('landscape' if result.returncode == 0 else result.stdout[-2000:] + result.stderr[-2000:])
@@ -152,7 +179,7 @@ def main(argv):
         for platform in rest or ['phone']:
             build(platform)
     elif cmd == 'rotate':
-        rotate()
+        rotate(*rest[:1])
     elif cmd == 'all':
         for platform in rest or ['phone']:
             udid = device(platform)

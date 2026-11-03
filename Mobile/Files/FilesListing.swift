@@ -216,6 +216,13 @@ struct FilesListingView: View {
     var offline = false
     let preview: (String, FileEntry) -> Void
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.filesZoom) private var zoom
+
+    /// Pushes a file's preview, zooming out of its row (`FilesZoom`).
+    private func open(_ path: String, _ entry: FileEntry) {
+        zoom?.tap.path = path
+        preview(path, entry)
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
@@ -280,19 +287,20 @@ struct FilesListingView: View {
     private func row(_ entry: FileEntry, last: Bool, now: Date) -> some View {
         let path = browser.folder.map { FilesPath.join($0, entry.name) } ?? entry.name
         return Button {
-            if entry.isDirectory { browser.open(path) } else { preview(path, entry) }
+            if entry.isDirectory { browser.open(path) } else { open(path, entry) }
         } label: {
             FilesRow(entry: entry, detail: FilesText.detail(entry, count: browser.count(path), now: now),
                      mark: browser.mark(entry), tint: tint, last: last)
         }
         .buttonStyle(.plain)
+        .modifier(FilesZoomSource(path: path))
         .tabsRowHover()
         .task(id: path) { if entry.isDirectory && !offline { browser.needCount(path) } }
         .onDisappear { if entry.isDirectory { browser.dropCount(path) } }
         .contextMenu {
             Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = path }
             if !entry.isDirectory {
-                Button("Open", systemImage: "doc.text") { preview(path, entry) }
+                Button("Open", systemImage: "doc.text") { open(path, entry) }
             }
         }
     }
@@ -312,13 +320,14 @@ struct FilesListingView: View {
                 }
                 ForEach(Array(browser.hits.enumerated()), id: \.element.id) { index, hit in
                     Button {
-                        if hit.entry.isDirectory { browser.open(hit.path) } else { preview(hit.path, hit.entry) }
+                        if hit.entry.isDirectory { browser.open(hit.path) } else { open(hit.path, hit.entry) }
                     } label: {
                         FilesRow(entry: hit.entry, detail: hit.folder.isEmpty ? FilesText.detail(hit.entry, count: nil, now: now)
                                                                               : hit.folder + "/",
                                  mark: nil, tint: tint, last: index == browser.hits.count - 1)
                     }
                     .buttonStyle(.plain)
+                    .modifier(FilesZoomSource(path: hit.path))
                     .tabsRowHover()
                 }
                 if browser.walking {
@@ -489,5 +498,75 @@ struct FilesLoadingView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading folder")
         .accessibilityIdentifier("files-loading")
+    }
+}
+
+/// A file's preview pushed from its row zooms out of the row and, on the way back, into it, as Photos opens a photo;
+/// pushed from anywhere else (Review's and Commits' changes, a folder's breadcrumb) it slides in as every push does.
+/// One per navigation stack (`filesZoomScope`), around it, so the rows and the screens it pushes share the namespace.
+struct FilesZoom {
+    let namespace: Namespace.ID
+    let tap: FilesZoomTap
+}
+
+/// The path of the row just tapped, until its preview is pushed (`FilesZoomed`). Plain storage: the pushed screen
+/// first draws in the same update as the tap, where a `@State` read still gave the value before it.
+@MainActor final class FilesZoomTap {
+    var path: String?
+}
+
+extension EnvironmentValues {
+    /// Nil outside a stack's scope and with Reduce Motion: no zoom.
+    @Entry var filesZoom: FilesZoom? = nil
+}
+
+private struct FilesZoomScope: ViewModifier {
+    @Namespace private var namespace
+    @State private var tap = FilesZoomTap()
+    @ReduceMotion private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.environment(\.filesZoom, reduceMotion ? nil : FilesZoom(namespace: namespace, tap: tap))
+    }
+}
+
+extension View {
+    /// A navigation stack whose file rows zoom into the previews they push (`FilesZoom`).
+    func filesZoomScope() -> some View { modifier(FilesZoomScope()) }
+}
+
+/// A file row in a listing, as where its preview zooms from (`FilesZoom`); the tap names it before it pushes.
+private struct FilesZoomSource: ViewModifier {
+    let path: String
+    @Environment(\.filesZoom) private var zoom
+
+    func body(content: Content) -> some View {
+        if let zoom { content.matchedTransitionSource(id: path, in: zoom.namespace) } else { content }
+    }
+}
+
+/// A pushed Files screen (`TabsDestination`): it zooms when its path is the row just tapped (`FilesZoomTap`). The
+/// choice is kept from the first draw, so a redraw mid-way or on the way back never changes the transition, and the
+/// tap is forgotten once the screen shows: a later push of the same path from Review slides in.
+struct FilesZoomed<Content: View>: View {
+    let path: String?
+    @ViewBuilder var content: Content
+    @Environment(\.filesZoom) private var zoom
+    @State private var kept: Bool?
+
+    var body: some View {
+        let zoomed = kept ?? (path != nil && zoom?.tap.path == path)
+        Group {
+            if zoomed, let zoom, let path {
+                content.navigationTransition(.zoom(sourceID: path, in: zoom.namespace))
+            } else {
+                content
+            }
+        }
+        .onAppear {
+            guard kept == nil else { return }
+            kept = zoomed
+            if zoomed { zoom?.tap.path = nil }
+        }
     }
 }

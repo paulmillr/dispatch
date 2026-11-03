@@ -44,37 +44,17 @@ struct MobileBarGlyph: View {
     }
 }
 
-/// An agent's mark (the mockup's, the Mac's marks for the same agents): Claude's sparkle in its orange, Codex's angle
-/// brackets, Pi's π in the code purple, a terminal glyph for a tab without an agent. `agent` is the helper's launch
-/// key (`claude`, `codex`, `pi`, `nanocodex`); nil or unknown draws the terminal.
+/// A tab's mark (the mockups' Y5): the Chat segment's bubble for every agent's chat, the Terminal segment's glyph for a
+/// tab without an agent, both secondary. The agent itself is not told apart: one monochrome mark for all of them.
+/// `agent` is the helper's launch key (`claude`, `codex`, `pi`, or "agent"); nil draws the terminal.
 struct AgentGlyph: View {
     let agent: String?
     var size: CGFloat = 18
 
-    /// Claude's orange: the mark's own colour, the same in light and dark.
-    static let claudeOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
-
-    enum Kind: Equatable { case claude, codex, pi, terminal }
-
-    static func kind(_ agent: String?) -> Kind {
-        switch agent?.lowercased() {
-        case "claude"?: .claude
-        case "codex"?, "nanocodex"?: .codex
-        case "pi"?: .pi
-        default: .terminal
-        }
-    }
-
     var body: some View {
-        Group {
-            switch Self.kind(agent) {
-            case .claude: Image(systemName: "sparkle").foregroundStyle(Self.claudeOrange)
-            case .codex: Image(systemName: "chevron.left.forwardslash.chevron.right").foregroundStyle(.primary)
-            case .pi: Text("π").font(.system(size: size, weight: .semibold, design: .serif)).foregroundStyle(Color.codeType)
-            case .terminal: Image(systemName: "apple.terminal").foregroundStyle(.secondary)
-            }
-        }
-        .font(.system(size: size))
+        Image(systemName: agent == nil ? TabSegment.terminal.symbol : TabSegment.chat.symbol)
+            .foregroundStyle(.secondary)
+            .font(.system(size: size))
         .frame(width: size + 8)
         .accessibilityHidden(true)
     }
@@ -124,7 +104,7 @@ struct MobileCounts: View {
     var body: some View {
         HStack(spacing: 6) {
             if added > 0 { Text("+\(added)").foregroundStyle(Color.added) }
-            if deleted > 0 { Text("−\(deleted)").foregroundStyle(Color.destructive) }
+            if deleted > 0 { Text("−\(deleted)").foregroundStyle(Color.removed) }
         }
         .font(font)
         .accessibilityElement(children: .ignore)
@@ -145,7 +125,7 @@ struct GitStatusBadge: View {
     static func color(_ status: String) -> Color {
         switch status {
         case "A", "?": .added
-        case "D": .destructive
+        case "D": .removed
         case "R": .codeType
         default: .caution
         }

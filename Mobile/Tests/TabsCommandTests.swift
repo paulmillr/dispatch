@@ -53,7 +53,7 @@ final class TabsCommandTests: XCTestCase {
     }
 
     /// With `multiplexers.versions`: a herdr the helper says is not installed does not count, the version comes along
-    /// for Host detail's line, and tmux without bracketed-paste state (before 3.7) gets the Mac's warning.
+    /// for the host sheet's Multiplexer row, and tmux without bracketed-paste state (before 3.7) gets the Mac's warning.
     func testVersionedRowsDecideInstallVersionAndWarning() async throws {
         let helper = ScriptedHelper.scripted { request in
             switch request.method {
@@ -110,54 +110,6 @@ final class TabsCommandTests: XCTestCase {
         XCTAssertEqual(rows.first?.time, Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertEqual(rows.first?.agents, ["claude"])
         XCTAssertEqual(helper.requests.first?.params as NSDictionary?, ["limit": 12])
-    }
-
-    /// The server's last-activity times: `terminals.activity` only when the hello accepted the feature and the spaces are
-    /// this connection's; rows by topology key date their tab (a tmux window's key, or a pane's), unreadable rows are
-    /// left out, and the times stay in the store for the next launch. A live snapshot asks for them again.
-    func testServerActivityNeedsTheFeature() async throws {
-        let helper = ScriptedHelper.scripted { request in
-            guard request.method == "terminals.activity" else { return nil }
-            return .binary(.array([
-                .object(["node": .unsigned(12), "key": .string("herdr:app:3"), "kind": .string("tab"),
-                         "time_ms": .unsigned(1_800_000_100_000)]),
-                .object(["node": .unsigned(13), "key": .string("p:dev"), "kind": .string("terminal"),
-                         "time_ms": .unsigned(1_800_000_050_000)]),
-                .object(["node": .unsigned(14), "key": .string("herdr:app:1")]),
-                .object(["node": .unsigned(15), "key": .string("herdr:elsewhere:1"), "time_ms": .unsigned(1_800_000_200_000)]),
-            ]))
-        }
-        defer { helper.close() }
-        let store = TabActivityStore(url: nil)
-        let workspace = TabsFixtures.workspace(client: helper.client, store: store)
-        workspace.apply(TabsFixtures.app().topology)
-        let refreshed = await workspace.refreshActivity()
-        XCTAssertFalse(refreshed)
-        XCTAssertEqual(helper.methods, [], "no request without the feature")
-        workspace.features = [MobileWorkspace.activityFeature]
-        var stale = TabsFixtures.host
-        stale.live = false
-        workspace.update(host: stale)
-        let early = await workspace.refreshActivity()
-        XCTAssertFalse(early)
-        XCTAssertEqual(helper.methods, [], "no request while the spaces are the cache's")
-        workspace.update(host: TabsFixtures.host)
-        let read = await workspace.refreshActivity()
-        XCTAssertTrue(read)
-        XCTAssertEqual(helper.requests.first?.params as NSDictionary?, [:])
-        XCTAssertEqual(workspace.tab("herdr:app:3")?.activity, Date(timeIntervalSince1970: 1_800_000_100))
-        XCTAssertEqual(workspace.tab("herdr:app:2")?.activity, Date(timeIntervalSince1970: 1_800_000_050), "by its pane's key")
-        XCTAssertNil(workspace.tab("herdr:app:1")?.activity, "a row without a time is left out")
-        XCTAssertEqual(store.date(host: TabsFixtures.host.id, key: "herdr:app:3"), Date(timeIntervalSince1970: 1_800_000_100))
-        // The next launch shows the kept time before the host connects.
-        var cached = TabsFixtures.host
-        cached.live = false
-        let relaunched = MobileWorkspace(host: cached, activity: store)
-        relaunched.apply(TabsFixtures.app(first: 70).topology)
-        XCTAssertEqual(relaunched.tab("herdr:app:3")?.activity, Date(timeIntervalSince1970: 1_800_000_100))
-        // A live snapshot reads them again.
-        workspace.apply(TabsFixtures.app(extraTab: true).topology)
-        try await TestSupport.eventually { helper.requests("terminals.activity").count == 2 }
     }
 
     /// New space: backends.create for the chosen multiplexer, a terminal under its backend in the directory, then the
@@ -413,39 +365,43 @@ final class TabsCommandTests: XCTestCase {
         let (helper, workspace, sketch) = closing([.closed(false, confirmation: false), .closed(true, confirmation: false)])
         defer { helper.close() }
         let node = sketch.ids["herdr:app:2"]!
-        let outcome = try await workspace.close(tab: workspace.tab("herdr:app:2")!, .close)
+        let dev = workspace.tab("herdr:app:2")!
+        let idle = try await workspace.idle(tab: dev)
+        XCTAssertTrue(idle)
+        let outcome = try await workspace.close(tab: dev, .close)
         XCTAssertEqual(outcome, .terminated)
         XCTAssertEqual(helper.requests.map { params($0) },
                        [["node": node, "policy": "prompt", "check": true], ["node": node, "policy": "prompt", "check": false]])
     }
 
-    /// Close Tab on a busy tab (a job, a stopped job, an agent): detach, the work keeps running.
-    func testCloseBusyTabDetaches() async throws {
-        let (helper, workspace, sketch) = closing([.closed(false, confirmation: true), .closed(true, confirmation: false)])
+    /// A busy tab (a job, a stopped job, an agent) is not idle; the check changes nothing and the tab stays.
+    func testBusyTabIsNotIdle() async throws {
+        let (helper, workspace, sketch) = closing([.closed(false, confirmation: true)])
         defer { helper.close() }
-        let node = sketch.ids["herdr:app:1"]!
-        let outcome = try await workspace.close(tab: workspace.tab("herdr:app:1")!, .close)
-        XCTAssertEqual(outcome, .detached)
-        XCTAssertEqual(helper.requests.map { params($0) },
-                       [["node": node, "policy": "prompt", "check": true], ["node": node, "policy": "detach", "check": false]])
+        let idle = try await workspace.idle(tab: workspace.tab("herdr:app:1")!)
+        XCTAssertFalse(idle)
+        XCTAssertEqual(helper.requests.map { params($0) }, [["node": sketch.ids["herdr:app:1"]!, "policy": "prompt", "check": true]])
+        XCTAssertNotNil(workspace.tab("herdr:app:1"))
     }
 
-    /// A tab that turned busy between the check and the close is detached, never killed.
-    func testTabTurningBusyAfterTheCheckDetaches() async throws {
-        let (helper, workspace, _) = closing([.closed(false, confirmation: false), .closed(false, confirmation: true), .closed(true, confirmation: false)])
+    /// A tab that turned busy between the check and the close is left as it is (back in the list), never killed.
+    func testTabTurningBusyAfterTheCheckStays() async throws {
+        let (helper, workspace, _) = closing([.closed(false, confirmation: true)])
         defer { helper.close() }
-        let outcome = try await workspace.close(tab: workspace.tab("herdr:app:2")!, .close)
-        XCTAssertEqual(outcome, .detached)
-        XCTAssertEqual(helper.requests.map { $0.params["policy"] as? String }, ["prompt", "prompt", "detach"])
+        let dev = workspace.tab("herdr:app:2")!
+        let outcome = try await workspace.close(tab: dev, .close)
+        XCTAssertEqual(outcome, .busy)
+        XCTAssertEqual(helper.requests.map { $0.params["policy"] as? String }, ["prompt"])
+        XCTAssertTrue(workspace.tab("herdr:app:2") === dev)
     }
 
-    /// An unavailable inspection (older multiplexer, lost server) keeps the work: detach.
-    func testFailedCheckDetaches() async throws {
-        let (helper, workspace, _) = closing([.failure(code: "unsupported", message: "Idle check unavailable"), .closed(true, confirmation: false)])
+    /// An unavailable inspection (older multiplexer, lost server) counts as busy: the user is asked.
+    func testFailedCheckIsNotIdle() async throws {
+        let (helper, workspace, _) = closing([.failure(code: "unsupported", message: "Idle check unavailable")])
         defer { helper.close() }
-        let outcome = try await workspace.close(tab: workspace.tab("herdr:app:3")!, .close)
-        XCTAssertEqual(outcome, .detached)
-        XCTAssertEqual(helper.requests.map { $0.params["policy"] as? String }, ["prompt", "detach"])
+        let idle = try await workspace.idle(tab: workspace.tab("herdr:app:3")!)
+        XCTAssertFalse(idle)
+        XCTAssertEqual(helper.requests.map { $0.params["policy"] as? String }, ["prompt"])
     }
 
     /// Close Space detaches, idle or not, as the Mac's does (docs/integrations.md): nothing is checked or ended.
@@ -863,5 +819,82 @@ extension TabsCommandTests {
         try await TestSupport.eventually { shell.isClosed }
         XCTAssertNil(presences.presence(key))
         XCTAssertTrue(shells.tabs.isEmpty)
+    }
+}
+
+/// Close from the phone's lists (swipe, Agents, ⌘W, the iPad pill's ×): an agent whose turn is over ends at once, an
+/// idle tab after the helper's check, a busy one after the question.
+extension TabsCommandTests {
+    private func actions(_ replies: [ScriptedHelper.Reply], state: PaneUrgency?)
+        -> (ScriptedHelper, TabsActions, TopologySketch, closed: () -> [TabsActions.Target]) {
+        let (helper, workspace, sketch) = closing(replies)
+        let model = ShellFixtures.model("tabs-close-\(name)")
+        model.insert(workspace)
+        let claude = sketch.ids["p:claude"]
+        model.agentState = { _, terminal in terminal == claude ? state : nil }
+        let actions = TabsActions(model: model)
+        var closed: [TabsActions.Target] = []
+        actions.closed = { closed.append($0) }
+        return (helper, actions, sketch, { closed })
+    }
+
+    private func ref(_ actions: TabsActions, _ key: String) -> TabRef {
+        actions.model.workspace(TabsFixtures.host.id)!.tab(key)!.ref
+    }
+
+    func testCloseOfAFinishedAgentTerminatesAtOnce() async throws {
+        for state in [PaneUrgency.idle, .unread] {
+            let (helper, actions, sketch, closed) = actions([.closed(true, confirmation: false)], state: state)
+            defer { helper.close() }
+            let claude = ref(actions, "herdr:app:1")
+            actions.close(.tab(claude), .close)
+            XCTAssertNil(actions.closing)
+            XCTAssertEqual(closed(), [.tab(claude)])
+            try await TestSupport.eventually { helper.requests.count == 1 }
+            XCTAssertEqual(params(helper.requests[0]), ["node": sketch.ids["herdr:app:1"]!, "policy": "terminate", "check": false])
+        }
+    }
+
+    func testCloseOfAWorkingAgentAsksThenTerminates() async throws {
+        let (helper, actions, sketch, closed) = actions([.closed(false, confirmation: true), .closed(true, confirmation: false)],
+                                                       state: .running)
+        defer { helper.close() }
+        let claude = ref(actions, "herdr:app:1")
+        actions.close(.tab(claude), .close)
+        try await TestSupport.eventually { actions.closing == claude }
+        XCTAssertEqual(closed(), [], "nothing leaves before the answer")
+        XCTAssertNotNil(actions.model.tab(claude))
+        XCTAssertEqual(actions.model.closeMessage(actions.model.tab(claude)!),
+                       "Claude Code is still working. Terminating ends it. To keep it running, detach it from the tab’s menu.")
+        actions.confirmClose(claude)
+        XCTAssertNil(actions.closing)
+        XCTAssertEqual(closed(), [.tab(claude)])
+        try await TestSupport.eventually { helper.requests.count == 2 }
+        XCTAssertEqual(helper.requests.map { params($0) },
+                       [["node": sketch.ids["herdr:app:1"]!, "policy": "prompt", "check": true],
+                        ["node": sketch.ids["herdr:app:1"]!, "policy": "terminate", "check": false]])
+    }
+
+    func testCloseOfAnIdleTabTerminatesAfterTheCheck() async throws {
+        let (helper, actions, sketch, closed) = actions([.closed(false, confirmation: false), .closed(true, confirmation: false)],
+                                                       state: nil)
+        defer { helper.close() }
+        let dev = ref(actions, "herdr:app:2")
+        actions.close(.tab(dev), .close)
+        try await TestSupport.eventually { closed() == [.tab(dev)] }
+        try await TestSupport.eventually { helper.requests.count == 2 }
+        XCTAssertNil(actions.closing)
+        XCTAssertEqual(helper.requests.map { params($0) },
+                       [["node": sketch.ids["herdr:app:2"]!, "policy": "prompt", "check": true],
+                        ["node": sketch.ids["herdr:app:2"]!, "policy": "prompt", "check": false]])
+    }
+
+    func testCloseQuestionNamesWhatRuns() {
+        let tail = " " + TabsCloseCopy.consequence
+        XCTAssertEqual(TabsCloseCopy.message(agent: "Codex", state: .waiting, program: nil), "Codex is waiting for you." + tail)
+        XCTAssertEqual(TabsCloseCopy.message(agent: "Pi", state: nil, program: nil), "Pi is still running." + tail)
+        XCTAssertEqual(TabsCloseCopy.message(agent: nil, state: nil, program: "vite"), "vite is still running." + tail)
+        XCTAssertEqual(TabsCloseCopy.message(agent: nil, state: nil, program: "zsh"), "Something is still running in it." + tail)
+        XCTAssertEqual(TabsCloseCopy.title(tab: "Rate limiter for the API"), "Close “Rate limiter for the API”?")
     }
 }

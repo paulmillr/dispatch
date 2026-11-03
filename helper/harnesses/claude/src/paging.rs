@@ -186,10 +186,14 @@ impl Reader {
                         finished = start;
                     }
                 }
-            } else if Self::readable(&line.bytes) {
-                self.count += line.end - line.start;
+            } else if let Some(counted) = Self::readable(&line.bytes) {
+                // A queued task notification (no uuid) ends a shell the page may show running:
+                // the parser sees it, the page's bounds never count it.
+                if counted {
+                    self.count += line.end - line.start;
+                }
                 self.lines.push(line.bytes);
-                finished = self.lines.len() >= self.limit || self.count >= self.budget;
+                finished = counted && (self.lines.len() >= self.limit || self.count >= self.budget);
             } else {
                 // Claude ≥ 2.1.300 logs every API request beside the conversation (api-request,
                 // -blob, -shape: up to tens of KB each). Counted, a burst of them filled the page's
@@ -234,12 +238,17 @@ impl Reader {
         }
         Ok(None)
     }
-    /// A line the parser can show or name the conversation with: a uuid entry or a title. A line
-    /// that is not JSON stays too, for the parser to judge.
-    fn readable(line: &[u8]) -> bool {
-        let Ok(doc) = Json::parse(line) else { return true };
+    /// A line the parser reads: Some(true) for one it can show or name the conversation with (a
+    /// uuid entry or a title; a line that is not JSON stays too, for the parser to judge),
+    /// Some(false) for a queued task notification, which only ends a running shell.
+    fn readable(line: &[u8]) -> Option<bool> {
+        let Ok(doc) = Json::parse(line) else { return Some(true) };
         let root = doc.root();
-        root.get("uuid").is_some() || matches!(text(root, "type"), Some("ai-title" | "custom-title"))
+        if root.get("uuid").is_some() || matches!(text(root, "type"), Some("ai-title" | "custom-title")) {
+            Some(true)
+        } else {
+            Parser::notification(root).map(|_| false)
+        }
     }
     /// Where the page read back to: 0 when it reached the start of the file.
     pub fn start(&self) -> u64 {

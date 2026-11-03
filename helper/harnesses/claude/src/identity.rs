@@ -21,6 +21,9 @@ pub struct Session {
     pub waiting: Option<String>,
     pub name: Option<String>,
     pub version: Option<String>,
+    /// The registry's `startedAt`, Unix milliseconds on Claude's clock: shells started before it
+    /// belong to an earlier process and died with it.
+    pub started_ms: Option<u64>,
     /// Registered working directory; side forks start there.
     pub directory: PathBuf,
     pub registry: PathBuf,
@@ -345,6 +348,7 @@ pub fn decode(
         },
         registry: home.join("sessions").join(format!("{}.json", process.pid)),
         version: text(root, "version").map(str::to_owned),
+        started_ms: Some((started * 1000.0) as u64),
     })
 }
 

@@ -13,8 +13,6 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
     private(set) var inCode = false
     /// The draft changed (a keystroke, a key of the key row, a paste, undo): the new text.
     var changed: ((String) -> Void)?
-    /// A paste of several lines, offered as a fenced block (the pasted range).
-    var pasted: ((NSRange?) -> Void)?
     var submit: (() -> Void)?
     /// Takes the images a paste carries (a screenshot, a copied photo) as attachments; nil: such a paste does nothing.
     var pasteImages: (([MobileAttachmentSource]) -> Void)?
@@ -185,13 +183,6 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
         perform(key.edit(textStorage.string, selection: selectedRange))
     }
 
-    /// Wraps the pasted range in a fence (the "Paste as code" offer).
-    func fence(_ range: NSRange) {
-        guard NSMaxRange(range) <= textStorage.length else { return }
-        let pasted = (textStorage.string as NSString).substring(with: range)
-        perform(ComposerMarkdown.fenced(pasted, replacing: range, in: textStorage.string))
-    }
-
     /// After any change of the characters: the caret's context and the owner.
     func didEdit() {
         restyleIfNeeded()
@@ -203,21 +194,9 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
         // Images without text attach; anything with text pastes as text, as before.
         if let pasteImages, pasteboard.hasImages, !pasteboard.hasStrings {
             let images = MobileAttachmentSource.images(on: pasteboard)
-            if !images.isEmpty { pasteImages(images); pasted?(nil); return }
+            if !images.isEmpty { pasteImages(images); return }
         }
-        let string = pasteboard.string ?? ""
-        let start = selectedRange.location
-        let offer = ComposerMarkdown.offersCode(string) && !markdown.isCode(at: start, in: textStorage.string)
         super.paste(sender)
-        let end = selectedRange.location
-        pasted?(offer && end > start ? NSRange(location: start, length: end - start) : nil)
-    }
-
-    /// Paste as a fenced block directly (the edit menu's "Paste as Code").
-    @objc func pasteAsCode(_ sender: Any?) {
-        guard let string = UIPasteboard.general.string, !string.isEmpty else { return }
-        perform(ComposerMarkdown.fenced(string, replacing: selectedRange, in: textStorage.string))
-        pasted?(nil)
     }
 
     /// The draft's editor mode and whether the agent works, for the hardware keys (`ComposerHardwareKeys`).

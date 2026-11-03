@@ -250,7 +250,7 @@ struct AgentWorkingAnimation: View {
                     Text("·").foregroundStyle(theme.muted.opacity(0.55))
                     HStack(spacing: 2) {
                         Text(state.fragment)
-                            .italic().lineLimit(1)
+                            .font(theme.typography.italic(offset: -2)).lineLimit(1)
                     }
                     .foregroundStyle(theme.muted.opacity(0.85))
                     .accessibilityElement(children: .ignore).accessibilityLabel(state.fragment)

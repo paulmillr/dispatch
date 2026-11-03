@@ -52,7 +52,7 @@ enum AppPresence {
     }
 }
 
-/// How often stats are sampled with no stats view open (a stats view samples every 2 s). While Dispatch is shown
+/// How often stats are sampled with no stats view open (a stats view samples every 1 or 2 s: `viewed`). While Dispatch is shown
 /// (AppPresence) every 15 s bar of the chart gets a sample; while it is not, or in Low Power Mode, one a minute does.
 /// Each sample is a helper request, over SSH a frame that wakes the link and the Wi-Fi radio. Read before every wait,
 /// so a change applies from the next sample; opening a stats view samples at once whatever the wait.
@@ -60,6 +60,13 @@ enum StatisticsCadence {
     static func background(shown: Bool, lowPower: Bool) -> Duration { shown && !lowPower ? .seconds(15) : .seconds(60) }
     @MainActor static var background: Duration {
         background(shown: AppPresence.shown, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
+    /// How often this Mac is sampled while a stats view shows it: every second on the power adapter, every 2 s on
+    /// battery or in Low Power Mode. SSH hosts stay at 2 s (SSHStatisticsStore.interval): each of their samples is a
+    /// frame on the link. Its process list costs about 28 mJ (stats/macos.rs, background), so about 28 mW at 1 s.
+    static func viewed(adapter: Bool, lowPower: Bool) -> Duration { adapter && !lowPower ? .seconds(1) : .seconds(2) }
+    @MainActor static var viewed: Duration {
+        viewed(adapter: MotionRate.adapter, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
     }
 }
 
@@ -95,18 +102,24 @@ final class HostStats {
     @ObservationIgnored private let historyExpiry = StatisticsHistoryExpiry()
     @ObservationIgnored private let historyRetention: TimeInterval
     @ObservationIgnored private let backgroundCadence: @MainActor () -> Duration
+    @ObservationIgnored private let viewedCadence: @MainActor () -> Duration
 
-    /// `backgroundCadence`: the wait between samples with no viewer, read before each wait (StatisticsCadence).
-    init(historyRetention: TimeInterval = 3600, backgroundCadence: @escaping @MainActor () -> Duration = { StatisticsCadence.background }) {
+    /// `backgroundCadence` and `viewedCadence`: the wait between samples with no viewer and with one, read before each
+    /// wait (StatisticsCadence).
+    init(historyRetention: TimeInterval = 3600,
+         backgroundCadence: @escaping @MainActor () -> Duration = { StatisticsCadence.background },
+         viewedCadence: @escaping @MainActor () -> Duration = { StatisticsCadence.viewed }) {
         self.historyRetention = historyRetention.isFinite ? min(3600, max(0.001, historyRetention)) : 3600
         self.backgroundCadence = backgroundCadence
+        self.viewedCadence = viewedCadence
     }
     private func trimHistory() {
         let cutoff = System.date().addingTimeInterval(-historyRetention)
         history.removeAll { $0.date <= cutoff }
         if history.isEmpty { history = [] }
-        if history.count > 1801 { history.removeFirst(history.count - 1801) }
-        historyExpiry.schedule(at: history.lazy.map(\.date).min()?.addingTimeInterval(historyRetention)) { [weak self] in self?.trimHistory() }
+        // An hour of 1 s samples (StatisticsCadence.viewed) and the one that closes it.
+        if history.count > 3601 { history.removeFirst(history.count - 3601) }
+        historyExpiry.schedule(at: history.lazy.map(\.date).min()?.addingTimeInterval(historyRetention), grid: historyRetention / 240) { [weak self] in self?.trimHistory() }
     }
 
     func subscribe() -> UUID {
@@ -164,10 +177,10 @@ final class HostStats {
                     trimHistory()
                 }
                 guard let self else { return }
-                // With a viewer the chart moves every 2 s. Without one the history only pre-fills the chart for the
-                // next popover, at the background cadence of this wait.
-                let interval: Duration = subscriptions.isEmpty ? backgroundCadence() : .seconds(2)
-                do { try await System.sleep(for: interval, "sample") } catch { return }
+                // With a viewer the chart moves every 1 or 2 s. Without one the history only pre-fills the chart for
+                // the next popover, at the background cadence of this wait.
+                let interval: Duration = subscriptions.isEmpty ? backgroundCadence() : viewedCadence()
+                do { try await System.sleep(every: interval, "sample") } catch { return }
             }
         }
         if !subscriptions.isEmpty { startDisks() }
@@ -188,7 +201,7 @@ final class HostStats {
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
                     disksStale = true
                 }
-                do { try await System.sleep(for: .seconds(15), "disks") } catch { return }
+                do { try await System.sleep(every: .seconds(15), "disks") } catch { return }
             }
         }
     }
@@ -206,16 +219,18 @@ final class HostStats {
 /// Expiry only removes chart points; it cannot sample or own any connection.
 /// One sleeping timer per history is rescheduled only when its oldest point
 /// changes, and disappears once the history is empty. Last samples are separate.
+/// It ends on the shared clock's `grid` (System.sleep(for:on:)), a 240th of the retention: an hour's chart drops its
+/// points on the 15 s ticks the background samples wake on, up to one tick late, rather than waking on its own.
 @MainActor
 final class StatisticsHistoryExpiry {
     private var deadline: Date?
     private var task: Task<Void, Never>?
-    func schedule(at date: Date?, action: @escaping @MainActor () -> Void) {
+    func schedule(at date: Date?, grid: TimeInterval, action: @escaping @MainActor () -> Void) {
         guard date != deadline else { return }
         task?.cancel(); task = nil; deadline = date
         guard let date else { return }
         task = Task { [weak self] in
-            do { try await System.sleep(for: .seconds(max(0, date.timeIntervalSinceNow)), "schedule") }
+            do { try await System.sleep(for: .seconds(max(0, date.timeIntervalSinceNow)), on: .seconds(max(0, grid)), "schedule") }
             catch { return }
             guard !Task.isCancelled, let self else { return }
             deadline = nil; task = nil

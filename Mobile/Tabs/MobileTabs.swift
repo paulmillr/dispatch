@@ -40,6 +40,9 @@ final class MobileTabs {
 
     /// (host, terminal) → how much it wants attention. Chat sets it; nil means idle or read.
     @ObservationIgnored var urgency: @MainActor (UUID, UInt64) -> TabUrgency? = { _, _ in nil }
+    /// (host, terminal) → its agent's state (the conversation's `PaneUrgency`) while Chat has it live; nil unknown or
+    /// last-known. Chat sets it.
+    @ObservationIgnored var agentState: @MainActor (UUID, UInt64) -> PaneUrgency? = { _, _ in nil }
     /// (host, terminal) → what a chat tab is doing, for line two of its row (`TabsStatus`). Chat sets it.
     @ObservationIgnored var status: @MainActor (UUID, UInt64) -> TabsStatus? = { _, _ in nil }
     /// (host, terminal) → the agent's conversation title, which names an unrenamed tab as on the Mac. Chat sets it.
@@ -57,7 +60,7 @@ final class MobileTabs {
     /// Pull to refresh: asks every host and returns once they answered (`HostSessions.refresh`). The composition sets
     /// it; nil offers none.
     @ObservationIgnored var refresh: (@MainActor () async -> Void)?
-    /// (host, multiplexer name) → the host follows that multiplexer from now on (its saved preference, as Host detail
+    /// (host, multiplexer name) → the host follows that multiplexer from now on (its saved preference, as Edit host
     /// sets it): New space on another multiplexer than the one shown. The composition sets it.
     @ObservationIgnored var follow: @MainActor (UUID, String) -> Void = { _, _ in }
     /// host → its shell tabs (`HostSession.shells`), for New tab, Close tab and Close space in a Shell space. The
@@ -276,13 +279,24 @@ final class MobileTabs {
     func agent(of tab: MobileTab) -> String? {
         guard let pane = tab.agentPane else { return nil }
         if let key = agentKey(tab.ref.host, pane.id) { return key }
-        let names = [pane.agent?.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, pane.name, tab.name]
-        for name in names.compactMap({ $0?.lowercased() }) {
-            if name.contains("claude") { return "claude" }
-            if name.contains("codex") { return name.contains("nano") ? "nanocodex" : "codex" }
-            if name == "pi" || name.hasPrefix("pi ") || name.hasPrefix("pi-") { return "pi" }
+        return MobileTab.agent(named: [pane.agent?.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, pane.name, tab.name])
+    }
+
+    /// Every pane runs an agent whose turn is over (idle, or a result not seen yet): Close ends the tab without asking.
+    /// An agent working or waiting for the user, a state not known live, or a pane without an agent asks first.
+    func agentsFinished(_ tab: MobileTab) -> Bool {
+        !tab.panes.isEmpty && tab.panes.allSatisfy { pane in
+            guard pane.agent != nil, let state = agentState(tab.ref.host, pane.id) else { return false }
+            return state == .idle || state == .unread
         }
-        return "agent"
+    }
+
+    /// The question Close of a busy tab asks: what runs in it (`TabsCloseCopy`).
+    func closeMessage(_ tab: MobileTab) -> String {
+        let pane = tab.agentPane
+        let key = agent(of: tab)
+        return TabsCloseCopy.message(agent: key.map { $0 == "agent" ? "The agent" : ChatSlashCommand.agentName(label: nil, key: $0) },
+                                     state: pane.flatMap { agentState(tab.ref.host, $0.id) }, program: tab.program)
     }
 
     /// A tab's urgency: its most urgent pane's. A shell tab has none (no agent, no chat).
@@ -292,13 +306,11 @@ final class MobileTabs {
     }
     func urgency(of space: MobileSpace) -> TabUrgency? { space.tabs.compactMap { urgency(of: $0) }.max() }
 
-    /// A tab's time (its row's, and the Activity sort's): the server's last-activity time for it (`terminals.activity`,
-    /// tmux windows) or the last change the phone saw in it live, whichever is later, and for a chat tab its agent's
-    /// newest record when that is later still. Nil until one is known: the topology carries no times, and a helper too
-    /// old for the feature (or herdr, which keeps none) leaves only what the phone saw.
+    /// A tab's time (its row's, and the Activity sort's): for a chat tab its agent's newest record, from the agent's
+    /// own transcript; for a terminal, or a chat whose agent has written nothing yet, the last change the phone saw in it
+    /// live (`MobileTab.activity`: a command starting or ending, a new folder). Nil until one is known.
     func activity(of tab: MobileTab) -> Date? {
-        let agent = tab.panes.filter { $0.agent != nil }.compactMap { agentActivity(tab.ref.host, $0.id) }.max()
-        return [tab.activity, agent].compactMap { $0 }.max()
+        tab.panes.filter { $0.agent != nil }.compactMap { agentActivity(tab.ref.host, $0.id) }.max() ?? tab.activity
     }
     func activity(of space: MobileSpace) -> Date? { space.tabs.compactMap { activity(of: $0) }.max() }
 
@@ -307,10 +319,11 @@ final class MobileTabs {
                   label: label(of: tab, host: host))
     }
 
-    /// The name a tab shows (rows, its screen, sorting): `MobileTab.label` with its agent's conversation title.
+    /// The name a tab shows (rows, its screen, sorting): `MobileTab.label` with its agent's conversation title, and its
+    /// agent's name for a window named after the launcher.
     func label(of tab: MobileTab, host: TabsHost?) -> String {
         tab.label(conversation: tab.agentPane.flatMap { conversationTitle(tab.ref.host, $0.id) }, homes: host?.homes ?? HomePath(account: nil),
-                  paneTitle: tab.activePane.flatMap { paneTitle(tab.ref.host, $0.key) })
+                  paneTitle: tab.activePane.flatMap { paneTitle(tab.ref.host, $0.key) }, agent: agent(of: tab))
     }
 
     /// Chat's count of conversations waiting for the user, but `excluding`'s (the back pill); nil: counted from the rows.
@@ -342,10 +355,20 @@ final class MobileTabs {
         }
     }
 
-    /// A space's tabs in server order (the Mac strip's), with their urgency, time and name (P2, P3).
-    func rows(in space: MobileSpace) -> [TabsEntry] {
+    /// A space's tabs with their urgency, time and name (P2, P3), by activity: most recent first, tabs with no time yet
+    /// last, ties in server order (the Mac strip's). `serverOrder` keeps the server's alone: Edit's drags reorder it.
+    func rows(in space: MobileSpace, serverOrder: Bool = false) -> [TabsEntry] {
         guard let host = workspace(space.ref.host)?.host else { return [] }
-        return space.tabs.map { entry($0, space: space, host: host) }
+        let rows = space.tabs.map { entry($0, space: space, host: host) }
+        guard !serverOrder else { return rows }
+        return rows.enumerated().sorted { a, b in
+            switch (a.element.activity, b.element.activity) {
+            case let (x?, y?) where x != y: x > y
+            case (.some, nil): true
+            case (nil, .some): false
+            default: a.offset < b.offset
+            }
+        }.map(\.element)
     }
 
     /// The tab the phone opened last in each space this run: P2's "open" chip, P3's check.

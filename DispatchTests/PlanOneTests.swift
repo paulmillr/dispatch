@@ -278,8 +278,8 @@ final class PlanOneTests: XCTestCase {
         }
         XCTAssertGreaterThan(TerminalFontScale.factor("Inconsolata"), 1.05)
         XCTAssertLessThan(TerminalFontScale.factor("Victor Mono"), 0.8)
-        // Chat's New York and SF Rounded: the system font's designs, never looked up by name.
-        for (choice, design) in [(ChatFont.newYork, Font.Design.serif), (.sfRounded, .rounded)] {
+        // Chat's New York and San Francisco (drawn in SF Rounded): the system font's designs, never looked up by name.
+        for (choice, design) in [(ChatFont.newYork, Font.Design.serif), (.system, .rounded)] {
             var chat = Preferences(); chat.chatFont = choice
             XCTAssertEqual(ChatTypography(preferences: chat).font(), Font.system(size: chat.fontSize, weight: .regular, design: design))
             XCTAssertNotEqual(choice.systemFont(ofSize: 12)?.familyName, NSFont.systemFont(ofSize: 12).familyName, "\(choice)")
@@ -288,4 +288,47 @@ final class PlanOneTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).spaceOrder, .tree)
     }
 
+}
+
+/// San Francisco draws in SF Rounded, which has no italic: chat's emphasis is San Francisco's italic at the same size
+/// and weight, and fonts with italics of their own keep them.
+extension PlanOneTests {
+    func testChatEmphasisInRoundedDrawsSanFranciscoItalic() throws {
+        let weightOf = { (font: CTFont) in (CTFontCopyTraits(font) as? [CFString: Any])?[kCTFontWeightTrait] as? CGFloat ?? -1 }
+        for weight in [NSFont.Weight.regular, .semibold, .bold] {
+            let upright = NSFont.systemFont(ofSize: 14, weight: weight)
+            let rounded = try XCTUnwrap(upright.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: 14) })
+            let italic = try XCTUnwrap(ChatFont.italic(for: rounded), "\(weight)")
+            XCTAssertTrue(CTFontGetSymbolicTraits(italic).contains(.traitItalic), "\(weight)")
+            XCTAssertEqual(CTFontCopyFamilyName(italic) as String, upright.familyName)
+            XCTAssertEqual(weightOf(italic), weightOf(upright), accuracy: 0.01, "\(weight)")
+            XCTAssertEqual(CTFontGetSize(italic), 14)
+        }
+        XCTAssertNil(ChatFont.italic(for: NSFont.systemFont(ofSize: 14)), "San Francisco's own face")
+        XCTAssertNil(ChatFont.italic(for: try XCTUnwrap(ChatFont.newYork.systemFont(ofSize: 14))), "New York has an italic")
+        XCTAssertNil(ChatFont.italic(for: try XCTUnwrap(NSFont(name: "LMRoman10-Regular", size: 14))), "a font by name")
+        XCTAssertFalse(ChatFont.allCases.map(\.rawValue).contains("SF Rounded"), "San Francisco is the rounded choice")
+        let typography = ChatTypography(preferences: Preferences())
+        XCTAssertEqual(typography.italic(), Font.system(size: typography.pointSize(), weight: .regular, design: .default).italic())
+        XCTAssertEqual(typography.italic(offset: -2), Font.system(size: typography.pointSize(offset: -2), weight: .regular, design: .default).italic())
+        var serif = Preferences(); serif.chatFont = .newYork
+        let newYork = ChatTypography(preferences: serif)
+        XCTAssertEqual(newYork.italic(), newYork.font().italic())
+    }
+}
+
+/// A window the phone's launch named after its agent (`launch.names`: `new-window -n claude`) reads as renamed from
+/// tmux, but follows its conversation as an unnamed one does; a name the user gave, or another agent's, stays.
+extension PlanOneTests {
+    func testALaunchNamedWindowFollowsItsConversation() {
+        let tab = TerminalTab(directory: "/work/src/project")
+        var window = ContainerTab(id: System.uuid(), node: 1, name: "claude", arrangement: PaneArrangement(tab: tab))
+        window.renamed = true
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup", agent: "claude"), "Fix startup")
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: nil, agent: "claude"), "claude")
+        XCTAssertEqual(window.displayLabel(automatic: false, conversation: "Fix startup", agent: "claude"), "claude")
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup", agent: "codex"), "claude")
+        window.name = "Server"
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup", agent: "claude"), "Server")
+    }
 }

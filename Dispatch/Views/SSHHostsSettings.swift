@@ -518,18 +518,34 @@ struct SSHHostsSettings: View {
         }.padding(.leading, 37).padding(.trailing, 14).padding(.bottom, 12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings-host-editor-\(Self.localID)")
+            // Asked each time it opens, so a CLI installed meanwhile gets its Install; a shell that cannot be asked
+            // keeps the last answer, or offers Install for every agent.
+            .task {
+                let found = await LocalAgentsConsent.installedAgents()
+                chat.localCLIs = found ?? chat.localCLIs ?? Set(launches.map(\.key))
+            }
     }
 
-    /// One agent on one line: its name, how its hooks stand here, Install when they need it, and whether this Mac
-    /// uses them. An agent off in Chat mode is off everywhere, so its switch rests.
+    /// One agent on one line: its name, how its hooks stand here, Install when they need it (the CLI's own install
+    /// command when this Mac lacks it), and whether this Mac uses them. An agent off in Chat mode is off everywhere,
+    /// so its switch rests.
     private func localAgentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
         let inChat = chat.enabled && !chat.disabledIntegrations.contains(launch.key)
+        let command = localOn(launch.key) && missingCLI(launch.key) ? LocalAgentsConsent.installs[launch.key] : nil
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(launch.label).fixedSize()
-            Text(localStatus(launch)).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if let command {
+                    Text(command).font(typography.font(offset: -2)).foregroundStyle(Chrome.ink)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        .help("\(launch.label) is not installed on this Mac: run this in a terminal")
+                        .accessibilityIdentifier("settings-install-command-\(launch.key)")
+                } else {
+                    Text(localStatus(launch)).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
             if needsInstall(launch.key) {
                 Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
                     .accessibilityIdentifier("settings-install-\(launch.key)")
@@ -550,11 +566,13 @@ struct SSHHostsSettings: View {
         guard chat.enabled else { return Text("Chat mode is off").foregroundColor(SettingsControlStyle.detail) }
         let on = launches.filter { localOn($0.key) }
         let ready = on.filter { chat.hookStatus($0.key) == .ready }
-        let pending = on.filter { chat.hookStatus($0.key) != .ready }.map(\.label)
+        let missing = on.filter { chat.hookStatus($0.key) != .ready && missingCLI($0.key) }.map(\.label)
+        let pending = on.filter { chat.hookStatus($0.key) != .ready && !missingCLI($0.key) }.map(\.label)
         let off = launches.filter { !localOn($0.key) }.map(\.label)
         var parts: [String] = []
         if !ready.isEmpty { parts.append("\(ready.count) ready") }
         if !pending.isEmpty { parts.append(pending.joined(separator: ", ") + (pending.count == 1 ? " needs setup" : " need setup")) }
+        if !missing.isEmpty { parts.append(missing.joined(separator: ", ") + " not installed") }
         if !off.isEmpty { parts.append(off.joined(separator: ", ") + " off") }
         return Text(parts.joined(separator: " · ")).foregroundColor(SettingsControlStyle.detail)
     }
@@ -567,8 +585,15 @@ struct SSHHostsSettings: View {
         return chat.enabled && !chat.disabledIntegrations.contains(key) && chat.localHooksAllowed(key)
     }
 
+    /// Install waits for the CLI probe, so it never shows for a missing agent before its command replaces it.
     private func needsInstall(_ key: String) -> Bool {
-        localOn(key) && TerminalRuntime.shared.chat.hookStatus(key) == .off
+        let chat = TerminalRuntime.shared.chat
+        return localOn(key) && chat.hookStatus(key) == .off && chat.localCLIs?.contains(key) == true
+    }
+
+    /// The probe found no CLI for this agent; unknown until This Mac opens.
+    private func missingCLI(_ key: String) -> Bool {
+        TerminalRuntime.shared.chat.localCLIs.map { !$0.contains(key) } ?? false
     }
 
     /// How an agent's hooks stand on this Mac, from the local helper's installation facts.
@@ -582,7 +607,9 @@ struct SSHHostsSettings: View {
             if let trust = install?.trust { return "restart \(launch.label), then trust Dispatch in \(trust)" }
             if let reload = install?.reload { return "run \(reload) in \(launch.label) to finish" }
             return "restart \(launch.label) to finish"
-        case .off: return install?.optional == true ? "needs its extension" : "not set up"
+        case .off:
+            if missingCLI(launch.key) { return "not installed" }
+            return install?.optional == true ? "needs its extension" : "not set up"
         }
     }
 

@@ -122,7 +122,7 @@ final class SettingsTests: XCTestCase {
         try await TestSupport.eventually { !app.conversations.conversations.isEmpty }
     }
 
-    /// The multiplexer preference (host detail and Settings share the control) reaches the running driver, which
+    /// The multiplexer preference (Edit host and Settings both set it) reaches the running driver, which
     /// re-follows on the same connection; Spaces detects again for New space.
     func testTheMultiplexerPreferenceIsFollowedWithoutReconnecting() async throws {
         let studio = ResilienceFixture.host("studio")
@@ -272,5 +272,177 @@ extension SettingsTests {
         XCTAssertEqual(MobileSettings.dictation(store).engine, .parakeet, "what the composer's mic reads")
         XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .parakeet)
         XCTAssertEqual(MobileSettings(defaults: store).dictationEngine.label(whisper: .small), "Parakeet")
+    }
+}
+
+/// The Settings app's Dispatch page (`Mobile/App/Settings.bundle`).
+extension SettingsTests {
+    /// Every row is a key the models read, with their values, titles and default: the page shows what the app does.
+    func testSettingsAppPageMatchesTheModels() throws {
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "Settings", withExtension: "bundle")).appendingPathComponent("Root.plist")
+        let page = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+        let rows = try XCTUnwrap(page["PreferenceSpecifiers"] as? [[String: Any]]).filter { $0["Key"] != nil }
+        let fresh = MobileSettings(defaults: defaults())
+        typealias Choice = (values: [String], titles: [String], fallback: String)
+        func choice<Value: CaseIterable & RawRepresentable<String>>(_ fallback: Value, _ title: (Value) -> String) -> Choice {
+            (Value.allCases.map(\.rawValue), Value.allCases.map(title), fallback.rawValue)
+        }
+        let choices: [String: Choice] = [
+            MobileSettings.appearanceKey: choice(fresh.appearance, \.title),
+            MobileSettings.themeKey: choice(fresh.theme, \.title),
+            MobileSettings.lineSpacingKey: choice(fresh.lineSpacing, \.title),
+            MobileSettings.textContrastKey: choice(fresh.textContrast, \.title),
+            MobileSettings.cursorKey: choice(fresh.cursor, \.title),
+            MobileSettings.chatFontKey: choice(fresh.chatFont, \.rawValue),
+            MobileSettings.chatTextSizeKey: choice(fresh.chatTextSize, \.title),
+            MobileSettings.notificationSoundKey: choice(fresh.notificationSound, \.title),
+            MobileSettings.colorVisionKey: choice(fresh.colorVision, \.title),
+        ]
+        let switches: [String: Bool] = [
+            MobileSettings.ligaturesKey: fresh.ligatures,
+            MobileSettings.boldIsBrightKey: fresh.boldIsBright,
+            MobileSettings.cursorBlinkKey: fresh.cursorBlink,
+            MobileSettings.notifyNeedsYouKey: fresh.notifyNeedsYou,
+            MobileSettings.notifyFinishedKey: fresh.notifyFinished,
+            MobileSettings.notifyFailedKey: fresh.notifyFailed,
+            MobileSettings.notificationTextKey: fresh.notificationText,
+            MobileSettings.notificationBadgeKey: fresh.notificationBadge,
+            MobileSettings.autoApproveUnsafePastesKey: fresh.autoApproveUnsafePastes,
+            MobileSettings.hostColorsKey: fresh.showHostColors,
+        ]
+        for row in rows {
+            let key = try XCTUnwrap(row["Key"] as? String)
+            switch row["Type"] as? String {
+            case "PSMultiValueSpecifier":
+                let expected = try XCTUnwrap(choices[key], "\(key) is no choice the models know")
+                XCTAssertEqual(row["Values"] as? [String], expected.values, key)
+                XCTAssertEqual(row["Titles"] as? [String], expected.titles, key)
+                XCTAssertEqual(row["DefaultValue"] as? String, expected.fallback, key)
+            case "PSToggleSwitchSpecifier":
+                let expected = try XCTUnwrap(switches[key], "\(key) is no switch the models know")
+                XCTAssertEqual(row["DefaultValue"] as? Bool, expected, key)
+            default:
+                XCTFail("\(key): unexpected row \(row["Type"] ?? "")")
+            }
+        }
+        XCTAssertEqual(rows.compactMap { $0["Key"] as? String }.sorted(), (Array(choices.keys) + Array(switches.keys)).sorted())
+    }
+
+    /// What the page writes while the app is away reaches the models, and a terminal setting restyles the terminals.
+    func testAChangeFromTheSettingsAppReachesTheModels() async throws {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        let changes = Count()
+        settings.followOutsideChanges { changes.value += 1 }
+        let restyles = Count()
+        let observer = NotificationCenter.default.addObserver(forName: TerminalStyle.changed, object: store, queue: nil) { _ in
+            MainActor.assumeIsolated { restyles.value += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        store.set("bar", forKey: MobileSettings.cursorKey)
+        store.set(false, forKey: MobileSettings.notificationBadgeKey)
+        try await TestSupport.eventually { settings.cursor == .bar && !settings.notificationBadge }
+        XCTAssertGreaterThan(restyles.value, 0, "the open terminals take the cursor")
+        XCTAssertGreaterThan(changes.value, 0, "the badge follows")
+
+        // The model's own write is nothing new: only the outside one after it counts.
+        let settled = changes.value
+        settings.chatTextSize = .larger
+        store.set("tight", forKey: MobileSettings.lineSpacingKey)
+        try await TestSupport.eventually { settings.lineSpacing == .tight }
+        XCTAssertEqual(changes.value, settled + 1)
+        XCTAssertEqual(settings.chatTextSize, .larger)
+        XCTAssertEqual(store.string(forKey: MobileSettings.chatTextSizeKey), "larger")
+    }
+
+    @MainActor private final class Count { var value = 0 }
+
+    /// The old contrast switch moves to the key the page shows.
+    func testTheOldContrastSwitchMovesToTheNewKey() {
+        let store = defaults()
+        store.set(true, forKey: MobileSettings.terminalContrastKey)
+        XCTAssertEqual(MobileSettings(defaults: store).textContrast, .always)
+        XCTAssertEqual(store.string(forKey: MobileSettings.textContrastKey), "always")
+    }
+}
+
+/// Colorblind-friendly and Color-code hosts, as the Mac's.
+extension SettingsTests {
+    /// The terminal's scheme follows the vision on its own side; a scheme already made for it stays.
+    func testColorblindModeConformsTheScheme() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.colorVision, .typical)
+        XCTAssertEqual(settings.terminalScheme, TerminalConfiguration.defaultScheme)
+        settings.colorVision = .redGreen
+        XCTAssertEqual(settings.terminalScheme, "GitHub Dark Colorblind")
+        XCTAssertEqual(store.string(forKey: MobileSettings.terminalSchemeKey), "GitHub Dark Colorblind", "saved, and the terminals restyle")
+        settings.terminalScheme = "Modus Vivendi Deuteranopia"
+        settings.colorVision = .blueYellow
+        XCTAssertEqual(settings.terminalScheme, "Modus Vivendi Tritanopia")
+        settings.colorVision = .typical
+        XCTAssertEqual(settings.terminalScheme, TerminalConfiguration.defaultScheme, "leaving colorblind mode: Dispatch's")
+
+        settings.terminalScheme = "GitHub Light Default"
+        settings.colorVision = .redGreen
+        XCTAssertEqual(settings.terminalScheme, "GitHub Light Colorblind", "a light scheme gives way to a light one")
+        settings.terminalScheme = "Modus Operandi Deuteranopia"
+        settings.colorVision = .redGreen
+        XCTAssertEqual(settings.terminalScheme, "Modus Operandi Deuteranopia")
+        XCTAssertEqual(MobileSettings(defaults: store).colorVision, .redGreen)
+    }
+
+    /// Color scheme lists only the vision's schemes, and typical vision none of them.
+    func testColorSchemeListsTheVisionsSchemes() {
+        let all = TerminalSchemes.all()
+        let made = Set(ColorVision.bundledSchemes.values.flatMap { $0.light + $0.dark })
+        XCTAssertEqual(made.count, 6)
+        XCTAssertEqual(Set(all.map(\.file)).intersection(made), made, "every one is bundled")
+        let typical = TerminalSchemes.listed(all, for: .typical)
+        XCTAssertEqual(typical.count, all.count - made.count)
+        XCTAssertEqual(typical.first?.file, TerminalConfiguration.defaultScheme)
+        XCTAssertEqual(Set(TerminalSchemes.listed(all, for: .redGreen).map(\.file)),
+                       ["GitHub Light Colorblind", "Modus Operandi Deuteranopia", "GitHub Dark Colorblind", "Modus Vivendi Deuteranopia"])
+        XCTAssertEqual(Set(TerminalSchemes.listed(all, for: .blueYellow).map(\.file)), ["Modus Operandi Tritanopia", "Modus Vivendi Tritanopia"])
+    }
+
+    /// Hosts are drawn from the store the settings feed: the vision's colours, or gray with Color-code hosts off.
+    func testHostColorsFollowTheSettings() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        let colors = HostColorStore()
+        colors.enabled = false
+        settings.hostColors = colors
+        XCTAssertTrue(colors.enabled, "taken at once")
+        XCTAssertEqual(colors.vision, .typical)
+        settings.colorVision = .blueYellow
+        XCTAssertEqual(colors.vision, .blueYellow)
+        settings.showHostColors = false
+        XCTAssertFalse(colors.enabled)
+        XCTAssertFalse(store.bool(forKey: MobileSettings.hostColorsKey))
+        XCTAssertFalse(MobileSettings(defaults: store).showHostColors)
+        XCTAssertTrue(MobileSettings(defaults: defaults()).showHostColors, "on by default")
+    }
+
+    /// Added and removed are the catalog's green and red, and in colorblind mode the vision's schemes' own, per side.
+    func testChangeColorsFollowTheVision() {
+        func hex(_ color: UIColor, _ vision: ColorVision, _ style: UIUserInterfaceStyle) -> String {
+            var (r, g, b, a) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+            color.resolvedColor(with: UITraitCollection { $0.userInterfaceStyle = style; $0[ColorVisionTrait.self] = vision })
+                .getRed(&r, green: &g, blue: &b, alpha: &a)
+            return String(format: "%02x%02x%02x", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+        }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            XCTAssertEqual(hex(CodePalette.added, .typical, style), hex(UIColor.dispatch("Added").resolvedColor(with: traits), .typical, style))
+            XCTAssertEqual(hex(CodePalette.removed, .typical, style), hex(UIColor.dispatch("Destructive").resolvedColor(with: traits), .typical, style))
+        }
+        XCTAssertEqual(hex(CodePalette.added, .redGreen, .dark), "58a6ff", "GitHub Dark Colorblind's blue")
+        XCTAssertEqual(hex(CodePalette.removed, .redGreen, .dark), "ec8e2c", "and its orange")
+        XCTAssertEqual(hex(CodePalette.added, .redGreen, .light), "0550ae")
+        XCTAssertEqual(hex(CodePalette.removed, .redGreen, .light), "b35900")
+        XCTAssertEqual(hex(CodePalette.added, .blueYellow, .dark), "44bc44", "Modus Vivendi Tritanopia's green")
+        XCTAssertEqual(hex(CodePalette.removed, .blueYellow, .light), "a60000")
     }
 }

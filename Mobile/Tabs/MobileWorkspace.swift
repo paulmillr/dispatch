@@ -97,9 +97,11 @@ final class MobileTab: Identifiable {
     private(set) var focused: UInt64?
     /// The pane the phone picked in the switcher (by key, so it survives reconnects).
     private(set) var picked: String?
-    /// When it last had activity: the server's own time when its helper reports one (`terminals.activity`: a tmux
-    /// window's), or the last change the phone saw happen in any of its panes (between two live snapshots, or the
-    /// phone's own), whichever is later; nil until one is known.
+    /// When it last had activity: the last change the phone saw happen in any of its panes (between two live snapshots,
+    /// or the phone's own): a command starting or ending names the pane anew (shell integration's title), a `cd` moves
+    /// its folder. Not the server's output times: tmux's `#{window_activity}` moves whenever a client resizes a window
+    /// (one attach resizes its siblings too), so it said "now" for every tab the phone had just looked beside. Nil until
+    /// one is known.
     private(set) var activity: Date?
     /// A plain SSH shell tab's state (`ShellSessions`); nil for a multiplexer's tab.
     private(set) var shell: ShellSessions.State?
@@ -142,20 +144,48 @@ final class MobileTab: Identifiable {
     /// Whether its program is a login shell at a prompt, as far as the name tells (M2b: busy tabs are white).
     var atShell: Bool { program.map(Self.isShell) ?? false }
 
-    static func isShell(_ name: String) -> Bool {
+    /// What tmux names a window whose agent Dispatch's typed launcher started (`claude` in a Dispatch shell runs
+    /// `dispatch-helper launch claude`, and tmux names the window after that program): it says nothing about the tab.
+    nonisolated static let launcher = "dispatch-helper"
+
+    /// A window's name as shown: the agent's (`agent`) in place of the launcher's.
+    nonisolated static func shown(_ name: String, agent: String?) -> String {
+        name == launcher ? agent ?? name : name
+    }
+
+    /// Whether a window's name is the user's: renamed, but not to its agent's own name (`agent`), which a launch from
+    /// the phone gives its new window (`launch.names`: tmux's `new-window -n claude`, herdr's `tab.rename`) and which
+    /// tmux and herdr report as a rename like any other. Such a tab still follows its conversation's title.
+    nonisolated static func named(_ name: String, renamed: Bool, agent: String?) -> Bool {
+        renamed && name != agent
+    }
+
+    /// The agent the names around a bound process give (its executable, its pane's title, its window's): claude, codex
+    /// or pi, else "agent".
+    nonisolated static func agent(named names: [String?]) -> String {
+        for name in names.compactMap({ $0?.lowercased() }) {
+            if name.contains("claude") { return "claude" }
+            if name.contains("codex") { return "codex" }
+            if name == "pi" || name.hasPrefix("pi ") || name.hasPrefix("pi-") { return "pi" }
+        }
+        return "agent"
+    }
+
+    nonisolated static func isShell(_ name: String) -> Bool {
         let base = name.hasPrefix("-") ? String(name.dropFirst()) : name
         return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"].contains(base)
     }
 
-    /// The name it shows, by the Mac's automatic names (ContainerTab.displayLabel): a renamed tab keeps its name; else
+    /// The name it shows, by the Mac's automatic names (ContainerTab.displayLabel): a renamed tab keeps its name (but
+    /// one named after its agent by the phone's launch, `named`); else
     /// the agent's conversation title; else for a numbered herdr tab its pane's label (TerminalTab.displayLabel): the
     /// terminal's own title (`paneTitle`, OSC 0/2, when the phone has it attached, else the pane's name), or its folder
     /// when that title names the folder (a shell at its prompt) or there is none. A tmux window keeps the name tmux gives
-    /// it (its program), as on the Mac.
-    func label(conversation: String?, homes: HomePath, paneTitle: String? = nil) -> String {
-        guard !renamed else { return name }
+    /// it (its program), as on the Mac, but for the launcher's: an agent's tab without a title yet shows `agent`.
+    func label(conversation: String?, homes: HomePath, paneTitle: String? = nil, agent: String? = nil) -> String {
+        guard !Self.named(name, renamed: renamed, agent: agent) else { return name }
         if let title = TerminalTab.conversationLabel(conversation) { return title }
-        guard numbered, let pane = activePane else { return name }
+        guard numbered, let pane = activePane else { return Self.shown(name, agent: agent) }
         let folder: String? = pane.cwd.map { cwd in
             let path = homes.abbreviate(cwd)
             return path == "/" || path == "~" ? path : (path as NSString).lastPathComponent
@@ -318,16 +348,6 @@ final class MobileWorkspace: Identifiable {
     @ObservationIgnored private var shellTabs: [ShellSessions.ShellTab] = []
     @ObservationIgnored private var shellSpaceObject: MobileSpace?
     @ObservationIgnored private var shellTabObjects: [UUID: MobileTab] = [:]
-    /// The running `terminals.activity` read, the periodic one, and whether another was asked for meanwhile.
-    @ObservationIgnored private var activityRead: Task<Void, Never>?
-    @ObservationIgnored private var activityPoll: Task<Void, Never>?
-    @ObservationIgnored private var activityAgain = false
-
-    /// The hello feature whose operation reports the server's last-activity times.
-    static let activityFeature = "terminals.activity"
-    /// How often a connected host's server times are read again while its topology stays the same.
-    static let activityInterval: Duration = .seconds(30)
-
     private struct PaneSignature: Equatable {
         let name: String
         let cwd: String?
@@ -386,7 +406,6 @@ final class MobileWorkspace: Identifiable {
         if self.client !== client {
             self.client = client
             watched = []
-            pollActivity()
         }
         if client == nil, !closing.isEmpty {
             closing = []
@@ -414,8 +433,6 @@ final class MobileWorkspace: Identifiable {
         rebuild()
         stamping = nil
         if host.live { watched.insert(topology.backend) } else { watched = [] }
-        // A live snapshot names this connection's nodes: their server times can be read now.
-        scheduleActivity()
     }
 
     /// A backend the helper no longer serves (its open ended).
@@ -432,56 +449,6 @@ final class MobileWorkspace: Identifiable {
         let date = date ?? now()
         activity.note(host: host.id, key: pane.key, at: date)
         tab.touch(date)
-    }
-
-    /// Reads the server's last-activity times (`terminals.activity`) into the activity store, by topology key, and shows
-    /// them. Nothing is asked of a helper without the feature (too old: the rows keep only what the phone saw), a host
-    /// not connected, or spaces that are not this connection's yet. False when nothing was read.
-    @discardableResult
-    func refreshActivity() async -> Bool {
-        guard features.contains(Self.activityFeature), let client, host.live else { return false }
-        guard let rows = try? await TabCommands(client: client).serverActivity(), self.client === client else { return false }
-        applyServerActivity(rows)
-        return true
-    }
-
-    /// Server times by topology key: a tab's own (a tmux window) or one of its panes'. Kept in the store, so the next
-    /// launch shows them before the host connects.
-    func applyServerActivity(_ rows: [TabsServerActivity]) {
-        for row in rows where row.time_ms > 0 {
-            activity.note(host: host.id, key: row.key, at: row.time)
-            tabs.first { $0.ref.key == row.key || $0.panes.contains { $0.key == row.key } }?.touch(row.time)
-        }
-    }
-
-    /// One read at a time; asked again while one runs, it runs once more after it.
-    private func scheduleActivity() {
-        guard features.contains(Self.activityFeature), client != nil, host.live else { return }
-        guard activityRead == nil else {
-            activityAgain = true
-            return
-        }
-        activityRead = Task { [weak self] in
-            repeat {
-                self?.activityAgain = false
-                await self?.refreshActivity()
-            } while self?.activityAgain == true
-            self?.activityRead = nil
-        }
-    }
-
-    /// While connected, the times are read every `activityInterval`: output moves them without changing the topology.
-    private func pollActivity() {
-        activityPoll?.cancel()
-        activityPoll = nil
-        guard client != nil else { return }
-        activityPoll = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.activityInterval)
-                guard !Task.isCancelled, let self else { return }
-                self.scheduleActivity()
-            }
-        }
     }
 
     /// The tabs a close request is pending for leave the lists at once.
@@ -542,8 +509,6 @@ final class MobileWorkspace: Identifiable {
                     }
                     if let date = activity.date(host: host.id, key: pane.key), latest.map({ $0 < date }) ?? true { latest = date }
                 }
-                // The server's own time for the tab (`terminals.activity`, kept by its key).
-                if let date = activity.date(host: host.id, key: window.key), latest.map({ $0 < date }) ?? true { latest = date }
                 let focused = focus(of: window.id) ?? topology.focus.flatMap { id in panes.contains { $0.id == id } ? id : nil }
                 let ref = TabRef(host: host.id, key: window.key)
                 liveTabs.insert(window.key)

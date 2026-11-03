@@ -177,7 +177,7 @@ final class PadStripTests: XCTestCase {
         let claude = model.tab(tab(mba2, "herdr:app:1"))?.agentPane?.id
         model.agentKey = { _, terminal in terminal == claude ? "pi" : nil }
         XCTAssertEqual(model.agent(of: model.tab(tab(mba2, "herdr:app:1"))!), "pi", "The conversation's agent first")
-        XCTAssertEqual(AgentGlyph.kind(model.agent(of: model.tab(tab(mba2, "herdr:e2e:1"))!)), .codex)
+        XCTAssertEqual(model.agent(of: model.tab(tab(mba2, "herdr:e2e:1"))!), "codex")
     }
 
     /// A space's row in the iPad sidebar shows the tab the space showed last, else its first, beside the sidebar,

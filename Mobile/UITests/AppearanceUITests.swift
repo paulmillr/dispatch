@@ -29,7 +29,7 @@ final class AppearanceUITests: XCTestCase {
         Screen(id: "tab", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2"]),
     ] + ["M3a", "M3b", "M4a", "M4b", "M4c", "M5a", "M5b", "M5c", "M5f", "M9a",
          // The chat redesign: search, slash list, side conversation, goal and its sheet, conversation mode (listening
-         // and reading aloud), Jump to latest, the turn summary in the bubble's corner (S6e while the agent works).
+         // and reading aloud), Jump to latest, the turn summary in the bubble's corner (S6e: a turn still running).
          "C1", "C2", "C3", "C4", "C4b", "C5", "C5r", "C6", "S6", "S6e"].map {
         Screen(id: $0, environment: ["DISPATCH_MOBILE_CHAT_DEMO": $0])
     } + [

@@ -144,25 +144,43 @@ struct ChatAccentScan: View {
     }
 }
 
-/// The working row (M5a, M5f): full width under the transcript, a hairline top edge with the accent scan, the thinking
-/// line and elapsed time; the trailing side gives the step count and the current step's kind and a disclosure chevron
-/// that unfolds the step list in place. Open, it reads as a live log; a step opens its full output.
+/// The working row's round buttons, Stop and the disclosure chevron: one size, one quiet disc (`Color.chipFill`) under
+/// the glyph (the chevron in the secondary ink, Stop's square in the primary).
+struct ChatWorkingDisc<Content: View>: View {
+    let size: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .frame(width: size, height: size)
+            .background(Color.chipFill, in: Circle())
+            .contentShape(Circle())
+            .contentShape(.hoverEffect, Circle())
+            .hoverEffect(.highlight)
+    }
+}
+
+/// The working row (M5a, M5f, Q1): full width under the transcript for as long as the agent works, a hairline top edge
+/// with the accent scan, the thinking line and elapsed time with Stop beside it (while the conversation can take it, away
+/// from the trailing controls a thumb reaches for); the trailing side counts the steps since the agent last wrote (the
+/// Mac's live tool group), holds the queue's capsule while messages wait (a tap opens the queue card under the row) and
+/// a disclosure chevron that unfolds those steps in place. Open, it reads as a live log; a step opens its full output.
 struct ChatWorkingRow: View {
     let session: MobileChatSession
     let directory: String?
     @Binding var expanded: Bool
+    /// The queue card under the row, opened and folded by the capsule.
+    var queueExpanded: Binding<Bool> = .constant(false)
     var openStep: (ChatStep) -> Void
     @ReduceMotion private var reduceMotion
 
     private var steps: [ChatStep] {
         guard let turn = session.transcript.openTurn else { return [] }
-        return ChatStep.steps(turn, directory: directory, reasoning: true)
+        return ChatStep.current(turn, directory: directory)
     }
 
     /// What the agent waits for, when it waits for the user (the Mac's AgentWorkingIndicator).
-    private var waiting: String? { Self.waiting(session) }
-
-    static func waiting(_ session: MobileChatSession) -> String? {
+    private var waiting: String? {
         guard session.waitingForUser else { return nil }
         let question = session.questions.contains { $0.blocking && !$0.submitted }
             || session.approvals.contains { $0.pending.pending && $0.pending.questions != nil }
@@ -170,12 +188,16 @@ struct ChatWorkingRow: View {
     }
 
     /// The clock: the prompt this phone sent, else the turn's start, else when the agent began working.
-    private var started: Date? { Self.started(session) }
-
-    static func started(_ session: MobileChatSession) -> Date? {
+    private var started: Date? {
         if let sent = session.submittedAt { return sent }
         if let turn = session.transcript.openTurn, turn.started.timeIntervalSince1970 > 0 { return turn.started }
         return session.workingSince
+    }
+
+    /// The messages waiting for the turn's end, as the queue card shows them (none while the link is not verified:
+    /// then they are faded bubbles in the thread).
+    private var queued: Int {
+        session.phase == .verified ? session.queueRows.count : 0
     }
 
     /// The row's space: the hairline spans it from 0, and the label's light is placed on it.
@@ -204,16 +226,6 @@ struct ChatWorkingRow: View {
                         Text("·").foregroundStyle(.tertiary)
                         ChatElapsed(since: started)
                     }
-                    Spacer(minLength: 8)
-                    if !tools.isEmpty {
-                        Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")" + (expanded ? "" : " · " + (tools.last?.kind.label ?? "")))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .layoutPriority(1)
-                    }
                 }
                 .frame(minHeight: 44)
                 .contentShape(.accessibility, Rectangle())
@@ -222,18 +234,44 @@ struct ChatWorkingRow: View {
                 .accessibilityElement(children: .ignore)
                 .modifier(ChatWorkingAccessibility(agent: session.agentName, since: started, steps: tools.count,
                                                    current: tools.last?.kind.label, waiting: waiting))
+                if session.working && session.phase == .verified {
+                    // Beside the clock, quiet as the chevron.
+                    Button { session.stop() } label: {
+                        ChatWorkingDisc(size: disclosure) {
+                            RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(0.85)).frame(width: 9, height: 9)
+                        }
+                        .opacity(session.stopping ? 0.5 : 1)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(session.stopping)
+                    .accessibilityLabel("Stop")
+                }
+                Spacer(minLength: 8)
+                if !tools.isEmpty {
+                    // The current step's kind is the unfolded log's live row and VoiceOver's value; the line counts.
+                    Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
+                        .accessibilityHidden(true)
+                }
+                if queued > 0 {
+                    ChatQueueCapsule(count: queued, expanded: queueExpanded, size: disclosure)
+                        .transition(.opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.15)))
+                }
                 Button {
                     // The rows below appear in place; nothing else in the thread moves.
                     expanded.toggle()
                 } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                        .foregroundStyle(.secondary)
-                        .frame(width: disclosure, height: disclosure)
-                        .background(Color.chipFill, in: Circle())
-                        .contentShape(.hoverEffect, Circle())
-                        .hoverEffect(.highlight)
+                    ChatWorkingDisc(size: disclosure) {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(expanded ? "Hide steps" : "Show steps")
@@ -271,71 +309,36 @@ struct ChatWorkingRow: View {
     @ScaledMetric(relativeTo: .subheadline) private var disclosure: CGFloat = 28
 }
 
-/// S6e: while the turn runs and has agent text, its newest bubble's corner carries the work instead of the working row:
-/// a mini spinner, the step and the turn's time ("step 4 · 38s"), at the working row's cadence (`ChatElapsed`; with
-/// Reduce Motion the diamond stands still and the time counts in fives after ten seconds). Waiting for the user it
-/// says so, without spinner or clock. When the turn ends the same corner settles into the summary (`ChatTurnCorner`).
-/// Only the time ticks here: the bubble's text keeps a fixed room (`room`), so the bubble never moves with it.
-struct ChatTurnProgressCorner: View {
-    /// The turn's steps so far (tools, not thinking).
-    let steps: Int
-    let since: Date?
-    /// What the agent waits for (`ChatWorkingRow.waiting`): "step 4 · approve", "step 4 · answer".
-    var waiting: String? = nil
-    /// On trailing lines of its own (`ChatTurnCorner.wrapped`).
-    var wrapped = false
+/// The queue in the working row (Q1): the glyph and how many messages wait, pink on a faint pink fill, as tall as the
+/// row's discs; lit (the accent's fill, its ink on it) while the card under the row is open. A tap opens or folds it.
+struct ChatQueueCapsule: View {
+    let count: Int
+    @Binding var expanded: Bool
+    let size: CGFloat
     @ReduceMotion private var reduceMotion
 
     var body: some View {
-        if wrapped {
-            content
-                .multilineTextAlignment(.trailing)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        } else {
-            content.lineLimit(1).fixedSize()
-        }
-    }
-
-    private var content: some View {
-        HStack(spacing: 5) {
-            if let waiting {
-                Text(Self.label(steps: steps, elapsed: Self.word(waiting)))
-            } else {
-                if reduceMotion {
-                    ChatThinkingGlyph(size: 12)
-                } else {
-                    ProgressView().controlSize(.mini)
-                }
-                TimelineView(.periodic(from: since ?? .now, by: 1)) { context in
-                    Text(Self.label(steps: steps, elapsed: ChatElapsed.text(since.map { context.date.timeIntervalSince($0) } ?? 0,
-                                                                         reduceMotion: reduceMotion)))
-                }
+        Button { expanded.toggle() } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.up.message")
+                Text("\(count)")
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
+                    .animation(.snappy(duration: 0.25), value: count)
             }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(expanded ? Color.onAccent : Color.dispatchPink)
+            .padding(.horizontal, size * 0.32)
+            .frame(minWidth: size, minHeight: size)
+            .background(expanded ? Color.dispatchPink : Color.dispatchPink.opacity(0.14), in: Capsule())
+            .contentShape(.hoverEffect, Capsule())
+            .hoverEffect(.highlight)
         }
-        .font(ChatTurnCorner.font)
-        .foregroundStyle(.secondary)
-    }
-
-    /// The corner's word for what the agent waits for: "answer" for a question, else "approve".
-    static func word(_ waiting: String) -> String { waiting.hasSuffix("answer") ? "answer" : "approve" }
-
-    /// "step 4 · 38s"; the time alone before the first step.
-    static func label(steps: Int, elapsed: String) -> String {
-        steps > 0 ? "step \(steps) · \(elapsed)" : elapsed
-    }
-
-    /// The text's room: the widest the label gets in the turn's first hour at up to three-digit steps ("step 000 · 00m
-    /// 00s", monospaced digits), with the spinner's, so neither the ticking time nor the next step moves the bubble.
-    static func room(steps: Int) -> String {
-        let digits = String(repeating: "0", count: max(3, String(steps).count))
-        return "\u{2003}\u{2003}" + label(steps: 1, elapsed: "00m 00s").replacingOccurrences(of: "1", with: digits)
-    }
-
-    /// For VoiceOver, as the bubble's value: "working, step 4", "waiting for your approval, step 4" (no clock: the
-    /// value does not change every second).
-    static func spoken(steps: Int, waiting: String?) -> String {
-        (waiting ?? "working") + (steps > 0 ? ", step \(steps)" : "")
+        .buttonStyle(.plain)
+        .accessibilityLabel("Queued")
+        .accessibilityValue(count == 1 ? "1 message" : "\(count) messages")
+        .accessibilityHint(expanded ? "Hides the queued messages" : "Shows the queued messages")
+        .accessibilityAddTraits(expanded ? .isSelected : [])
     }
 }
 

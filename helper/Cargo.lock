@@ -11,7 +11,6 @@ dependencies = [
  "dispatch-helper-core",
  "dispatch-helper-files",
  "dispatch-helper-herdr",
- "dispatch-helper-nanocodex",
  "dispatch-helper-native",
  "dispatch-helper-pi",
  "dispatch-helper-stats",
@@ -45,13 +44,6 @@ dependencies = [
 
 [[package]]
 name = "dispatch-helper-herdr"
-version = "0.1.0"
-dependencies = [
- "dispatch-helper-core",
-]
-
-[[package]]
-name = "dispatch-helper-nanocodex"
 version = "0.1.0"
 dependencies = [
  "dispatch-helper-core",

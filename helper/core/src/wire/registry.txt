@@ -421,3 +421,6 @@ s	tokens
 r	id	kind	name	tokens	started_ms
 s	prefix2
 r	key	repeat_ms	bindings	prefix2
+s	shells
+r	id	name	command	started_ms
+r	busy	activity	model	model_label	effort	usage	goal	draft	attention	leaf	dialog	title	version	pending	compacting	service_tier	mode	agents	shells

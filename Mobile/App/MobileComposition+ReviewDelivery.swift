@@ -55,7 +55,7 @@ extension MobileComposition {
     /// An agent's name before its conversation said it: the bound process's executable ("claude", "codex", "pi").
     static func agentName(executable: String?) -> String {
         let name = executable.map { ($0 as NSString).lastPathComponent.lowercased() } ?? ""
-        return ["claude", "codex", "nanocodex", "pi"].contains(name) ? name : "agent"
+        return ["claude", "codex", "pi"].contains(name) ? name : "agent"
     }
 
     #if DEBUG

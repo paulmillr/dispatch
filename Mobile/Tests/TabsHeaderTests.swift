@@ -3,8 +3,9 @@ import UIKit
 import XCTest
 @testable import DispatchMobile
 
-/// The phone's tab header (X9b): the chevron Back, the title block two lines tall (host · folder under a title that
-/// fits on one line, else the title on two lines and no subtitle) and the host disc that is the tab's menu. Rendered in
+/// The phone's tab header (B7): Back and the host's glyph that is the tab's menu in one capsule, the title block two
+/// lines tall (host · folder under a title that fits on one line, else the title on two lines and no subtitle), and the
+/// mode button. Rendered in
 /// a window of the test host's scene at each width, the column the stack's bar is in (`tabsColumnWidth`), with the
 /// app's Chat header (`TabsContent.chatHeader`: `ChatHeaderControls` with the disc as the tab's menu) and the stack's
 /// navigator (`tabsNavigator`), as `MobileComposition` and `MobileRoot` give the tab screen.
@@ -37,50 +38,6 @@ final class TabsHeaderTests: XCTestCase {
             }
             let one = try XCTUnwrap(heights[Self.short]), two = try XCTUnwrap(heights[Self.long])
             XCTAssertGreaterThan(two, one * 1.6, "\(width): the long title takes two lines (\(one), \(two))")
-        }
-    }
-
-    /// Short or long title, with or without the needs-you badge, on Chat (the app's Chat controls, and conversation
-    /// mode's waveform in the disc's place) or Terminal: Back, the title and the trailing control stay in the bar (no
-    /// "…" overflow menu), Back at the leading edge, the 44 point disc or waveform at the trailing one.
-    func testTheHeaderNeverOverflowsTheBar() async throws {
-        AccessibilityLabelTests.enableAccessibility()
-        let shared = MobileVoiceConversation.shared
-        let voice = MobileVoiceConversation(listener: ScriptedListener(), speaker: ScriptedSpeaker())
-        MobileVoiceConversation.shared = voice
-        defer { voice.stop(); MobileVoiceConversation.shared = shared }
-        for width in Self.widths {
-            for title in [Self.short, Self.long] {
-                for (waiting, segment, listening) in [(0, TabSegment.chat, false), (2, .terminal, false), (2, .chat, true)] {
-                    let name = "\(title == Self.short ? "short" : "long"), \(waiting) waiting, \(segment)\(listening ? " listening" : ""), \(width)"
-                    let (model, tab, space) = headerModel(tab: title)
-                    model.needsYouCount = { _ in waiting }
-                    model.segments[tab] = segment
-                    let session = Self.session()
-                    if listening { voice.start(session) } else { voice.stop() }
-                    let trailing = listening ? "End conversation mode" : "Tab menu"
-                    let (window, bar) = try assertInTheBar(screen(model, tab: tab, space: space, width: width, session: session), name, width: width)
-                    defer { window.isHidden = true }
-                    let edges = bar.convert(bar.bounds, to: window)
-                    var labels: [String: CGRect] = [:]
-                    try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "\(name): \(labels.keys.sorted())") {
-                        labels = Self.labels(in: window)
-                        return labels["Back to ciphers"] != nil && labels[trailing] != nil && labels[title] != nil
-                    }
-                    XCTAssertEqual(labels["Tab menu"] == nil, listening, "\(name): the waveform takes the disc's place")
-                    let back = try XCTUnwrap(labels["Back to ciphers"]), menu = try XCTUnwrap(labels[trailing])
-                    let shown = try XCTUnwrap(labels[title])
-                    // The needs-you badge reaches 6 points past the circle's upper trailing edge.
-                    XCTAssertEqual(back.width, waiting > 0 ? 50 : 44, accuracy: 1, "\(name): Back is the chevron circle, \(back)")
-                    // The ⋯ badge reaches 3 points past the disc's lower trailing edge.
-                    XCTAssertEqual(menu.width, 44, accuracy: 3.5, "\(name): the disc, \(menu)")
-                    XCTAssertGreaterThanOrEqual(back.minX, edges.minX, "\(name): \(back)")
-                    XCTAssertLessThanOrEqual(menu.maxX, edges.maxX, "\(name): \(menu)")
-                    XCTAssertLessThan(back.maxX, shown.minX, "\(name): the title after Back")
-                    XCTAssertLessThan(shown.maxX, menu.minX, "\(name): the title before the disc")
-                    XCTAssertGreaterThan(menu.minX, edges.midX, "\(name): the disc at the trailing edge, \(menu)")
-                }
-            }
         }
     }
 
@@ -178,5 +135,74 @@ final class TabsHeaderTests: XCTestCase {
         let more = views(bar).filter { $0.accessibilityLabel == "More" && !$0.isHidden && $0.alpha > 0 }
         XCTAssertTrue(more.isEmpty, "\(name): the bar overflowed into its menu", file: file, line: line)
         return (window, bar)
+    }
+}
+
+/// The mode button (B7): Back and the host's menu in one capsule, the mode button at the trailing end, no capsule under
+/// the header.
+extension TabsHeaderTests {
+    /// A tap goes where the Mac strip's button goes: Terminal to Chat with an agent, else to Files; Chat and Files back
+    /// to Terminal. The glyph is the bubble on Chat or toward it, else the folder.
+    func testTheModeButtonGoesWhereTheMacsDoes() {
+        let all = TabSegment.allCases, shell: [TabSegment] = [.terminal, .files]
+        XCTAssertEqual(TabModeButton.next(shown: .terminal, agent: true, segments: all), .chat)
+        XCTAssertEqual(TabModeButton.next(shown: .terminal, agent: false, segments: all), .files)
+        XCTAssertEqual(TabModeButton.next(shown: .terminal, agent: false, segments: shell), .files)
+        XCTAssertEqual(TabModeButton.next(shown: .chat, agent: true, segments: all), .terminal)
+        XCTAssertEqual(TabModeButton.next(shown: .files, agent: true, segments: all), .terminal)
+        XCTAssertNil(TabModeButton.next(shown: .terminal, agent: false, segments: [.terminal]))
+        XCTAssertEqual(TabModeButton.symbol(shown: .chat, agent: true), "text.bubble")
+        XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: true), "text.bubble")
+        XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: false), "folder")
+        XCTAssertEqual(TabModeButton.symbol(shown: .files, agent: true), "folder")
+    }
+
+    /// Short or long title, with or without the needs-you badge, on Chat (the app's Chat controls, and conversation
+    /// mode's waveform in the mode button's place) or Terminal: Back and the host's menu lead, the title after them, the
+    /// mode button (or waveform) at the trailing edge, all in the bar (no "…" overflow menu), and no capsule under it.
+    func testTheHeaderNeverOverflowsTheBar() async throws {
+        AccessibilityLabelTests.enableAccessibility()
+        let shared = MobileVoiceConversation.shared
+        let voice = MobileVoiceConversation(listener: ScriptedListener(), speaker: ScriptedSpeaker())
+        MobileVoiceConversation.shared = voice
+        defer { voice.stop(); MobileVoiceConversation.shared = shared }
+        for width in Self.widths {
+            for title in [Self.short, Self.long] {
+                for (waiting, segment, listening) in [(0, TabSegment.chat, false), (2, .terminal, false), (2, .chat, true)] {
+                    let name = "\(title == Self.short ? "short" : "long"), \(waiting) waiting, \(segment)\(listening ? " listening" : ""), \(width)"
+                    let (model, tab, space) = headerModel(tab: title)
+                    model.needsYouCount = { _ in waiting }
+                    model.segments[tab] = segment
+                    let session = Self.session()
+                    if listening { voice.start(session) } else { voice.stop() }
+                    let trailing = listening ? "End conversation mode" : segment == .chat ? "Show Terminal" : "Show Chat"
+                    let (window, bar) = try assertInTheBar(screen(model, tab: tab, space: space, width: width, session: session), name, width: width)
+                    defer { window.isHidden = true }
+                    let edges = bar.convert(bar.bounds, to: window)
+                    var labels: [String: CGRect] = [:]
+                    try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "\(name): \(labels.keys.sorted())") {
+                        labels = Self.labels(in: window)
+                        return labels["Back to ciphers"] != nil && labels["Tab menu"] != nil && labels[trailing] != nil && labels[title] != nil
+                    }
+                    XCTAssertNil(labels["View"], "\(name): no capsule under the header")
+                    XCTAssertEqual(labels["Show Terminal"] == nil && labels["Show Chat"] == nil, listening,
+                                   "\(name): the waveform takes the mode button's place")
+                    let back = try XCTUnwrap(labels["Back to ciphers"]), menu = try XCTUnwrap(labels["Tab menu"])
+                    let mode = try XCTUnwrap(labels[trailing]), shown = try XCTUnwrap(labels[title])
+                    XCTAssertGreaterThanOrEqual(back.minX, edges.minX, "\(name): \(back)")
+                    XCTAssertLessThanOrEqual(back.maxX, menu.minX + 7, "\(name): the menu after Back, \(back) \(menu)")
+                    XCTAssertLessThan(menu.maxX, shown.minX, "\(name): the title after the menu")
+                    XCTAssertLessThan(shown.maxX, mode.minX, "\(name): the title before the mode button")
+                    // A system bar item: the bar sizes it (36 points on iOS 26 and 27); the waveform's disc is 44.
+                    XCTAssertEqual(mode.width, 40, accuracy: 8, "\(name): the mode button, \(mode)")
+                    XCTAssertLessThanOrEqual(mode.maxX, edges.maxX, "\(name): \(mode)")
+                    XCTAssertGreaterThan(mode.minX, edges.midX, "\(name): the mode button at the trailing edge, \(mode)")
+                    if title == Self.short {
+                        XCTAssertNotNil(labels["mba2 · ciphers"], "\(name): a short title keeps the host line")
+                    }
+                    try write(window, "header-\(title == Self.short ? "short" : "long")-\(segment)\(listening ? "-listening" : "")-\(Int(width))")
+                }
+            }
+        }
     }
 }

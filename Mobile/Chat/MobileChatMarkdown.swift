@@ -5,8 +5,9 @@ import SwiftUI
 /// active; the environment check is a second boundary in case attributed content reaches the view another way.
 enum MobileChatMarkdown {
     /// `code`: the font of inline code (paths, commands), the terminal's (`ChatTypography.code`); nil keeps the
-    /// system's monospaced one.
-    static func text(_ text: String, code: Font? = nil) -> AttributedString {
+    /// system's monospaced one. `emphasis`: emphasized text's font where the text's own has no italic
+    /// (`ChatTypography.emphasis`); nil lets the text's font italicize.
+    static func text(_ text: String, code: Font? = nil, emphasis: Font? = nil) -> AttributedString {
         let visible = TextRendering.visible(text)
         var value = (try? AttributedString(
             markdown: visible, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(visible)
@@ -15,6 +16,13 @@ enum MobileChatMarkdown {
             return run.range
         }
         for range in unsafe { value[range].link = nil }
+        if let emphasis {
+            let spans = value.runs.compactMap { run -> (Range<AttributedString.Index>, Bool)? in
+                guard let intent = run.inlinePresentationIntent, intent.contains(.emphasized), !intent.contains(.code) else { return nil }
+                return (run.range, intent.contains(.stronglyEmphasized))
+            }
+            for (range, strong) in spans { value[range].font = strong ? emphasis.bold() : emphasis }
+        }
         if let code {
             let spans = value.runs.compactMap { run in run.inlinePresentationIntent?.contains(.code) == true ? run.range : nil }
             for range in spans { value[range].font = code }
@@ -39,11 +47,12 @@ struct MobileChatMarkdownView: View {
     let text: String
     /// Text on the thread's muted tone (Claude's thinking).
     var muted = false
-    /// What the bubble says in its bottom-right corner (S6d, S6e). When the last block is text running the layout's
+    /// What the bubble says in its bottom-right corner (S6d). When the last block is text running the layout's
     /// way and the corner fits one line, the text keeps its room (`ChatTurnCorner.room`, after the search has marked
     /// the text, never read aloud) and the corner lies over it: on the last line when it leaves room, else on a short
     /// line of its own. Otherwise (code, a table, a rule, a cut preview, text running the other way, a corner too
     /// wide for one line) the corner takes trailing lines of its own below.
+    /// An undrawn corner (`ChatCorner.spokenOnly`) is the last text's VoiceOver value alone.
     var corner: ChatCorner? = nil
     /// Settings' chat font: inline code and code blocks in the terminal's font.
     @Environment(\.chatTypography) private var typography
@@ -60,8 +69,10 @@ struct MobileChatMarkdownView: View {
     }
 
     /// The blocks' runs of text in drawing order, each passed through `marker` (which counts and highlights matches);
-    /// `code` is inline code's font (`MobileChatMarkdown.text`).
-    static func contents(_ text: String, code: Font? = nil, marker: inout ChatSearchMarker) -> (blocks: [Content], truncated: Bool) {
+    /// `code` is inline code's font and `emphasis` emphasized text's in the chat font (`MobileChatMarkdown.text`); tables
+    /// and the first two heading levels draw in system styles, which italicize themselves.
+    static func contents(_ text: String, code: Font? = nil, emphasis: Font? = nil,
+                         marker: inout ChatSearchMarker) -> (blocks: [Content], truncated: Bool) {
         let rendered = TextRendering.rich(text)
         let blocks = ChatMarkdownBlock.parse(rendered.text).map { block -> Content in
             switch block.kind {
@@ -73,16 +84,46 @@ struct MobileChatMarkdownView: View {
                 return .rule
             case .table(let rows):
                 return .table(rows.map { row in row.map { marker.mark(MobileChatMarkdown.text($0, code: code)) } })
+            case .heading(let level):
+                let emphasis = level > 2 ? emphasis?.weight(.semibold) : nil
+                return .text(block.kind, marker.mark(MobileChatMarkdown.text(block.text, code: code, emphasis: emphasis)))
             default:
-                return .text(block.kind, marker.mark(MobileChatMarkdown.text(block.text, code: code)))
+                return .text(block.kind, marker.mark(MobileChatMarkdown.text(block.text, code: code, emphasis: emphasis)))
             }
         }
         return (blocks, rendered.truncated)
     }
 
+    /// `contents` with nothing marked, kept by text and fonts: a thread draws every bubble when it opens and again as
+    /// the rows around it change, and parsing, the link checks and highlighting were most of what a bubble cost.
+    static func contents(_ text: String, code: Font?, emphasis: Font?) -> (blocks: [Content], truncated: Bool) {
+        let key = Parsed(text: text, code: code, emphasis: emphasis)
+        if let parsed = parsed[key] { return parsed }
+        var none = ChatSearchMarker(query: "", current: nil)
+        let contents = contents(text, code: code, emphasis: emphasis, marker: &none)
+        // A streamed message leaves a parse per update behind: the cache starts over rather than tracking use.
+        if parsed.count >= 512 { parsed.removeAll(keepingCapacity: true) }
+        parsed[key] = contents
+        return contents
+    }
+
+    private struct Parsed: Hashable {
+        let text: String
+        let code: Font?
+        let emphasis: Font?
+    }
+    private static var parsed: [Parsed: (blocks: [Content], truncated: Bool)] = [:]
+
+    /// The blocks as drawn: marked by an open search, else from the cache.
+    private var shownContents: (blocks: [Content], truncated: Bool) {
+        guard var marker = ChatSearchMarker(marks, current: current) else {
+            return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis)
+        }
+        return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, marker: &marker)
+    }
+
     var body: some View {
-        var marker = ChatSearchMarker(marks, current: current) ?? ChatSearchMarker(query: "", current: nil)
-        let contents = Self.contents(text, code: typography.inlineCode, marker: &marker)
+        let contents = shownContents
         let last = contents.blocks.indices.last
         let inline = corner.map { Self.sharesLine($0, blocks: contents.blocks, truncated: contents.truncated, layout: layoutDirection) } ?? false
         let room = inline ? corner?.room : nil
@@ -93,7 +134,7 @@ struct MobileChatMarkdownView: View {
             if contents.truncated {
                 Text("Rendered preview truncated for safety").font(.footnote).foregroundStyle(.secondary)
             }
-            if let corner, !inline {
+            if let corner, !inline, corner.drawn {
                 // Trailing lines of the corner's own.
                 corner.view(true)
                     .padding(.top, -4)
@@ -145,7 +186,7 @@ struct MobileChatMarkdownView: View {
         Group {
             if let room {
                 let spoken = corner?.spoken ?? ""
-                Text(Self.joined(text, room: room))
+                Text(room.isEmpty ? text : Self.joined(text, room: room))
                     .accessibilityLabel(Text(text))
                     .accessibilityValue(spoken)
                     .accessibilityHint(spoken.isEmpty ? "" : corner?.hint ?? "")

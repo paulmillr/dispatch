@@ -662,3 +662,37 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(outcome(), .failed)
     }
 }
+
+extension FilesModeTests {
+    func testAnExitedAgentLeavesTheClickToTheTerminal() {
+        let fixture = fixture(agent: true), files = fixture.files, id = fixture.id, chat = fixture.chat
+        files.switchMode(id, to: .chat)
+        fixture.session.exitRequested = true
+        chat.helperExited(.local, terminal: 0)
+        XCTAssertEqual(files.mode(for: id), .terminal)
+        // The tab is a terminal again: the click goes to files, chat's transcript stays in the menu and ⇧⌘C.
+        XCTAssertTrue(chat.canEnterChat(fixture.session), "the transcript stays readable")
+        let shown = files.switchState(id)
+        XCTAssertFalse(shown.chat); XCTAssertTrue(shown.retained)
+        XCTAssertEqual(shown.next, .files); XCTAssertEqual(shown.glyph, "folder")
+        XCTAssertTrue(shown.reaches(.chat))
+        XCTAssertTrue(ModeSwitchMenuItem.items(shown, files: files, id: id) { _ in }.first { $0.target == .mode(.chat) }?.enabled == true)
+        files.switchMode(id, to: .chat)
+        XCTAssertEqual(files.mode(for: id), .chat, "the menu still opens it")
+        files.switchMode(id, to: .terminal)
+
+        // Without files the switch dims, and its menu still opens the transcript.
+        let bare = ModeSwitchState(mode: .terminal, chat: false, files: false, host: nil, retained: true)
+        XCTAssertTrue(bare.dimmed); XCTAssertTrue(bare.reaches(.chat))
+
+        // A lost connection names its cause and keeps chat as the click.
+        let other = self.fixture(agent: true)
+        other.chat.helperExited(.local, terminal: 0, status: "SSH disconnected. Reconnect from the terminal to continue.")
+        XCTAssertEqual(other.files.nextMode(other.id), .chat)
+
+        // An agent started again in the tab brings chat back to the click.
+        chat.receiveHelper(.state(state()), session: fixture.session)
+        XCTAssertFalse(fixture.session.agentExited)
+        XCTAssertEqual(files.nextMode(id), .chat)
+    }
+}

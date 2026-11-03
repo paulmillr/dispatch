@@ -8,8 +8,8 @@ struct HostRemovalConfirmation: Equatable {
 }
 
 /// What Hosts offers the Spaces tab (docs/ios.md, Areas and seams): removing a host after the user confirms
-/// (M1e), reordering over `HostStore`, and the host screens Spaces embeds through `SpacesHostViews` (M1f pushed, M8a as
-/// a sheet).
+/// (M1e), reordering over `HostStore`, and the host screens Spaces embeds through `SpacesHostViews` (New host M8a and Edit
+/// host, as sheets).
 extension HostSessions: SpacesHostActions {
     static var removalMessage: String { "Its spaces and tabs close on this \(MobileDevice.name), and Dispatch forgets its password and host key. Nothing changes on the host: its tmux or herdr sessions and agents keep running." }
 
@@ -64,10 +64,10 @@ extension HostSessions: SpacesHostActions {
         }
     }
 
-    /// Host detail (M1f) to push, with Tabs' rows for its Spaces section and how many there are (nil: the topology's).
-    func hostDetail<Rows: View>(_ host: UUID, count: ((HostSession) -> Int)? = nil,
-                                @ViewBuilder spaces: @escaping (HostSession) -> Rows) -> AnyView {
-        AnyView(HostDetail(hostID: host, count: count, spaces: spaces).environment(self))
+    /// Edit host to present as a sheet (nothing when the host is gone).
+    func editHostSheet(_ host: UUID) -> AnyView {
+        guard let record = store.record(host) else { return AnyView(EmptyView()) }
+        return AnyView(NewHostSheet(editing: record).environment(self).tint(.dispatchPink))
     }
 
     /// New host (M8a) to present as a sheet; `created` gets the saved host (M7a selects it).

@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Tabs screens' shared actions and their dialogs: rename, Close, Detach, Terminate (with the Mac's confirmation),
-/// and the alert for a failed request. Attached once to the Tabs navigation stack. A plain host's shells close on the
-/// phone (`MobileTabs.closeShell`): Close tab at once, Close space after asking while a shell is live.
+/// and the alert for a failed request. Attached once to the Tabs navigation stack. Close of a tab ends it: at once when
+/// its agents' turns are over or the helper verifies it idle, else after asking (`closing`). A plain host's shells close
+/// on the phone (`MobileTabs.closeShell`): Close tab at once, Close space after asking while a shell is live.
 @MainActor @Observable
 final class TabsActions {
     enum Target: Hashable {
@@ -13,6 +14,8 @@ final class TabsActions {
     var renaming: Target?
     var name = ""
     var terminating: Target?
+    /// Close of a tab that runs work: the question naming it, then Terminate.
+    var closing: TabRef?
     /// Close space of a Shell space with live shells: the dialog that ends them.
     var closingShells: SpaceRef?
     var failure: String?
@@ -48,9 +51,9 @@ final class TabsActions {
         }
     }
 
-    /// Terminate asks first, with the Mac's words; Close and Detach act at once (the work of a busy tab keeps running).
-    /// A shell tab closes at once whichever way (nothing keeps a plain shell); a Shell space asks first while one of
-    /// its shells is live.
+    /// Terminate asks first, with the Mac's words; Detach acts at once. Close of a tab ends it at once when nothing would
+    /// be lost (`closeTab`), else asks; Close of a space detaches it. A shell tab closes at once whichever way (nothing
+    /// keeps a plain shell); a Shell space asks first while one of its shells is live.
     func close(_ target: Target, _ how: TabsClose) {
         switch target {
         case .tab(let ref) where model.tab(ref)?.isShell == true:
@@ -70,7 +73,40 @@ final class TabsActions {
             terminating = target
             return
         }
+        if how == .close, case .tab(let ref) = target {
+            closeTab(ref)
+            return
+        }
         run(target, how)
+    }
+
+    /// Close of a multiplexer's tab. Its agents' turns are over (`MobileTabs.agentsFinished`): terminated at once, the
+    /// conversation stays in the agent's history. Else the helper checks it (nothing changes, the row stays meanwhile):
+    /// verified idle, it is terminated; busy, or not inspectable, the user is asked.
+    private func closeTab(_ ref: TabRef) {
+        let target = Target.tab(ref)
+        guard let tab = model.tab(ref) else { return }
+        if model.agentsFinished(tab) {
+            run(target, .terminate)
+            return
+        }
+        perform(target) { [weak self] workspace in
+            guard let tab = workspace.tab(ref.key) else { return }
+            guard try await workspace.idle(tab: tab) else {
+                self?.closing = ref
+                return
+            }
+            guard let self else { return }
+            self.model.noteUserClose(target)
+            self.closed(target)
+            if try await workspace.close(tab: tab, .close) == .busy { self.closing = ref }
+        }
+    }
+
+    /// The confirmed Close of a busy tab.
+    func confirmClose(_ ref: TabRef) {
+        closing = nil
+        run(.tab(ref), .terminate)
     }
 
     /// The confirmed Close space of a Shell space: every shell of the host ends.
@@ -123,6 +159,12 @@ private struct TabsDialogs: ViewModifier {
         if case .space = actions.renaming { "Rename space" } else { "Rename tab" }
     }
 
+    private var closeTitle: String {
+        let model = actions.model
+        let name = actions.closing.flatMap { ref in model.tab(ref).map { model.label(of: $0, host: model.workspace(ref.host)?.host) } }
+        return TabsCloseCopy.title(tab: name ?? "")
+    }
+
     private var terminateTitle: String {
         switch actions.terminating {
         case .tab(let ref)?: TabsTerminateCopy.title(tab: actions.model.tab(ref)?.name ?? "")
@@ -146,6 +188,12 @@ private struct TabsDialogs: ViewModifier {
             } message: { _ in
                 Text(TabsShellCopy.closeMessage)
             }
+            .alert(closeTitle, isPresented: binding(\.closing), presenting: actions.closing) { ref in
+                Button("Cancel", role: .cancel) {}
+                Button(TabsCloseCopy.confirm, role: .destructive) { actions.confirmClose(ref) }
+            } message: { ref in
+                Text(actions.model.tab(ref).map(actions.model.closeMessage) ?? TabsCloseCopy.consequence)
+            }
             .alert(terminateTitle, isPresented: binding(\.terminating), presenting: actions.terminating) { target in
                 Button("Cancel", role: .cancel) {}
                 Button(TabsTerminateCopy.confirm, role: .destructive) { actions.terminate(target) }
@@ -167,7 +215,8 @@ enum TabsShellCopy {
     static let closeConfirm = "Close Shells"
 }
 
-/// A tab's menu (long press on a row): the Mac's tab menu, with Rename; a shell tab's is Close Tab alone.
+/// A tab's menu (long press on a row, the tab's ⋯): Rename, Close Tab (which asks while work runs) and Detach (hidden
+/// on this connection, still running); a shell tab's is Close Tab alone.
 struct TabsTabMenu: View {
     let actions: TabsActions
     let tab: TabRef
@@ -187,6 +236,5 @@ struct TabsTabMenu: View {
         Divider()
         Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }
         Button("Detach", systemImage: "eject") { actions.close(.tab(tab), .detach) }
-        Button("Terminate…", systemImage: "xmark.octagon", role: .destructive) { actions.close(.tab(tab), .terminate) }
     }
 }

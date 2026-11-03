@@ -49,6 +49,9 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
         didSet { if files, !helper { files = false } }
     }
     var order: Int = 0
+    /// The user disconnected the host (Disconnect in its stats, `HostSession.park`): nothing connects it, also after a
+    /// relaunch, until the user's Connect.
+    var parked = false
     var lastConnected: Date?
     /// Seeds `HostTint`: the machine identity the helper reported when the host was verified (the Mac app colours the
     /// same machine from the same identity), else the record's id. Fixed once saved, so a row never changes colour.
@@ -117,6 +120,7 @@ extension HostRecord {
         chat = try (fields.decodeIfPresent(Bool.self, forKey: .chat) ?? true) && helper
         files = try (fields.decodeIfPresent(Bool.self, forKey: .files) ?? true) && helper
         order = try fields.decodeIfPresent(Int.self, forKey: .order) ?? 0
+        parked = try fields.decodeIfPresent(Bool.self, forKey: .parked) ?? false
         lastConnected = try fields.decodeIfPresent(Date.self, forKey: .lastConnected)
         tintSeed = try fields.decodeIfPresent(String.self, forKey: .tintSeed) ?? id.uuidString
         system = try fields.decodeIfPresent(HostSystem.self, forKey: .system)

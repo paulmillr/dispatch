@@ -13,6 +13,10 @@ impl Claude {
         let mut state = cache.map(|c| c.parser.state.clone()).unwrap_or_default();
         state.agents = self.subagents.agents(&binding.session);
         if let Some(registration) = registration {
+            // A resumed transcript's shells that never ended died with the process that ran them.
+            if let Some(started) = registration.started_ms {
+                state.shells.retain(|shell| shell.started_ms.is_none_or(|ms| ms >= started));
+            }
             state.busy = registration.status != "idle";
             state.activity = Some(registration.status.clone());
             // Native dialog kind while Terminal waits (pi reports its prompt kind the same way).

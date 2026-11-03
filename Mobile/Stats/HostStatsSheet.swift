@@ -60,21 +60,12 @@ struct HostStatsPresentation {
         return phase == .live && stats.lowPower ? "Low Power Mode · sampling every \(seconds) s" : nil
     }
 
-    var address: String { "\(session.host.user)@\(session.host.address)" }
-    var latency: String { session.latency.map(HostSummary.milliseconds) ?? "—" }
+    /// "alex@studio.local", with the port when it is not SSH's ("alex@studio.local:2222").
+    var address: String {
+        let host = session.host
+        return "\(host.user)@\(host.address)" + (host.port == 22 ? "" : ":\(host.port)")
+    }
     var multiplexer: String { session.multiplexerLine ?? (session.host.helper ? session.host.multiplexer.title : "—") }
-
-    /// The Helper row: "Full features" (the helper with Chat), "Without Chat", "Plain SSH" (the switch off).
-    var helper: String {
-        guard session.host.helper else { return HostSummary.plainSSH }
-        return session.host.chat ? "Full features" : "Without Chat"
-    }
-
-    /// The Color row: "Automatic" unless the user picked one (`HostRecord.colorPicked`).
-    var color: String {
-        guard session.host.colorPicked, let color = session.host.color else { return "Automatic" }
-        return color.title
-    }
 
     /// The plain card's text (W6).
     var plainText: String {
@@ -89,10 +80,12 @@ struct HostStatsPresentation {
     var plainAction: String { session.host.helper ? "Try again" : "Install helper…" }
 }
 
-/// The host stats sheet (W1a–W7, docs/ios.md, Host stats): the host's disc, name and status as its title, the stat strip
-/// over the 15-minute sparkline, the top processes and the connection, with Edit and Disconnect (Forget host and
-/// Connect while offline). Its small detent shows the strip and Disconnect, or offline the connection facts and Connect,
-/// with the screen behind it still usable; the large one everything. Present it with `hostStatsSheet(host:)`.
+/// The host sheet (W1a–W7, docs/ios.md, Host stats), the host's one screen besides Edit host: the host's disc, name and
+/// status as its title with Edit (the pencil) at both detents, the stat strip over the 15-minute sparkline, the top
+/// processes and the connection list, with one action: Disconnect, or Connect while offline. Its small detent shows the
+/// strip and Disconnect, or offline the connection list and Connect, with the screen behind it still usable; the large
+/// one everything. Everything the user sets (the switches, the colour, Remove host) is Edit host's. Present it with
+/// `hostStatsSheet(host:)`.
 struct HostStatsSheet: View {
     let hostID: UUID
     var launch = HostStatsLaunch()
@@ -103,10 +96,8 @@ struct HostStatsSheet: View {
     @State private var metric: HostStatistics.Metric
     @State private var scrub: Int?
     @State private var editing = false
-    @State private var confirmingForget = false
-    @State private var forgetting = false
 
-    /// The small detent: the strip and one action, or the five connection facts and Connect.
+    /// The small detent: the strip and one action, or the connection list and Connect.
     nonisolated static let small = PresentationDetent.height(372)
     /// Debug screenshots of a sheet mid-drag (W1b).
     nonisolated static let dragging = PresentationDetent.fraction(0.62)
@@ -128,7 +119,7 @@ struct HostStatsSheet: View {
             if let session = sessions.session(hostID) {
                 NavigationStack { content(session) }
                     .hostStatsViewing(session.stats)
-                    .onDisappear { if forgetting { sessions.remove(hostID) } }
+                    // Remove host in Edit host closes this sheet too (the session goes: the branch below).
                     .sheet(isPresented: $editing) {
                         NewHostSheet(editing: session.host).tint(.dispatchPink)
                     }
@@ -152,14 +143,14 @@ struct HostStatsSheet: View {
         return ScrollView {
             VStack(spacing: 14) {
                 if phase == .offline && !large {
-                    HostConnectionFacts(session: session)
+                    HostConnectionList(session: session)
                 } else {
-                    HostStatsBody(session: session, metric: $metric, scrub: $scrub, compact: false, expanded: large)
+                    HostStatsBody(session: session, metric: $metric, scrub: $scrub, expanded: large)
                 }
                 // At the small detent the action sits right under the strip or the facts (W1a, W1c); at the large one
                 // in the bottom bar, under the rest of the sheet.
                 if !large {
-                    actions(session, phase: phase).padding(.horizontal, -16)
+                    actions(session).padding(.horizontal, -16)
                 }
                 Color.clear.frame(height: 8)
             }
@@ -168,7 +159,7 @@ struct HostStatsSheet: View {
         }
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .scrollDisabled(!large)
-        .safeAreaBar(edge: .bottom) { if large { actions(session, phase: phase) } }
+        .safeAreaBar(edge: .bottom) { if large { actions(session) } }
         .background(Color.canvas)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -181,63 +172,41 @@ struct HostStatsSheet: View {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .accessibilityLabel("Close")
             }
-            if phase == .offline && large {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { editing = true } label: { Image(systemName: "pencil") }
-                        .accessibilityLabel("Edit")
-                }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { editing = true } label: { Image(systemName: "pencil") }
+                    .accessibilityLabel("Edit")
             }
-        }
-        .navigationDestination(for: HostStatsRoute.self) { route in
-            switch route {
-            case .helper: HostHelperSettings(hostID: session.id)
-            case .color: HostColorPicker(hostID: session.id)
-            }
-        }
-        .confirmationDialog("Forget \(session.host.name)?", isPresented: $confirmingForget, titleVisibility: .visible) {
-            Button("Forget host", role: .destructive) {
-                forgetting = true
-                dismiss()
-            }
-        } message: {
-            Text(HostSessions.removalMessage)
         }
     }
 
-    /// The bottom bar: Disconnect (small) or Edit and Disconnect; offline Connect (small) or Forget host and Connect.
-    private func actions(_ session: HostSession, phase: HostStatsPresentation.Phase) -> some View {
-        let connected = session.link.isConnected
-        return HStack(spacing: 10) {
-            if connected {
-                if large {
-                    HostStatsActionButton(title: "Edit", symbol: "pencil") { editing = true }
-                }
-                HostStatsActionButton(title: "Disconnect") { session.park() }
-            } else {
-                if large {
-                    HostStatsActionButton(title: "Forget host", role: .destructive) { confirmingForget = true }
-                }
-                HostStatsConnectButton(session: session)
-            }
-        }
-        .padding(.horizontal, 16).padding(.bottom, 4)
-        .animation(.snappy, value: large)
+    /// The one action, the same at both detents: Disconnect, also while connecting or reconnecting (it stops the
+    /// retries); offline Connect.
+    private func actions(_ session: HostSession) -> some View {
+        HostStatsAction(session: session)
+            .padding(.horizontal, 16).padding(.bottom, 4)
     }
 }
 
-/// Where the sheet pushes: the Helper and Color rows.
-enum HostStatsRoute: Hashable {
-    case helper, color
+/// The sheet's and the popover's action: Disconnect while connected or on its way, else Connect.
+struct HostStatsAction: View {
+    let session: HostSession
+
+    var body: some View {
+        if session.link.isConnected || session.link.isPending {
+            HostStatsActionButton(title: "Disconnect") { session.park() }
+        } else {
+            HostStatsConnectButton(session: session)
+        }
+    }
 }
 
 /// What a stats surface shows below its title (the sheet and the popover): the banners, the strip (or the plain card),
-/// the processes and the connection list. `compact` is the popover's: Address, Multiplexer and Helper only. Not
-/// `expanded` (the sheet's small detent) only the strip or the plain card shows, with the action under it.
+/// the processes and the connection list. Not `expanded` (the sheet's small detent) only the strip or the plain card
+/// shows, with the action under it.
 struct HostStatsBody: View {
     let session: HostSession
     @Binding var metric: HostStatistics.Metric
     @Binding var scrub: Int?
-    var compact: Bool
     var expanded = true
 
     var body: some View {
@@ -257,7 +226,7 @@ struct HostStatsBody: View {
                 StatStripCard(stats: session.stats, metric: $metric, tint: tint, dimmed: phase != .live || !session.stats.live, scrub: $scrub)
                 if expanded { HostProcessesCard(stats: session.stats, metric: metric, tint: tint) }
             }
-            if expanded { HostConnectionList(session: session, compact: compact) }
+            if expanded { HostConnectionList(session: session) }
         }
     }
 }
@@ -282,7 +251,7 @@ struct HostStatsBanner: View {
 }
 
 /// W6: a host without its helper has no stats; "Install helper…" turns its Helper switch on (which reconnects), and
-/// after a fallback "Try again" connects once more.
+/// after a fallback "Try again" connects once more or "Use plain SSH" turns the switch off (`HostSummary.offersPlainSSH`).
 struct HostPlainStatsCard: View {
     let session: HostSession
     @Environment(HostSessions.self) private var sessions
@@ -297,13 +266,19 @@ struct HostPlainStatsCard: View {
                     Text(presentation.plainText)
                         .font(.subheadline).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(presentation.plainAction) {
-                        if session.host.helper {
-                            session.disconnect()
-                            session.connectByUser()
-                        } else {
-                            sessions.setHelper(true, host: session.id)
-                            session.connectByUser()
+                    HStack(spacing: 20) {
+                        Button(presentation.plainAction) {
+                            if session.host.helper {
+                                session.disconnect()
+                                session.connectByUser()
+                            } else {
+                                sessions.setHelper(true, host: session.id)
+                                session.connectByUser()
+                            }
+                        }
+                        if HostSummary(session: session).offersPlainSSH {
+                            Button(Self.usePlainSSH) { sessions.setHelper(false, host: session.id) }
+                                .accessibilityHint("Turns the helper off: \(session.host.name) connects with plain SSH from now on")
                         }
                     }
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Color.dispatchPink)
@@ -312,70 +287,34 @@ struct HostPlainStatsCard: View {
             }
         }
     }
+
+    static let usePlainSSH = "Use plain SSH"
 }
 
-/// The sheet's connection list (W1): Address, Latency, Multiplexer, Helper › and Color ›; the popover's (I5) Address,
-/// Multiplexer and Helper ›.
+/// The connection list (W1, and offline W1c instead of stale numbers): Address ("user@host", with a port that is not
+/// 22), Key and Multiplexer; with no multiplexer on the host its row leads to the install hint. The latency is the
+/// title's line; the switches and the colour are Edit host's.
 struct HostConnectionList: View {
     let session: HostSession
-    var compact = false
+    @Environment(HostSessions.self) private var sessions
 
     var body: some View {
         let presentation = HostStatsPresentation(session: session)
         VStack(spacing: 0) {
             HostStatsListRow(label: "Address", value: presentation.address)
             HostStatsHairline()
-            if !compact {
-                HostStatsListRow(label: "Latency", value: presentation.latency)
-                HostStatsHairline()
-            }
-            HostStatsListRow(label: "Multiplexer", value: presentation.multiplexer)
+            HostStatsListRow(label: "Key", value: sessions.keyName(session.host))
             HostStatsHairline()
-            NavigationLink(value: HostStatsRoute.helper) {
-                HostStatsListRow(label: "Helper", value: presentation.helper, chevron: true)
-            }
-            .buttonStyle(.plain)
-            if !compact {
-                HostStatsHairline()
-                NavigationLink(value: HostStatsRoute.color) {
-                    HostStatsListRow(label: "Color", value: presentation.color, chevron: true, swatch: session.host.tint.color)
+            if session.multiplexerLine == "none" {
+                NavigationLink { MultiplexerHint(hostID: session.id) } label: {
+                    HostStatsListRow(label: "Multiplexer", value: presentation.multiplexer, chevron: true)
                 }
                 .buttonStyle(.plain)
+            } else {
+                HostStatsListRow(label: "Multiplexer", value: presentation.multiplexer)
             }
         }
         .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 20))
-    }
-}
-
-/// W1c: what the phone knows of an offline host, instead of stale numbers.
-struct HostConnectionFacts: View {
-    let session: HostSession
-    @Environment(HostSessions.self) private var sessions
-
-    var body: some View {
-        let host = session.host
-        VStack(spacing: 0) {
-            row("Address", host.address)
-            HostStatsHairline()
-            row("Port", String(host.port))
-            HostStatsHairline()
-            row("User", host.user)
-            HostStatsHairline()
-            row("Key", sessions.keyName(host))
-            HostStatsHairline()
-            row("Multiplexer", HostStatsPresentation(session: session).multiplexer)
-        }
-        .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 20))
-    }
-
-    private func row(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).font(.body)
-            Spacer()
-            Text(value).font(.body).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 11)
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -401,16 +340,16 @@ struct HostStatsActionButton: View {
     }
 }
 
-/// Connect (pink): lifts a Disconnect and connects (`HostSession.connectByUser`); "Connecting…" while on its way.
+/// Connect (pink): lifts a Disconnect and connects (`HostSession.connectByUser`); while on its way the bars show
+/// Disconnect instead.
 struct HostStatsConnectButton: View {
     let session: HostSession
 
     var body: some View {
-        let pending = session.link.isPending
         Button { session.connectByUser() } label: {
             HStack(spacing: 8) {
-                if pending { ProgressView().tint(Color.onAccent) } else { Image(systemName: "bolt.fill") }
-                Text(pending ? "Connecting…" : "Connect")
+                Image(systemName: "bolt.fill")
+                Text("Connect")
             }
             .font(.body.weight(.semibold)).foregroundStyle(Color.onAccent)
             .frame(maxWidth: .infinity).frame(height: 50)
@@ -418,77 +357,43 @@ struct HostStatsConnectButton: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.tint(.dispatchPink).interactive(), in: Capsule())
-        .disabled(pending || session.hostKeyMismatch != nil)
-        .accessibilityLabel(pending ? "Connecting" : "Connect")
+        .disabled(session.hostKeyMismatch != nil)
+        .accessibilityLabel("Connect")
     }
 }
 
-/// The host's Helper and Chat switches (`HostHelperRows`) and its multiplexer, pushed from the stats' Helper row.
-struct HostHelperSettings: View {
-    let hostID: UUID
-    @Environment(HostSessions.self) private var sessions
-
-    var body: some View {
-        if let session = sessions.session(hostID) {
-            Form {
-                Section {
-                    HostHelperRows(session: session)
-                } footer: {
-                    Text(session.host.helper
-                         ? "Dispatch's helper runs on \(session.host.name) for spaces, Chat and stats."
-                         : NewHostSheet.plainStatement)
-                }
-                if session.host.helper {
-                    Section {
-                        if session.multiplexerLine == "none" {
-                            LabeledContent("Multiplexer") { Text("none").monospaced() }
-                        } else {
-                            HostMultiplexerPicker(session: session)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Helper")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-}
-
-/// The host's colour (docs/ios.md, Hosts and trust): Automatic (the colour it was given, the one the fewest hosts
-/// show) or one of the palette's eight, saved in `HostRecord.color`.
+/// Edit host's Color (docs/ios.md, Hosts and trust): Automatic (the colour it was given, the one the fewest hosts show)
+/// or one of the palette's eight, as `choice` (nil: Automatic), which Save puts in `HostRecord.color` (`setColor`).
 struct HostColorPicker: View {
-    let hostID: UUID
+    let host: HostRecord
+    @Binding var choice: HostColor?
     @Environment(HostSessions.self) private var sessions
 
     var body: some View {
-        if let session = sessions.session(hostID) {
-            let host = session.host
-            // Colours are drawn by machine: another host of the same machine earlier in the list sets this one's.
-            let owner = sessions.colorOwner(of: hostID)
-            List {
-                Section {
-                    row("Automatic", swatch: host.tint.showing(sessions.automaticColor(of: hostID)).color, chosen: !host.colorPicked) {
-                        sessions.setColor(nil, host: hostID)
-                    }
-                }
-                Section {
-                    ForEach(HostColor.allCases, id: \.self) { color in
-                        row(color.title, swatch: host.tint.showing(color).color, chosen: host.colorPicked && host.color == color) {
-                            sessions.setColor(color, host: hostID)
-                        }
-                    }
-                } footer: {
-                    if let owner {
-                        Text("\(host.name) is the same machine as \(owner.name), whose colour both show. Choose it in \(owner.name)'s stats.")
-                    } else {
-                        Text("Spaces, Agents and this \(MobileDevice.name)'s tabs draw \(host.name) in this colour.")
-                    }
+        // Colours are drawn by machine: another host of the same machine earlier in the list sets this one's.
+        let owner = sessions.colorOwner(of: host.id)
+        List {
+            Section {
+                row("Automatic", swatch: host.tint.showing(sessions.automaticColor(of: host.id)).color, chosen: choice == nil) {
+                    choice = nil
                 }
             }
-            .disabled(owner != nil)
-            .navigationTitle("Color")
-            .navigationBarTitleDisplayMode(.inline)
+            Section {
+                ForEach(HostColor.allCases, id: \.self) { color in
+                    row(color.title, swatch: host.tint.showing(color).color, chosen: choice == color) { choice = color }
+                }
+            } footer: {
+                if let owner {
+                    Text("\(host.name) is the same machine as \(owner.name), whose colour both show. Choose it when editing \(owner.name).")
+                } else {
+                    Text("Spaces, Agents and this \(MobileDevice.name)'s tabs draw \(host.name) in this colour."
+                         + (HostColorStore.shared.enabled ? "" : " Color-code hosts is off in Settings: every host is gray until it is on."))
+                }
+            }
         }
+        .disabled(owner != nil)
+        .navigationTitle("Color")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func row(_ title: String, swatch: Color, chosen: Bool, action: @escaping () -> Void) -> some View {
@@ -529,19 +434,16 @@ extension HostSessions {
         return first
     }
 
-    /// The Color picker's choice, saved at once: a colour (`colorPicked`), or nil for Automatic, which gives the host
+    /// The Color picker's choice put in `record`: a colour (`colorPicked`), or nil for Automatic, which gives the host
     /// the colour the fewest other hosts show, as a new host gets (`HostStore.freeColor`).
-    func setColor(_ color: HostColor?, host id: UUID) {
-        guard var record = store.record(id) else { return }
+    func setColor(_ color: HostColor?, in record: inout HostRecord) {
         if let color {
             record.color = color
             record.colorPicked = true
-        } else {
-            guard record.colorPicked else { return }
-            record.color = automaticColor(of: id)
+        } else if record.colorPicked {
+            record.color = automaticColor(of: record.id)
             record.colorPicked = false
         }
-        update(record)
     }
 }
 
@@ -580,8 +482,8 @@ struct HostStatsLaunch {
     var scrub: Int? = nil
 }
 
-/// I5: the stats as a popover from a host's glyph on an iPad (the iPad stream presents it): the sheet's content at
-/// 360 points without its bar or grabber, the Edit pencil in its header, Edit and Disconnect (Connect offline) last.
+/// I5: the host sheet as a popover from a host's glyph on an iPad (the iPad stream presents it): its content at 360
+/// points without its bar or grabber, the Edit pencil in its header, Disconnect (Connect offline) last.
 struct HostStatsPopoverContent: View {
     let hostID: UUID
     @Environment(HostSessions.self) private var sessions
@@ -609,31 +511,18 @@ struct HostStatsPopoverContent: View {
                             .accessibilityLabel("Edit")
                         }
                         .padding(.top, 2)
-                        HostStatsBody(session: session, metric: $metric, scrub: $scrub, compact: true)
+                        HostStatsBody(session: session, metric: $metric, scrub: $scrub)
                     }
                     .padding(16)
                 }
-                // Edit and Disconnect stay whole at the popover's foot, the rest scrolling above them (in the scroll
-                // view the popover's height cut them).
+                // The action stays whole at the popover's foot, the rest scrolling above it (in the scroll view the
+                // popover's height cut it).
                 .safeAreaBar(edge: .bottom) {
-                    HStack(spacing: 10) {
-                        HostStatsActionButton(title: "Edit", symbol: "pencil") { editing = true }
-                        if session.link.isConnected {
-                            HostStatsActionButton(title: "Disconnect") { session.park() }
-                        } else {
-                            HostStatsConnectButton(session: session)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
+                    HostStatsAction(session: session)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                 }
                 .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: HostStatsRoute.self) { route in
-                    switch route {
-                    case .helper: HostHelperSettings(hostID: hostID)
-                    case .color: HostColorPicker(hostID: hostID)
-                    }
-                }
             }
             .frame(width: Self.width)
             .frame(minHeight: 480, idealHeight: 628)

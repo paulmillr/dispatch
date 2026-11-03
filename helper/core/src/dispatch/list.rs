@@ -1,6 +1,6 @@
 //! `chat.list` (feature `chat.list`): every agent-bound terminal of this helper with what a
 //! conversation list row shows, in one call: binding, label, busy/attention, the last
-//! assistant text and its time. Built from the same harness calls as chat.state and chat.page.
+//! assistant text and its time. Built from the same harness calls as chat.page and chat.state.
 use super::*;
 
 /// Characters of the last assistant text a row keeps.
@@ -135,27 +135,30 @@ impl Request<'_> {
                 history_error: None,
                 waiting,
             })));
-            let (next, history_binding) = (harness.clone(), binding.clone());
+            let (next, state_binding) = (harness.clone(), binding.clone());
             let (collected, remaining, done) = (collected.clone(), remaining.clone(), done.clone());
-            harness.borrow_mut().state(
+            // History first: reading the transcript is what names the conversation (Claude's
+            // title records), so a state asked before it on a helper that has not read that
+            // transcript yet has no title, and the phone's row and tab keep the window's name.
+            harness.borrow_mut().history(
                 self.io,
                 &binding,
+                None,
                 deferred(Box::new(move |io, result| {
                     if let Some(row) = row.borrow_mut().as_mut() {
                         match result {
-                            Ok(state) => row.state = Some(state),
-                            Err(error) => row.state_error = Some(error),
+                            Ok(page) => (row.preview, row.time_ms) = last(&page.records),
+                            Err(error) => row.history_error = Some(error),
                         }
                     }
-                    next.borrow_mut().history(
+                    next.borrow_mut().state(
                         io,
-                        &history_binding,
-                        None,
+                        &state_binding,
                         deferred(Box::new(move |io, result| {
                             let Some(mut row) = row.borrow_mut().take() else { return };
                             match result {
-                                Ok(page) => (row.preview, row.time_ms) = last(&page.records),
-                                Err(error) => row.history_error = Some(error),
+                                Ok(state) => row.state = Some(state),
+                                Err(error) => row.state_error = Some(error),
                             }
                             collected.borrow_mut().push(row);
                             remaining.set(remaining.get() - 1);

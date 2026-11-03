@@ -40,6 +40,15 @@ pub struct Tmux {
     /// `screen` reads every terminal no client publishes for from tmux (host.rs): the queue drainer; off in a client
     /// helper, whose screens.host clients turn it on per terminal instead.
     pub(crate) host_screens: bool,
+    /// Sizing a window leaves its siblings as they are (feature sizes.steady, ops.rs `grid`).
+    pub(crate) steady: bool,
+    /// A backend's first topology waits for discovery's first look at its terminals (feature topology.bound,
+    /// `holds`).
+    pub(crate) bound: bool,
+    /// Backends whose topology went to the UI at least once.
+    pub(crate) appeared: std::collections::BTreeSet<Id>,
+    /// First topologies `holds` keeps back, until when.
+    pub(crate) held: BTreeMap<Id, std::time::Instant>,
     /// Each backend's last published layouts and focus: a backend that cannot read its
     /// server (suspended, opening) republishes them with its current retained views.
     shown: BTreeMap<Id, (Vec<Layout>, Option<Id>)>,
@@ -307,6 +316,11 @@ impl Tmux {
         );
     }
     fn topology(&mut self, io: &mut dyn Io, ui: &mut dyn Ui) {
+        // A held first topology past its wait goes out as it is (`holds`).
+        if !self.changed && !self.held.is_empty() {
+            let now = io.now();
+            self.changed = self.held.values().any(|at| now >= *at);
+        }
         if !self.changed {
             return;
         }
@@ -616,6 +630,17 @@ impl Tmux {
                     .map(|(_, node, _)| node.clone()),
             );
             self.nodes.extend(nodes.iter().cloned());
+            if self.holds(io, backend, &nodes) {
+                // Its open waits with it: a mutation's topology reaches the UI before its completion.
+                let (kept, rest): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut finished).into_iter().partition(|(_, id)| *id == backend);
+                finished = rest;
+                if let Some(held) = self.backends.get_mut(&backend) {
+                    held.done.extend(kept.into_iter().map(|(done, _)| done));
+                }
+                continue;
+            }
+            self.appeared.insert(backend);
             self.shown.insert(backend, (layouts.clone(), focus));
             ui.update(Update::Topology {
                 key: self.backends[&backend]
@@ -918,6 +943,12 @@ impl Multiplexer for Tmux {
     }
     fn restore(&mut self, io: &mut dyn Io, terminal: Id, token: u64, done: Done<()>) {
         self.follow_restore(io, terminal, token, deferred(done));
+    }
+    fn steady_sizes(&mut self) {
+        self.steady = true;
+    }
+    fn bound_topology(&mut self) {
+        self.bound = true;
     }
     fn screen_clients(&mut self, io: &mut dyn Io, terminal: Id, hosting: bool, published: bool) {
         Tmux::screen_clients(self, io, terminal, hosting, published);

@@ -435,8 +435,11 @@ struct ContainerTab: Identifiable, Equatable, Codable {
     var terminals: [TerminalTab] { arrangement.panes.flatMap(\.tabs) }
     var focusedTerminal: TerminalTab? { arrangement.panes.first { $0.id == arrangement.focusedPane }?.activeTab }
 
-    func displayLabel(automatic: Bool, conversation: String?, focused: TerminalTab? = nil) -> String {
-        guard automatic, renamed != true else { return name }
+    /// `agent`: the focused pane's agent (its helper key). A window named after it, as the phone's launch names the
+    /// windows it starts (`launch.names`: `new-window -n claude`), is not one the user named, though tmux and herdr
+    /// report it as renamed: it still follows the conversation.
+    func displayLabel(automatic: Bool, conversation: String?, focused: TerminalTab? = nil, agent: String? = nil) -> String {
+        guard automatic, renamed != true || name == agent else { return name }
         if let conversation = TerminalTab.conversationLabel(conversation) { return conversation }
         guard numbered == true, let pane = focused ?? focusedTerminal else { return name }
         let label = pane.displayLabel(automatic: true, conversation: nil)

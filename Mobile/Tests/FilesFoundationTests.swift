@@ -80,10 +80,12 @@ final class FilesFoundationTests: XCTestCase {
                                terminal: { _, _ in Text("terminal-body") }, chat: { _, _ in Text("chat-body") })
         let (window, host) = try show(NavigationStack { screen }, size: CGSize(width: 402, height: 874))
         defer { window.isHidden = true }
+        // The phone's Files is in the mode button's menu (a hold, which has no accessibility action): the View menu's
+        // request shows it, as the button's menu does.
         try await TestSupport.eventually(timeout: .seconds(2)) {
-            accessibilityElements(host.view).contains { $0.accessibilityLabel == "Files" }
+            accessibilityElements(host.view).contains { $0.accessibilityLabel?.hasPrefix("Show ") == true }
         }
-        try tap("Files", in: host.view)
+        TabSegment.requestSwitch(ref, to: TabSegment.files)
         try await TestSupport.eventually(timeout: .seconds(2)) {
             accessibilityElements(host.view).contains { $0.accessibilityLabel == "Files needs the helper on mba2" }
         }
@@ -392,16 +394,18 @@ final class FilesFoundationTests: XCTestCase {
         try await TestSupport.eventually { helper.requests("files.branch").count == 1 }
         XCTAssertEqual(helper.requests("files.git").count, 1)
         XCTAssertFalse(ticks.waiting, "no polling on Terminal")
+        // The phone's Files is in the mode button's menu (a hold, which has no accessibility action): the View menu's
+        // request shows it, as the button's menu does.
         try await TestSupport.eventually(timeout: .seconds(2)) {
-            accessibilityElements(host.view).contains { $0.accessibilityLabel == "Files" }
+            accessibilityElements(host.view).contains { $0.accessibilityLabel?.hasPrefix("Show ") == true }
         }
-        try tap("Files", in: host.view)
+        TabSegment.requestSwitch(ref, to: TabSegment.files)
         try await TestSupport.eventually { ticks.waiting }
         XCTAssertEqual(helper.requests("files.git").count, 1, "the root is known")
         ticks.tick()
         _ = try await helper.wait(for: "files.branch", count: 2)
         try await TestSupport.eventually { ticks.waiting }
-        try tap("Terminal", in: host.view)
+        TabSegment.requestSwitch(ref, to: TabSegment.terminal)
         try await TestSupport.eventually { model.segments[ref] == .terminal }
         ticks.tick()
         try await Task.sleep(for: .milliseconds(200))
@@ -455,11 +459,6 @@ final class FilesFoundationTests: XCTestCase {
     // MARK: Chrome
 
     func testChromePieces() {
-        XCTAssertEqual(AgentGlyph.kind("claude"), .claude)
-        XCTAssertEqual(AgentGlyph.kind("codex"), .codex)
-        XCTAssertEqual(AgentGlyph.kind("nanocodex"), .codex)
-        XCTAssertEqual(AgentGlyph.kind("pi"), .pi)
-        XCTAssertEqual(AgentGlyph.kind(nil), .terminal)
         XCTAssertEqual(GitStatusBadge.spoken("?"), "Untracked")
         XCTAssertEqual(MobileChangeRow.split("src/components/Sidebar.tsx").folder, "src/components/")
         XCTAssertEqual(MobileChangeRow.split("README.md").folder, "")

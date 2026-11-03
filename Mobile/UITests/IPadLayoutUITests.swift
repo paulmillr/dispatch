@@ -29,9 +29,11 @@ final class IPadLayoutUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
             if app.state == .runningForeground { arrange("Fill") }
         }
-        // A launch that opens a tab waits for it (the strip's modes, or the stack's capsule).
+        // A launch that opens a tab waits for it (the strip's modes, or the stack's mode button).
         if arguments.contains(where: { $0.hasPrefix("tab:") }) {
-            XCTAssertTrue(app.otherElements["tab-segments"].waitForExistence(timeout: 10))
+            let tab = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier IN %@", ["tab-segments", "tab-mode-button"])).firstMatch
+            XCTAssertTrue(tab.waitForExistence(timeout: 10))
         }
     }
 
@@ -92,12 +94,11 @@ final class IPadLayoutUITests: XCTestCase {
         XCTAssertFalse(app.buttons.matching(backPill).firstMatch.exists, "no back pill beside the sidebar", file: file, line: line)
     }
 
-    /// The stack: the tab on top with its back pill, the phone's header and capsule, nothing beside it.
+    /// The stack: the tab on top with its back pill, the phone's header and mode button, nothing beside it.
     private func assertStackedTab(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(app.buttons.matching(backPill).firstMatch.waitForExistence(timeout: 5), "the back pill", file: file, line: line)
         XCTAssertFalse(app.otherElements["pad-strip"].exists, "no strip", file: file, line: line)
-        // The phone's capsule (in Slide Over a chat tab's header has its ⋯ menu where the host disc was).
-        XCTAssertTrue(app.otherElements["tab-segments"].buttons["Terminal"].exists, "the phone's capsule", file: file, line: line)
+        XCTAssertTrue(app.buttons["tab-mode-button"].exists, "the phone's mode button", file: file, line: line)
     }
 
     private func shot(_ name: String) {

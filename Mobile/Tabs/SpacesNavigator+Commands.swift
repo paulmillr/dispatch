@@ -32,13 +32,13 @@ extension SpacesNavigator {
         switch top {
         case .tab(let ref)?, .files(let ref, _)?: return model.tab(ref)?.space
         case .space(let ref)?: return ref
-        case .host?, .detached?, nil: return nil
+        case .detached?, nil: return nil
         }
     }
 
     /// A Spaces sheet or dialog is up (New tab's picker, New space, the switcher, Rename, Terminate, a failure).
     var presenting: Bool {
-        picking || newSpace != nil || actions.renaming != nil || actions.terminating != nil || switcher != nil
+        picking || newSpace != nil || actions.renaming != nil || actions.terminating != nil || actions.closing != nil || switcher != nil
             || actions.closingShells != nil || actions.failure != nil
     }
 

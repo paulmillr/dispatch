@@ -44,6 +44,15 @@ extension MobileComposition {
                   review.sent[place.place] != nil || review.notices[place.place] != nil else { return nil }
             return AnyView(ReviewAccessory(context: place))
         }
+        // A phone on its side: Create review is the rail's foot, with the comment count, while there are comments and
+        // no review just sent (the row's pill on an iPad, the accessory upright).
+        slot.railAction = { context in
+            guard let place = Self.reviewContext(context, review: review), review.sent[place.place] == nil,
+                  review.notices[place.place] == nil else { return nil }
+            let count = review.count(place.place)
+            guard count > 0 else { return nil }
+            return FilesRailAction(title: "Create review", symbol: "paperplane.fill", count: count) { review.sheet = place.tab }
+        }
         slot.count = { tab in
             guard let root = gitFacts.facts(SpaceGitFacts.Key(host: tab.host, key: tab.key))?.root else { return 0 }
             return review.count(ReviewPlace(host: tab.host, root: root))

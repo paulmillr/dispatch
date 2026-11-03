@@ -1259,6 +1259,10 @@ pub fn isolated() -> Option<i32> {
         return None;
     }
     let name = args.next().unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    if name == "stats.processes" {
+        stats::macos::background();
+    }
     let mut input = Vec::new();
     let result = std::io::stdin()
         .read_to_end(&mut input)

@@ -87,6 +87,16 @@ impl Request<'_> {
                 .get(&self.fd)
                 .map(|set| set.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default();
+            if accepted.iter().any(|feature| feature == features::SIZES_STEADY) {
+                for mux in &self.helper.multiplexers {
+                    mux.borrow_mut().steady_sizes();
+                }
+            }
+            if accepted.iter().any(|feature| feature == features::TOPOLOGY_BOUND) {
+                for mux in &self.helper.multiplexers {
+                    mux.borrow_mut().bound_topology();
+                }
+            }
             if accepted.iter().any(|feature| feature == features::ATTACHMENTS) {
                 // History strips path lines under this account's attachments root only.
                 attachments::cache(self.io, &self.helper.held);

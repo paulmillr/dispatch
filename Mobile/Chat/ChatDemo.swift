@@ -265,7 +265,7 @@ enum ChatDemo {
             }
             // S6: the recorded turns and two more, ended today (`cornerTurns`).
             if screen == "S6" { records = ChatDemo.cornerTurns() }
-            // S6e: the same, then a turn still running with its answer begun: four steps, 38 s.
+            // S6e: the same, then a turn still running with its answer begun: four steps, 38 s, the working row under it.
             if screen == "S6e" { records = ChatDemo.cornerTurns(working: true) }
             if screen == "C6" {
                 // C6: a longer thread read from its top, two more messages arriving while it is scrolled up.
@@ -476,7 +476,7 @@ struct ChatDemoRoot: View {
             NavigationStack {
                 Group {
                     if let row = session.transcript.rows.last {
-                        ChatMessageDetails(session: session, row: row, space: "app", tab: "claude", directory: "/Users/alex/src/app") { _ in }
+                        ChatMessageDetails(session: session, row: row, space: "app", tab: "claude", directory: "/Users/alex/src/app")
                     } else { Color.canvas }
                 }
             }
@@ -575,42 +575,42 @@ struct ChatDemoHeader: View {
     var title = "app"
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 5) {
-                    Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
-                    if needsYou > 0 { Text("\(needsYou)").font(.callout.weight(.semibold)) }
-                }
-                .foregroundStyle(Color.dispatchPink)
-                .padding(.leading, 12).padding(.trailing, 14)
-                .frame(height: 44)
-                .glassEffect(.regular, in: Capsule())
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(.headline)
-                    (Text(session.hostName).foregroundStyle(TabsSample.mba2.tint) + Text(" · ")
-                        + Text("~/src/app").font(.caption2.monospaced()))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.leading, 4)
-                Spacer()
-                ChatHeaderControls(session: session) {
-                    Image(systemName: "apple.logo")
-                        .foregroundStyle(TabsSample.mba2.tint)
-                        .frame(width: 44, height: 44)
-                        .glassEffect(.regular, in: Circle())
-                }
+        HStack(spacing: 8) {
+            // Back and the host's menu in one capsule, as `TabHeaderBackAndMenu`.
+            HStack(spacing: 0) {
+                Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.dispatchPink)
+                    .frame(width: 44, height: 44)
+                    .overlay(alignment: .topTrailing) {
+                        if needsYou > 0 { TabsCountBadge(label: "\(needsYou)").offset(x: 6, y: -4) }
+                    }
+                    .zIndex(1)
+                Image(systemName: "apple.logo")
+                    .foregroundStyle(TabsSample.mba2.tint)
+                    .frame(width: 44, height: 44)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-            // As Tabs' header in the navigation bar: it grows to xxxLarge.
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            // Tabs' capsule (the mockups' C screens show the Files segment with the review count).
-            TabSegmentCapsule(selection: .constant(.chat), segments: TabSegment.allCases, badge: 3)
-                .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 10)
+            .glassEffect(.regular, in: Capsule())
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(.headline)
+                (Text(session.hostName).foregroundStyle(TabsSample.mba2.tint) + Text(" · ")
+                    + Text("~/src/app").font(.caption2.monospaced()))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 4)
+            Spacer()
+            // The mode button on Chat (`TabModeButton`), the waveform in its place in conversation mode.
+            ChatHeaderControls(session: session, menuInDisc: true) {
+                Image(systemName: "text.bubble.fill")
+                    .foregroundStyle(Color.dispatchPink)
+                    .frame(width: 44, height: 44)
+                    .glassEffect(.regular, in: Circle())
+            }
         }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        // As Tabs' header in the navigation bar: it grows to xxxLarge.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .background(Color.canvas)
     }
 }

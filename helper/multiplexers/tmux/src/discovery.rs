@@ -13,6 +13,9 @@ use std::{
 /// Output-driven rescans run at most this often: each scan inspects every pane's process tree,
 /// and agents' redraws would otherwise keep a worker scanning continuously.
 pub(crate) const OUTPUT_RESCAN: std::time::Duration = std::time::Duration::from_secs(2);
+/// The longest a backend's first topology waits for discovery (feature topology.bound, `Tmux::holds`): its process
+/// checks take some milliseconds per terminal; a stuck one must not keep the spaces from the client.
+pub(crate) const BOUND_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Default)]
 pub(crate) struct Discovery {
@@ -25,6 +28,8 @@ pub(crate) struct Discovery {
     armed: bool,
     pub rescans: BTreeSet<Id>,
     pending: BTreeSet<Id>,
+    /// Terminals discovery has looked at once (`Tmux::scanned`).
+    scanned: BTreeSet<Id>,
     /// Pane PTY devices verified like c1654cc TmuxCoordinator.swift:671-681.
     pub ttys: BTreeMap<Id, u64>,
     observed: Rc<RefCell<VecDeque<(Id, Vec<(usize, Binding)>)>>>,
@@ -54,6 +59,38 @@ pub(crate) fn tty(bytes: &[u8], device: u64) -> bool {
 }
 
 impl Tmux {
+    /// Discovery is done with `id` for now (bound to an agent or not).
+    pub(crate) fn scanned(&mut self, id: Id) {
+        self.discovery.pending.remove(&id);
+        // A first topology waiting for it goes out on this tick (`holds`).
+        self.changed |= self.discovery.scanned.insert(id) && !self.held.is_empty();
+    }
+
+    /// Whether `backend`'s topology of `nodes` waits (feature topology.bound): its first one, while discovery has not
+    /// looked at each of its local terminals, so a new client's first spaces name the agents already running instead
+    /// of plain terminals the next topology turns into agents. At most BOUND_WAIT; a backend that appeared already, or
+    /// a helper without such a client, never waits.
+    pub(crate) fn holds(&mut self, io: &mut dyn Io, backend: Id, nodes: &[Node]) -> bool {
+        if !self.bound || self.appeared.contains(&backend) || self.backends.get(&backend).is_none_or(|b| b.remote) {
+            return false;
+        }
+        let waiting = nodes
+            .iter()
+            .any(|node| node.kind == Kind::Terminal && !node.detached && !self.discovery.scanned.contains(&node.id));
+        if waiting {
+            let now = io.now();
+            let at = *self.held.entry(backend).or_insert_with(|| {
+                io.timer(now + BOUND_WAIT);
+                now + BOUND_WAIT
+            });
+            if now < at {
+                return true;
+            }
+        }
+        self.held.remove(&backend);
+        false
+    }
+
     pub(crate) fn discover(&mut self, io: &mut dyn Io) {
         let now = io.now();
         if self.discovery.output && !self.discovery.dirty {
@@ -83,12 +120,18 @@ impl Tmux {
         self.agents.retain(|id, _| nodes.contains(id));
         self.discovery.ttys.retain(|id, _| nodes.contains(id));
         self.discovery.rescans.retain(|id| nodes.contains(id));
+        self.discovery.scanned.retain(|id| nodes.contains(id));
         for id in nodes {
             if !dirty && !self.discovery.rescans.contains(&id) { continue; }
             let Ok(loc) = self.location(id) else {
+                self.scanned(id);
                 continue;
             };
-            if self.backends[&loc.backend].remote || !self.discovery.pending.insert(id) {
+            if self.backends[&loc.backend].remote {
+                self.scanned(id);
+                continue;
+            }
+            if !self.discovery.pending.insert(id) {
                 continue;
             }
             self.discovery.rescans.remove(&id);
@@ -133,7 +176,7 @@ impl Tmux {
                             p
                         }
                         _ => {
-                            mux.discovery.pending.remove(&id);
+                            mux.scanned(id);
                             return;
                         }
                     };
@@ -151,13 +194,13 @@ impl Tmux {
                                 _ => false,
                             };
                             if !matches {
-                                mux.discovery.pending.remove(&id);
+                                mux.scanned(id);
                                 return;
                             }
                             mux.changed |=
                                 mux.discovery.ttys.insert(id, shell.tty) != Some(shell.tty);
                             if mux.harnesses.is_empty() {
-                                mux.discovery.pending.remove(&id);
+                                mux.scanned(id);
                                 return;
                             }
                             let input = body::encode_plain(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]))
@@ -200,7 +243,7 @@ impl Tmux {
             _ => None,
         }});
         if members.len() != 1 || self.location(id).is_err() {
-            self.discovery.pending.remove(&id);
+            self.scanned(id);
             return;
         }
         let process = &members[0];
@@ -240,7 +283,7 @@ impl Tmux {
         let observations: Vec<_> = self.discovery.observed.borrow_mut().drain(..).collect();
         for (id, mut bindings) in observations {
             if bindings.len() != 1 || self.location(id).is_err() {
-                self.discovery.pending.remove(&id);
+                self.scanned(id);
                 continue;
             }
             let (harness, binding) = bindings.pop().unwrap();
@@ -249,7 +292,7 @@ impl Tmux {
                 id,
                 binding.process.clone(),
                 Box::new(move |mux, _, result| {
-                    mux.discovery.pending.remove(&id);
+                    mux.scanned(id);
                     if result.is_err()
                         || mux.agents.iter().any(|(other, (_, b))| {
                             *other != id

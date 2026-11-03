@@ -282,10 +282,6 @@ fn main() -> std::io::Result<()> {
             helper.add_harness(dispatch_helper_pi::Pi::new(home.clone())),
         ),
         (
-            "nanocodex",
-            helper.add_harness(dispatch_helper_nanocodex::Nano::new(uid, home, remote)),
-        ),
-        (
             "codex",
             helper.add_harness(dispatch_helper_codex::Codex::new()),
         ),

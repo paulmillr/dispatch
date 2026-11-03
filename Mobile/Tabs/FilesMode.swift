@@ -114,6 +114,17 @@ struct FilesModeSlot {
     /// The iPad's line under the context row, where the phone has the accessory (`PadBanner`); nil: the accessory.
     /// Review's Create review is a pill in its row there instead, so only its sent and notice lines are banners.
     var banner: (@MainActor (FilesModeContext) -> AnyView?)? = nil
+    /// A phone on its side: the mode's action at the rail's foot (`TabRail`; Review's Create review with its count);
+    /// nil: none.
+    var railAction: @MainActor (FilesModeContext) -> FilesRailAction? = { _ in nil }
+}
+
+/// A mode's action at a phone's landscape rail: a pink disc with its glyph and an optional count.
+struct FilesRailAction {
+    let title: String
+    let symbol: String
+    var count = 0
+    let action: @MainActor () -> Void
 }
 
 /// The seam the Files, Review and Commits areas fill, one slot each, so no two areas write the same lines: each
@@ -148,6 +159,7 @@ struct FilesModeContent {
     @MainActor func pane(_ tab: TabRef, _ route: FilesRoute) -> AnyView {
         slot(route.mode).pane?(tab, route) ?? destination(tab, route)
     }
+    @MainActor func railAction(_ context: FilesModeContext) -> FilesRailAction? { slot(context.mode).railAction(context) }
     @MainActor func banner(_ context: FilesModeContext) -> AnyView? {
         if let banner = slot(context.mode).banner { return banner(context) }
         return accessory(context)
@@ -177,13 +189,16 @@ struct TabFilesSegment: View {
     @Binding var mode: FilesMode
     /// The tab's git repository (`SpaceGitFacts`): the modes' bar shows only inside one.
     let repository: Bool
+    /// A phone's stack: the modes are the capsule at the tab's top (`FilesModeCapsule`), not the system tab bar; the
+    /// mode shows alone, its accessory in a glass bar at the bottom. Beside the Duo's sidebar the system tab bar.
+    var modesOnTop = false
     let notNow: () -> Void
     /// S2's Change integration…: the host's settings.
     let changeIntegration: () -> Void
 
     var body: some View {
         if context.availability.showsModes {
-            modes
+            if modesOnTop { topModes } else { modes }
         } else {
             FilesUnavailableView(availability: context.availability, notNow: notNow,
                                  installHelper: { content.installHelper(context.host.id) },
@@ -218,6 +233,26 @@ struct TabFilesSegment: View {
         .tint(.dispatchPink)
         .modifier(FilesAccessory(accessory: accessory))
         }
+    }
+
+    /// The mode alone under the tab's bar (its capsule there, `FilesModeCapsule`), and the accessory the tab bar carried
+    /// in a glass capsule at the bottom, where the tab bar's accessory sat.
+    private var topModes: some View {
+        let shown = FilesMode.available(repository: repository).contains(mode) ? mode : .files
+        return content.body(context.with(mode: shown))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .opacity(context.availability.isOffline ? 0.45 : 1)
+            .background(Color.canvas)
+            .safeAreaBar(edge: .bottom) {
+                if let accessory = accessoryView(shown) {
+                    accessory
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                }
+            }
     }
 
     private func accessoryView(_ mode: FilesMode) -> AnyView? {

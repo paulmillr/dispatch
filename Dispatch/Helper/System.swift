@@ -233,6 +233,35 @@ enum System {
         }
     }
 
+    /// A wait that ends on a shared clock: the first multiple of `grid`, counted from one origin per launch, at least
+    /// `minimum` from now. Waits on the same grid end together however their loops drifted (this Mac's samples, every
+    /// SSH host's, their latency probes and process lists), and on multiples of each other (60 s probes on 15 s or 2 s
+    /// samples) whenever a tick is shared: one CPU wake, and over SSH one radio burst, instead of one each. Recorded as
+    /// `sleep(for:)` is (the duration is the clock's).
+    nonisolated(nonsending) static func sleep(for minimum: Duration, on grid: Duration, _ name: String,
+                                              _ file: String = #fileID) async throws {
+        let wait = {
+            guard grid > .zero else { return try await Task.sleep(for: minimum) }
+            let tick = tick(after: ContinuousClock.now - gridOrigin, minimum: minimum, grid: grid)
+            try await Task.sleep(until: gridOrigin + tick, tolerance: min(grid / 10, .seconds(1)))
+        }
+        guard !polling else { return try await wait() }
+        _ = try await AppReplay.run(kind: "clock", input: .string(file + ":" + name), caller: true, woken: false) {
+            try await wait()
+            return .null
+        }
+    }
+    /// A loop's wait between samples on the shared clock (above): its next tick of `interval` at least half of one away,
+    /// so a sample taken off the grid (a viewer that opened, a reconnect) moves onto it within one and a half intervals.
+    nonisolated(nonsending) static func sleep(every interval: Duration, _ name: String, _ file: String = #fileID) async throws {
+        try await sleep(for: interval / 2, on: interval, name, file)
+    }
+    private static let gridOrigin = ContinuousClock.now
+    /// The shared clock's next tick, as time since its origin: the first multiple of `grid` at least `minimum` after `now`.
+    static func tick(after now: Duration, minimum: Duration, grid: Duration) -> Duration {
+        grid * max(0, ((now + minimum) / grid).rounded(.up))
+    }
+
     /// Signals another process (a test's fixture or tool): the outcome is recorded.
     @discardableResult
     static func signal(_ pid: pid_t, _ number: Int32) -> Int32 {

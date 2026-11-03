@@ -28,6 +28,12 @@ struct ChatBubble<Content: View>: View {
                                 ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
                                 : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
                                 style: .continuous))
+                // The swipe's room for a reply's time beside it (`ChatRevealReceived`).
+                .background {
+                    if side == .agent {
+                        GeometryReader { Color.clear.preference(key: ChatBubbleWidth.self, value: $0.size.width) }
+                    }
+                }
                 // 78% of the column for the user, 86% for the agent (M4a), never past the readable measure (an iPad's
                 // wide column); the bubble hugs shorter text.
                 .frame(maxWidth: ChatMeasure.bubble(user: side == .user, column: column, measure: measure),
@@ -89,6 +95,11 @@ struct ChatCaption: View {
 struct ChatApprovalView: View {
     let approval: MobileChatSession.Approval
     let answer: (ApprovalChoice) -> Void
+    /// The chosen chip becomes the user's reply (`ChatAnswerMorph`).
+    @Namespace private var replies
+    @ReduceMotion private var reduceMotion
+    /// Counts the answers given here, for their haptic.
+    @State private var answered = 0
 
     var body: some View {
         let presentation = approval.interaction.approvalPresentation
@@ -112,15 +123,36 @@ struct ChatApprovalView: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     ChatCaption(text: "Waiting · " + ChatTurnSummary.elapsed(context.date.timeIntervalSince(approval.arrived)))
                 }
-                ChatChips(choices: MobileChatSession.choices(for: approval.interaction), choose: answer)
-                    .padding(.top, 2)
+                ChatChips(choices: MobileChatSession.choices(for: approval.interaction), morph: reduceMotion ? nil : replies) { choice in
+                    answer(choice)
+                    answered += 1
+                }
+                .padding(.top, 2)
             } else if let chosen = approval.chosen {
-                ChatBubble(side: .user) { Text(chosen.label) }
+                ChatBubble(side: .user) { Text(chosen.label).chatAnswerMorph(id: AnyHashable(chosen.id), in: reduceMotion ? nil : replies) }
                     .padding(.top, 3)
             } else if approval.pending.decision == .expired {
                 ChatCaption(text: "No longer waiting · continue in Terminal if it still asks")
             }
         }
+        // The card's own change, not the session's: the working row under the thread changes in the same update.
+        .animation(ChatAnswerMorph.animation(reduceMotion: reduceMotion), value: approval.pending.pending)
+        .sensoryFeedback(trigger: answered) { _, _ in approval.chosen?.role == .deny ? .impact(weight: .light) : .success }
+    }
+}
+
+/// An answer's chip turning into the user's reply bubble as it is chosen: the chip's label and the reply's text share
+/// a frame (`matchedGeometryEffect`), so the pill grows into the bubble while the other chips and the waiting line fade.
+/// Nil namespace (Reduce Motion): the chips fade into the reply.
+enum ChatAnswerMorph {
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.35)
+    }
+}
+
+extension View {
+    @ViewBuilder func chatAnswerMorph(id: some Hashable, in namespace: Namespace.ID?) -> some View {
+        if let namespace { matchedGeometryEffect(id: id, in: namespace) } else { self }
     }
 }
 
@@ -128,12 +160,14 @@ struct ChatApprovalView: View {
 /// affirmative one in the app tint.
 struct ChatChips: View {
     let choices: [ApprovalChoice]
+    /// Where a chosen chip turns into the reply (`ChatAnswerMorph`).
+    var morph: Namespace.ID? = nil
     let choose: (ApprovalChoice) -> Void
     var body: some View {
         ChatChipFlow {
             ForEach(choices) { choice in
                 ChatChip(title: choice.label, prominent: choice.role == .allow,
-                         hint: "Answers the agent’s request") { choose(choice) }
+                         hint: "Answers the agent’s request", morph: morph.map { (AnyHashable(choice.id), $0) }) { choose(choice) }
             }
         }
     }
@@ -145,6 +179,8 @@ struct ChatChip: View {
     var selected = false
     /// VoiceOver's hint: what choosing the chip does.
     var hint: String? = nil
+    /// The reply its label turns into once chosen (`ChatAnswerMorph`).
+    var morph: (id: AnyHashable, namespace: Namespace.ID)? = nil
     let action: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -154,6 +190,7 @@ struct ChatChip: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                 .multilineTextAlignment(.center)
+                .chatAnswerMorph(id: morph?.id ?? AnyHashable(title), in: morph?.namespace)
                 .foregroundStyle(prominent || selected ? Color.onAccent : Color.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -180,6 +217,17 @@ struct ChatChip: View {
 struct ChatQuestionFormView: View {
     let approval: MobileChatSession.Approval
     let submit: ([String: String]?) -> Void
+    /// Send becomes the reply with the answers (`ChatAnswerMorph`).
+    @Namespace private var replies
+    @ReduceMotion private var reduceMotion
+    /// Counts the forms sent or skipped here, for their haptic.
+    @State private var submitted = 0
+    private static let reply = "reply"
+
+    private func finish(_ answers: [String: String]?) {
+        submit(answers)
+        submitted += 1
+    }
 
     var body: some View {
         if let draft = approval.pending.questionDraft {
@@ -218,18 +266,24 @@ struct ChatQuestionFormView: View {
                     }
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
-                        ChatChip(title: "Skip") { submit(nil) }
-                        ChatChip(title: last ? "Send" : "Next", prominent: answered) {
-                            if last { submit(draft.answers) } else { draft.next() }
+                        ChatChip(title: "Skip") { finish(nil) }
+                        ChatChip(title: last ? "Send" : "Next", prominent: answered,
+                                 morph: last && !reduceMotion ? (AnyHashable(Self.reply), replies) : nil) {
+                            if last { finish(draft.answers) } else { draft.next() }
                         }
                         .disabled(!answered)
                     }
                 } else if let answers = approval.pending.answers {
-                    ChatBubble(side: .user) { Text(answers.values.sorted().joined(separator: "\n")) }
+                    ChatBubble(side: .user) {
+                        Text(answers.values.sorted().joined(separator: "\n"))
+                            .chatAnswerMorph(id: AnyHashable(Self.reply), in: reduceMotion ? nil : replies)
+                    }
                 } else {
                     ChatCaption(text: approval.pending.decision == .deny ? "Skipped" : "No longer waiting", trailing: true)
                 }
             }
+            .animation(ChatAnswerMorph.animation(reduceMotion: reduceMotion), value: approval.pending.pending)
+            .sensoryFeedback(trigger: submitted) { _, _ in approval.pending.answers == nil ? .impact(weight: .light) : .success }
         }
     }
 }

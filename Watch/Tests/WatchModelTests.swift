@@ -56,7 +56,8 @@ final class WatchModelTests: XCTestCase {
         let sections = model.sections
         XCTAssertEqual(sections.map(\.host.name), ["first", "second"])
         XCTAssertEqual(sections[0].spaces.map(\.space.name), ["later", "earlier"], "the phone's space order")
-        XCTAssertEqual(sections[0].spaces[0].tabs.map(\.name), ["agent", "build", "bash", "zsh"])
+        XCTAssertEqual(sections[0].spaces[0].tabs.map(\.name), ["agent", "build", "zsh", "bash"],
+                       "by activity, then the phone's (server) order")
         XCTAssertEqual(sections[1].spaces.first?.tabs.map(\.key), ["t5"])
     }
 

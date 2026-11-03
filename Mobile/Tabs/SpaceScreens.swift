@@ -75,7 +75,8 @@ struct SpaceTabsScreen: View {
     }
 
     private func list(_ space: MobileSpace, workspace: MobileWorkspace, now: Date) -> some View {
-        let rows = model.rows(in: space)
+        // By activity; Edit shows the server's order, the one its drags change.
+        let rows = model.rows(in: space, serverOrder: editing)
         let shells = space.kind == .plainShell
         let open = shownTab ?? model.openedTabs[ref]
         let reorders = workspace.canReorder(space)
@@ -120,13 +121,11 @@ struct SpaceTabsScreen: View {
                             Button("Edit", systemImage: "pencil") { editing = true }
                         }
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    // Close alone, also by a full swipe: it ends the tab, asking first while work runs (Detach, which
+                    // only hides it on this connection, is in the tab's menu).
+                    .swipeActions(edge: .trailing) {
                         Button { actions.close(.tab(entry.id), .close) } label: { Label("Close", systemImage: "xmark") }
                             .tint(Color.destructive)
-                        if !shells {
-                            Button { actions.close(.tab(entry.id), .detach) } label: { Label("Detach", systemImage: "eject.fill") }
-                                .tint(Color.caution)
-                        }
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 16))
                     .alignmentGuide(.listRowSeparatorLeading) { _ in 48 }
@@ -154,8 +153,8 @@ struct SpaceTabsScreen: View {
         .overlay { if rows.isEmpty { TabsNothing(query: TabsQuery()) } }
     }
 
-    static let editNote = "Tap a name to rename it. Drag to reorder. Closing a tab detaches it unless it is idle."
-    static let closeNote = "Closing a tab detaches it unless it is idle."
+    static let editNote = "Tap a name to rename it. Drag to reorder. Closing a tab ends it, after asking while work runs."
+    static let closeNote = "Closing a tab ends it, after asking while work runs."
 
     /// A rename from Edit: the server's answer, a refusal shown as the screen's other failures are. True once it took.
     private func rename(_ work: () async throws -> Void) async -> Bool {
@@ -270,18 +269,25 @@ enum SpaceCloseCopy {
 
 /// P2e: the New tab capsule. A tap opens a shell in this space (a new shell on a plain host); held, the menu: Shell (the
 /// shell and folder it opens in), the agents the host can start with the model New chat would use, and "In another
-/// space…" (New tab's picker).
+/// space…" (New tab's picker). While an agent picked there starts, the capsule says so with a spinner ("Starting
+/// Claude…", the Mac's launch cover) until its tab opens in Chat.
 struct SpaceNewTabButton: View {
     let navigator: SpacesNavigator
     let space: MobileSpace
 
     var body: some View {
+        let starting = navigator.startingAgents[space.ref]
         Menu {
             SpaceNewTabMenu(navigator: navigator, space: space)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "plus").font(.title3.weight(.medium))
-                Text("New tab").font(.headline)
+                if let starting {
+                    ProgressView()
+                    Text("Starting \(starting)…").font(.headline).lineLimit(1)
+                } else {
+                    Image(systemName: "plus").font(.title3.weight(.medium))
+                    Text("New tab").font(.headline)
+                }
             }
             .foregroundStyle(.primary)
             .padding(.leading, 18)
@@ -299,6 +305,7 @@ struct SpaceNewTabButton: View {
         .contentShape(.hoverEffect, Capsule())
         .hoverEffect(.highlight)
         .accessibilityLabel("New tab")
+        .accessibilityValue(starting.map { "Starting \($0)" } ?? "")
         .accessibilityHint("Hold for an agent or another space")
         .accessibilityIdentifier("space-new-tab")
     }
@@ -326,9 +333,9 @@ struct SpaceNewTabMenu: View {
                         Button { act { navigator.startAgent(choice, in: space) } } label: {
                             Text(choice.label)
                             if let note = choice.note { Text(note) }
-                            Self.agentIcon(choice.key)
+                            Image(systemName: TabSegment.chat.symbol)
                         }
-                        .disabled(navigator.startingAgents.contains(space.ref))
+                        .disabled(navigator.startingAgents[space.ref] != nil)
                     }
                 }
             }
@@ -349,23 +356,6 @@ struct SpaceNewTabMenu: View {
         let shell = space.tabs.compactMap { $0.program ?? $0.activePane?.name }.first(where: MobileTab.isShell) ?? "shell"
         guard let folder = host?.abbreviate(space.cwd) else { return shell }
         return "\(shell) in \(folder)"
-    }
-
-    /// A menu item's icon is an image: the agents' marks as their symbols in their colours (Claude's coral, Pi's π in the
-    /// code purple; a menu draws a template image in its own colour, so these are drawn as they are).
-    static func agentIcon(_ key: String) -> Image {
-        func colored(_ symbol: String, _ color: UIColor) -> Image {
-            guard let image = UIImage(systemName: symbol)?.withTintColor(color, renderingMode: .alwaysOriginal) else {
-                return Image(systemName: symbol)
-            }
-            return Image(uiImage: image)
-        }
-        switch AgentGlyph.kind(key) {
-        case .claude: return colored("sparkle", UIColor(AgentGlyph.claudeOrange))
-        case .codex: return Image(systemName: "chevron.left.forwardslash.chevron.right")
-        case .pi: return colored("pi", UIColor.dispatch("CodeType"))
-        case .terminal: return Image(systemName: "text.bubble")
-        }
     }
 }
 

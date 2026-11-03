@@ -42,8 +42,8 @@ final class MobileSplitTests: XCTestCase {
         typealias Split = SpacesNavigator.SplitPath
         XCTAssertEqual(SpacesNavigator.split([]), Split(sidebar: [], tab: nil, detail: []))
         XCTAssertEqual(SpacesNavigator.split([.space(space("s"))]), Split(sidebar: [.space(space("s"))], tab: nil, detail: []))
-        XCTAssertEqual(SpacesNavigator.split([.space(space("s")), .tab(tab("a")), .host(space("s").host)]),
-                       Split(sidebar: [.space(space("s"))], tab: tab("a"), detail: [.host(space("s").host)]))
+        XCTAssertEqual(SpacesNavigator.split([.space(space("s")), .tab(tab("a")), .detached(space("s").host)]),
+                       Split(sidebar: [.space(space("s"))], tab: tab("a"), detail: [.detached(space("s").host)]))
         XCTAssertEqual(SpacesNavigator.split([.tab(tab("a")), .space(space("s")), .tab(tab("b"))]),
                        Split(sidebar: [.space(space("s"))], tab: tab("b"), detail: []), "An earlier tab is not the sidebar's")
     }
@@ -56,29 +56,29 @@ final class MobileSplitTests: XCTestCase {
         navigator.setSidebar([.space(space("s")), .tab(tab("a"))])
         XCTAssertEqual(navigator.splitPath.sidebar, [.space(space("s"))], "The space stays in the sidebar")
         XCTAssertEqual(navigator.splitPath.tab, tab("a"))
-        navigator.setDetail([.host(space("s").host)])
+        navigator.setDetail([.detached(space("s").host)])
         navigator.setSidebar([])
-        XCTAssertEqual(navigator.path, [.tab(tab("a")), .host(space("s").host)], "Back in the sidebar keeps the detail column")
+        XCTAssertEqual(navigator.path, [.tab(tab("a")), .detached(space("s").host)], "Back in the sidebar keeps the detail column")
         navigator.setSidebar([.tab(tab("b"))])
         XCTAssertEqual(navigator.path, [.tab(tab("b"))], "Another tab replaces the shown one and what it pushed")
     }
 
-    /// The detail column's stack: host detail over the tab and Back; a tab opened from there takes the column.
+    /// The detail column's stack: a pushed screen over the tab and Back; a tab opened from there takes the column.
     func testTheDetailColumnPushesOverItsTab() {
         let navigator = navigator()
         navigator.path = [.space(space("s")), .tab(tab("a"))]
-        navigator.setDetail([.host(space("s").host)])
-        XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a")), .host(space("s").host)])
+        navigator.setDetail([.detached(space("s").host)])
+        XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a")), .detached(space("s").host)])
         navigator.setDetail([])
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a"))])
-        navigator.setDetail([.host(space("s").host), .tab(tab("b"))])
+        navigator.setDetail([.detached(space("s").host), .tab(tab("b"))])
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("b"))])
     }
 
     /// New tab, Create and Agents open into the detail column in place of its tab; folded, they push as before.
     func testOpeningATabReplacesTheShownOneOnlyInTheSplit() {
         let navigator = navigator()
-        navigator.path = [.space(space("s")), .tab(tab("a")), .host(space("s").host)]
+        navigator.path = [.space(space("s")), .tab(tab("a")), .detached(space("s").host)]
         navigator.split = true
         navigator.openChat(tab("b"))
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("b"))])

@@ -24,12 +24,18 @@ extension HostSessions {
         }
         #endif
         let sessions = HostSessions(store: HostStore(), knownHosts: KnownHostStore(), keys: KeyStore(keyProtection: Self.keyProtection))
+        sessions.lingerLength = appLinger
+        sessions.backgroundTime = { expired in WatchBridge.applicationBackgroundTask("Hosts linger", expired: expired) }
         #if DEBUG
         sessions.testHooks(environment)
         #endif
         migrateProtection(sessions.keys)
         return sessions
     }
+
+    /// How long the app's connected hosts stay connected in the background (`lingerLength`): inside the some 30 s of
+    /// background time iOS gives an app that asks.
+    static let appLinger: Duration = .seconds(25)
 
     /// Older builds kept passwords and passphrases `WhenUnlockedThisDeviceOnly` and the app's files class A, so nothing
     /// could log in with the phone locked: moves both to after first unlock (`MobileFiles.reclassify`,

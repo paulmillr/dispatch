@@ -767,3 +767,184 @@ extension HostSessionTests {
         try await TestSupport.eventually { second.shells[0].isClosed }
     }
 }
+
+extension HostSessionTests {
+    /// Disconnect is saved with the host: a relaunch (a new registry over the saved hosts) leaves it off, an edit made
+    /// from a record read before it does not lift it, and Connect lifts and saves that.
+    func testDisconnectSurvivesARelaunchUntilConnect() async throws {
+        let stale = host()
+        let sessions = registry(ScriptedHostSessionDriver(), hosts: [stale], active: true)
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link.isConnected }
+        session.park()
+        XCTAssertEqual(session.link, .disconnected)
+        XCTAssertEqual(sessions.store.record(stale.id)?.parked, true)
+
+        var renamed = stale
+        renamed.name = "studio2"
+        sessions.update(renamed)
+        XCTAssertEqual(sessions.store.record(stale.id)?.parked, true, "the edit's record predates Disconnect")
+        XCTAssertTrue(session.parked)
+
+        let relaunched = registry(ScriptedHostSessionDriver(), hosts: sessions.store.hosts, active: true)
+        let again = relaunched.ordered[0]
+        XCTAssertTrue(again.parked)
+        XCTAssertTrue(relaunched.isParked(stale.id))
+        relaunched.networkChanged()
+        relaunched.setActive(true)
+        XCTAssertEqual(again.link, .disconnected)
+
+        again.connectByUser()
+        try await TestSupport.eventually { again.link.isConnected }
+        XCTAssertEqual(relaunched.store.record(stale.id)?.parked, false)
+    }
+
+    /// Disconnect while reconnecting stops the retries.
+    func testDisconnectWhileReconnectingStopsTheRun() async throws {
+        let since = Date()
+        let driver = steps([.event(.link(.reconnecting(attempt: 4, since: since, reason: "No route to host"))), .hold])
+        let sessions = registry(driver, hosts: [host()], active: true)
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link.isPending && session.problem == "No route to host" }
+        session.park()
+        XCTAssertEqual(session.link, .disconnected)
+        session.retryNow()
+        XCTAssertEqual(session.link, .disconnected, "a network change leaves it alone")
+    }
+}
+
+/// A new helper reports its first snapshots before its agent discovery has run: the bindings the last snapshot showed
+/// stay a moment, and the helper's own answer stands after that.
+extension HostSessionTests {
+    /// `HostFixture.topology()` as a helper whose discovery has not run reports it: no terminal bound.
+    private func unbound() throws -> HelperTopology {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostFixture.topology())) as? [String: Any])
+        object["nodes"] = (object["nodes"] as? [[String: Any]])?.map { node in node.filter { $0.key != "agent" } }
+        return try JSONDecoder().decode(HelperTopology.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func bound(_ topology: HelperTopology?) -> [String] {
+        topology?.nodes.filter { $0.agent != nil }.map(\.key) ?? []
+    }
+
+    func testAReconnectKeepsTheBindingsUntilDiscoveryReportsThem() async throws {
+        let live = try unbound()
+        let full = HostFixture.topology()
+        XCTAssertEqual(bound(full).count, 2)
+        let session = registry(steps([
+            .ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:], topology: live),
+            .sleep(.milliseconds(100)), .event(.topology(full)), .hold,
+        ]), hosts: [host()]).ordered[0]
+        session.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:],
+                        following: "tmux", topology: full)
+        let seen = Recorder { self.bound(session.topology) }
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertTrue(session.topologyIsLive)
+        XCTAssertEqual(bound(session.topology), bound(full), "the cached bindings, not a plain terminal")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(session.topology, full)
+        XCTAssertTrue(seen.seen.allSatisfy { $0 == bound(full) }, "never unbound: \(seen.seen)")
+    }
+
+    func testABindingDiscoveryDoesNotReportGoesAfterTheGrace() async throws {
+        let live = try unbound()
+        let session = registry(steps([
+            .ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:], topology: live),
+            .hold,
+        ]), hosts: [host()]).ordered[0]
+        session.bindingGrace = .milliseconds(200)
+        session.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:],
+                        following: "tmux", topology: HostFixture.topology())
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertEqual(bound(session.topology).count, 2)
+        try await TestSupport.eventually { session.topology == live }
+        XCTAssertTrue(session.topologyIsLive)
+    }
+}
+
+/// Leaving the foreground, connected hosts stay a moment under background time (`HostSessions.lingerLength`): a quick
+/// switch to another app and back reconnects nothing.
+extension HostSessionTests {
+    @MainActor private final class BackgroundTime {
+        private(set) var begun = 0
+        private(set) var ended = 0
+        private(set) var expire: (@MainActor () -> Void)?
+        func begin(_ expired: @escaping @MainActor () -> Void) -> @MainActor () -> Void {
+            begun += 1
+            expire = expired
+            return { [weak self] in self?.ended += 1 }
+        }
+    }
+
+    private func lingering(_ length: Duration, driver: ScriptedHostSessionDriver = ScriptedHostSessionDriver(),
+                           hosts: [HostRecord]) -> (HostSessions, BackgroundTime) {
+        let sessions = registry(driver, hosts: hosts, active: true)
+        let time = BackgroundTime()
+        sessions.lingerLength = length
+        sessions.backgroundTime = { time.begin($0) }
+        return (sessions, time)
+    }
+
+    func testAQuickSwitchKeepsConnectedHostsConnected() async throws {
+        let driver = ScriptedHostSessionDriver()
+        let (sessions, time) = lingering(.seconds(30), driver: driver, hosts: [host()])
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link == .connected }
+        sessions.scenePhaseChanged(.background)
+        XCTAssertFalse(sessions.active)
+        XCTAssertEqual(time.begun, 1)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(session.link, .connected, "still connected in the background")
+        sessions.scenePhaseChanged(.inactive)
+        sessions.scenePhaseChanged(.active)
+        XCTAssertEqual(time.ended, 1, "the background time goes back")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(session.link, .connected)
+        XCTAssertEqual(driver.runs(session.id), 1, "nothing reconnected")
+    }
+
+    func testTheLingerEndsWithEveryHostDisconnected() async throws {
+        let (sessions, time) = lingering(.milliseconds(200), hosts: [host()])
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link == .connected }
+        sessions.scenePhaseChanged(.background)
+        try await TestSupport.eventually { session.link == .disconnected }
+        XCTAssertEqual(time.ended, 1)
+    }
+
+    func testExpiredBackgroundTimeDisconnectsAtOnce() async throws {
+        let (sessions, time) = lingering(.seconds(30), hosts: [host()])
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link == .connected }
+        sessions.scenePhaseChanged(.background)
+        time.expire?()
+        try await TestSupport.eventually { session.link == .disconnected }
+        XCTAssertEqual(time.ended, 1)
+    }
+
+    /// A host still on its way disconnects at once: no host key or login question may wait in the background.
+    func testAHostOnItsWayDoesNotLinger() async throws {
+        let slow = host("slow")
+        let driver = ScriptedHostSessionDriver { record in
+            record.id == slow.id ? [.event(.link(.connecting)), .hold] : ScriptedHostSessionDriver.connects(record)
+        }
+        let (sessions, _) = lingering(.seconds(30), driver: driver, hosts: [host(), slow])
+        let (connected, connecting) = (sessions.ordered[0], sessions.ordered[1])
+        try await TestSupport.eventually { connected.link == .connected && connecting.link == .connecting }
+        sessions.scenePhaseChanged(.background)
+        try await TestSupport.eventually { connecting.link == .disconnected }
+        XCTAssertEqual(connected.link, .connected)
+    }
+
+    /// Without linger (zero, the default outside the app) the background disconnects at once, as before.
+    func testNoLingerDisconnectsAtOnce() async throws {
+        let (sessions, time) = lingering(.zero, hosts: [host()])
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.link == .connected }
+        sessions.scenePhaseChanged(.background)
+        try await TestSupport.eventually { session.link == .disconnected }
+        XCTAssertEqual(time.begun, 0)
+    }
+}

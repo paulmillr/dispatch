@@ -318,6 +318,45 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertFalse(labels(otherView.view).contains { $0.hasPrefix("Ask") }, "No agent, no Ask")
     }
 
+    /// An image keeps the screen: no Ask or Find below it.
+    func testImageScreenHasNoAskBar() async throws {
+        AccessibilityLabelTests.enableAccessibility()
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 200), format: { let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f }())
+            .pngData { context in UIColor.systemTeal.setFill(); context.fill(CGRect(x: 0, y: 0, width: 300, height: 200)) }
+        let files = Files(["/Users/sam/src/web/logo.png": png])
+        let host = TabsHost(id: FilesListingTests.ref.host, name: "mba2", tint: .blue, system: nil, home: "/Users/sam", order: 0)
+        let screen = NavigationStack {
+            FilePreviewScreen(preview: preview("/Users/sam/src/web/logo.png", files), host: host, root: "/Users/sam/src/web",
+                              actions: FilesPreviewActions(agent: "claude", ask: { _ in }), fonts: .memory())
+        }
+        let (window, view) = try show(screen)
+        defer { window.isHidden = true }
+        try await TestSupport.eventually { labels(view.view).contains("Image, logo.png") }
+        let all = labels(view.view)
+        XCTAssertFalse(all.contains { $0.hasPrefix("Ask") }, "\(all)")
+        XCTAssertFalse(all.contains("Find in file"), "\(all)")
+    }
+
+    /// The zoomable image fits its bounds less the inset, centred, and stays centred zoomed in and out.
+    func testZoomableImageFitsAndCentres() throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100)).image { _ in }
+        let view = ZoomingImageView()
+        view.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        view.inset = 16
+        view.image = image
+        view.layoutIfNeeded()
+        XCTAssertEqual(view.contentSize.width, 368, accuracy: 0.5)
+        XCTAssertEqual(view.contentSize.height, 184, accuracy: 0.5)
+        XCTAssertEqual(view.contentInset.top, (800 - 184) / 2, accuracy: 0.5)
+        XCTAssertEqual(view.contentInset.left, 16, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(view.maximumZoomScale, 4)
+        view.setZoomScale(3, animated: false)
+        XCTAssertEqual(view.contentInset.left, 0, accuracy: 0.5, "Wider than the bounds: no side inset")
+        XCTAssertEqual(view.contentInset.top, (800 - 184 * 3) / 2, accuracy: 0.5)
+        view.setZoomScale(1, animated: false)
+        XCTAssertEqual(view.contentInset.left, 16, accuracy: 0.5)
+    }
+
     /// The code's metrics: the mockup's 19 point rows at the standard size, a wider gutter for longer files, and a
     /// width that holds the longest line.
     func testCodeMetrics() {

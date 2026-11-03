@@ -1,7 +1,9 @@
 //! Stats Plugin. Each connection gets its own `Stats::new(local)`.
 //! Sampling happens only when the app requests it; every native effect uses system.rs.
 //!
-//! All three reserved jobs run in isolated workers (1 s host/process, 5 s disks).
+//! stats.host runs in the helper (Job::Native): only Mach, sysctl and getifaddrs calls (Linux: /proc reads), none
+//! of which can hang, and a process started per sample would cost more than its sample (about 1.6 of 1.75 ms of
+//! CPU). The other two run in isolated workers (1 s processes, 5 s disks): ps, and statfs on a hung mount.
 //! Their Native payloads take UTF-8 JSON `{local:bool}` and return Bytes JSON:
 //! - stats.host: {boot:string,monotonic:f64,cpu?:[{name:string,busy:u64,total:u64,
 //!   ticks?:[u32;4]}],network?:[{name:string,received:u64,sent:u64}],memoryTotal?:u64,
@@ -137,13 +139,15 @@ impl Stats {
                     offset: 0,
                     length: u64::from(dispatch_helper_core::wire::LIMIT),
                 }),
-                None => body::encode_plain(&Data::Object(vec![("local", Data::Bool(self.local))])).map(
-                    |input| Job::Isolated {
-                        name,
-                        value: input,
-                        deadline: io.now() + Duration::from_secs(if slot == 2 { 5 } else { 1 }),
-                    },
-                ),
+                None => body::encode_plain(&Data::Object(vec![("local", Data::Bool(self.local))]))
+                    .map(|input| match slot {
+                        0 => Job::Native { name, value: input },
+                        _ => Job::Isolated {
+                            name,
+                            value: input,
+                            deadline: io.now() + Duration::from_secs(if slot == 2 { 5 } else { 1 }),
+                        },
+                    }),
             };
             job.and_then(|job| io.submit(job).map_err(failure))
         };

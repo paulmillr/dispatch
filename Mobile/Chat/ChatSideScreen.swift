@@ -17,13 +17,14 @@ struct ChatSideScreen: View {
     @State private var column: CGFloat = 370
     @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var reveal = ChatReveal()
+    @ScaledMetric(relativeTo: .caption2) private var revealWidth = ChatRevealDetail.width
+    @ReduceMotion private var reduceMotion
 
-    /// A side answer's corner (S6d), told against now: the side's turns are minutes old at most.
-    private func corner(_ summary: ChatTurnSummary?) -> ChatCorner? {
-        let metrics = ChatCornerMetrics(column: column, measure: measure, size: typeSize)
-        guard let summary, let text = summary.corner(now: Date(), calendar: .autoupdatingCurrent, fits: metrics.fits) else { return nil }
-        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
-                          spoken: summary.spokenCorner(now: Date(), calendar: .autoupdatingCurrent))
+    /// A side answer's corner (`ChatCorner.reply`), told against now: the side's turns are minutes old at most.
+    private func corner(_ row: ChatThreadRow, summary: ChatTurnSummary?) -> ChatCorner? {
+        ChatCorner.reply(time: row.time, summary: summary, now: Date(),
+                         metrics: ChatCornerMetrics(column: column, measure: measure, size: typeSize))
     }
 
     var body: some View {
@@ -32,11 +33,19 @@ struct ChatSideScreen: View {
                 ForEach(side.rows) { row in
                     switch row.kind {
                     case .user:
-                        ChatUserMessage(text: row.item.text)
+                        ChatRevealSent(reveal: reveal, corner: corner(row, summary: nil)) {
+                            ChatUserMessage(text: row.item.text)
+                        }
                     case .agent(let summary):
-                        ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text, corner: corner(summary)) }
-                        .environment(\.openURL, MobileChatMarkdown.openURL)
-                        .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
+                        let (corner, time) = ChatCorner.swiped(time: row.time, summary: summary, now: Date(),
+                                                               metrics: ChatCornerMetrics(column: column, measure: measure, size: typeSize))
+                        ChatRevealReceived(reveal: reveal, time: time) {
+                            ChatBubble(side: .agent) {
+                                MobileChatMarkdownView(text: row.item.text, corner: corner)
+                            }
+                            .environment(\.openURL, MobileChatMarkdown.openURL)
+                            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
+                        }
                     case .thinking:
                         // Thinking is an agent bubble of its own, as in the thread.
                         ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text) }
@@ -70,6 +79,7 @@ struct ChatSideScreen: View {
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
+        .gesture(ChatRevealPan(reveal: reveal, width: revealWidth + ChatRevealDetail.gap, reduceMotion: reduceMotion))
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
         .environment(\.chatColumnWidth, column)

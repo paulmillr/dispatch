@@ -60,8 +60,15 @@ enum LocalAgentsConsent {
         return Set(programs.filter { lines.contains(Substring("dispatch-agent:" + $0.key)) }.map(\.value))
     }
 
+    /// One-line installs by launch key, which Hosts settings show for a CLI this Mac lacks.
+    static let installs = [
+        "claude": "npm install -g @anthropic-ai/claude-code",
+        "codex": "npm install -g @openai/codex",
+        "pi": "npm install -g @earendil-works/pi-coding-agent",
+    ]
+
     /// The npm installs the warning shows when no CLI is found.
-    static let guide = [("Claude Code", "npm install -g @anthropic-ai/claude-code"), ("Codex", "npm install -g @openai/codex")]
+    static let guide = [("Claude Code", installs["claude"] ?? ""), ("Codex", installs["codex"] ?? "")]
 
     typealias Style = SSHIntegrationConsent
 

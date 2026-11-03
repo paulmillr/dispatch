@@ -420,7 +420,7 @@ final class HostStatisticsTests: XCTestCase {
         XCTAssertTrue(probe.stats.active)
     }
 
-    /// The Color picker: a colour is the user's; Automatic gives back the colour the fewest other hosts show.
+    /// Edit host's Color: a colour is the user's; Automatic gives back the colour the fewest other hosts show.
     func testColorChoice() throws {
         var other = HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .password)
         other.color = .blue
@@ -430,15 +430,19 @@ final class HostStatisticsTests: XCTestCase {
         sessions.add(other)
         XCTAssertEqual(sessions.automaticColor(of: record.id), .blue, "not picked: the colour it has")
         XCTAssertNil(sessions.colorOwner(of: record.id))
-        sessions.setColor(.green, host: record.id)
+        var edited = record
+        sessions.setColor(nil, in: &edited)
+        XCTAssertEqual(edited, record, "Automatic on a host not picked: nothing changes")
+        sessions.setColor(.green, in: &edited)
+        sessions.update(edited)
         let automatic = try XCTUnwrap(sessions.automaticColor(of: record.id))
         XCTAssertNotEqual(automatic, .blue, "what Automatic would give: the colour the fewest other hosts show")
         XCTAssertEqual(sessions.store.record(record.id)?.color, .green)
         XCTAssertEqual(sessions.store.record(record.id)?.colorPicked, true)
-        let session = try XCTUnwrap(sessions.session(record.id))
-        XCTAssertEqual(HostStatsPresentation(session: session).color, "Green")
-        sessions.setColor(nil, host: record.id)
-        let back = try XCTUnwrap(sessions.store.record(record.id))
+        var back = try XCTUnwrap(sessions.store.record(record.id))
+        sessions.setColor(nil, in: &back)
+        sessions.update(back)
+        back = try XCTUnwrap(sessions.store.record(record.id))
         XCTAssertFalse(back.colorPicked)
         XCTAssertEqual(back.color, automatic, "the colour the Automatic row showed")
 
@@ -447,7 +451,6 @@ final class HostStatisticsTests: XCTestCase {
         sessions.add(twin)
         XCTAssertEqual(sessions.colorOwner(of: twin.id)?.id, record.id)
         XCTAssertNil(sessions.colorOwner(of: record.id))
-        XCTAssertEqual(HostStatsPresentation(session: session).color, "Automatic")
 
         // Saved and read back; a record from before the picker reads as Automatic.
         let data = try JSONEncoder().encode(sessions.store.record(record.id))

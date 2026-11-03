@@ -46,4 +46,15 @@ enum ColorVision: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The bundled schemes made for each color blindness, light first: listed only in that colorblind mode (the Mac's
+    /// `ColorSchemes.filtered`, the iPhone's `TerminalSchemes.listed`).
+    static let bundledSchemes: [ColorVision: (light: [String], dark: [String])] = [
+        .redGreen: (["GitHub Light Colorblind", "Modus Operandi Deuteranopia"], ["GitHub Dark Colorblind", "Modus Vivendi Deuteranopia"]),
+        .blueYellow: (["Modus Operandi Tritanopia"], ["Modus Vivendi Tritanopia"]),
+    ]
+
+    /// The vision a bundled scheme is made for; typical for every other.
+    init(bundledScheme name: String) {
+        self = Self.bundledSchemes.first { $0.value.light.contains(name) || $0.value.dark.contains(name) }?.key ?? .typical
+    }
 }

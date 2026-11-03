@@ -158,14 +158,13 @@ enum ChatFont: String, Codable, CaseIterable {
     case comicSans = "Comic Sans"
     case latinModernRoman = "Latin Modern Roman"
     case newYork = "New York"
-    case sfRounded = "SF Rounded"
 
-    /// The system font's own designs (San Francisco, New York, SF Rounded): drawn as the system font, never by name.
+    /// The system font's own designs: drawn as the system font, never by name. San Francisco draws in SF Rounded,
+    /// whose missing italic is San Francisco's own (`italic(for:)`).
     var systemDesign: NSFontDescriptor.SystemDesign? {
         switch self {
-        case .system: .default
+        case .system: .rounded
         case .newYork: .serif
-        case .sfRounded: .rounded
         case .sameAsCode, .comicSans, .latinModernRoman: nil
         }
     }
@@ -174,9 +173,17 @@ enum ChatFont: String, Codable, CaseIterable {
     func systemFont(ofSize size: CGFloat) -> NSFont? {
         guard let design = systemDesign else { return nil }
         let font = NSFont.systemFont(ofSize: size)
-        // San Francisco stays the system UI font: a design applied to it resolves to the plain SFNS face.
-        guard design != .default else { return font }
         return font.fontDescriptor.withDesign(design).flatMap { NSFont(descriptor: $0, size: size) } ?? font
+    }
+
+    /// SF Rounded has no italic (Apple ships none): asked for one, `font` (any rounded system face) comes back upright,
+    /// so emphasis draws San Francisco's italic at its size and weight. nil for every other face.
+    static func italic(for font: CTFont) -> CTFont? {
+        guard !CTFontGetSymbolicTraits(font).contains(.traitItalic),
+              CTFontCopyFamilyName(font) as String == ChatFont.system.systemFont(ofSize: 12)?.familyName else { return nil }
+        let weight = (CTFontCopyTraits(font) as? [CFString: Any])?[kCTFontWeightTrait] as? CGFloat ?? 0
+        let upright = NSFont.systemFont(ofSize: CTFontGetSize(font), weight: NSFont.Weight(weight))
+        return CTFontCreateCopyWithSymbolicTraits(upright, CTFontGetSize(font), nil, .traitItalic, .traitItalic)
     }
 
     // Match median rendered lowercase height, not font-reported x-height, to Source Code Pro at 14 pt.
@@ -184,7 +191,7 @@ enum ChatFont: String, Codable, CaseIterable {
     // Recalibrate after font replacements with `swift scripts/measure-chat-fonts.swift`.
     var sizeScale: CGFloat {
         switch self {
-        case .sameAsCode, .system, .newYork, .sfRounded: 1
+        case .sameAsCode, .system, .newYork: 1
         case .comicSans: 0.907
         case .latinModernRoman: 1.126
         }
@@ -194,7 +201,7 @@ enum ChatFont: String, Codable, CaseIterable {
         switch self {
         case .comicSans: "ComicSansMS"
         case .latinModernRoman: "LMRoman10-Regular"
-        case .sameAsCode, .system, .newYork, .sfRounded: nil
+        case .sameAsCode, .system, .newYork: nil
         }
     }
 
@@ -209,6 +216,12 @@ enum ChatFont: String, Codable, CaseIterable {
     }
 }
 
+/// The app's own text: tabs, the sidebar, Files, Git and Settings. Terminals and chat keep their own fonts.
+enum InterfaceFont: String, Codable, CaseIterable {
+    case sourceCodePro = "Source Code Pro"
+    case system = "San Francisco"
+}
+
 struct Preferences: Codable, Equatable {
     var spaceOrder = SpaceOrder.flat
     /// Tabs follow the agent's conversation, a running program's title, then the folder.
@@ -217,6 +230,7 @@ struct Preferences: Codable, Equatable {
     /// The code font's ligatures (`->` as an arrow, in Hasklig, Fira Code…) in terminals, code and the file preview.
     var fontLigatures = true
     var chatFont = ChatFont.system
+    var interfaceFont = InterfaceFont.sourceCodePro
     /// Terminal and interface text: Source Code Pro at 14 has the lowercase height of the system's 13-point text, and
     /// every terminal font draws at that apparent size (`TerminalFontScale`). Layouts grow from a 12.5 design base
     /// (`AppTypography.expanded`).
@@ -378,7 +392,7 @@ struct Preferences: Codable, Equatable {
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
         case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, autoApproveUnsafePastes, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
-        case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
+        case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, interfaceFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
         case keyGroups
         case hideSingleSpace, tabsOnly, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
         case enableDiagnostics, outputWindow
@@ -421,6 +435,7 @@ struct Preferences: Codable, Equatable {
         fontLigatures = try fields.decodeIfPresent(Bool.self, forKey: .fontLigatures) ?? fontLigatures
         // Removed font choices fall back without discarding the other settings.
         chatFont = try fields.decodeIfPresent(String.self, forKey: .chatFont).flatMap(ChatFont.init(rawValue:)) ?? chatFont
+        interfaceFont = try fields.decodeIfPresent(String.self, forKey: .interfaceFont).flatMap(InterfaceFont.init(rawValue:)) ?? interfaceFont
         fontSize = try fields.decodeIfPresent(Double.self, forKey: .fontSize) ?? fontSize
         let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
         // Replaces `largeSidebarItems`. Every save wrote it, so on was usually the old default rather than a choice:

@@ -4,7 +4,8 @@ import SwiftUI
 /// The right pane: what the selected row is (F2a, F2d). A header as tall as the list's column header names it and
 /// carries its controls; the body draws the kind the loader decided. Content and header always come from the same
 /// `FilePreviewState`, and each state gets its own view identity, so a new selection never shows the last file's
-/// text, scroll or find.
+/// text, scroll or find. One exception: an image replacing an image keeps the last picture until its own is decoded
+/// (`FilesSession.imageHandoff`), so two versions of a picture compare without a blank frame between them.
 struct FilePreviewPane: View {
     let session: FilesSession
 
@@ -262,18 +263,28 @@ private struct FilePreviewContent: View {
 
     // MARK: Body
 
+    private var loading: some View {
+        ZStack {
+            if spinner { ProgressView().controlSize(.small) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            // A read that answers at once shows no spinner flashing before its text.
+            try? await System.sleep(for: .milliseconds(300), "files.preview-spinner")
+            spinner = true
+        }
+    }
+
     @ViewBuilder private var content: some View {
         let owner = ObjectIdentifier(preview)
         switch preview.kind {
         case .loading:
-            ZStack {
-                if spinner { ProgressView().controlSize(.small) }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .task {
-                // A read that answers at once shows no spinner flashing before its text.
-                try? await System.sleep(for: .milliseconds(300), "files.preview-spinner")
-                spinner = true
+            if FilePreviewLoader.isImageName(preview.name), let handoff = session.imageHandoff {
+                // Another image is being read in place of the last: its picture stays until this one's is ready.
+                FileImagePreview(data: nil, revision: nil, pixelSize: handoff.pixelSize, zoom: $zoom, focused: focused,
+                                 activate: { if focus != .content { focus = .content } }, handoff: handoff)
+            } else {
+                loading
             }
         case .text(let text, let language):
             FileTextPreview(owner: owner, content: .text(text, language: language), wrap: wrap, lineNumbers: lineNumbers,
@@ -297,7 +308,9 @@ private struct FilePreviewContent: View {
                                  FileImageFullScreen.show(name: preview.name, data: data, revision: preview.revision,
                                                           pixelSize: pixels, from: NSApp.keyWindow)
                              },
-                             activate: { if focus != .content { focus = .content } })
+                             activate: { if focus != .content { focus = .content } },
+                             handoff: session.imageHandoff,
+                             drew: { session.drawnImage = FileImageHandoff(owner: owner, image: $0, pixelSize: pixels) })
         case .folder(let summary):
             FileFolderPreview(path: preview.path, entry: preview.entry, summary: summary,
                               openFolder: { session.pin(preview.path) },

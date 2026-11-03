@@ -314,12 +314,13 @@ struct SettingsView: View {
         }
     }
 
-    /// Text's first row: the terminal's font, with chat's and text contrast folded under its options button. Only the button opens it: a
-    /// tap on the row would reach the dropdown too.
+    /// Text's first row: the terminal's font, with chat's, the interface's and text contrast folded under its options button. Only the
+    /// button opens it: a tap on the row would reach the dropdown too.
     @ViewBuilder private var fontRow: some View {
-        let fold = Fold(title: "Ligatures, chat font and contrast", changed: changed { [AnyHashable($0.fontLigatures), $0.chatFont, $0.textContrast] },
+        let fold = Fold(title: "Ligatures, chat and interface fonts, contrast",
+                        changed: changed { [AnyHashable($0.fontLigatures), $0.chatFont, $0.interfaceFont, $0.textContrast] },
                         isExpanded: $fontExpanded)
-        row("Font", detail: "installed fonts too · chat: \(chatFontName)") {
+        row("Font", detail: "installed fonts too · chat: \(chatFontName) · interface: \(interfaceFontName)") {
             // The button beside a dropdown as wide as every other, so the column lines up, folds included.
             HStack(spacing: 8) {
                 foldButton(fold, card: "Font")
@@ -345,6 +346,15 @@ struct SettingsView: View {
                     }, fontScale: { ChatFont(rawValue: $0)?.sizeScale ?? 1 },
                        previewFont: { title, size in ChatFont(rawValue: title)?.systemFont(ofSize: size) })
                 }
+                cardOption("Interface font", detail: "tabs, the sidebar, Files, Git and Settings", detailBelow: true) {
+                    dropdown("Interface font", selection: Binding(get: { draft.interfaceFont.rawValue }, set: {
+                        if let choice = InterfaceFont(rawValue: $0) { draft.interfaceFont = choice }
+                    }), choices: InterfaceFont.allCases.map(\.rawValue), fontName: { _ in "Source Code Pro" },
+                       previewFont: { title, size in
+                        InterfaceFont(rawValue: title) == .system ? ChatFont.system.systemFont(ofSize: size * AppFont.systemScale) : nil
+                    })
+                        .accessibilityIdentifier("settings-interface-font")
+                }
                 cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
                     dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
                         if let contrast = TextContrast.allCases.first(where: { $0.title == title }) { draft.textContrast = contrast }
@@ -364,6 +374,9 @@ struct SettingsView: View {
         default: draft.chatFont.rawValue
         }
     }
+
+    /// The interface font as Font's detail names it.
+    private var interfaceFontName: String { draft.interfaceFont == .system ? "SF" : draft.interfaceFont.rawValue }
 
     /// Text's second row: the size of terminal and chat text, with their line spacing folded under its options button,
     /// which alone opens it (a row tap would reach the slider).
@@ -1476,10 +1489,7 @@ struct ColorSchemes {
     var problems: [String: [String]] = [:]
 
     /// The bundled schemes made for color blindness, by vision, light first: listed only in that colorblind mode.
-    static let colorblind: [ColorVision: (light: [String], dark: [String])] = [
-        .redGreen: (["GitHub Light Colorblind", "Modus Operandi Deuteranopia"], ["GitHub Dark Colorblind", "Modus Vivendi Deuteranopia"]),
-        .blueYellow: (["Modus Operandi Tritanopia"], ["Modus Vivendi Tritanopia"]),
-    ]
+    static let colorblind = ColorVision.bundledSchemes
 
     /// Who a scheme is for: a bundled colorblind scheme's vision, or the vision a made scheme's recipe (or an edited one's
     /// file) names.

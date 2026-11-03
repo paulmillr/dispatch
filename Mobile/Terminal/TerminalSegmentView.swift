@@ -5,6 +5,8 @@ import UIKit
 /// at the bottom (above the keyboard while it is docked; at the bottom under a floating or split one), and the
 /// d-pad's arrow cluster pops up over the terminal's bottom right while held or pinned. On an iPad with a hardware
 /// keyboard the capsule collapses to a small button over the terminal's bottom right, and the terminal gets its rows.
+/// On a phone's side (`MobileLandscape`, L14) the terminal keeps the whole window: the capsule shows only riding a
+/// docked keyboard, and the rail's keyboard button (`TabRailKeyboardButton`) raises it.
 /// The feed is the tab's terminal node; leaving the segment stops observing it and never ends anything on the host.
 /// A plain shell's tab passes an ended card (`TerminalEndedCard`): once its shell ended, the card ("Session ended",
 /// New shell, Close) takes the capsule's place under the last screen. Helper terminals pass none.
@@ -15,6 +17,9 @@ struct TerminalSegmentView: View {
     @State private var slot = Slot()
     /// The app's appearance, before the capsule forces dark: the key bar's menu follows it.
     @Environment(\.colorScheme) private var scheme
+    /// The tab's rail on a phone's side (`MobileLandscape`): its keyboard button acts on this terminal, and the
+    /// capsule shows only on a docked keyboard (`MobileLandscape.keyCapsule`).
+    @Environment(\.tabRail) private var rail
 
     @MainActor final class Slot {
         var controller: TerminalController?
@@ -44,13 +49,15 @@ struct TerminalSegmentView: View {
         let controller = controller
         // A shell that ended: its last screen stays, the card offers what is next, and the keys have nothing to reach.
         let ended = endedCard.flatMap { card in card.ended || controller.ended != nil ? card : nil }
+        // On a phone's side the capsule rides a docked keyboard only: at rest the rail's button stands for it.
         let full = controller.capsuleForm == .full && ended == nil
+            && (rail == nil || MobileLandscape.keyCapsule(keyboard: controller.keyboard))
         // Searching (T1): the search capsule takes the key capsule's place (or the collapsed button's).
         let searching = controller.search.visible && ended == nil
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
                 Group {
-                    if ended != nil || searching {
+                    if ended != nil || searching || (rail != nil && !full) {
                         EmptyView()
                     } else if full {
                         TerminalDPadCluster(controller: controller)
@@ -90,8 +97,14 @@ struct TerminalSegmentView: View {
             .ignoresSafeArea(.keyboard, edges: controller.keyboard == .floating ? .bottom : [])
             .coordinateSpace(.named(TerminalDPadCluster.space))
             .background(Color(controller.hostView.backgroundColor ?? .black))
-            .onAppear { controller.appear() }
-            .onDisappear { controller.disappear() }
+            .onAppear {
+                controller.appear()
+                rail?.terminal = controller
+            }
+            .onDisappear {
+                controller.disappear()
+                if rail?.terminal === controller { rail?.terminal = nil }
+            }
     }
 }
 

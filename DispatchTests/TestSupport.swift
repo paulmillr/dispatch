@@ -106,7 +106,7 @@ enum TestSupport {
     }
 
     /// The helper's launch keys (helper/harnesses).
-    static let launches: Set<String> = ["claude", "codex", "nanocodex", "pi"]
+    static let launches: Set<String> = ["claude", "codex", "pi"]
 
     /// Independent cases discover their own hosts; cache reuse remains scoped to each case.
     static func reset(_ cache: HostBackendCache) {

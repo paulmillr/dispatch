@@ -586,3 +586,35 @@ final class ScriptedFilesSource: FilesSource, @unchecked Sendable {
         try await base.closeUnpack(transfer: transfer, commit: commit)
     }
 }
+
+extension FilePreviewTests {
+    /// Moving from one image to another keeps the last picture until the new one is decoded, but only from the
+    /// selection it replaced: never across another file in between, nor after the selection clears.
+    func testImageHandoffComesOnlyFromTheReplacedPreview() throws {
+        let session = FilesSession(id: System.uuid())
+        let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let picture = try XCTUnwrap(context.makeImage())
+        session.showPreview("/tmp/before.png", entry: nil)
+        let before = try XCTUnwrap(session.preview)
+        XCTAssertNil(session.imageHandoff)
+        session.drawnImage = FileImageHandoff(owner: ObjectIdentifier(before), image: picture,
+                                              pixelSize: CGSize(width: 2, height: 2))
+
+        session.showPreview("/tmp/after.png", entry: nil)
+        XCTAssertTrue(session.imageHandoff?.image === picture)
+        XCTAssertEqual(session.imageHandoff?.pixelSize, CGSize(width: 2, height: 2))
+
+        session.showPreview("/tmp/notes.txt", entry: nil)
+        XCTAssertNil(session.imageHandoff, "the picture belonged to the selection before the last")
+        XCTAssertNil(session.drawnImage)
+
+        session.showPreview("/tmp/before.png", entry: nil)
+        session.drawnImage = FileImageHandoff(owner: ObjectIdentifier(try XCTUnwrap(session.preview)), image: picture,
+                                              pixelSize: CGSize(width: 2, height: 2))
+        session.selectionChanged(to: [], anchor: nil)
+        XCTAssertNil(session.preview)
+        XCTAssertNil(session.drawnImage, "a cleared selection keeps no picture")
+    }
+}

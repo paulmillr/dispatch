@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Settings app's Dispatch page: the in-app Settings' fixed choices, on the keys MobileSettings reads (docs/ios.md,
+     Settings). Values and defaults must match the models: SettingsTests.testSettingsAppPageMatchesTheModels. -->
+<plist version="1.0">
+<dict>
+	<key>PreferenceSpecifiers</key>
+	<array>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Appearance</string>
+			<key>FooterText</key>
+			<string>Appearance applies to the Automatic theme: Graphite, Lavender and Nautical bring their own. Red-green or blue-yellow color vision draws hosts and changes in colors made for it and gives the terminal a scheme made for it.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Appearance</string>
+			<key>Key</key>
+			<string>appearance</string>
+			<key>DefaultValue</key>
+			<string>dark</string>
+			<key>Values</key>
+			<array>
+				<string>system</string>
+				<string>dark</string>
+				<string>light</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>System</string>
+				<string>Dark</string>
+				<string>Light</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Theme</string>
+			<key>Key</key>
+			<string>theme</string>
+			<key>DefaultValue</key>
+			<string>automatic</string>
+			<key>Values</key>
+			<array>
+				<string>automatic</string>
+				<string>graphite</string>
+				<string>lavender</string>
+				<string>nautical</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Automatic</string>
+				<string>Graphite</string>
+				<string>Lavender</string>
+				<string>Nautical</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Line spacing</string>
+			<key>Key</key>
+			<string>text.lineSpacing</string>
+			<key>DefaultValue</key>
+			<string>normal</string>
+			<key>Values</key>
+			<array>
+				<string>tight</string>
+				<string>normal</string>
+				<string>relaxed</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Tight</string>
+				<string>Normal</string>
+				<string>Relaxed</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Color vision</string>
+			<key>Key</key>
+			<string>colorVision</string>
+			<key>DefaultValue</key>
+			<string>typical</string>
+			<key>Values</key>
+			<array>
+				<string>typical</string>
+				<string>redGreen</string>
+				<string>blueYellow</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Typical</string>
+				<string>Red-green</string>
+				<string>Blue-yellow</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Terminal</string>
+			<key>FooterText</key>
+			<string>The font, its size and the color scheme are in Dispatch's Settings.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Improve text contrast</string>
+			<key>Key</key>
+			<string>terminal.textContrast</string>
+			<key>DefaultValue</key>
+			<string>lightThemes</string>
+			<key>Values</key>
+			<array>
+				<string>lightThemes</string>
+				<string>always</string>
+				<string>never</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Light themes</string>
+				<string>Always</string>
+				<string>Never</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Ligatures</string>
+			<key>Key</key>
+			<string>terminal.ligatures</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Bold text as bright colors</string>
+			<key>Key</key>
+			<string>terminal.boldIsBright</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Cursor</string>
+			<key>Key</key>
+			<string>terminal.cursor</string>
+			<key>DefaultValue</key>
+			<string>block</string>
+			<key>Values</key>
+			<array>
+				<string>block</string>
+				<string>bar</string>
+				<string>underline</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Block</string>
+				<string>Bar</string>
+				<string>Underline</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Blinking cursor</string>
+			<key>Key</key>
+			<string>terminal.cursorBlink</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Chat</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Font</string>
+			<key>Key</key>
+			<string>chat.font</string>
+			<key>DefaultValue</key>
+			<string>San Francisco</string>
+			<key>Values</key>
+			<array>
+				<string>San Francisco</string>
+				<string>Same as code</string>
+				<string>Comic Sans</string>
+				<string>Latin Modern Roman</string>
+				<string>New York</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>San Francisco</string>
+				<string>Same as code</string>
+				<string>Comic Sans</string>
+				<string>Latin Modern Roman</string>
+				<string>New York</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Text size</string>
+			<key>Key</key>
+			<string>chat.textSize</string>
+			<key>DefaultValue</key>
+			<string>standard</string>
+			<key>Values</key>
+			<array>
+				<string>smaller</string>
+				<string>standard</string>
+				<string>larger</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Smaller</string>
+				<string>Default</string>
+				<string>Larger</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Notify when an agent</string>
+			<key>FooterText</key>
+			<string>Approvals and questions always notify.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Needs you</string>
+			<key>Key</key>
+			<string>notify.needsYou</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Finished</string>
+			<key>Key</key>
+			<string>notify.finished</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Failed or disconnected</string>
+			<key>Key</key>
+			<string>notify.failed</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>FooterText</key>
+			<string>Off, banners say only which conversation needs you. The badge counts conversations waiting for you across hosts.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Sound</string>
+			<key>Key</key>
+			<string>notify.sound</string>
+			<key>DefaultValue</key>
+			<string>default</string>
+			<key>Values</key>
+			<array>
+				<string>default</string>
+				<string>shipsBell</string>
+				<string>none</string>
+			</array>
+			<key>Titles</key>
+			<array>
+				<string>Default</string>
+				<string>Ship's bell</string>
+				<string>None</string>
+			</array>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Show message text</string>
+			<key>Key</key>
+			<string>notify.text</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Badge app icon</string>
+			<key>Key</key>
+			<string>notify.badge</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Hosts</string>
+			<key>FooterText</key>
+			<string>Off, every host is gray.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Color-code hosts</string>
+			<key>Key</key>
+			<string>hosts.colors</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Security</string>
+			<key>FooterText</key>
+			<string>Turn off to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Automatically approve unsafe pastes</string>
+			<key>Key</key>
+			<string>autoApproveUnsafePastes</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+	</array>
+</dict>
+</plist>

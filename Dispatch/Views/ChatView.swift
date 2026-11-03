@@ -375,6 +375,7 @@ struct ChatView: View {
                             modelControls(compactEffort: hasActivity, truncated: true).fixedSize().focusedOnly(focused)
                             ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: false).fixedSize()
                             ChatComposerAgents(session: session).fixedSize()
+                            ChatComposerShells(session: session).fixedSize()
                         }
                     }
                     // Never, not hidden: with scroll bars shown always (no trackpad) hidden still draws one.
@@ -467,6 +468,7 @@ struct ChatView: View {
         HStack(spacing: 8) {
             ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: showsLabel)
             ChatComposerAgents(session: session)
+            ChatComposerShells(session: session)
             composerStop
         }
     }

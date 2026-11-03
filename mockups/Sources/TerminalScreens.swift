@@ -65,7 +65,7 @@ struct TerminalSearchScreen: View {
                     .padding(.horizontal, 12).padding(.bottom, 4)
                 }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "dev", subtitle: AnyView(HostPath(path: "~/src/web · pnpm", mono: false))) }
+                .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
         }
     }
 }
@@ -105,7 +105,7 @@ struct TerminalMenuScreen: View {
                     .padding(.horizontal, 12).padding(.bottom, 4)
                 }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "dev", subtitle: AnyView(HostPath(path: "~/src/web · pnpm", mono: false))) }
+                .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
         }
     }
     private func row(_ title: String, _ symbol: String, note: String? = nil) -> some View {

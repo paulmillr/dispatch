@@ -292,10 +292,10 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(typography.family(.sameAsCode), "Fira Code", "the terminal's font")
         XCTAssertNil(typography.family(.system))
         XCTAssertEqual(typography.family(.comicSans), "Chalkboard SE", "iOS's stand-in")
-        // New York and SF Rounded: the system font's designs, at the chosen style.
+        // New York and San Francisco (drawn in SF Rounded): the system font's designs, at the chosen style.
         XCTAssertNil(typography.family(.newYork))
         XCTAssertEqual(ChatTypography(font: .newYork).body, Font.system(.callout, design: .serif))
-        XCTAssertEqual(ChatTypography(font: .sfRounded).body, Font.system(.callout, design: .rounded))
+        XCTAssertEqual(ChatTypography(font: .system).body, Font.system(.callout, design: .rounded))
         XCTAssertEqual(ChatTextSize.allCases.map(\.points), [15, 16, 17])
         XCTAssertEqual(MobileChatFont.sameAsCode.sample(terminalFont: "Fira Code", size: 15), "Fira Code 15, as the terminal.")
     }
@@ -410,5 +410,30 @@ extension SettingsStyleTests {
         let text = TerminalStyle(store).applied(to: TerminalConfiguration()).text
         XCTAssertTrue(text.contains("font-feature = -calt, -liga, -dlig"), text)
         XCTAssertFalse(MobileSettings(defaults: store).ligatures, "kept")
+    }
+}
+
+/// San Francisco draws in SF Rounded, which has no italic: emphasized runs carry San Francisco's italic (bold for both
+/// emphases, semibold in small headings), inline code keeps the terminal's font, and New York italicizes itself.
+extension SettingsStyleTests {
+    func testRoundedEmphasisDrawsSanFranciscoItalic() throws {
+        let emphasis = try XCTUnwrap(ChatTypography(font: .system).emphasis)
+        XCTAssertEqual(emphasis, Font.system(.callout, design: .default).italic())
+        XCTAssertNil(ChatTypography(font: .newYork).emphasis)
+        XCTAssertFalse(MobileChatFont.allCases.map(\.rawValue).contains("SF Rounded"), "San Francisco is the rounded choice")
+        let code = Font.custom("Fira Code", size: 13)
+        let value = MobileChatMarkdown.text("*soft* **firm** ***both*** `*code*`", code: code, emphasis: emphasis)
+        let fonts = Dictionary(value.runs.map { (String(value[$0.range].characters), $0.font) }, uniquingKeysWith: { first, _ in first })
+        XCTAssertEqual(fonts["soft"] ?? nil, emphasis)
+        XCTAssertEqual(fonts["firm"] ?? nil, nil, "bold alone draws in the chat font")
+        XCTAssertEqual(fonts["both"] ?? nil, emphasis.bold())
+        XCTAssertEqual(fonts["*code*"] ?? nil, code)
+        var marker = ChatSearchMarker(query: "", current: nil)
+        let blocks = MobileChatMarkdownView.contents("# Big *one*\n\n### Small *one*", emphasis: emphasis, marker: &marker).blocks
+        let emphasized = blocks.map { block -> Font? in
+            guard case .text(_, let text) = block else { return nil }
+            return text.runs.first { String(text[$0.range].characters) == "one" }?.font
+        }
+        XCTAssertEqual(emphasized, [nil, emphasis.weight(.semibold)], "the first two heading levels draw in system styles")
     }
 }

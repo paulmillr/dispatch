@@ -91,3 +91,54 @@ struct ChatWaitingDots: View {
         }
     }
 }
+
+/// The haptic for the host's link changing while a thread is open: a warning as it drops once the app has been in use
+/// for a moment, a success as it comes back after being away long enough for the banner to be read. A drop in the
+/// background, and the reconnect that follows returning to the app or opening the thread, get none.
+struct ChatLinkHaptic {
+    /// How long the app is in use before a drop warns, and how long the link is away before its return is told.
+    static let settle: TimeInterval = 3
+    /// Counts the haptics given: what `sensoryFeedback` follows.
+    private(set) var count = 0
+    private(set) var feedback: SensoryFeedback?
+    private var dropped: Date?
+    private var active: Date?
+
+    init(now: Date = Date()) { active = now }
+
+    mutating func scene(active isActive: Bool, now: Date = Date()) {
+        active = isActive ? active ?? now : nil
+    }
+
+    mutating func link(connected: Bool, now: Date = Date()) {
+        guard let active, now.timeIntervalSince(active) >= Self.settle else {
+            dropped = nil
+            return
+        }
+        if !connected {
+            guard dropped == nil else { return }
+            dropped = now
+            give(.warning)
+        } else if let dropped {
+            self.dropped = nil
+            if now.timeIntervalSince(dropped) >= Self.settle { give(.success) }
+        }
+    }
+
+    private mutating func give(_ haptic: SensoryFeedback) {
+        feedback = haptic
+        count += 1
+    }
+}
+
+/// Gives `ChatLinkHaptic`'s haptics as the link changes.
+struct ChatLinkHaptics: ViewModifier {
+    let connected: Bool
+    @Binding var haptic: ChatLinkHaptic
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: connected) { _, connected in haptic.link(connected: connected) }
+            .sensoryFeedback(trigger: haptic.count) { _, _ in haptic.feedback }
+    }
+}

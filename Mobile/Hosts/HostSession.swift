@@ -56,8 +56,9 @@ final class HostSession: Identifiable {
     /// connection is up and the app is in the foreground, kept (stale) after.
     let stats = HostStatistics()
     /// The user disconnected this host (Disconnect in its stats): nothing connects it again (the foreground, a network
-    /// change, pull to refresh, an edit, a watch request) until `connectByUser()` or the next launch.
-    private(set) var parked = false
+    /// change, pull to refresh, an edit, a watch request, a relaunch) until `connectByUser()`. Read from the record
+    /// (`HostRecord.parked`) once; `parkChanged` saves each change.
+    private(set) var parked: Bool
     /// Non-nil only while connected.
     private(set) var client: HelperClient?
     /// The last `hello` (identity, OS line, schema); kept while offline for the host's labels.
@@ -78,6 +79,14 @@ final class HostSession: Identifiable {
     /// nothing that sends them (terminal presences, tab commands, chat) may use a snapshot that is not live, and its
     /// rows show as stale. The client stays usable for what needs no node id (`backends.create`, `backends.open`).
     private(set) var topologyIsLive = false
+    /// The helper's own latest snapshot while `topology` keeps bindings it has not reported yet (`carryingBindings`).
+    private var reported: HelperTopology?
+    /// Ends the window after `ready` in which snapshots keep the last bindings (`bindingGrace`).
+    private var bindingGraceTask: Task<Void, Never>?
+    /// How long a new connection's snapshots keep an agent binding the last snapshot showed for the same terminal: a
+    /// new helper reports its first snapshots before its agent discovery has looked at the panes (some 75 ms on the
+    /// fixture), and the tab, its Agents row and an open thread would turn into a plain terminal and back.
+    var bindingGrace: Duration = .seconds(2)
     /// The followed multiplexer changed on this connection and has not answered yet (a snapshot, or no server): the host's
     /// spaces are not known, though no snapshot is kept (Spaces offers no New space row meanwhile).
     private(set) var switchingMultiplexer = false
@@ -121,6 +130,8 @@ final class HostSession: Identifiable {
     /// Called on the main actor when a connection's client goes away (a drop, a reconnect, disconnect): what used it
     /// stops (`TerminalPresences.stopAll(host:)`) and reattaches after the next `.ready`.
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)?
+    /// Called on the main actor when `parked` changed (HostSessions saves it with the host).
+    @ObservationIgnored var parkChanged: ((HostSession) -> Void)?
     /// Called on the main actor after anything the areas read changed (`HostSessions.changed`).
     @ObservationIgnored var changed: ((HostSession) -> Void)?
     /// Asked before each connection: a reason none may start now (the trusted host keys are unreadable); the link then
@@ -131,6 +142,7 @@ final class HostSession: Identifiable {
     init(host: HostRecord, driver: any HostSessionDriver, context: @escaping (HostSession) -> HostSessionContext) {
         self.host = host
         hostID = host.id
+        parked = host.parked
         self.driver = driver
         self.context = context
         shells = ShellSessions(host: host.id)
@@ -200,10 +212,13 @@ final class HostSession: Identifiable {
         connect()
     }
 
-    /// Disconnect in the host's stats: the connection ends and stays down until `connectByUser()` (Connect) or the next
-    /// launch, whatever else would reconnect it.
+    /// Disconnect in the host's stats (also while connecting or reconnecting: it stops the retries): the connection
+    /// ends and stays down until `connectByUser()` (Connect), whatever else would reconnect it, a relaunch included.
     func park() {
-        if !parked { parked = true }
+        if !parked {
+            parked = true
+            parkChanged?(self)
+        }
         disconnect()
     }
 
@@ -216,7 +231,10 @@ final class HostSession: Identifiable {
 
     /// Lifts `park()` without connecting (an action that starts its own run: Remove and retry).
     func unpark() {
-        if parked { parked = false }
+        if parked {
+            parked = false
+            parkChanged?(self)
+        }
     }
 
     /// The last-known state from the device's cache (`HostCache`, at launch): the lists show it at once and the live
@@ -247,6 +265,7 @@ final class HostSession: Identifiable {
         if helperOff {
             // Plain SSH from now on: the spaces kept from a helper are not the host's any more.
             if topology != nil { topology = nil }
+            reported = nil
             if topologyIsLive { topologyIsLive = false }
             if switchingMultiplexer { switchingMultiplexer = false }
         }
@@ -274,7 +293,8 @@ final class HostSession: Identifiable {
             self.hello = hello
             self.multiplexers = multiplexers.filter { $0.name != "native" }
             multiplexerVersions = versions
-            if let topology { self.topology = topology }
+            startBindingGrace()
+            if let topology { take(topology) }
             // Without a first snapshot the one kept is the cache's or the last helper's: stale until a live one comes.
             if topologyIsLive != (topology != nil) { topologyIsLive = topology != nil }
             if switchingMultiplexer { switchingMultiplexer = false }
@@ -304,6 +324,7 @@ final class HostSession: Identifiable {
             stats.attach(nil)
             // No helper on this connection: a kept snapshot (the cache's, an earlier helper's) is not the host's spaces.
             if topology != nil { topology = nil }
+            reported = nil
             if topologyIsLive { topologyIsLive = false }
             if switchingMultiplexer { switchingMultiplexer = false }
             if latency != nil { latency = nil }
@@ -313,7 +334,7 @@ final class HostSession: Identifiable {
             // A snapshot still in flight when the link dropped is not this (absent) connection's.
             guard client != nil else { return }
             updated = System.date()
-            if topology != snapshot { topology = snapshot }
+            take(snapshot)
             if !topologyIsLive { topologyIsLive = true }
             if switchingMultiplexer { switchingMultiplexer = false }
         case .noBackend:
@@ -321,6 +342,7 @@ final class HostSession: Identifiable {
             updated = System.date()
             // No server: the kept snapshot's spaces are not there any more (or never were on this connection).
             if topology != nil { topology = nil }
+            reported = nil
             if !topologyIsLive { topologyIsLive = true }
             if switchingMultiplexer { switchingMultiplexer = false }
         case .following(let name):
@@ -329,6 +351,7 @@ final class HostSession: Identifiable {
             // more. A first choice (nil before) keeps the snapshot it had, cached or from the last connection.
             if following != nil, name != nil {
                 topology = nil
+                reported = nil
                 if client != nil { switchingMultiplexer = true }
             }
             following = name
@@ -350,10 +373,61 @@ final class HostSession: Identifiable {
         changed?(self)
     }
 
+    /// A live snapshot: within `bindingGrace` of `ready`, with the bindings the kept snapshot showed.
+    private func take(_ snapshot: HelperTopology) {
+        let next = bindingGraceTask == nil ? snapshot : Self.carryingBindings(snapshot, from: topology)
+        reported = next == snapshot ? nil : snapshot
+        if topology != next { topology = next }
+    }
+
+    private func startBindingGrace() {
+        bindingGraceTask?.cancel()
+        reported = nil
+        let grace = bindingGrace
+        bindingGraceTask = Task { [weak self] in
+            try? await Task.sleep(for: grace)
+            guard let self, !Task.isCancelled else { return }
+            self.endBindingGrace()
+        }
+    }
+
+    /// The grace is over (or the connection ended): the helper's own snapshot stands, without what was kept.
+    private func endBindingGrace() {
+        bindingGraceTask?.cancel()
+        bindingGraceTask = nil
+        guard let reported else { return }
+        self.reported = nil
+        if client != nil, topology != reported {
+            topology = reported
+            changed?(self)
+        }
+    }
+
+    /// `snapshot` with the agent bindings `previous` showed on terminals it reports without one (same topology key, not
+    /// detached).
+    static func carryingBindings(_ snapshot: HelperTopology, from previous: HelperTopology?) -> HelperTopology {
+        let bound = Dictionary((previous?.nodes ?? []).compactMap { node in
+            node.kind == .terminal ? node.agent.map { (node.key, $0) } : nil
+        }, uniquingKeysWith: { first, _ in first })
+        guard !bound.isEmpty else { return snapshot }
+        var carried = false
+        let nodes = snapshot.nodes.map { node in
+            guard node.kind == .terminal, node.agent == nil, !node.detached, let binding = bound[node.key] else { return node }
+            carried = true
+            return node.with(agent: binding)
+        }
+        guard carried else { return snapshot }
+        return HelperTopology(backend: snapshot.backend, nodes: nodes, layouts: snapshot.layouts, focus: snapshot.focus,
+                              key: snapshot.key)
+    }
+
     /// What exists only while connected.
     private func drop() {
         postConnectTask?.cancel()
         postConnectTask = nil
+        bindingGraceTask?.cancel()
+        bindingGraceTask = nil
+        reported = nil
         if client != nil {
             client = nil
             clientEnded?(self)

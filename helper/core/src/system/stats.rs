@@ -57,8 +57,8 @@ const BOOT: &str = if cfg!(target_os = "linux") {
 } else {
     "BB000000-0000-4000-8000-000000000001"
 };
-/// The synthetic host's clock: a day of uptime, then the real clock's time into its current day. Each sample is an
-/// isolated job of its own (a fresh process), so the clock must grow across processes: only a day's wrap goes back.
+/// The synthetic host's clock: a day of uptime, then the real clock's time into its current day. Process lists are
+/// isolated jobs (a fresh process each), so the clock must grow across processes: only a day's wrap goes back.
 fn clock(local: bool) -> io::Result<f64> {
     Ok(86_400.0 + time(local)? % 86_400.0)
 }

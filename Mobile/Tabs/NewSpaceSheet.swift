@@ -13,10 +13,10 @@ import SwiftUI
 ///
 /// Not in the mockup: Multiplexer, the host's installed ones (herdr, tmux; never the helper's native one, whose sessions
 /// end with the connection), the one the host shows picked. A host shows one multiplexer's spaces at a time, so another
-/// one becomes the host's on Create (its footnote says so), as Multiplexer in host details would.
+/// one becomes the host's on Create (its footnote says so), as Multiplexer in Edit host would.
 struct NewSpaceSheet: View {
     let model: MobileTabs
-    /// Host detail pre-selects its host; New tab's picker passes the recent space's.
+    /// A host's New space pre-selects it; New tab's picker passes the recent space's.
     var host: UUID?
     let hostViews: SpacesHostViews
     let created: (MobileTab) -> Void

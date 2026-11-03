@@ -1,0 +1,15 @@
+{
+  "kind": "rerecord",
+  "why": "stats.host now runs in the helper as a native job instead of a worker process of its own (`dispatch-helper native stats.host`): its collectors are Mach, sysctl and getifaddrs calls (Linux: /proc reads) that cannot hang, and starting a process per sample cost more CPU than the sample (about 1.6 of 1.75 ms). The submit records `native` where it recorded `isolated`, and the helper no longer reads the clock for the job's deadline first (`expected now, got submit`), which a rewrite of the app's inputs cannot change: the eight tests whose helpers sampled the host are recorded again. stats.processes and stats.disks stay isolated jobs, recorded as before (the processes worker now lowers its own priority, which nothing records).",
+  "tests": [
+    "HostStatisticsStoreTests/testLocalBackgroundHistoryContinuesAfterLastViewerCloses",
+    "HostStatisticsStoreTests/testLocalFirstRatesAreUnknownAndMemoryIsExplicitlyCollected",
+    "HostStatisticsStoreTests/testLocalFirstViewerSamplesAtOnceDuringALongBackgroundWait",
+    "PlanOnePresentationTests/testNativeLayoutsDropZonesAndStatsPopover",
+    "PlanOneTests/testHostSampling",
+    "SSHConfigurationIntegrationTests/testMatchOnTheSessionTypeStopsAReconnectBeforeItLogsIn",
+    "SSHConfigurationIntegrationTests/testRelativeConfigurationReconnectsFromTheFolderSSHWasTypedIn",
+    "SSHConfigurationIntegrationTests/testResumedShellForwardsNoAgentTheConnectionDidNotRequest",
+    "SSHConfigurationIntegrationTests/testSendEnvAndRequestedAgentForwardingReachHelperAndResumedChannels"
+  ]
+}

@@ -612,3 +612,29 @@ final class ThinkingAnimationTests: XCTestCase {
         XCTAssertTrue(try reduced.text().contains("thinking"))
     }
 }
+
+extension ThinkingAnimationTests {
+    func testRunningShellsListWithoutKeepingTheAgentWorking() {
+        let session = ChatSession(id: System.uuid())
+        session.active = true
+        let now = Date(timeIntervalSince1970: 1_800_000_090)
+        let reported = [HelperChat.Shell(id: "b1", name: "Serve the docs", command: "python3 -m http.server 8000", started_ms: 1_800_000_000_000),
+                        HelperChat.Shell(id: "b2", command: "make test")]
+        session.shells = ChatShell.merge(reported, previous: [], now: now)
+        XCTAssertEqual(session.shells.map(\.started), [Date(timeIntervalSince1970: 1_800_000_000), now])
+        XCTAssertEqual(ChatShell.merge(reported, previous: session.shells, now: now.addingTimeInterval(5)), session.shells,
+                       "A shell the helper sends no time for keeps the start first seen")
+        XCTAssertEqual(ChatComposerShells.title(2), "2 shells running")
+        XCTAssertEqual(ChatComposerShells.title(1), "1 shell running")
+        XCTAssertEqual(session.shells[0].title, "Serve the docs")
+        XCTAssertEqual(session.shells[0].detail, "python3 -m http.server 8000")
+        XCTAssertEqual(session.shells[1].title, "make test")
+        XCTAssertNil(session.shells[1].detail)
+        XCTAssertEqual(ChatShell(id: "b3", started: now).title, "Background shell")
+        XCTAssertEqual(ChatShellList.elapsed(session.shells[0], now: now), "1m 30s")
+        // A dev server can run for hours while the agent waits for input: no working row, no clock.
+        XCTAssertFalse(AgentWorkingState(session).visible)
+        XCTAssertFalse(AgentWorkingState.isWorking(session))
+        XCTAssertNil(session.workingSince)
+    }
+}

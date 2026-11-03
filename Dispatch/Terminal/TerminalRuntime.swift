@@ -54,7 +54,8 @@ final class TerminalRuntime {
         let focused = window.focusedTerminal
         // Only numbered windows read the pane's title, so only they re-render on it.
         let live = automatic && window.numbered == true ? focused.map { workspace?.liveTab($0.id) ?? $0 } : nil
-        return window.displayLabel(automatic: automatic, conversation: focused.flatMap(liveConversationTitle), focused: live)
+        return window.displayLabel(automatic: automatic, conversation: focused.flatMap(liveConversationTitle), focused: live,
+                                   agent: focused.flatMap { chat.sessions[$0.focusedSurfaceID]?.agentID })
     }
 
     private func liveConversationTitle(_ tab: TerminalTab) -> String? {
@@ -92,6 +93,7 @@ final class TerminalRuntime {
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
         }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
+        InterfaceFontStore.shared.current = preferences.interfaceFont
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
@@ -166,6 +168,7 @@ final class TerminalRuntime {
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
+        InterfaceFontStore.shared.current = preferences.interfaceFont
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors

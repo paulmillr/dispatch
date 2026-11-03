@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// The host's multiplexer preference while a driver runs: host detail and Settings change it on a live connection, and
+/// The host's multiplexer preference while a driver runs: Edit host and Settings change it on a live connection, and
 /// the follower picks the new choice without reconnecting (`HostSessionContext.preferences`).
 final class FollowPreference: Sendable {
     private struct State {

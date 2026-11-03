@@ -398,7 +398,7 @@ pub(crate) fn remembering(
 ) -> Option<Box<dyn FnOnce(Done<Sent>) -> Done<Sent>>> {
     let paths: Vec<String> = attachments.iter().filter(|a| a.image).map(|a| a.path.clone()).collect();
     // Only Claude Code's transcript keeps an image without its path; Codex keeps its local images'
-    // paths and the text fallback (Pi, Nanocodex) keeps the path lines.
+    // paths and the text fallback (Pi) keeps the path lines.
     if paths.is_empty() || session.is_empty() || !UNNAMED.contains(&harness) {
         return None;
     }

@@ -203,6 +203,50 @@ final class TabsWorkspaceTests: XCTestCase {
         XCTAssertEqual(tmux.tab("herdr:app:3")?.label(conversation: nil, homes: homes), "zsh")
     }
 
+    /// A tmux window named after Dispatch's launcher (`claude` typed in a Dispatch shell runs `dispatch-helper launch
+    /// claude`) shows its agent's name until the conversation has a title, in the tab list and in Agents; a renamed tab
+    /// keeps its name, and with no agent known the window's name stays.
+    func testALauncherWindowShowsItsAgent() throws {
+        let sketch = TopologySketch(spaces: [.init(key: "tmux:s", name: "s", tabs: [
+            .init(key: "tmux:s:@1", name: "dispatch-helper", panes: [.init(key: "p:a", name: "✳ Claude Code", cwd: "/Users/alex/src/app", agent: "s1")]),
+            .init(key: "tmux:s:@2", name: "dispatch-helper", renamed: true, panes: [.init(key: "p:b", cwd: "/Users/alex", agent: "s2")]),
+        ])])
+        let workspace = TabsFixtures.workspace()
+        workspace.apply(sketch.topology)
+        let homes = TabsFixtures.host.homes
+        let tab = try XCTUnwrap(workspace.tab("tmux:s:@1"))
+        XCTAssertEqual(MobileTab.agent(named: [nil, tab.panes.first?.name, tab.name]), "claude", "from the pane's title")
+        XCTAssertEqual(tab.label(conversation: nil, homes: homes, agent: "claude"), "claude")
+        XCTAssertEqual(tab.label(conversation: "Fix the build", homes: homes, agent: "claude"), "Fix the build")
+        XCTAssertEqual(tab.label(conversation: nil, homes: homes), "dispatch-helper")
+        XCTAssertEqual(workspace.tab("tmux:s:@2")?.label(conversation: nil, homes: homes, agent: "claude"), "dispatch-helper")
+        let window = try XCTUnwrap(sketch.topology.nodes.first { $0.key == "tmux:s:@1" })
+        XCTAssertEqual(ChatConversations.name(tab: window, title: nil, agent: "claude"), "claude")
+        XCTAssertEqual(ChatConversations.name(tab: window, title: "Fix the build", agent: "claude"), "Fix the build")
+    }
+
+    /// A window the phone's launch named after its agent (`launch.names`: `new-window -n claude`) reads as renamed
+    /// from tmux, but follows its conversation's title like an unnamed one; a name the user gave stays.
+    func testALaunchNamedWindowFollowsItsConversation() throws {
+        let sketch = TopologySketch(spaces: [.init(key: "tmux:s", name: "s", tabs: [
+            .init(key: "tmux:s:@1", name: "claude", renamed: true, panes: [.init(key: "p:a", cwd: "/Users/alex/src/app", agent: "s1")]),
+            .init(key: "tmux:s:@2", name: "notes", renamed: true, panes: [.init(key: "p:b", cwd: "/Users/alex", agent: "s2")]),
+        ])])
+        let workspace = TabsFixtures.workspace()
+        workspace.apply(sketch.topology)
+        let homes = TabsFixtures.host.homes
+        let launched = try XCTUnwrap(workspace.tab("tmux:s:@1"))
+        XCTAssertEqual(launched.label(conversation: "Fix the build", homes: homes, agent: "claude"), "Fix the build")
+        XCTAssertEqual(launched.label(conversation: nil, homes: homes, agent: "claude"), "claude")
+        XCTAssertEqual(launched.label(conversation: "Fix the build", homes: homes, agent: "codex"), "claude", "another agent's name")
+        XCTAssertEqual(workspace.tab("tmux:s:@2")?.label(conversation: "Fix the build", homes: homes, agent: "claude"), "notes")
+        let window = try XCTUnwrap(sketch.topology.nodes.first { $0.key == "tmux:s:@1" })
+        XCTAssertEqual(ChatConversations.name(tab: window, title: "Fix the build", agent: "claude"), "Fix the build")
+        XCTAssertEqual(ChatConversations.name(tab: window, title: nil, agent: "claude"), "claude")
+        let named = try XCTUnwrap(sketch.topology.nodes.first { $0.key == "tmux:s:@2" })
+        XCTAssertEqual(ChatConversations.name(tab: named, title: "Fix the build", agent: "claude"), "notes")
+    }
+
     /// Two backends on one host (herdr and tmux) list side by side; removing one leaves the other.
     func testBackendsMergeAndLeave() {
         let workspace = TabsFixtures.workspace()

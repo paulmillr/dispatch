@@ -20,6 +20,9 @@ final class ChatCoordinator {
     var helperLaunches: [HelperClient.Launch]?
     /// Latest helper installation facts by opaque launch key.
     var helperInstalls: [String: HelperChat.Installation] = [:]
+    /// Launch keys whose CLI this Mac's login shell runs (`LocalAgentsConsent.installedAgents`), asked when Hosts
+    /// settings open This Mac; nil until then.
+    var localCLIs: Set<String>?
     /// Model and effort choices by agent, host and agent version (`modelChoices(for:)`).
     @ObservationIgnored private var sharedModelChoices: [String: ChatModelChoicesCache] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
@@ -152,8 +155,12 @@ final class ChatCoordinator {
     func canEnterChat(_ session: ChatSession) -> Bool {
         enabled && (session.hasOpenedChat || session.sessionID != nil || !session.draft.isEmpty || (session.active && !session.discoveryBlocked))
     }
+    /// Whether the mode switch's click opens chat: once the agent exits the tab is a terminal again, and its retained
+    /// transcript stays in the switch's menu and ⇧⌘C.
+    func chatLeads(_ session: ChatSession) -> Bool { canEnterChat(session) && !session.agentExited }
     func chatAvailabilityHint(_ session: ChatSession) -> String {
         if !enabled { return "Enable Agent chat in Settings, then start \(agents) in this terminal." }
+        if session.agentExited { return "Start \(agents) in this terminal. Its last conversation is in this button's menu." }
         if (!session.active || session.inputBlocked), session.hasOpenedChat || session.sessionID != nil || !session.draft.isEmpty { return "View the retained conversation and edit drafts · sending paused" }
         if session.discoveryBlocked { return session.status ?? "Cannot safely identify this agent session. Continue in terminal." }
         if !session.active { return "Start \(agents) in this terminal. Finish any startup menus, then select Chat." }
@@ -280,7 +287,7 @@ final class ChatCoordinator {
         cancelSubmission(session)
         if !preservingPresentation { session.invalidateQueuedDestination() }
         session.drafts.persist(flush: true)
-        session.active = false; session.busy = false; session.subagents = []; session.activityCheck = nil; session.relinquish()
+        session.active = false; session.busy = false; session.subagents = []; session.shells = []; session.activityCheck = nil; session.relinquish()
         session.activityNeedsRefresh = true; session.activityRetryAfter = nil
         if !preservingPresentation { session.setView(false, reason: "integration-disabled") }
         session.status = "\(session.agentTitle) exited. This transcript is read-only."

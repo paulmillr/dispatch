@@ -1,7 +1,7 @@
 import Foundation
 
-/// The last activity known in each terminal and tab, per host and topology key, kept lightly on the device: the changes
-/// the phone saw (by pane key) and the server's own times (`terminals.activity`, by the key it names, a tmux window's).
+/// The last activity known in each terminal, per host and topology key, kept lightly on the device: the changes the
+/// phone saw, by pane key (times an older build kept from `terminals.activity`, by tmux window key, are no longer read).
 /// A small JSON file in Application Support, written a moment after a change, holding at most `limit` keys per host and
 /// nothing older than `age`. It orders the Tabs list by activity (M2a) and gives rows their time, also before the host
 /// connects. Losing it costs only those times.

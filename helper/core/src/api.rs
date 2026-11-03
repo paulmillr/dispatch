@@ -876,6 +876,9 @@ pub struct State {
     /// Running subagents, oldest first (Claude and Codex SubagentStart until SubagentStop).
     /// They can outlive the turn that started them (background agents).
     pub agents: Vec<Agent>,
+    /// Running background shells, oldest first (Claude: a Bash call's `backgroundTaskId` until its
+    /// task notification). They outlive their turn; none for harnesses that do not report them.
+    pub shells: Vec<Shell>,
 }
 
 /// One running subagent (`State.agents`).
@@ -893,6 +896,20 @@ pub struct Agent {
     pub tokens: Option<u64>,
     /// When SubagentStart reached the helper, in the host's Unix milliseconds; None until the
     /// clock answered, and for harnesses that do not ask it (the client times it from then).
+    pub started_ms: Option<u64>,
+}
+
+/// One running background shell (`State.shells`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shell {
+    /// The harness's task id for it (Claude `backgroundTaskId`).
+    pub id: String,
+    /// What the agent said it does (the Bash call's `description`); None when it gave none.
+    pub name: Option<String>,
+    /// Its command line; None when the call that started it lies before what the helper read.
+    pub command: Option<String>,
+    /// When the call that started it was recorded, in the host's Unix milliseconds; None when
+    /// unknown (the client times it from then).
     pub started_ms: Option<u64>,
 }
 
@@ -1734,6 +1751,15 @@ pub trait Multiplexer {
     /// alone (`attach`, `screen_clients`), so a helper whose clients name no feature reads only published screens
     /// and records nothing new. Native has no host source: its screens are only published.
     fn host_screens(&mut self, _enabled: bool) {}
+    /// A client of feature sizes.steady connected: from now on sizing a terminal resizes its own window alone. tmux's
+    /// control client counts for every window of its session once it has sized one, with its own size (80x24 until set)
+    /// where it gave none, so it first takes the session's current window size; the setting is the helper's, as its
+    /// control client is. herdr and native size each terminal alone already.
+    fn steady_sizes(&mut self) {}
+    /// A client of feature topology.bound connected: from now on a backend's first topology waits (briefly) until the
+    /// multiplexer's agent discovery has looked at its terminals, so it names the agents already running. The setting
+    /// is the helper's, as `steady_sizes`. tmux only: herdr and native publish as before.
+    fn bound_topology(&mut self) {}
     /// Who supplies `terminal`'s screens now (core helper.rs, when it changes: an attach ended, a client left):
     /// `hosting`, a screens.host client has it attached; `published`, a client that published a screen for it still
     /// has it attached (or published without attaching and is still connected). `attach` and `publish` already

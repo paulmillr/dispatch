@@ -31,50 +31,6 @@ pub(super) struct Vm {
     pub swapped_count: u64,
 }
 
-#[repr(C)]
-pub(super) struct Interfaces {
-    pub ifa_next: *mut Interfaces,
-    pub ifa_name: *mut c_char,
-    pub ifa_flags: u32,
-    pub ifa_addr: *mut c_void,
-    pub ifa_netmask: *mut c_void,
-    pub ifa_dstaddr: *mut c_void,
-    pub ifa_data: *mut Interface,
-}
-
-#[repr(C)]
-pub(super) struct Interface {
-    pub ifi_type: u8,
-    pub ifi_typelen: u8,
-    pub ifi_physical: u8,
-    pub ifi_addrlen: u8,
-    pub ifi_hdrlen: u8,
-    pub ifi_recvquota: u8,
-    pub ifi_xmitquota: u8,
-    pub ifi_unused1: u8,
-    pub ifi_mtu: u32,
-    pub ifi_metric: u32,
-    pub ifi_baudrate: u32,
-    pub ifi_ipackets: u32,
-    pub ifi_ierrors: u32,
-    pub ifi_opackets: u32,
-    pub ifi_oerrors: u32,
-    pub ifi_collisions: u32,
-    pub ifi_ibytes: u32,
-    pub ifi_obytes: u32,
-    pub ifi_imcasts: u32,
-    pub ifi_omcasts: u32,
-    pub ifi_iqdrops: u32,
-    pub ifi_noproto: u32,
-    pub ifi_recvtiming: u32,
-    pub ifi_xmittiming: u32,
-    pub ifi_lastchange: [i32; 2],
-    pub ifi_unused2: u32,
-    pub ifi_hwassist: u32,
-    pub ifi_reserved1: u32,
-    pub ifi_reserved2: u32,
-}
-
 unsafe extern "C" {
     pub(super) fn sysctlbyname(
         name: *const c_char,
@@ -85,6 +41,7 @@ unsafe extern "C" {
     ) -> i32;
     pub(super) fn mach_host_self() -> u32;
     pub(super) static mach_task_self_: u32;
+    pub(super) fn mach_port_deallocate(task: u32, name: u32) -> i32;
     pub(super) fn host_processor_info(
         host: u32,
         flavor: i32,
@@ -96,7 +53,15 @@ unsafe extern "C" {
     pub(super) fn host_statistics64(host: u32, flavor: i32, info: *mut i32, count: *mut u32)
     -> i32;
     pub(super) fn getloadavg(load: *mut f64, count: i32) -> i32;
-    pub(super) fn getifaddrs(value: *mut *mut Interfaces) -> i32;
-    pub(super) fn freeifaddrs(value: *mut Interfaces);
+    #[link_name = "sysctl"]
+    pub(super) fn sysctl_mib(
+        name: *mut i32,
+        length: u32,
+        old: *mut c_void,
+        size: *mut usize,
+        new: *const c_void,
+        new_length: usize,
+    ) -> i32;
     pub(super) fn getfsstat(value: *mut Statfs, size: i32, flags: i32) -> i32;
+    pub(super) fn setpriority(which: i32, who: u32, priority: i32) -> i32;
 }

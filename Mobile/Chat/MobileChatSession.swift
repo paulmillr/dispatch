@@ -71,6 +71,9 @@ final class MobileChatSession: Identifiable {
         didSet { if transcript.revision != stepRevision { refreshStep() } }
     }
     @ObservationIgnored private var stepRevision = -1
+    /// Where the thread was being read when it was last scrolled or left (`ChatThreadView`); nil while it showed its
+    /// end. The next thread view opens there, so leaving the tab and coming back keeps the place. In memory only.
+    @ObservationIgnored var readingPosition: ChatReadingPosition?
     /// The open turn's current step as a phrase ("Editing Sidebar.tsx"), and when that turn started: Spaces' tab lines
     /// read these, which change only when the step or the turn does, never with every streamed word of the transcript.
     private(set) var currentStep: String?
@@ -87,6 +90,8 @@ final class MobileChatSession: Identifiable {
     // The agent's reported state (chat.state).
     private(set) var busy = false
     private(set) var subagents: [String] = []
+    /// Background shells the agent reports running (`State.shells`); they outlive their turn and are no work of its.
+    private(set) var shells: [ChatShell] = []
     private(set) var activity: String?
     private(set) var model: String?
     /// The model as the Mac's footer names it (opus-5.5), never the menu's alias or the raw ID (claude-opus-5-5).
@@ -115,6 +120,8 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored private(set) var openForks: Set<String> = []
     /// The Manage goal sheet (C4b).
     var managingGoal = false
+    /// The running shells' sheet shows; it closes with the last shell.
+    var showingShells = false
     /// A prompt was sent and the agent has not acknowledged it (no turn start or state since).
     private(set) var awaitingAck = false
     /// The acknowledged turn started; the agent counts as working until its next state (ChatSession.starting).
@@ -172,6 +179,12 @@ final class MobileChatSession: Identifiable {
     private(set) var modelsLoading = false
     /// Settings chosen before the conversation opened (New chat, M9a), applied once it is verified.
     var pendingSettings: (model: String, effort: String?)?
+    /// The agent this phone just started in the tab (New chat, New tab's agents), by label, until its conversation is
+    /// verified, input pauses or `launchLimit` passes: the thread says "Starting Claude…" with a spinner meanwhile, as
+    /// the Mac's tab covers an agent's launch until Chat opens.
+    private(set) var launching: String?
+    @ObservationIgnored private var launchTicket = UUID()
+    static let launchLimit: Duration = .seconds(15)
 
     let drafts: ChatDraftCollection
     let outbox: ChatOutbox
@@ -227,7 +240,7 @@ final class MobileChatSession: Identifiable {
         guard terminal != previous.0 || binding != previous.1 else { return }
         if binding == nil || terminal == nil {
             if previous.1 != nil {
-                busy = false; subagents = []; awaitingAck = false; starting = false; updateWorkingSince()
+                busy = false; subagents = []; shells = []; showingShells = false; awaitingAck = false; starting = false; updateWorkingSince()
                 suspend(reason: "\(agentName) exited. This transcript is read-only.")
             }
             return
@@ -238,6 +251,19 @@ final class MobileChatSession: Identifiable {
     }
 
     var agentName: String { agentLabel ?? agentKey ?? "The agent" }
+
+    /// This phone started `label` in the tab (`launching`).
+    func launched(_ label: String) {
+        guard phase != .verified else { return }
+        let ticket = UUID()
+        launchTicket = ticket
+        launching = label
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.launchLimit)
+            guard let self, self.launchTicket == ticket else { return }
+            self.launching = nil
+        }
+    }
 
     /// `currentStep` and `openTurnStarted` from the transcript (its running step, else its latest, as the watch's rows).
     private func refreshStep() {
@@ -326,6 +352,7 @@ final class MobileChatSession: Identifiable {
         retireRequests()
         loadingHistory = false
         reconciling = false
+        launching = nil
         phase = reason.map(Phase.paused) ?? .detached
     }
 
@@ -344,7 +371,7 @@ final class MobileChatSession: Identifiable {
         loadingHistory = false
         let code = (error as? HelperFailure)?.code
         if code == "agent_exited" || code == "expired" {
-            busy = false; subagents = []; awaitingAck = false; starting = false; updateWorkingSince()
+            busy = false; subagents = []; shells = []; showingShells = false; awaitingAck = false; starting = false; updateWorkingSince()
             suspend(reason: "\(agentName) exited. This transcript is read-only.")
         } else if link == .connected {
             suspend(reason: error.localizedDescription)
@@ -380,7 +407,7 @@ final class MobileChatSession: Identifiable {
             case "terminal.exit":
                 let exit = try HelperBinary.decode(HelperClient.Exit.self, from: value)
                 guard exit.terminal == terminal else { return }
-                busy = false; subagents = []; awaitingAck = false; starting = false; updateWorkingSince()
+                busy = false; subagents = []; shells = []; showingShells = false; awaitingAck = false; starting = false; updateWorkingSince()
                 suspend(reason: "\(agentName) exited. This transcript is read-only.")
             default: return
             }
@@ -449,6 +476,7 @@ final class MobileChatSession: Identifiable {
         }
         let wasVerified = phase == .verified
         phase = .verified
+        launching = nil
         historyError = history.history_error?.localizedDescription
         if let error = history.state_error, error.code == "setup" {
             phase = .paused(error.localizedDescription)
@@ -511,6 +539,9 @@ final class MobileChatSession: Identifiable {
     private func receive(state: HelperChat.State) {
         if let version = state.version { self.version = version }
         subagents = (state.agents ?? []).map(\.kind)
+        let shells = ChatShell.merge(state.shells ?? [], previous: shells)
+        if self.shells != shells { self.shells = shells }
+        if shells.isEmpty { showingShells = false }
         busy = state.busy
         if state.busy { awaitingAck = false }
         starting = false
@@ -1281,7 +1312,7 @@ final class MobileChatSession: Identifiable {
         return true
     }
 
-    /// Long-press "send now" (interrupts the turn: steer while working). A device-only message goes by `chat.send`, a
+    /// A queue row's Send now (interrupts the turn: steer while working). A device-only message goes by `chat.send`, a
     /// device-only command by `chat.command`.
     func sendQueuedNow(_ row: QueueRow) {
         guard canSendNow(row) else { return }

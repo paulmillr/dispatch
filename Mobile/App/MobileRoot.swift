@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The two sections of the tab bar (M2a, M3a). Hosts are managed inside Spaces (M1d, M1e, M1f).
+/// The two sections of the tab bar (M2a, M3a). Hosts are managed inside Spaces (M1d, M1e, the host sheet).
 enum MobileSection: Hashable, CaseIterable, Identifiable {
     case spaces, agents
     var id: Self { self }
@@ -40,10 +40,10 @@ enum MobileSheet: Hashable, Identifiable {
 /// (always a new space with one shell tab, never a tab in an existing one; New Tab is ⌘T and each space's capsule);
 /// with no host yet, its glyph is a display with a plus and it opens New host (M1d). In Agents it opens New chat (M9a).
 ///
-/// One navigation stack holds the tab bar: pushed screens (a tab, a space, space details, host detail, message
-/// details) cover the whole screen and the tab bar leaves with the root as UIKit pushes it, frame for frame, as the
-/// mockup shows them without a tab bar (M2c, M4d, M5b, the tab screen). The sections' titles and toolbars are the
-/// stack's, chosen by the selected section.
+/// One navigation stack holds the tab bar: pushed screens (a tab, a space, space details, message details) cover the
+/// whole screen and the tab bar leaves with the root as UIKit pushes it, frame for frame, as the mockup shows them
+/// without a tab bar (M2c, M4d, M5b, the tab screen). The sections' titles and toolbars are the stack's, chosen by the
+/// selected section.
 struct MobileRoot: View {
     @State private var section = MobileRoot.initialSection
     @State private var sheet: MobileSheet?
@@ -51,6 +51,10 @@ struct MobileRoot: View {
     @State private var afterSheet: (() -> Void)?
     /// The window's, for `MobileSplit`.
     @State private var windowSize = MobileSplit.initialSize
+    /// How deep the Dynamic Island or notch reaches in from its edge (`MobileLandscape.island`).
+    @State private var island = MobileLandscape.defaultIsland
+    /// The interface's orientation: on a phone's side, the rail stands on the Dynamic Island's edge (`MobileLandscape`).
+    @State private var orientation = UIInterfaceOrientation.unknown
     /// The split's columns' space and the fold in it (`MobileFoldReader`); zero until measured.
     @State private var splitSpace = CGSize.zero
     @State private var fold: CGFloat?
@@ -141,6 +145,11 @@ struct MobileRoot: View {
                 // 13-inch screen, and its headers must truncate to it.
                 stack(path: $navigator.path, titleInBar: false)
                     .environment(\.tabsColumnWidth, windowSize.width > 0 ? windowSize.width : nil)
+                    // An iPhone on its side: a tab's chrome in a rail on the island's side, the content the window's
+                    // height (`MobileLandscape`).
+                    .environment(\.mobileLandscape, MobileLandscape.applies(to: windowSize, device: device))
+                    .environment(\.mobileRailEdge, MobileLandscape.railEdge(orientation))
+                    .environment(\.mobileIsland, island)
                     .mobileCompactWidth(device == .pad)
             }
         }
@@ -148,8 +157,15 @@ struct MobileRoot: View {
             // The whole window, keyboard and bars included: the keyboard coming up must not fold the split away, nor
             // the status bar on the Duo's unfolded screen, 553 points high held as a book (`MobileWindowReader`:
             // SwiftUI's geometry here shrank with both).
-            MobileWindowReader { windowSize = $0 }
+            MobileWindowReader { size, island in
+                windowSize = size
+                if island > 0 { self.island = island }
+            }
                 .ignoresSafeArea()
+            MobileOrientationReader { orientation = $0 }
+        }
+        .onChange(of: MobileLandscape.applies(to: windowSize, device: device), initial: true) { _, landscape in
+            navigator.landscape = landscape
         }
         .onChange(of: split, initial: true) { _, split in
             navigator.split = split
@@ -159,13 +175,12 @@ struct MobileRoot: View {
         // A section chosen while the sidebar is hidden (⌘1, ⌘2) shows it.
         .onChange(of: section) { navigator.showSidebar() }
         .spacesPresentations(navigator, hostViews: composition.hostViews)
-        .environment(\.hostSpaceOpening, navigator)
         // A tab's menu (its host disc) acts through the Tabs actions and opens the host's stats over the stack.
         .environment(\.tabsNavigator, navigator)
         // The menu bar and ⌘ chords (MobileCommands).
         .mobileCommands(composition, section: $section, sheet: $sheet)
         #if DEBUG
-        // Host stats screenshots (`-DispatchHostStats`, `-DispatchHostDetail`, HostStatsDemo).
+        // Host stats screenshots (`-DispatchHostStats`, HostStatsDemo).
         .modifier(HostStatsDebugLaunch(composition: composition))
         .onAppear {
             navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
@@ -297,6 +312,7 @@ struct MobileRoot: View {
                                     hostViews: composition.hostViews)
                 }
         }
+        .filesZoomScope()
     }
 
     private var tabView: some View {

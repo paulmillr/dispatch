@@ -4,6 +4,19 @@ import UIKit
 extension EnvironmentValues {
     /// Opens an attachment full screen (`ChatThreadView`'s preview); nil where nothing previews.
     @Entry var chatOpenAttachment: ((ChatAttachment) -> Void)? = nil
+    /// Where the preview zooms from and back to: the tapped tile or chip (`chatZoomSource`). Nil: it slides up.
+    @Entry var chatAttachmentZoom: Namespace.ID? = nil
+}
+
+extension View {
+    /// Marks an attachment's tile or chip as where its preview zooms from (`chatAttachmentZoom`), its corners kept.
+    @ViewBuilder func chatZoomSource(_ id: String, in namespace: Namespace.ID?, corner: CGFloat) -> some View {
+        if let namespace {
+            matchedTransitionSource(id: id, in: namespace) { $0.clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous)) }
+        } else {
+            self
+        }
+    }
 }
 
 /// A user message with attachments (docs/ios.md, Attachments): image thumbnails in a grid and file chips on the user's
@@ -42,6 +55,7 @@ struct ChatMessageAttachments: View {
     @Environment(\.chatColumnWidth) private var column
     @Environment(\.chatMeasure) private var measure
     @Environment(\.chatOpenAttachment) private var open
+    @Environment(\.chatAttachmentZoom) private var zoom
 
     static let spacing: CGFloat = 4
     static let columns = 4
@@ -66,12 +80,15 @@ struct ChatMessageAttachments: View {
                             ChatAttachmentTile(attachment: image, host: host, read: read, side: side)
                         }
                         .buttonStyle(.plain)
+                        .chatZoomSource(image.id, in: zoom, corner: 16)
                         .accessibilityLabel("Image, \(image.name)")
                     }
                 }
             }
             ForEach(files) { file in
-                Button { open?(file) } label: { ChatFileChip(attachment: file).frame(maxWidth: width, alignment: .trailing) }
+                Button { open?(file) } label: {
+                    ChatFileChip(attachment: file).chatZoomSource(file.id, in: zoom, corner: 14).frame(maxWidth: width, alignment: .trailing)
+                }
                     .buttonStyle(.plain)
                     .accessibilityLabel("File, \(file.name)")
             }
@@ -200,10 +217,12 @@ struct ComposerAttachmentStrip: View {
 private struct ComposerAttachmentChip: View {
     let chip: ComposerAttachments.Chip
     let attachments: ComposerAttachments
+    @Environment(\.chatAttachmentZoom) private var zoom
     private static let side: CGFloat = 50
 
     var body: some View {
         content
+            .chatZoomSource(chip.id, in: zoom, corner: 10)
             .opacity(chip.uploading ? 0.6 : 1)
             .overlay {
                 if chip.uploading { ProgressView() }
@@ -259,7 +278,8 @@ private struct ComposerAttachmentChip: View {
 }
 
 /// An attachment full screen: an image at the size the host keeps (its thumbnail until that arrives, or instead of it
-/// when the host's copy cannot be read; without either, why), a file's name, size and host path.
+/// when the host's copy cannot be read; without either, why), zoomed with a pinch or a double tap; a file's name, size
+/// and host path.
 struct MobileAttachmentPreview: View {
     let attachment: ChatAttachment
     /// The conversation's host, whose thumbnail cache may hold a smaller copy.
@@ -282,8 +302,10 @@ struct MobileAttachmentPreview: View {
                 if attachment.kind == .image {
                     Color.black.ignoresSafeArea()
                     if let image = full ?? thumbnail {
-                        Image(uiImage: image).resizable().scaledToFit().ignoresSafeArea(edges: .bottom)
+                        ZoomableImage(image: image).ignoresSafeArea(edges: .bottom)
+                            .accessibilityElement()
                             .accessibilityLabel("Image, \(attachment.name)")
+                            .accessibilityAddTraits(.isImage)
                     } else if let missing {
                         VStack(spacing: 10) {
                             Image(systemName: "photo").font(.system(size: 48))
@@ -337,4 +359,11 @@ struct MobileAttachmentPreview: View {
 
     static let gone = "Not available on the host any more."
     static let unreachable = "The host's copy cannot be read right now."
+}
+
+extension View {
+    /// A preview's zoom out of its source (`chatZoomSource`); nil: the cover's own slide.
+    @ViewBuilder func chatZoom(_ id: String, in namespace: Namespace.ID?) -> some View {
+        if let namespace { navigationTransition(.zoom(sourceID: id, in: namespace)) } else { self }
+    }
 }

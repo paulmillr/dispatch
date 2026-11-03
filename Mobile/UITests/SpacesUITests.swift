@@ -35,6 +35,14 @@ final class SpacesUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", identifier, label)).firstMatch
     }
 
+    /// A short, slow drag to the left that shows a row's swipe actions: `swipeLeft` goes far and fast enough to be a full
+    /// swipe, which closes a tab.
+    private static func revealSwipe(_ row: XCUIElement) {
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: row.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+
     /// P1b: Needs you keeps the hosts and spaces with an agent waiting (app on mba2, docs on studio) and hides the
     /// rest and the OFFLINE group; Agents keeps the spaces running one; All brings everything back.
     func testFilterChips() {
@@ -105,9 +113,9 @@ final class SpacesUITests: XCTestCase {
         XCTAssertFalse(app.buttons["space-new-tab"].exists, "no New tab while editing")
         app.buttons["Done"].tap()
         wait(app.buttons["space-new-tab"])
-        zsh.swipeLeft()
-        wait(app.buttons["Detach"], "the swipe's Detach")
-        XCTAssertTrue(app.buttons["Close"].exists)
+        Self.revealSwipe(zsh)
+        wait(app.buttons["Close"], "the swipe's Close")
+        XCTAssertFalse(app.buttons["Detach"].exists, "Detach is the tab menu's")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)).tap()
         Thread.sleep(forTimeInterval: 0.5)
         app.buttons["space-new-tab"].press(forDuration: 1.2)
@@ -116,8 +124,8 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["In another space…"].exists)
     }
 
-    /// X9b: a tab's host disc is its menu: the conversation's items on Chat, the tab's (Rename… opens the rename
-    /// dialog), the host's Stats. No space switcher on the phone: Back returns to the space.
+    /// B7: a tab's host glyph beside Back is its menu: the conversation's items on Chat, the tab's (Rename… opens the
+    /// rename dialog), the host's Stats. No space switcher on the phone: Back returns to the space.
     func testTabMenu() {
         let app = launch(Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1"])
         let disc = app.buttons["tab-menu"]
@@ -125,16 +133,19 @@ final class SpacesUITests: XCTestCase {
         XCTAssertFalse(app.buttons["space-switcher"].exists, "no switcher on a phone's tab")
         disc.tap()
         wait(app.buttons["Search"], "the conversation's items")
-        XCTAssertTrue(app.buttons["Conversation Mode"].exists)
+        XCTAssertTrue(app.buttons["Side Conversation"].exists)
+        XCTAssertTrue(app.buttons["Side Conversation with Changes"].exists)
+        XCTAssertFalse(app.buttons["Conversation Mode"].exists, "conversation mode is the composer's")
         XCTAssertTrue(app.buttons["Rename…"].exists)
+        XCTAssertTrue(app.buttons["Close Tab"].exists)
         XCTAssertTrue(app.buttons["Detach"].exists)
-        XCTAssertTrue(app.buttons["Terminate…"].exists)
+        XCTAssertFalse(app.buttons["Terminate…"].exists, "Close Tab asks while work runs")
         XCTAssertTrue(app.buttons["Stats"].exists)
         app.buttons["Rename…"].tap()
         wait(app.alerts["Rename tab"], "the rename dialog")
         app.alerts["Rename tab"].buttons["Cancel"].tap()
         XCTAssertTrue(app.alerts["Rename tab"].waitForNonExistence(timeout: 3))
-        app.otherElements["tab-segments"].buttons["Terminal"].tap()
+        app.buttons["tab-mode-button"].tap()
         disc.tap()
         wait(app.buttons["Rename…"], "Terminal's menu")
         XCTAssertFalse(app.buttons["Search"].exists, "the conversation's items only on Chat")
@@ -152,7 +163,7 @@ final class SpacesUITests: XCTestCase {
                then: { app in app.descendants(matching: .any)["spaces-offline"].press(forDuration: 1.2) }),
         Screen(id: "P2", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"]),
         Screen(id: "P2b", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"], then: { app in
-            row(app, "space-tab", "zsh").swipeLeft()
+            revealSwipe(row(app, "space-tab", "zsh"))
         }),
         Screen(id: "P2c", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"], then: { app in
             app.buttons["space-menu"].tap()

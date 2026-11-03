@@ -70,7 +70,7 @@ struct ReviewDiffLineView: View {
                 }
                 Text(new.map(String.init) ?? "").foregroundStyle(.tertiary).frame(width: metrics.number, alignment: .trailing)
                 Text(kind == .added ? "+" : kind == .removed ? "−" : " ")
-                    .foregroundStyle(kind == .added ? Color.added : Color.destructive)
+                    .foregroundStyle(kind == .added ? Color.added : Color.removed)
                     .frame(width: metrics.marker)
                 Text(text).lineLimit(1)
             }
@@ -97,7 +97,7 @@ struct ReviewDiffLineView: View {
         switch row.content {
         case .hunk: Color.stateUnread.opacity(0.10)
         case .code(.added, _, _): Color.added.opacity(0.16)
-        case .code(.removed, _, _): Color.destructive.opacity(0.16)
+        case .code(.removed, _, _): Color.removed.opacity(0.16)
         default: .clear
         }
     }

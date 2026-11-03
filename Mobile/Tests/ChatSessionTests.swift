@@ -918,7 +918,7 @@ final class ChatSessionTests: XCTestCase {
         let image = ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 2048, path: Self.stored,
                                    thumbnail: ChatAttachmentImage.thumbnail(Self.png))
         chat.drafts.attach([image])
-        XCTAssertEqual(CodeComposer.slot(text: "", working: false, attached: true), .send)
+        XCTAssertEqual(CodeComposer.slot(text: "", attached: true), .send)
         chat.send()
         let pendingID = try XCTUnwrap(chat.optimisticPrompt?.id)
         try await TestSupport.eventually { helper.requests("chat.send").count == 1 && !chat.sending }

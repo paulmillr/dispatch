@@ -1300,3 +1300,29 @@ private struct RemoteTabHighlightPreview: View {
         .id(tint)
     }
 }
+
+extension SettingsSynchronizationTests {
+    /// Settings › Font's interface font: Source Code Pro by default, San Francisco (SF Rounded, as chat's) at its
+    /// lowercase height on request.
+    func testInterfaceFontDefaultsToSourceCodeProAndSwitchesToSystem() throws {
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).interfaceFont, .sourceCodePro)
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"interfaceFont":"Unknown"}"#.utf8)).interfaceFont,
+                       .sourceCodePro)
+        var preferences = Preferences(); preferences.interfaceFont = .system
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).interfaceFont, .system)
+
+        let store = InterfaceFontStore.shared, previous = store.current
+        defer { store.current = previous }
+        store.current = .sourceCodePro
+        XCTAssertEqual(AppFont.native(size: 14).fontName, "SourceCodePro-Regular")
+        XCTAssertEqual(AppFont.native(size: 14, semibold: true).fontName, "SourceCodePro-SemiBold")
+        store.current = .system
+        let system = AppFont.native(size: 14), code = try XCTUnwrap(NSFont(name: "SourceCodePro-Regular", size: 14))
+        XCTAssertEqual(system.familyName, ChatFont.system.systemFont(ofSize: 14)?.familyName, "SF Rounded")
+        XCTAssertEqual(AppFont.native(size: 14, semibold: true).familyName, system.familyName)
+        let digits = ["1111", "0000"].map { ($0 as NSString).size(withAttributes: [.font: system]).width }
+        XCTAssertEqual(digits[0], digits[1], "monospaced digits")
+        XCTAssertEqual(system.xHeight, code.xHeight, accuracy: 0.05, "the same lowercase height")
+        XCTAssertNotEqual(AppFont.ui(size: 14), Font.custom("SourceCodePro-Regular", size: 14))
+    }
+}

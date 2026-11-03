@@ -696,6 +696,25 @@ extension ChatRedesignTests {
         XCTAssertNotEqual(Self.pixel(image, at: probe), Self.rgb(canvas), "a bubble behind the thinking, not the canvas")
     }
 
+    func testEveryReplyHasItsTimeAndTheTurnsLastOneItsSummary() {
+        let metrics = ChatCornerMetrics(column: 370, measure: ChatMeasure.standard, size: .large)
+        let now = Date(), written = now.addingTimeInterval(-60)
+        let time = ChatTurnSummary.time(written, now: now, calendar: .autoupdatingCurrent)
+        let reply = ChatCorner.reply(time: written, summary: nil, now: now, metrics: metrics)
+        XCTAssertEqual(reply?.room, time)
+        XCTAssertEqual(reply?.spoken, time)
+        XCTAssertNil(reply?.hint)
+        let plain = ChatTurnSummary(steps: [], duration: 3, ended: written)
+        XCTAssertEqual(ChatCorner.reply(time: written, summary: plain, now: now, metrics: metrics)?.room, time,
+                       "a plain answer, the turn's last reply, has its time")
+        let tool = ChatItem(id: "t", kind: .tool, text: "", title: "Bash", completed: true)
+        let busy = ChatTurnSummary(steps: [tool, tool, tool], duration: 52, ended: written)
+        let summary = ChatCorner.reply(time: written, summary: busy, now: now, metrics: metrics)
+        XCTAssertEqual(summary?.room, busy.corner(now: now, calendar: .autoupdatingCurrent))
+        XCTAssertEqual(summary?.hint, "Shows the steps")
+        XCTAssertNil(ChatCorner.reply(time: nil, summary: nil, now: now, metrics: metrics), "read without a time")
+    }
+
     /// The 0...255 channels of `image` at `point`.
     private static func pixel(_ image: UIImage, at point: CGPoint) -> [Int] {
         let cg = image.cgImage!
@@ -835,14 +854,14 @@ extension ChatRedesignTests {
     }
 }
 
-/// S6e: while the turn runs and has agent text, its newest bubble's corner carries the spinner, step and time and the
-/// working row stays away; at the turn's end the corner settles into the summary in the same update, the bubble where
-/// it was. State and records arrive apart, in either order: no state in between shows (a blank corner, the working
-/// row back), checked at every turn of the main loop. The hold that rides that out (`chatSettle`) is set per test, so
-/// no check depends on the wall clock.
+/// M5a with S6d: the working row stays under the thread for as long as the agent works, its answer begun or not, and
+/// counts the steps since the agent last wrote (the Mac's live tool group); a reply's corner has its time until the
+/// turn's end puts the summary on its last one, in the same update as the row goes. State and records arrive apart, in
+/// either order: no state in between shows (neither row nor summary, the row back), checked at every turn of the main
+/// loop. The hold that rides that out (`chatSettle`) is set per test, so no check depends on the wall clock.
 extension ChatRedesignTests {
     /// The thread in a window, the fixture's second turn still open: its steps in, `answered` with its answer.
-    private func openTurnThread(answered: Bool, busy: Bool = true, hold: TimeInterval = 600, expandSteps: Bool = false)
+    private func openTurnThread(answered: Bool, busy: Bool = true, hold: TimeInterval = 600)
         async throws -> (MobileChatSession, ScriptedHelper, UInt64, UIWindow) {
         let helper = helper()
         let records = try ChatFixture.records("claude-thread").filter {
@@ -856,26 +875,31 @@ extension ChatRedesignTests {
         let window = UIWindow(windowScene: try XCTUnwrap(found))
         window.frame = CGRect(x: 0, y: 0, width: 402, height: 1400)
         window.rootViewController = UIHostingController(rootView: NavigationStack {
-            ChatThreadView(session: chat, space: "app", directory: "/work/app", expandSteps: expandSteps)
+            ChatThreadView(session: chat, space: "app", directory: "/work/app")
         }.environment(\.chatSettle, hold))
         window.isHidden = false
         return (chat, helper, id, window)
     }
 
-    /// What the thread shows of the open turn: the answer's corner as VoiceOver reads it, its frame, the working row.
+    /// What the thread shows of the open turn: the answer's corner as VoiceOver reads it, the working row's label and
+    /// steps.
     private struct Shown: Equatable {
         var corner: String?
-        var frame: CGRect?
-        var workingRow: Bool
+        var row: String?
+        var steps: String?
         var hint: String? = nil
+        var workingRow: Bool { row != nil }
     }
 
     private func shown(_ window: UIWindow) -> Shown {
         let elements = AccessibilityLabelTests.elements(in: window)
         let reply = elements.first { $0.accessibilityLabel?.hasPrefix("Right, the invoice.paid path") == true }
-        return Shown(corner: reply?.accessibilityValue, frame: reply?.accessibilityFrame,
-                     workingRow: elements.contains { $0.accessibilityLabel?.contains(" is thinking") == true },
-                     hint: reply?.accessibilityHint)
+        let row = elements.first { label in
+            [" is thinking", " is waiting for your"].contains { label.accessibilityLabel?.contains($0) == true }
+        }
+        return Shown(corner: reply?.accessibilityValue.flatMap { $0.isEmpty ? nil : $0 },
+                     row: row?.accessibilityLabel.map { $0.contains(" is thinking") ? "thinking" : $0 },
+                     steps: row?.accessibilityValue, hint: reply?.accessibilityHint.flatMap { $0.isEmpty ? nil : $0 })
     }
 
     /// Samples the thread at every turn of the main loop until `done`, returning each state seen.
@@ -913,47 +937,57 @@ extension ChatRedesignTests {
         helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: busy)])
     }
 
-    func testTheWorkingRowGivesWayToTheBubblesCornerWhichSettlesIntoTheSummary() async throws {
+    /// The open turn's answer's corner: when it was written.
+    private var answerTime: String {
+        ChatTurnSummary.time(Date(timeIntervalSince1970: 946_719_172), now: Date(), calendar: .autoupdatingCurrent)
+    }
+
+    /// A step of the open turn after its answer.
+    private func step(_ helper: ScriptedHelper, _ id: UInt64) throws {
+        var tool = try XCTUnwrap(ChatFixture.records("claude-thread").first { $0["id"] as? String == "tool-d1" })
+        tool["id"] = "tool-d5"
+        tool["time_ms"] = 946_719_173_000
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [tool]])
+    }
+
+    func testTheWorkingRowStaysThroughTheTurnCountingTheStepsSinceTheAgentWrote() async throws {
         let (chat, helper, id, window) = try await openTurnThread(answered: false)
         defer { window.isHidden = true }
-        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).steps?.hasPrefix("4 steps") == true }
 
-        // The answer arrives: the row goes and the corner takes the work, at once.
+        // The answer arrives: the row stays, its count starts again as the Mac's next tool group, the corner has its time.
         let answer = try XCTUnwrap(ChatFixture.records("claude-thread").first { $0["id"] as? String == "claude-f2-0" })
         helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [answer]])
-        let working = "working, step 4"
-        var seen = try await sample(window) { $0.corner == working }
-        XCTAssertFalse(seen.contains { $0.corner != nil && $0.workingRow }, "the row and the corner never both: \(seen)")
-        let frame = try XCTUnwrap(seen.last?.frame)
-        XCTAssertEqual(seen.last?.hint, "Shows the steps")
-        XCTAssertNotNil(chat.transcript.progressRow)
+        var seen = try await sample(window) { $0.steps == "No steps yet" }
+        XCTAssertFalse(seen.contains { !$0.workingRow || $0.corner.map { $0 != answerTime } == true }, "the row all along: \(seen)")
+        XCTAssertEqual(seen.last?.corner, answerTime)
+        try step(helper, id)
+        seen = try await sample(window) { $0.steps?.hasPrefix("1 step,") == true }
+        XCTAssertFalse(seen.contains { !$0.workingRow || $0.corner != answerTime }, "\(seen)")
 
-        // The state says idle before the turn's end comes: the corner keeps its progress all through the hold.
+        // The state says idle before the turn's end comes: the row stays all through the hold, the corner its time.
         state(helper, id, busy: false)
         try await TestSupport.eventually { !chat.working }
         seen = try await sample(window, for: .milliseconds(1_000))
-        XCTAssertEqual(Set(seen.map(\.corner)), [working], "no blank corner while the end is on its way: \(seen)")
-        XCTAssertFalse(seen.contains { $0.workingRow || $0.frame != frame }, "\(seen)")
+        XCTAssertFalse(seen.contains { !$0.workingRow || $0.corner != answerTime }, "the row while the end is on its way: \(seen)")
 
         end(helper, id)
-        seen = try await sample(window) { $0.corner != working }
+        seen = try await sample(window) { !$0.workingRow }
         let summary = try XCTUnwrap(chat.transcript.rows.compactMap(\.kind.summary).last?.spokenCorner(now: Date(), calendar: .autoupdatingCurrent))
-        XCTAssertEqual(seen.map(\.corner), [working, summary], "straight from the progress to the summary")
-        XCTAssertFalse(seen.contains { $0.workingRow })
-        let settled = try XCTUnwrap(seen.last?.frame)
-        XCTAssertEqual(settled, frame, "the bubble stays where it was, its height too: the room held the summary already")
+        XCTAssertEqual(seen.last?.corner, summary, "the row goes as the summary comes, in one update: \(seen)")
+        XCTAssertEqual(seen.last?.hint, "Shows the steps")
     }
 
     func testATurnsEndBeforeTheIdleStateNeverBringsTheWorkingRowBack() async throws {
         let (chat, helper, id, window) = try await openTurnThread(answered: true)
         defer { window.isHidden = true }
-        let working = "working, step 4"
-        _ = try await sample(window) { $0.corner == working }
+        _ = try await sample(window) { $0.workingRow }
         end(helper, id)
         try await TestSupport.eventually { chat.transcript.openTurn == nil }
         XCTAssertTrue(chat.working, "the state still says busy")
         let seen = try await sample(window, for: .milliseconds(1_000))
         XCTAssertFalse(seen.contains { $0.workingRow }, "the working row stays away while the idle state is on its way: \(seen)")
+        XCTAssertNotNil(seen.last?.corner)
         state(helper, id, busy: false)
         try await TestSupport.eventually { !chat.working }
         XCTAssertFalse(shown(window).workingRow)
@@ -963,7 +997,7 @@ extension ChatRedesignTests {
         // A short hold: the busy state that ran through the turn's end outlives it (a subagent still working).
         let (chat, helper, id, window) = try await openTurnThread(answered: true, hold: 0.3)
         defer { window.isHidden = true }
-        _ = try await sample(window) { $0.corner == "working, step 4" }
+        _ = try await sample(window) { $0.workingRow }
         end(helper, id)
         try await TestSupport.eventually { chat.transcript.openTurn == nil }
         try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
@@ -971,7 +1005,7 @@ extension ChatRedesignTests {
         // A long hold: another device's prompt makes the agent busy again before its turn starts; the row shows at once.
         let (other, otherHelper, otherID, otherWindow) = try await openTurnThread(answered: true)
         defer { otherWindow.isHidden = true }
-        _ = try await sample(otherWindow) { $0.corner == "working, step 4" }
+        _ = try await sample(otherWindow) { $0.workingRow }
         end(otherHelper, otherID)
         state(otherHelper, otherID, busy: false)
         try await TestSupport.eventually { !other.working && other.transcript.openTurn == nil }
@@ -981,74 +1015,107 @@ extension ChatRedesignTests {
         try await TestSupport.eventually(diagnostic: "\(shown(otherWindow))") { self.shown(otherWindow).workingRow }
     }
 
-    func testAnUnfoldedStepListStaysAndWaitingSaysForWhat() async throws {
-        let (chat, helper, id, window) = try await openTurnThread(answered: false, expandSteps: true)
+    func testWaitingTheRowSaysForWhat() async throws {
+        let (chat, helper, id, window) = try await openTurnThread(answered: true)
         defer { window.isHidden = true }
-        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
-        let answer = try XCTUnwrap(ChatFixture.records("claude-thread").first { $0["id"] as? String == "claude-f2-0" })
-        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [answer]])
-        let seen = try await sample(window) { $0.corner == "working, step 4" }
-        XCTAssertTrue(seen.last?.workingRow == true, "the unfolded step list (M5f) stays readable beside the corner")
-
+        _ = try await sample(window) { $0.workingRow }
         helper.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval()])
         try await TestSupport.eventually { chat.waitingForUser }
-        let waiting = try await sample(window) { $0.corner?.hasPrefix("waiting for your") == true }
-        XCTAssertTrue(waiting.last?.corner?.hasSuffix(", step 4") == true, "\(waiting)")
-        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: ChatTurnProgressCorner.word("waiting for your approval")),
-                       "step 4 · approve")
-        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: ChatTurnProgressCorner.word("waiting for your answer")),
-                       "step 4 · answer")
-        XCTAssertEqual(ChatTurnProgressCorner.spoken(steps: 4, waiting: "waiting for your answer"), "waiting for your answer, step 4")
+        let seen = try await sample(window) { $0.row?.hasSuffix("is waiting for your approval") == true }
+        XCTAssertEqual(seen.last?.corner, answerTime, "\(seen)")
     }
 
-    func testAnOpenTurnWhoseAgentStoppedKeepsItsRoomButSaysNothing() async throws {
+    func testAnOpenTurnOfAnIdleAgentShowsNoRowAndTheReplysTime() async throws {
         // A turn left open (interrupted, its end never written) by an agent that is idle.
         let (_, _, _, window) = try await openTurnThread(answered: true, busy: false)
         defer { window.isHidden = true }
-        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).frame != nil }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") {
+            AccessibilityLabelTests.elements(in: window).contains { $0.accessibilityLabel?.hasPrefix("Right, the invoice.paid path") == true }
+        }
         let seen = try await sample(window, for: .milliseconds(300))
-        XCTAssertEqual(seen.last?.corner ?? "", "", "no value: \(seen)")
-        XCTAssertEqual(seen.last?.hint ?? "", "", "no hint without a corner")
-        XCTAssertFalse(seen.contains { $0.workingRow })
+        XCTAssertEqual(seen, [Shown(corner: answerTime)], "the reply's time, no hint, no row")
     }
 
-    func testTheProgressRoomHoldsTheWidestCornerOfTheFirstHourAndTheSummary() {
-        func width<V: View>(_ view: V) -> CGFloat {
-            UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 1000, height: 100)).width
-        }
-        let room = width(Text(ChatTurnCorner.room(ChatTurnProgressCorner.room(steps: 4))).fixedSize())
-        let gap = width(Text(ChatTurnCorner.room("x")).fixedSize()) - width(ChatTurnCorner(text: "x"))
-        let widest = width(ChatTurnProgressCorner(steps: 999, since: Date().addingTimeInterval(-3_599)))
-        XCTAssertGreaterThanOrEqual(room - gap, widest, "room \(room), gap \(gap), corner \(widest)")
-        XCTAssertEqual(ChatTurnProgressCorner.room(steps: 4), ChatTurnProgressCorner.room(steps: 120), "three digits held from the start")
-        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: "38s"), "step 4 · 38s")
-        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 0, elapsed: "3s"), "3s", "the time alone before the first step")
-        XCTAssertEqual(ChatTurnProgressCorner.spoken(steps: 4, waiting: nil), "working, step 4")
+    // MARK: Background shells
+
+    func testRunningShellsShowOverTheComposerUntilTheyEnd() async throws {
+        var reported = ChatFixture.state(busy: false)
+        reported["shells"] = [["id": "b1", "name": "Serve the docs", "command": "python3 -m http.server 8000", "started_ms": 946_719_000_000],
+                              ["id": "b2", "command": "make test"]]
+        let helper = helper()
+        let chat = try await opened(helper, records: [], state: reported)
+        XCTAssertEqual(chat.shells.map(\.title), ["Serve the docs", "make test"])
+        XCTAssertEqual(chat.shells.map(\.detail), ["python3 -m http.server 8000", nil])
+        XCTAssertEqual(chat.shells[0].started, Date(timeIntervalSince1970: 946_719_000))
+        XCTAssertEqual(ChatShellsLine.label(chat.shells), "2 shells running")
+        XCTAssertEqual(ChatShellsLine.label(Array(chat.shells.prefix(1))), "Serve the docs")
+        XCTAssertFalse(chat.working, "A running shell is not the agent's work")
+        chat.showingShells = true
+        // The next state without them ends them, and the list closes with the last.
+        state(helper, try XCTUnwrap(helper.subscription("chat.open")), busy: false)
+        try await TestSupport.eventually { chat.shells.isEmpty }
+        XCTAssertFalse(chat.showingShells)
+    }
+}
+
+/// Times on swipe (`ChatReveal`): the corners leave the bubbles, the text keeps no room for them and VoiceOver still
+/// reads them; the swipe slides the thread up to the times' column, then a fifth as far.
+extension ChatRedesignTests {
+    func testWithTimesOnSwipeTheBubbleKeepsNoRoomAndStillSaysItsTime() async throws {
         let metrics = ChatCornerMetrics(column: 370, measure: ChatMeasure.standard, size: .large)
-        let summary = "PaymentWebhook.ts +1,204 −380 · 10:17"
-        XCTAssertEqual(metrics.wider(ChatTurnProgressCorner.room(steps: 4), summary), summary, "a wider summary sets the room")
-        XCTAssertEqual(metrics.wider("Read 3 files · 1:04", ChatTurnProgressCorner.room(steps: 4)), ChatTurnProgressCorner.room(steps: 4),
-                       "a narrower summary keeps the progress's room")
-    }
-
-    func testWithReduceMotionTheSpinnerIsAStillDiamond() throws {
-        func image(_ reduceMotion: Bool) -> UIImage? {
-            let renderer = ImageRenderer(content: ChatTurnProgressCorner(steps: 4, since: Date())
-                .environment(\.reduceMotionOverride, reduceMotion).padding(4).background(Color.white))
-            renderer.scale = 2
-            return renderer.uiImage
+        let now = Date()
+        let corner = try XCTUnwrap(ChatCorner.reply(time: now.addingTimeInterval(-60), summary: nil, now: now, metrics: metrics))
+        // A last line the time shares in the corner, and one the room pushes onto a line of its own.
+        for text in ["The guard skips a repeated event.", String(repeating: "The guard skips a repeated event id ", count: 3)] {
+            func size<V: View>(_ view: V) -> CGSize {
+                UIHostingController(rootView: view.environment(\.chatColumnWidth, 370).frame(width: 300))
+                    .sizeThatFits(in: CGSize(width: 300, height: 1000))
+            }
+            XCTAssertEqual(size(MobileChatMarkdownView(text: text, corner: corner.spokenOnly)), size(MobileChatMarkdownView(text: text)),
+                           "no room kept: \(text)")
         }
-        func pink(_ image: UIImage?) -> Bool {
-            guard let cg = image?.cgImage else { return false }
-            var bytes = [UInt8](repeating: 0, count: cg.width * cg.height * 4)
-            let context = CGContext(data: &bytes, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: cg.width * 4,
-                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            context?.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
-            return stride(from: 0, to: bytes.count, by: 4).contains { p in
-                Int(bytes[p]) > 150 && Int(bytes[p + 2]) > 120 && Int(bytes[p + 1]) < Int(bytes[p]) - 50
+
+        AccessibilityLabelTests.enableAccessibility()
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 400)
+        window.rootViewController = UIHostingController(rootView: ChatBubble(side: .agent) {
+            MobileChatMarkdownView(text: "The guard skips a repeated event.", corner: corner.spokenOnly)
+        }.environment(\.chatColumnWidth, 370))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await TestSupport.eventually(diagnostic: "\(AccessibilityLabelTests.elements(in: window).map { ($0.accessibilityLabel, $0.accessibilityValue) })") {
+            AccessibilityLabelTests.elements(in: window).contains {
+                $0.accessibilityLabel == "The guard skips a repeated event." && $0.accessibilityValue == corner.spoken
             }
         }
-        XCTAssertTrue(pink(image(true)), "the app's diamond, standing still")
-        XCTAssertFalse(pink(image(false)), "the system spinner otherwise")
+    }
+
+    func testTheSwipeSlidesUpToTheColumnThenAFifthAsFar() {
+        XCTAssertEqual(ChatReveal.offset(-50, width: 112), 50)
+        XCTAssertEqual(ChatReveal.offset(30, width: 112), 0, "toward the trailing edge it stays")
+        XCTAssertEqual(ChatReveal.offset(-212, width: 112), 132)
+        XCTAssertEqual(ChatRevealDetail.lines("2 files +4 −4 · 10:17"), "2 files +4 −4\n10:17", "the time under the summary")
+        XCTAssertEqual(ChatRevealDetail.lines("10:17"), "10:17")
+    }
+
+    /// As in Messages, a reply stays where it is while its time fades in beside it, in the room the bubble leaves (two
+    /// lines where it needs them), under the turn's step count on its last reply; nothing is drawn in its corner.
+    func testARepliesTimeFadesInBesideItWithTheTurnsSteps() {
+        let reveal = ChatReveal()
+        reveal.drag(-44, width: 88)
+        XCTAssertEqual(reveal.progress, 0.5)
+        reveal.drag(-400, width: 88)
+        XCTAssertEqual(reveal.progress, 1, "past the column, all the way in")
+        XCTAssertEqual(ChatRevealReceived<EmptyView>.room(column: 370, bubble: 200), 164)
+        XCTAssertEqual(ChatRevealReceived<EmptyView>.room(column: 370, bubble: 318), ChatRevealReceived<EmptyView>.narrowest,
+                       "beside a reply at 86% of the column: a day's word still on a line")
+
+        let now = Date()
+        let metrics = ChatCornerMetrics(column: 370, measure: ChatMeasure.standard, size: .large)
+        let plain = ChatCorner.swiped(time: now.addingTimeInterval(-60), summary: nil, now: now, metrics: metrics)
+        XCTAssertEqual(plain.corner?.drawn, false, "nothing drawn in the corner")
+        XCTAssertEqual(plain.time, plain.corner?.spoken)
+        XCTAssertFalse(plain.time?.contains("step") ?? true)
     }
 }

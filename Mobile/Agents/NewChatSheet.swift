@@ -50,7 +50,9 @@ extension ChatConversations {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while ContinuousClock.now < deadline {
             if let key = key(host: space.host, terminal: terminal) {
-                if let settings { session(for: key).pendingSettings = settings }
+                let chat = session(for: key)
+                if let settings { chat.pendingSettings = settings }
+                chat.launched(launch.label)
                 return key
             }
             try await Task.sleep(for: .milliseconds(100))
@@ -134,11 +136,17 @@ struct NewChatSheet: View {
                 .accessibilityLabel("Close")
                 Spacer()
                 Button(action: start) {
-                    Text("Start").font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.onAccent)
-                        .padding(.horizontal, 6)
-                        .frame(minHeight: 28)
+                    // Spins until the agent's tab shows (`ChatConversations.start`), as New space's Create does.
+                    Group {
+                        if starting { ProgressView().tint(Color.onAccent) } else { Text("Start") }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.onAccent)
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 28)
                 }
+                .accessibilityLabel("Start")
+                .accessibilityValue(starting ? "Starting \(selectedLaunch?.label ?? "the agent")" : "")
                 .buttonStyle(.glassProminent)
                 .tint(Color.dispatchPink)
                 .disabled(space == nil || selectedLaunch == nil || starting || making != nil)

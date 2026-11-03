@@ -33,6 +33,11 @@ import ImageIO
         case text(language: String)
     }
 
+    /// A name the loader reads as an image, before its bytes arrive.
+    static func isImageName(_ name: String) -> Bool {
+        imageExtensions.contains((name as NSString).pathExtension.lowercased())
+    }
+
     static func decide(name: String, size: UInt64, head: Data) -> Decision {
         let ext = (name as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return size <= imageLimit ? .image : .binary }

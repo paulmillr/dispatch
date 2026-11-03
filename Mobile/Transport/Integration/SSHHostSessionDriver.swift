@@ -19,10 +19,15 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// latency ping (`pingInterval`) keeps it alive while connected, so it must stay at most `livenessPing`. With
     /// `screens.host` the helper reads the screens of the terminals the phone attaches from tmux or herdr itself, so the
     /// phone publishes none (`TerminalFeed.hostsScreens`); with `terminals.follow` too a terminal only a conversation
-    /// uses holds its output (`TerminalPresence`).
+    /// uses holds its output (`TerminalPresence`). With `sizes.steady` opening a tab resizes its tmux window alone, not
+    /// every other window of its session. With `topology.bound` the first topology names the agents already running in
+    /// tmux (the helper's discovery looked at its panes first, at most 1 s, within `firstTopology`).
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",
-                           "launch.names", "stdio.liveness", "terminals.activity", ChatAttachment.feature,
-                           "memberships.append", HelperSession.screensHost, HelperSession.terminalsFollow]
+                           "launch.names", "stdio.liveness", ChatAttachment.feature,
+                           "memberships.append", HelperSession.screensHost, HelperSession.terminalsFollow, "sizes.steady",
+                           "topology.bound"]
+    /// The longest a `topology.bound` helper holds a tmux server's first topology (helper/PROTOCOL.md, `BOUND_WAIT`).
+    static let boundWait: Duration = .seconds(1)
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
     static let livenessPing: Duration = .seconds(15)
 

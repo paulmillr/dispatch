@@ -123,7 +123,9 @@ def groups(facts):
 
 
 # login(1)'s banner: "Last login: Fri Oct 16 14:44:47 on ttys007", the account's previous login to the second (sshd's
-# adds the year and where from). The time is the needle; its line, tty and host vary.
+# adds the year and where from). The time is the needle, with the banner's "Last login: " before it: the same second in
+# another form is no login (Claude Code's sessions/<pid>.json `procStart`, a process's start in `ps -o lstart` form, which
+# the harness checks against the process). Its line, tty and host vary.
 BANNER = re.compile(rb'Last login: ((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d '
                     rb'\d\d:\d\d:\d\d)')
 
@@ -158,7 +160,7 @@ def banners(directories):
     values = [value for second in range(2 * len(times) + 1)
               for value in [f'Thu Jan  1 {second // 3600:02d}:{second // 60 % 60:02d}:{second % 60:02d}'] if value not in times]
     secrets.SystemRandom().shuffle(values)
-    return [f'{time}\t{value}' for time, value in zip(sorted(times), values)]
+    return [f'Last login: {time}\tLast login: {value}' for time, value in zip(sorted(times), values)]
 
 
 def emit(where, candidates, context, seen, out):

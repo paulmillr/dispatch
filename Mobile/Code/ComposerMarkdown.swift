@@ -98,24 +98,6 @@ struct ComposerMarkdown: Equatable {
         let text: String
         let selection: NSRange
     }
-
-    /// `pasted` (at `range` of `text`) as a fenced block on lines of its own ("Paste as code").
-    static func fenced(_ pasted: String, replacing range: NSRange, in text: String, language: String = "") -> Edit {
-        let source = text as NSString
-        var body = pasted
-        while body.hasSuffix("\n") { body.removeLast() }
-        let before = range.location > 0 && source.character(at: range.location - 1) != unichar(10) ? "\n" : ""
-        let afterIndex = NSMaxRange(range)
-        let after = afterIndex < source.length && source.character(at: afterIndex) != unichar(10) ? "\n" : ""
-        let value = before + "```" + language + "\n" + body + "\n```" + after
-        let end = range.location + (before + "```" + language + "\n" + body + "\n```").utf16.count
-        return Edit(range: range, text: value, selection: NSRange(location: end, length: 0))
-    }
-
-    /// Whether pasting `string` offers "Paste as code": several lines, outside code.
-    static func offersCode(_ string: String) -> Bool {
-        string.trimmingCharacters(in: .whitespacesAndNewlines).contains("\n")
-    }
 }
 
 /// The key row above the keyboard (M5e): the backtick, the fence, braces, parentheses, the arrow and tab.

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Which multiplexer a host's spaces come from: "tmux" or "herdr" in a small grey chip, in the caption's monospaced face
-/// (the names are commands; neither project has a mark of its own to draw). Spaces' host headers, host detail's Spaces
-/// header and New space's host field show it. A host shows one multiplexer's spaces at a time; while that is unknown
+/// (the names are commands; neither project has a mark of its own to draw). Spaces' host headers and New space's host
+/// field show it. A host shows one multiplexer's spaces at a time; while that is unknown
 /// (none followed yet, a switch on its way: `HostSession.spacesMultiplexer`) the views draw no chip.
 struct MultiplexerMark: View {
     let name: String
@@ -22,7 +22,7 @@ struct MultiplexerMark: View {
 }
 
 /// A plain SSH host (docs/ios.md, Plain SSH: no helper, so no multiplexer's spaces) where `MultiplexerMark` goes, in
-/// the same chip: Spaces' host headers and host detail's Spaces header.
+/// the same chip: Spaces' host headers.
 struct PlainSSHMark: View {
     var body: some View { MultiplexerMark(name: HostSummary.plainSSH) }
 }

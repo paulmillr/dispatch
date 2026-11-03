@@ -76,8 +76,7 @@ Dispatch is a normal terminal. If you've used terminals, it should be intuitive.
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
-    - Requires codex-cli 0.164.0, claude 2.1.311, pi 1.4.0 or nanocode
-    - Try [Nanocodex](https://github.com/gakonst/nanocodex): Codex rebuilt so that it's faster and can be embedded in third party applications via an ergonomic library API
+    - Requires codex-cli 0.164.0, claude 2.1.311 or pi 1.4.0
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 ## License

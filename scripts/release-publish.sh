@@ -23,9 +23,10 @@
 #           addresses: DISPATCH_ADHOC_URL/<variant>/<build>/ (~/.config/dispatch-release/<variant>-adhoc.env), where
 #           the three files are to be served. The .ipa lists every registered device's UDID (embedded.mobileprovision),
 #           so only from a host nobody can list or browse. With DISPATCH_ADHOC_SITE, the folder of a git clone served at
-#           DISPATCH_ADHOC_URL, they are copied there as the variant's only build, with <variant>/index.html its install page too, and the
-#           branch is rewritten to one commit and pushed (--force-with-lease), so no older .ipa stays in its history.
-#           A public GitHub repository is refused. Each --ad-hoc run signs again (offline, quick): the files name their
+#           DISPATCH_ADHOC_URL (a git clone or a plain folder), they are copied there as the variant's only build, with
+#           <variant>/index.html its install page too. In a git clone the branch is then rewritten to one commit and pushed
+#           (--force-with-lease), so no older .ipa stays in its history, and a public GitHub repository is refused.
+#           DISPATCH_ADHOC_DEPLOY, a shell command, runs after that: a host deployed from the folder. Each --ad-hoc run signs again (offline, quick): the files name their
 #           addresses, which may have changed since.
 # Writes published.json, commits it with the DMG and pushes. Rerun after a failure: notarization resumes where it
 # stopped, and a finished part is skipped (markers in the release folder's export/, which git ignores).
@@ -286,27 +287,40 @@ PY
   if [[ -n "${DISPATCH_ADHOC_SITE:-}" ]]; then
     site="$DISPATCH_ADHOC_SITE"
     mkdir -p "$site"
-    root="$(git -C "$site" rev-parse --show-toplevel 2> /dev/null)" || fail "DISPATCH_ADHOC_SITE $site is not in a git clone"
-    branch="$(git -C "$root" branch --show-current)"
-    [[ -n "$branch" && -z "$(git -C "$root" status --porcelain)" ]] || fail "$root: not on a branch, or uncommitted changes"
-    # The .ipa lists the testers' UDIDs: never into a repository anyone can read.
-    origin="$(git -C "$root" remote get-url origin)"
-    if [[ "$origin" =~ github\.com[:/]([^/]+)/([^/]+)$ ]]; then
-      repository="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
-      [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/$repository")" != 200 ]] ||
-        fail "$repository is public, and the .ipa lists your testers' UDIDs: use a private repository (README.md, Ad Hoc builds)"
+    root="$(git -C "$site" rev-parse --show-toplevel 2> /dev/null || true)"
+    if [[ -n "$root" ]]; then
+      branch="$(git -C "$root" branch --show-current)"
+      [[ -n "$branch" && -z "$(git -C "$root" status --porcelain)" ]] || fail "$root: not on a branch, or uncommitted changes"
+      # The .ipa lists the testers' UDIDs: never into a repository anyone can read.
+      origin="$(git -C "$root" remote get-url origin)"
+      if [[ "$origin" =~ github\.com[:/]([^/]+)/([^/]+)$ ]]; then
+        repository="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
+        [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/$repository")" != 200 ]] ||
+          fail "$repository is public, and the .ipa lists your testers' UDIDs: use a private repository (README.md, Ad Hoc builds)"
+      fi
+      [[ -z "$push" ]] || git -C "$root" pull --ff-only --quiet
     fi
-    [[ -z "$push" ]] || git -C "$root" pull --ff-only --quiet
     rm -rf "${site:?}/$variant"
     mkdir -p "$site/$variant/$number"
     cp "$folder/adhoc/Dispatch.ipa" "$folder/adhoc/manifest.plist" "$folder/adhoc/index.html" "$site/$variant/$number/"
     cp "$folder/adhoc/index.html" "$site/$variant/index.html"
-    git -C "$site" add -A .
-    old="$(git -C "$root" rev-parse HEAD)"
-    new="$(TZ=UTC git -C "$root" commit-tree "$(git -C "$root" write-tree)" -m "Site, with Dispatch $variant $number (Ad Hoc)")"
-    git -C "$root" update-ref "refs/heads/$branch" "$new" "$old"
-    git -C "$root" reset --quiet
-    [[ -z "$push" ]] || git -C "$root" push --quiet --force-with-lease="$branch:$old" origin "$branch"
+    if [[ -n "$root" ]]; then
+      git -C "$site" add -A .
+      old="$(git -C "$root" rev-parse HEAD)"
+      new="$(TZ=UTC git -C "$root" commit-tree "$(git -C "$root" write-tree)" -m "Site, with Dispatch $variant $number (Ad Hoc)")"
+      git -C "$root" update-ref "refs/heads/$branch" "$new" "$old"
+      git -C "$root" reset --quiet
+      [[ -z "$push" ]] || git -C "$root" push --quiet --force-with-lease="$branch:$old" origin "$branch"
+    fi
+  fi
+  # A host deployed from a folder rather than a repository: its command, run once the files are in place.
+  if [[ -n "${DISPATCH_ADHOC_DEPLOY:-}" ]]; then
+    if [[ -n "$push" ]]; then
+      echo "Deploying: $DISPATCH_ADHOC_DEPLOY"
+      bash -c "$DISPATCH_ADHOC_DEPLOY" || fail "the deploy command failed; the files are in ${DISPATCH_ADHOC_SITE:-$folder/adhoc}"
+    else
+      echo "note: --no-push, so not deploying ($DISPATCH_ADHOC_DEPLOY)"
+    fi
   fi
 fi
 

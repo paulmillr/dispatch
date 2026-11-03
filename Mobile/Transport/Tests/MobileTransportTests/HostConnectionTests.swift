@@ -44,12 +44,45 @@ final class HostConnectionTests: XCTestCase {
     await harness.script.dropCurrent()
     for index in 1...8 {
       try await harness.clock.waitForSleepers(index)
-      harness.clock.advance(by: 60)
+      harness.clock.advance(by: seconds(harness.clock.requested[index - 1]))
     }
     try await awaitState(host, for: .connected)
     XCTAssertEqual(harness.clock.requested, [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16), .seconds(32), .seconds(60), .seconds(60)])
     let attempts = await harness.script.attempts
     XCTAssertEqual(attempts, 9)
+  }
+
+  /// A host still down five minutes after the loss stops being tried (ten retries, not one a minute for as
+  /// long as the app is open); `start` (Connect, a network change, foregrounding) begins again.
+  func testRetriesStopFiveMinutesAfterTheLoss() async throws {
+    let harness = Harness()
+    await harness.script.push(.success)
+    let host = harness.host()
+    await host.start()
+    try await awaitState(host, for: .connected)
+    await harness.script.dropCurrent()
+    // 1 + 2 + 4 + … + 32 + 4 × 60 s: the tenth retry fails at 303 s.
+    for index in 1...10 {
+      try await harness.clock.waitForSleepers(index)
+      harness.clock.advance(by: seconds(harness.clock.requested[index - 1]))
+    }
+    try await awaitState(host) { if case .failed = $0 { true } else { false } }
+    let state = await host.state
+    let failure = URLError(.cannotConnectToHost).localizedDescription
+    XCTAssertEqual(state, .failed(reason: HostConnectionPolicy.gaveUp(after: 300, failure)))
+    XCTAssertEqual(HostConnectionPolicy.gaveUp(after: 300, "Down."), "Stopped reconnecting after 5 minutes: Down.")
+    XCTAssertEqual(harness.clock.requested, [.seconds(1), .seconds(2), .seconds(4), .seconds(8), .seconds(16), .seconds(32),
+                                             .seconds(60), .seconds(60), .seconds(60), .seconds(60)])
+    let attempts = await harness.script.attempts
+    XCTAssertEqual(attempts, 11, "the first connection and ten retries")
+    // Nothing is scheduled after giving up.
+    harness.clock.advance(by: 3600)
+    try await Task.sleep(for: .milliseconds(50))
+    let after = await harness.script.attempts
+    XCTAssertEqual(after, 11)
+    await harness.script.push(.success)
+    await host.start()
+    try await awaitState(host, for: .connected)
   }
 
   func testLossSoonAfterPreviousLossBacksOff() async throws {

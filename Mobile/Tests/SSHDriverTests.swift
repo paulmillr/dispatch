@@ -164,8 +164,10 @@ final class SSHDriverTests: XCTestCase {
     func testHelloFeaturesAndTheLivenessPing() {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",
                                                        "terminals.coalesce", "launch.names", "stdio.liveness",
-                                                       "terminals.activity", "chat.attachments", "memberships.append",
-                                                       "screens.host", "terminals.follow"])
+                                                       "chat.attachments", "memberships.append",
+                                                       "screens.host", "terminals.follow", "sizes.steady", "topology.bound"])
+        XCTAssertLessThan(SSHHostSessionDriver.boundWait, SSHHostSessionDriver().firstTopology,
+                          "the helper's held first topology arrives within the wait for it")
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)
         XCTAssertEqual(SSHHostSessionDriver.livenessPing, .seconds(15))
     }

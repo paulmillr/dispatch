@@ -53,6 +53,17 @@ pub(crate) const ATTACHMENTS: &str = "chat.attachments";
 pub(crate) const ATTACHMENTS_PUT: &str = "attachments.put";
 pub(crate) const ATTACHMENTS_READ: &str = "attachments.read";
 
+/// Sizing a tmux terminal for this client leaves the windows it does not size as they were: before the control
+/// client's first per-window size it takes its session's current window size as its own (`Multiplexer::steady_sizes`),
+/// where tmux would otherwise count its default 80x24 for every other window of the session. Without it, the first
+/// `terminals.attach` or `terminals.resize` resized (and so redrew) every sibling window, as recorded clients expect.
+pub(crate) const SIZES_STEADY: &str = "sizes.steady";
+
+/// A backend's first topology waits (at most a second) for the multiplexer's agent discovery to look at its terminals
+/// (`Multiplexer::bound_topology`, tmux), so a client's first spaces name the agents already running: a reconnecting
+/// phone's tabs stay agents instead of turning into plain terminals and back. Helper-wide once a client names it.
+pub(crate) const TOPOLOGY_BOUND: &str = "topology.bound";
+
 /// The `login.release` operation (dispatch/release.rs): the Mac's greeting probe releases the SSH login waiting for it.
 /// Accepted only by a `--remote --stdio` helper without the login wrapper (helper.rs), so no other helper's hello
 /// changes.
@@ -75,6 +86,8 @@ pub(crate) const KNOWN: &[&str] = &[
     REQUESTS_BACKLOG,
     TERMINALS_WINDOW,
     LOGIN_RELEASE,
+    SIZES_STEADY,
+    TOPOLOGY_BOUND,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary

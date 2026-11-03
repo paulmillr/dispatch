@@ -78,7 +78,7 @@ struct FilesUnavailableScreen: View {
                     SegmentCapsule().padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
                 }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "Sidebar theme toggle", subtitle: AnyView(HostPath(path: "~/src/web"))) }
+                .toolbar { TabHeader(title: "Sidebar theme toggle") }
             }
         }
     }
@@ -189,11 +189,11 @@ struct DiffFoldOutdatedScreen: View {
             .allowsHitTesting(false)
     }
 
-    /// 28 unchanged lines between the hunks, a tap opens them; the chevrons expand ten at a time from either side.
+    /// 28 unmodified lines between the hunks, a tap opens them; the chevrons expand ten at a time from either side.
     private var fold: some View {
         HStack(spacing: 8) {
             Image(systemName: "chevron.up").font(.caption2.weight(.bold)).foregroundStyle(.secondary).frame(width: 28)
-            Text("28 unchanged lines").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Color.stateUnread)
+            Text("28 unmodified lines").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(Color.stateUnread)
             Spacer()
             Image(systemName: "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary).padding(.trailing, 12)
         }
@@ -276,7 +276,7 @@ struct ChatEntryScreen: View {
                 SegmentCapsule(selected: 1, badge: 3).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { TabHeader(title: "Sidebar theme toggle", subtitle: AnyView(HostPath(path: "~/src/web"))) }
+            .toolbar { TabHeader(title: "Sidebar theme toggle") }
         }
     }
 }

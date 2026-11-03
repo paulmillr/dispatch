@@ -259,29 +259,6 @@ def sync_claude(vm):
     return checked[-1]
 
 
-def sync_nanocodex(vm):
-    """Copy an explicitly linked local nanocodex build; its test skips without one."""
-    link = ROOT / 'build/test-tools/bin/nanocodex'
-    if not link.exists():
-        return None
-    source = link.resolve()
-    digest = hashlib.sha256()
-    with source.open('rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-            digest.update(chunk)
-    destination = GUEST + '/test-tools/nanocodex'
-    inspected = inspect_binary(vm, destination)
-    if len(inspected) < 2 or inspected[0] != digest.hexdigest():
-        check_portable(vm, source)
-        guest(vm, '/bin/mkdir', '-p', GUEST + '/test-tools')
-        synchronize(vm, [str(source)], destination)
-        inspected = inspect_binary(vm, destination)
-        if len(inspected) < 2 or inspected[0] != digest.hexdigest():
-            raise RuntimeError('Guest nanocodex does not match the linked host build')
-    version = next((line for line in inspected if 'Version' in line), inspected[-1])
-    return version + ' (linked host build SHA-256 ' + digest.hexdigest() + ')'
-
-
 def pinned_tool(name):
     """A SHA-verified project-local test tool. Never downloads; ./run.sh --test prepares it."""
     if str(ROOT / 'scripts') not in sys.path:
@@ -615,12 +592,6 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
             with profile.stage('pi_sync'):
                 profile.data['tool_versions']['pi'] = sync_pi(vm)
                 print('Testing ' + profile.data['tool_versions']['pi'], flush=True)
-        if not fast and (not selected or 'DispatchTests' in selected or any('/Nanocodex' in test for test in selected)):
-            with profile.stage('nanocodex_sync'):
-                nanocodex = sync_nanocodex(vm)
-                if nanocodex:
-                    profile.data['tool_versions']['nanocodex'] = nanocodex
-                    print('Testing ' + nanocodex, flush=True)
         print("Running tests inside " + vm + "; log: " + str(output / "test.log"), flush=True)
         print("Testing " + version.strip(), flush=True)
         arguments = list(tests)

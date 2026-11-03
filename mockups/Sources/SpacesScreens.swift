@@ -186,6 +186,26 @@ struct SpacesRootScreen: View {
     }
 }
 
+/// The phone's root (M2a, `MobileRoot`): the system tab bar with Spaces and Agents in outline glyphs, the selected one
+/// in the primary colour, and New apart as the bar's trailing circle (iOS 27's prominent tab; a space with a plus in
+/// Spaces).
+struct SpacesTabBar<Content: View>: View {
+    @ViewBuilder var content: Content
+    private static var newRole: TabRole {
+        if #available(iOS 27, *) { .prominent } else { .search }
+    }
+    var body: some View {
+        TabView(selection: .constant(0)) {
+            Tab(value: 0) { content } label: { Label { Text("Spaces") } icon: { Image(systemName: "square.on.square").environment(\.symbolVariants, .none) } }
+            Tab(value: 1) { Color.canvas } label: { Label { Text("Agents") } icon: { Image(systemName: "bubble.left.and.bubble.right").environment(\.symbolVariants, .none) } }
+            Tab(value: 2, role: Self.newRole) { Color.canvas } label: {
+                Label { Text("New space") } icon: { Image(systemName: "plus.square.on.square").environment(\.symbolVariants, .none) }
+            }
+        }
+        .tint(.primary)
+    }
+}
+
 /// The filter chips as glyph-only 34-point glass discs (iPad sidebar): All, Needs you with its count, Agents; the
 /// selected one tinted.
 struct FilterDiscs: View {
@@ -243,7 +263,8 @@ struct FilterRow: View {
 }
 
 /// P2: a space, as the Mac strip shows it: tabs named for what runs in them, the kind glyph, what they are doing,
-/// the branch in the header; swipe for Close and Detach; Rename and Close space in the menu.
+/// the branch in the header; swipe for Close, which ends the tab (Detach is in the tab's menu); New tab, Edit, Detach
+/// and Terminate in the space's menu. Edit renames the space and its tabs in place.
 struct SpaceScreen: View {
     var swiped = false
     var menuOpen = false
@@ -255,19 +276,25 @@ struct SpaceScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
+                    if editing {
+                        // The space's name, renamed in place (SpaceNameField).
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Space").font(.footnote).foregroundStyle(.secondary).padding(.leading, 16)
+                            Text("app").font(.body).frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16).padding(.vertical, 12)
+                                .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 22))
+                        }
+                        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 14)
+                    }
                     VStack(spacing: 0) {
                         ForEach(Array(MockSpaces.appTabs.enumerated()), id: \.element.id) { i, tab in
                             tabRow(tab, index: i)
                                 .background(Color.groupedRow)
-                                .offset(x: swiped && i == 2 ? -150 : 0)
+                                .offset(x: swiped && i == 2 ? -75 : 0)
                                 .background(alignment: .trailing) {
                                     if swiped, i == 2 {
-                                        HStack(spacing: 0) {
-                                            VStack(spacing: 4) { Image(systemName: "eject.fill"); Text("Detach").font(.caption2.weight(.semibold)) }
-                                                .foregroundStyle(.white).frame(width: 75).frame(maxHeight: .infinity).background(Color.caution)
-                                            VStack(spacing: 4) { Image(systemName: "xmark"); Text("Close").font(.caption2.weight(.semibold)) }
-                                                .foregroundStyle(.white).frame(width: 75).frame(maxHeight: .infinity).background(Color.destructive)
-                                        }
+                                        VStack(spacing: 4) { Image(systemName: "xmark"); Text("Close").font(.caption2.weight(.semibold)) }
+                                            .foregroundStyle(.white).frame(width: 75).frame(maxHeight: .infinity).background(Color.destructive)
                                     }
                                 }
                                 .clipped()
@@ -276,9 +303,11 @@ struct SpaceScreen: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 22))
                     .padding(.horizontal, 16).padding(.top, 8)
-                    Text(editing ? "Drag to reorder. Closing a tab detaches it unless it is idle."
-                                 : "Long-press a tab for Rename, Detach and Terminate.")
-                        .font(.caption).foregroundStyle(.tertiary).padding(.top, 14)
+                    if editing {
+                        Text("Tap a name to rename it. Drag to reorder. Closing a tab ends it, after asking while work runs.")
+                            .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                            .padding(.horizontal, 32).padding(.top, 12)
+                    }
                     Color.clear.frame(height: 100)
                 }
             }
@@ -286,8 +315,8 @@ struct SpaceScreen: View {
             .overlay(alignment: .topTrailing) {
                 if menuOpen {
                     VStack(alignment: .leading, spacing: 0) {
-                        menuRow("Rename…", "pencil")
-                        menuRow("Edit tabs", "arrow.up.arrow.down")
+                        menuRow("New tab", "plus")
+                        menuRow("Edit", "pencil")
                         Divider().padding(.vertical, 4)
                         menuRow("Detach", "eject", note: "keeps everything running")
                         menuRow("Terminate…", "xmark.octagon", note: "ends every shell and agent", destructive: true)
@@ -403,10 +432,6 @@ struct SpaceScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tab.name).font(.headline).lineLimit(1).truncationMode(.tail)
-                    if tab.current {
-                        Text("open").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                            .padding(.horizontal, 6).frame(height: 16).background(Color.chipFill, in: Capsule())
-                    }
                     Spacer()
                     if editing {
                         Image(systemName: "line.3.horizontal").font(.body).foregroundStyle(.tertiary)
@@ -423,20 +448,11 @@ struct SpaceScreen: View {
 }
 
 /// The agent's mark at the row's leading edge: Claude's sparkle, Codex's angle brackets, Pi's π, a terminal glyph for a shell.
+/// The style comes from `agentIconStyle` (AgentIcons.swift); today's by default.
 struct AgentGlyph: View {
     let kind: String
-    var body: some View {
-        Group {
-            switch kind {
-            case "claude": Image(systemName: "sparkle").foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-            case "codex": Image(systemName: "chevron.left.forwardslash.chevron.right").foregroundStyle(.primary)
-            case "pi": Text("π").font(.system(size: 18, weight: .semibold, design: .serif)).foregroundStyle(Color.codeType)
-            default: Image(systemName: "apple.terminal").foregroundStyle(.secondary)
-            }
-        }
-        .font(.system(size: 18))
-        .frame(width: 26)
-    }
+    @Environment(\.agentIconStyle) private var style
+    var body: some View { StyledAgentGlyph(kind: kind, style: style) }
 }
 
 /// P3: the host disc on a tab screen opens the space switcher: this space's tabs with the current one marked, New tab,

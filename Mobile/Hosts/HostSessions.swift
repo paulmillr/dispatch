@@ -94,6 +94,15 @@ final class HostSessions {
     @ObservationIgnored var holdBudget: Duration = .seconds(15)
     /// Each held host's expiry.
     @ObservationIgnored private var holds: [UUID: Task<Void, Never>] = [:]
+    /// How long connected hosts stay connected after the app leaves the foreground (`linger`): a switch to another app
+    /// and back finds them as they were instead of reconnecting each. Zero disconnects at once (tests, previews); the
+    /// app's is `appLinger`, within the background time iOS gives.
+    @ObservationIgnored var lingerLength: Duration = .zero
+    /// Background time (`UIApplication.beginBackgroundTask`, `WatchBridge.applicationBackgroundTask`): the returned
+    /// closure gives it back; `expired` runs when the system takes it back first. Nil: no linger.
+    @ObservationIgnored var backgroundTime: ((_ expired: @escaping @MainActor () -> Void) -> @MainActor () -> Void)?
+    @ObservationIgnored private var lingering: Task<Void, Never>?
+    @ObservationIgnored private var endBackgroundTime: (@MainActor () -> Void)?
 
     @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var answering: [UUID: CheckedContinuation<[String]?, Never>] = [:]
@@ -135,14 +144,52 @@ final class HostSessions {
         }
         self.active = active
         // Foreground: every host connects interactively, so no hold is left to expire; background: everything
-        // disconnects, holds included.
+        // disconnects, holds included, connected hosts after `lingerLength`.
         for task in holds.values { task.cancel() }
         holds = [:]
         if active, !quietRefusals.isEmpty { quietRefusals = [:] }
+        if active { endLinger() }
         for session in ordered {
             session.stats.active = active
-            if active { session.retryNow() } else { session.disconnect() }
+            // A connected link that lingered checks that it still answers (`retryNow`'s echo probe).
+            if active { session.retryNow() }
         }
+        if !active { linger() }
+    }
+
+    /// The app left the foreground: hosts still on their way disconnect now (no question may wait in the background);
+    /// connected ones stay for `lingerLength` of background time, then disconnect (`leave`).
+    private func linger() {
+        guard lingerLength > .zero, let backgroundTime, ordered.contains(where: { $0.link == .connected }) else {
+            leave()
+            return
+        }
+        for session in ordered where session.link != .connected { session.disconnect() }
+        endBackgroundTime = backgroundTime { [weak self] in self?.leave() }
+        let length = lingerLength
+        lingering = Task { [weak self] in
+            try? await Task.sleep(for: length)
+            guard !Task.isCancelled else { return }
+            self?.leave()
+        }
+    }
+
+    /// The background time is over: every host disconnects, but one a watch request holds (it ends with its hold).
+    private func leave() {
+        lingering?.cancel()
+        lingering = nil
+        if !active {
+            for session in ordered where holds[session.id] == nil { session.disconnect() }
+        }
+        endBackgroundTime?()
+        endBackgroundTime = nil
+    }
+
+    private func endLinger() {
+        lingering?.cancel()
+        lingering = nil
+        endBackgroundTime?()
+        endBackgroundTime = nil
     }
 
     /// The user disconnected this host (`HostSession.park`): background refresh and watch requests leave it alone until
@@ -378,6 +425,9 @@ final class HostSessions {
     /// goes off while the connection is already plain.
     func update(_ record: HostRecord) {
         guard let previous = store.record(record.id) else { return }
+        // Disconnect is the session's, not the edit's: a sheet opened before it carries the old value.
+        var record = record
+        record.parked = previous.parked
         store.update(record)
         guard let saved = store.record(record.id), let session = sessions[record.id] else { return }
         if previous.sameConnection(as: saved) {
@@ -592,6 +642,7 @@ final class HostSessions {
         }
         session.helloReceived = { [weak self] session, hello in self?.received(hello, on: session) }
         session.plainConnected = { [weak self] session in self?.connectedPlain(session) }
+        session.parkChanged = { [weak self] session in self?.parkChanged(session) }
         session.refusal = { [weak self] in self?.connectionRefusal }
         session.postConnect = postConnect
         session.clientEnded = clientEnded
@@ -656,6 +707,15 @@ final class HostSessions {
 
     /// Saves what the helper said about the host and when it was reached.
     /// A plain SSH connection: the connection time (no helper reports the OS).
+    /// Disconnect and Connect are saved with the host (`HostRecord.parked`), so a relaunch leaves a disconnected host
+    /// alone. A probe (New host) has no record yet; a replaced session's record already holds its value.
+    private func parkChanged(_ session: HostSession) {
+        guard sessions[session.id] === session, var record = store.record(session.id), record.parked != session.parked else { return }
+        record.parked = session.parked
+        store.update(record)
+        if let saved = store.record(record.id) { session.update(saved) }
+    }
+
     private func connectedPlain(_ session: HostSession) {
         guard var record = store.record(session.id) else { return }
         record.lastConnected = Date()

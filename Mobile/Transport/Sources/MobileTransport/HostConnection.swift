@@ -13,7 +13,8 @@ public enum HostConnectionState: Sendable, Equatable {
   /// Stays put through each attempt's phases, so the banner and its elapsed counter never flicker. `reason` is why
   /// the link is down: the latest attempt's failure, else why the connection was lost.
   case reconnecting(attempt: Int, since: Date, reason: String? = nil)
-  /// Refused (host key, credentials, incompatible helper): no automatic retry until `start` again.
+  /// Refused (host key, credentials, incompatible helper), or still down `giveUpAfter` after the loss (the reason says
+  /// so): no automatic retry until `start` again.
   case failed(reason: String)
 }
 
@@ -48,7 +49,8 @@ public enum HostConnectionPhase: Sendable {
 
 /// The reconnect policy of the Mac's SSHReconnect: a loss retries after 1 s, or backs off when it
 /// follows the previous loss within a minute; failed attempts back off 2, 4, 8 … 60 s. A network
-/// change or foregrounding (`retryNow`) tries at once and resets the backoff. Refusals stop.
+/// change or foregrounding (`retryNow`) tries at once and resets the backoff. Refusals stop, and so does a link still down
+/// `giveUpAfter` (5 minutes) after it went: an unreachable host is not tried every minute for as long as the app is open.
 public actor HostConnection<Session: HostSession> {
   public typealias Establish = @Sendable (_ phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> Session
 
@@ -63,6 +65,7 @@ public actor HostConnection<Session: HostSession> {
   private let clock: any ReconnectClock
   private let establish: Establish
   private let refused: @Sendable (any Error) -> Bool
+  private let giveUpAfter: TimeInterval
   private var task: Task<Void, Never>?
   private var failures = 0
   private var lastDrop: Date?
@@ -70,13 +73,16 @@ public actor HostConnection<Session: HostSession> {
   private var waiting: (id: UUID, continuation: CheckedContinuation<Void, Never>, timer: Task<Void, Never>)?
   private var observers: [UUID: AsyncStream<HostConnectionState>.Continuation] = [:]
 
-  /// `refused` classifies an error as final (no retry); by default SSH refusals and bootstrap failures.
+  /// `refused` classifies an error as final (no retry); by default SSH refusals and bootstrap failures. `giveUpAfter`:
+  /// how long after the loss (or the first failed attempt) a failed attempt ends the retries.
   public init(
     clock: any ReconnectClock = SystemReconnectClock(),
+    giveUpAfter: TimeInterval = 300,
     refused: @escaping @Sendable (any Error) -> Bool = HostConnectionPolicy.refused,
     establish: @escaping Establish
   ) {
     self.clock = clock
+    self.giveUpAfter = giveUpAfter
     self.establish = establish
     self.refused = refused
   }
@@ -171,7 +177,13 @@ public actor HostConnection<Session: HostSession> {
         }
         // Waiting for the next try shows as reconnecting, never as the failed attempt's last phase.
         if since == nil { since = clock.now }
-        reason = HostConnectionPolicy.describe(error)
+        let failure = HostConnectionPolicy.describe(error)
+        reason = failure
+        if clock.now.timeIntervalSince(since!) >= giveUpAfter {
+          state = .failed(reason: HostConnectionPolicy.gaveUp(after: giveUpAfter, failure))
+          self.generation = nil
+          return
+        }
         state = .reconnecting(attempt: attempt, since: since!, reason: reason)
         await pause(backoff())
       }
@@ -226,6 +238,12 @@ public enum HostConnectionPolicy: Sendable {
     case .timedOut, .channelClosed, .commandFailed, .outputLimit, .network, .connectFailed, .protocolError:
       return false
     }
+  }
+
+  /// Why retries ended for a host still unreachable `interval` after it went.
+  public static func gaveUp(after interval: TimeInterval, _ failure: String) -> String {
+    let minutes = max(1, Int((interval / 60).rounded()))
+    return "Stopped reconnecting after \(minutes) minute\(minutes == 1 ? "" : "s"): \(failure)"
   }
 
   public static func describe(_ error: any Error) -> String {

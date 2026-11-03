@@ -1,7 +1,7 @@
 import XCTest
 @testable import DispatchMobile
 
-/// One "~" rule for Spaces, host detail, Terminal's subtitle and Chat's intro: the helper's homes, never a guess.
+/// One "~" rule for Spaces, Terminal's subtitle and Chat's intro: the helper's homes, never a guess.
 @MainActor
 final class HomePathTests: XCTestCase {
     func testTheRule() {
@@ -36,7 +36,7 @@ final class HomePathTests: XCTestCase {
         XCTAssertEqual(HomePath(ResilienceFixture.hello()).login, nil, "absent while the login HOME is the account's")
     }
 
-    /// Spaces (TabsHost), host detail (HostSummary), Terminal's subtitle and Chat's intro say the same.
+    /// Spaces (TabsHost), Terminal's subtitle and Chat's intro say the same.
     func testEveryPlaceUsesTheSameRule() {
         let hello = ResilienceFixture.hello(home: "/Users/alex", loginHome: "/tmp/dt/h")
         let homes = HomePath(hello)

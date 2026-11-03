@@ -1,6 +1,6 @@
 import Foundation
 
-/// The one "~" rule for paths on a host (Spaces rows, a tab's subtitle, Terminal's subtitle, host detail, Chat's intro):
+/// The one "~" rule for paths on a host (Spaces rows, a tab's subtitle, Terminal's subtitle, Chat's intro):
 /// a path inside the account's home shows from "~". The homes are what the helper reports: the login environment's
 /// `HOME` when it exposes it (`hello.account.login_home`, which differs from the password database's home when a host
 /// or a fixture sets HOME), and the account's home (`hello.account.home`). Of the two, the longer match wins, so a

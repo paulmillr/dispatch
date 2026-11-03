@@ -107,7 +107,7 @@ No test selectors means **fast checks only**. Use `--suite full` for full correc
 validation or `--suite exhaustive` for the complete live matrix. All three entry
 points (`run.sh`, `xcode.py`, and `vm.py test`) share the case manifest in
 `test/suites.json`; new unclassified cases remain in full and exhaustive. Cases marked
-`disabled` there (the nanocodex Chat walkthroughs, for now) run in no suite, only when selected explicitly.
+`disabled` there run in no suite, only when selected explicitly.
 Full uses detailed plain-local agent behavior and focused Codex/Claude/Pi transport
 checks; exhaustive also retains the original detailed live matrix and 20-cycle
 reconnect stress repetition. Security, reattachment, host-isolation and platform

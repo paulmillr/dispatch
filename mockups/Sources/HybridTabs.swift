@@ -65,7 +65,7 @@ struct HybridShell<Content: View, Context: View, Trailing: View, Accessory: View
                                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
                             }
                             .navigationBarTitleDisplayMode(.inline)
-                            .toolbar { TabHeader(title: "Sidebar theme toggle", subtitle: AnyView(HostPath(path: "~/src/web"))) }
+                            .toolbar { TabHeader(title: "Sidebar theme toggle") }
                     }
                 }
                 .badge(m == .review ? 3 : 0)
@@ -181,6 +181,7 @@ struct HybridTerminalScreen: View {
                         Text(k).font(.system(size: 17, design: .monospaced)).frame(maxWidth: .infinity)
                     }
                     Image(systemName: "dpad").font(.system(size: 20)).frame(maxWidth: .infinity)
+                    Image(systemName: "ellipsis").font(.system(size: 20)).frame(maxWidth: .infinity)
                     Image(systemName: "keyboard").font(.system(size: 20)).frame(maxWidth: .infinity)
                 }
                 .frame(height: 50).padding(.horizontal, 8)
@@ -188,7 +189,7 @@ struct HybridTerminalScreen: View {
                 .padding(.horizontal, 12).padding(.bottom, 4)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { TabHeader(title: "dev", subtitle: AnyView(HostPath(path: "~/src/web · pnpm", mono: false))) }
+            .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
         }
     }
 }

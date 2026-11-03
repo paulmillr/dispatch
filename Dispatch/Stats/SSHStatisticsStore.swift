@@ -64,7 +64,7 @@ final class SSHLatency {
             // popup toggles and reconnects. Old replies cannot update this generation.
             await previous?.value
             if !immediate {
-                do { try await System.sleep(for: interval, "latency.first") } catch { return }
+                do { try await System.sleep(every: interval, "latency.first") } catch { return }
             }
             while !Task.isCancelled {
                 do {
@@ -81,7 +81,7 @@ final class SSHLatency {
                     guard !Task.isCancelled, self?.generation == generation else { return }
                     self?.state = self?.milliseconds == nil ? .unavailable : .stale
                 }
-                do { try await System.sleep(for: interval, "latency") } catch { return }
+                do { try await System.sleep(every: interval, "latency") } catch { return }
             }
         }
     }
@@ -222,7 +222,7 @@ final class SSHStatisticsStore {
             history.removeAll { $0.date <= cutoff }
             if history.isEmpty { history = [] }
             if history.count > 1801 { history.removeFirst(history.count - 1801) }
-            historyExpiry.schedule(at: history.lazy.map(\.date).min()?.addingTimeInterval(historyRetention)) { [weak self] in self?.trimHistory() }
+            historyExpiry.schedule(at: history.lazy.map(\.date).min()?.addingTimeInterval(historyRetention), grid: historyRetention / 240) { [weak self] in self?.trimHistory() }
         }
         func stop() {
             stopTasks(preservingRates: false)
@@ -398,7 +398,7 @@ final class SSHStatisticsStore {
                 defer { if entry?.generation == generation { entry?.metricsTask = nil } }
                 await retired?.value
                 if !metricsImmediately {
-                    do { try await System.sleep(for: foreground ? interval : background(), "metrics.first") } catch { return }
+                    do { try await System.sleep(every: foreground ? interval : background(), "metrics.first") } catch { return }
                 }
                 while !Task.isCancelled {
                     guard let entry, entry.generation == generation, let provider = entry.provider() else { return }
@@ -434,7 +434,7 @@ final class SSHStatisticsStore {
                         // may take over. Failed connections are never reopened.
                         if entry.provider() == nil { return }
                     }
-                    do { try await System.sleep(for: foreground ? interval : background(), "metrics") } catch { return }
+                    do { try await System.sleep(every: foreground ? interval : background(), "metrics") } catch { return }
                 }
             }
         }
@@ -466,7 +466,7 @@ final class SSHStatisticsStore {
                     } else {
                         entry.processes = nil; entry.processesPartial = false; entry.processRates.reset()
                     }
-                    do { try await System.sleep(for: interval, "processes") } catch { return }
+                    do { try await System.sleep(every: interval, "processes") } catch { return }
                 }
             }
         }
@@ -486,7 +486,7 @@ final class SSHStatisticsStore {
                         guard !Task.isCancelled, entry.generation == generation else { return }
                         entry.disksStale = true
                     }
-                    do { try await System.sleep(for: diskInterval, "disks") } catch { return }
+                    do { try await System.sleep(every: diskInterval, "disks") } catch { return }
                 }
             }
         }

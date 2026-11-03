@@ -51,6 +51,16 @@ final class ChatFollowTests: XCTestCase {
         XCTAssertFalse(follow.moved(offset: 210, atEnd: false), "and nothing pulls it back")
     }
 
+    /// A pushed thread is laid out at its end before the navigation bar's inset arrives, which moves the offset up by
+    /// the bar's height: that is the layout, so the thread goes back to its end.
+    func testAnInsetArrivingIsNotAScrollUp() {
+        var follow = ChatFollow()
+        XCTAssertFalse(follow.moved(offset: 1262, atEnd: true))
+        XCTAssertTrue(follow.moved(offset: 1140, atEnd: false, resized: true), "back to the end")
+        XCTAssertTrue(follow.following)
+        XCTAssertFalse(follow.moved(offset: 1262, atEnd: true))
+    }
+
     /// A drag stops following the moment it starts, also when the end is out of view for another reason (right after
     /// the pill, during the keyboard's animation, while an answer streams): nothing snaps back when it ends.
     func testADragStopsFollowingAtOnce() {
@@ -151,5 +161,38 @@ final class ChatFollowTests: XCTestCase {
         var follow = ChatFollow()
         follow.leave()
         XCTAssertFalse(follow.moved(offset: 100, atEnd: false))
+    }
+}
+
+extension ChatFollowTests {
+    /// The link's haptic (`ChatLinkHaptic`): a drop warns once the app has been in use a moment, its return is told
+    /// after the banner showed for a while; a drop in the background, the reconnect on returning to the app, and a
+    /// blink shorter than the banner's read get none.
+    func testTheLinkHapticSkipsReconnectsOnReturning() {
+        let start = Date(timeIntervalSinceReferenceDate: 1000)
+        var haptic = ChatLinkHaptic(now: start)
+        haptic.link(connected: false, now: start.addingTimeInterval(1))
+        XCTAssertEqual(haptic.count, 0, "a drop right after the thread opens is the reconnect it opened into")
+        haptic.link(connected: true, now: start.addingTimeInterval(2))
+        XCTAssertEqual(haptic.count, 0)
+
+        haptic.link(connected: false, now: start.addingTimeInterval(10))
+        XCTAssertEqual(haptic.count, 1)
+        XCTAssertEqual(haptic.feedback, .warning)
+        haptic.link(connected: false, now: start.addingTimeInterval(11))
+        XCTAssertEqual(haptic.count, 1, "still down: one warning")
+        haptic.link(connected: true, now: start.addingTimeInterval(20))
+        XCTAssertEqual(haptic.count, 2)
+        XCTAssertEqual(haptic.feedback, .success)
+
+        haptic.link(connected: false, now: start.addingTimeInterval(30))
+        haptic.link(connected: true, now: start.addingTimeInterval(31))
+        XCTAssertEqual(haptic.count, 3, "back within the moment: only the warning")
+
+        haptic.scene(active: false, now: start.addingTimeInterval(40))
+        haptic.link(connected: false, now: start.addingTimeInterval(41))
+        haptic.scene(active: true, now: start.addingTimeInterval(100))
+        haptic.link(connected: true, now: start.addingTimeInterval(101))
+        XCTAssertEqual(haptic.count, 3, "dropped in the background and back on returning: none")
     }
 }

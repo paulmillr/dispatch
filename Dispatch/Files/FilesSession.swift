@@ -43,7 +43,23 @@ import Foundation
     var staleSince: Date?
 
     // Preview.
-    var preview: FilePreviewState?
+    var preview: FilePreviewState? {
+        didSet {
+            guard oldValue !== preview else { return }
+            replacedPreview = oldValue.map(ObjectIdentifier.init)
+            if preview == nil || drawnImage?.owner != replacedPreview { drawnImage = nil }
+        }
+    }
+    /// The state `preview` last replaced, which `drawnImage` must have drawn to stand in for the new one.
+    @ObservationIgnored private var replacedPreview: ObjectIdentifier?
+    /// The picture the image preview last drew. Set by the pane, never observed: only a later selection reads it.
+    @ObservationIgnored var drawnImage: FileImageHandoff?
+    /// The picture of the image this selection replaced: the next image shows it until its own is decoded, so moving
+    /// between two versions of a picture swaps them in one frame instead of blanking between them.
+    var imageHandoff: FileImageHandoff? {
+        guard let drawnImage, drawnImage.owner == replacedPreview else { return nil }
+        return drawnImage
+    }
     /// Nil follows Settings › Files › Wrap lines; the preview's wrap button sets it for this tab.
     var previewWrap: Bool?
     /// The preview's width as the divider left it on this tab; nil takes the last width chosen on any tab, else the

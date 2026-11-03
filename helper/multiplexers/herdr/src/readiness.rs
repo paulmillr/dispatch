@@ -50,7 +50,7 @@ impl Herdr {
             );
             return;
         };
-        if ["pi", "nanocodex"].contains(&kind.as_str()) {
+        if kind == "pi" {
             self.type_checked(io, terminal, process, inputs, done);
             return;
         }

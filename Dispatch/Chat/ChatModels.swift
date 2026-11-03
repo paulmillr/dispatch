@@ -320,6 +320,29 @@ struct ChatSubagent: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A running background shell as the chat shows it: what the helper reports, and when it started on this device's clock.
+struct ChatShell: Identifiable, Equatable, Sendable {
+    let id: String
+    var name: String? = nil
+    var command: String? = nil
+    /// The host's start time; else when this app first saw it.
+    var started: Date
+
+    /// "Serve the docs": what the agent said it does, else its command.
+    var title: String { name ?? command ?? "Background shell" }
+    /// Its command under the description; nil when the command is already the title.
+    var detail: String? { name == nil ? nil : command }
+
+    /// The reported shells, each keeping the start it had in `previous` when the helper sends none.
+    static func merge(_ shells: [HelperChat.Shell], previous: [ChatShell], now: Date = .now) -> [ChatShell] {
+        shells.map { shell in
+            let started = shell.started_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+                ?? previous.first { $0.id == shell.id }?.started ?? now
+            return ChatShell(id: shell.id, name: shell.name, command: shell.command, started: started)
+        }
+    }
+}
+
 struct ChatSendFlight: Equatable {
     enum Place: Hashable { case composer, queued(UUID), prompt(String) }
     let id: UUID
@@ -1054,6 +1077,9 @@ final class ChatSession: Identifiable {
     /// command's reply and the agent's exit arrives first, and no state brings Chat back.
     var exitRequested = false
     var active = false
+    /// The agent exited (not a lost connection or a withdrawn integration), until an agent reports its state here
+    /// again: its transcript stays readable, but the tab is a terminal again (`ChatCoordinator.chatLeads`).
+    var agentExited = false
     var busy = false { didSet {
         cachedVisibleRows = nil
         if !busy { submittedThinkingAt = nil }
@@ -1063,6 +1089,9 @@ final class ChatSession: Identifiable {
     var submittedThinkingAt: Date?
     /// Subagents the agent reports running (`State.agents`); background agents keep running while it is idle.
     var subagents: [ChatSubagent] = [] { didSet { updateWorkingSince() } }
+    /// Background shells the agent reports running (`State.shells`). They keep no working clock: a server can run
+    /// for hours while the agent waits for input.
+    var shells: [ChatShell] = []
     /// When the agent last became busy or started running subagents: the activity clock when no live turn has a
     /// start (e.g. a turn that ended while its agents run). Lives here, not in a view, so rebuilding a view
     /// (switching tabs) doesn't restart it.
@@ -1327,7 +1356,7 @@ final class ChatSession: Identifiable {
         }
         transcriptPath = nil; transcriptAvailable = false; version = nil
         loadingHistory = false; promptBoundary = nil
-        busy = false; subagents = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; starting = false; observedCommand = nil; stoppedTurnID = nil
+        busy = false; subagents = []; shells = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; starting = false; observedCommand = nil; stoppedTurnID = nil
         activityNeedsRefresh = false; activityRetryAfter = nil
         submissionFailure = nil; status = nil; title = nil; transcriptTitle = nil; configurationRequest = nil
         if !keepingConfiguration { reportedModel = nil; effort = nil }
@@ -1566,7 +1595,7 @@ enum TranscriptParser {
 
 enum AgentInput {
     /// What a harness sends for a command-looking chat message (c1654cc AgentDiscovery.literalMessage; codex
-    /// and claude fence it, pi and nanocodex take it as is): a code fence longer than any inside it.
+    /// and claude fence it, pi takes it as is): a code fence longer than any inside it.
     static func fenced(_ text: String) -> String {
         guard isCommand(text) else { return text }
         var backticks = 0, tildes = 0, longestBackticks = 0, longestTildes = 0

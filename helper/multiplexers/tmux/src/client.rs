@@ -88,6 +88,8 @@ pub(crate) struct Client {
     pub expected: Option<(u64, i32, String)>,
     pub cwd: BTreeMap<u32, PathBuf>,
     pub available: BTreeMap<u64, (u32, u32)>,
+    /// The client's own size was sent (`refresh-client -C WxH`, Tmux::steady).
+    pub sized: bool,
     pub closed: BTreeSet<u64>,
     pub dismissed: BTreeSet<u32>,
     pub ended: bool,
@@ -399,6 +401,7 @@ impl Client {
                 } if flags & 1 == 1 => {
                     if failed {
                         self.available.clear();
+                        self.sized = false;
                     }
                     let notice = Group::consume(
                         &mut self.pending,

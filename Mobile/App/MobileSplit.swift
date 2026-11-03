@@ -178,6 +178,7 @@ struct MobileSplitDetail: View {
                 TabsDestination(route: route, navigator: navigator, content: content, hostViews: hostViews)
             }
         }
+        .filesZoomScope()
     }
 }
 
@@ -228,6 +229,7 @@ struct PadSplitDetail: View {
                 TabsDestination(route: route, navigator: navigator, content: content, hostViews: hostViews)
             }
         }
+        .filesZoomScope()
     }
 }
 

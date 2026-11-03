@@ -319,6 +319,19 @@ final class HelperChat {
     var mode: String? = nil
     /// Running subagents, oldest first; they can outlive their turn (absent from older helpers).
     var agents: [Agent]? = nil
+    /// Running background shells, oldest first; absent while none runs and from older helpers.
+    var shells: [Shell]? = nil
+  }
+
+  /// One running background shell (Claude: a Bash call sent to the background, until its task notification).
+  struct Shell: Decodable, Sendable, Equatable {
+    let id: String
+    /// What the agent said it does; nil when it gave none.
+    var name: String? = nil
+    /// Its command line; nil when the helper never read the call that started it.
+    var command: String? = nil
+    /// When its call was recorded, in the host's Unix milliseconds.
+    var started_ms: UInt64? = nil
   }
 
   /// One running subagent. An older helper sends only its type, which stands for its id too.

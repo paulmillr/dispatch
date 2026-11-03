@@ -82,10 +82,10 @@ final class ChatRenderingTests: XCTestCase {
     }
 
     func testTheComposerSlotFollowsTheDraftAndTheAgent() {
-        XCTAssertEqual(CodeComposer.slot(text: "", working: false), .mic)
-        XCTAssertEqual(CodeComposer.slot(text: "  ", working: true), .stop, "Stop takes the send slot (M5a)")
-        XCTAssertEqual(CodeComposer.slot(text: "next", working: true), .send)
-        XCTAssertEqual(CodeComposer.slot(text: "next", working: false), .send)
+        XCTAssertEqual(CodeComposer.slot(text: ""), .mic)
+        XCTAssertEqual(CodeComposer.slot(text: "  "), .mic, "Stop is on the working row, not in the send slot")
+        XCTAssertEqual(CodeComposer.slot(text: "next"), .send)
+        XCTAssertEqual(CodeComposer.slot(text: "next", dictating: true), .mic)
     }
 
     func testReducedMotionElapsedStepsByFive() {
@@ -161,5 +161,66 @@ final class ChatRenderingTests: XCTestCase {
             .init(id: "a", name: "shot.png", kind: .image, thumbnail: png),
             .init(id: "b", name: "notes.txt", kind: .file, detail: "2 KB", uploading: true)]))
         XCTAssertEqual(size(strip).height, ComposerAttachmentStrip.height, accuracy: 1)
+    }
+}
+
+extension ChatRenderingTests {
+    /// Message details' steps (M1): up to eight show as they are; past that the patches, the failed steps and the last
+    /// stay, runs of two or more between them fold into a row saying what they did, and a run of one shows.
+    func testMessageDetailsFoldLongStepLists() {
+        func read(_ id: String) -> ChatStep {
+            ChatStep(ChatItem(id: id, kind: .tool, text: #"{"file_path":"/w/\#(id).ts"}"#, title: "Read", completed: true), directory: "/w")
+        }
+        func run(_ id: String, exit: Int = 0) -> ChatStep {
+            var item = ChatItem(id: id, kind: .tool, text: #"{"command":"cargo test"}"#, title: "Bash", completed: true)
+            item.exitCode = exit
+            return ChatStep(item, directory: "/w")
+        }
+        func search(_ id: String) -> ChatStep {
+            ChatStep(ChatItem(id: id, kind: .tool, text: #"{"command":"rg -n \#(id) src"}"#, title: "Bash", completed: true), directory: "/w")
+        }
+        let short = [read("a"), read("b"), run("c")]
+        XCTAssertEqual(ChatStepFold.entries(short), [.step(0), .step(1), .step(2)])
+        XCTAssertEqual([read("a"), run("b")].map(\.kind), [.read, .run])
+        XCTAssertEqual(search("s").kind, .search)
+        XCTAssertTrue(run("f", exit: 1).failed)
+
+        let steps = [read("r1"), search("s1"), read("r2"), search("s2"),  // 0–3 fold
+                     run("bad", exit: 2),                                 // 4 failed: stays
+                     read("r3"),                                          // 5 a run of one: shows
+                     run("fail", exit: 1),                                // 6 stays
+                     run("b1"), read("r4"), run("b2"),                    // 7–9 fold
+                     run("last")]                                         // 10 the last: stays
+        XCTAssertEqual(ChatStepFold.entries(steps), [
+            .fold(0..<4, "Read 2 files, searched twice"), .step(4), .step(5), .step(6),
+            .fold(7..<10, "Ran 2 commands, read 1 file"), .step(10),
+        ])
+        XCTAssertEqual(ChatStepFold.summary(steps[0..<1]), "Read 1 file")
+        XCTAssertEqual(ChatStepFold.summary([search("a"), search("b"), search("c")][...]), "Searched 3 times")
+    }
+
+    /// The outcome line's span: start and end the same day, the end with its day when it changed, and nothing for a turn
+    /// read without times.
+    func testMessageDetailsSpanSaysWhenTheTurnRan() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)  // 2027-01-15 08:00 UTC
+        func turn(_ start: TimeInterval, _ end: TimeInterval?) -> ChatTurn {
+            var turn = ChatTurn(id: "t")
+            turn.started = now.addingTimeInterval(start)
+            turn.ended = end.map { now.addingTimeInterval($0) }
+            return turn
+        }
+        XCTAssertEqual(ChatMessageDetails.span(turn(-300, -48), duration: 252, now: now, calendar: calendar), "07:55 – 07:59 · 4m 12s")
+        XCTAssertEqual(ChatMessageDetails.span(turn(-60, nil), duration: nil, now: now, calendar: calendar), "07:59",
+                       "while working: when it started")
+        XCTAssertEqual(ChatMessageDetails.span(turn(-8.5 * 3600, -7.9 * 3600), duration: nil, now: now, calendar: calendar),
+                       "Yesterday 23:30 – 00:06")
+        XCTAssertEqual(ChatMessageDetails.span(turn(-40 * 86400, -40 * 86400 + 52), duration: 52, now: now, calendar: calendar),
+                       "6 Dec 2026, 08:00 – 08:00 · 52s", "past a week: the date and the time of day")
+        var historical = ChatTurn(id: "h")
+        historical.started = Date(timeIntervalSince1970: 0)
+        XCTAssertNil(ChatMessageDetails.span(historical, duration: nil, now: now, calendar: calendar))
     }
 }

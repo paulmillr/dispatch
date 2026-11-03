@@ -85,10 +85,10 @@ enum HostStatsDemo {
 
     /// Screenshot launches of the demo: `-DispatchHostStats <host>[:small|drag|large][:cpu|memory|scrub]` opens that
     /// host's stats sheet; `-DispatchHostStatsState offline` disconnects the host first (W1c, W5), `plain` starts it
-    /// with its Helper switch off (W6); `-DispatchHostDetail <host>` pushes its host detail (W4).
+    /// with its Helper switch off (W6); `-DispatchHostEdit <host>` opens its Edit host.
     static var target: String? {
         UserDefaults.standard.string(forKey: "DispatchHostStats")?.split(separator: ":").first.map(String.init)
-            ?? UserDefaults.standard.string(forKey: "DispatchHostDetail")
+            ?? UserDefaults.standard.string(forKey: "DispatchHostEdit")
             ?? UserDefaults.standard.string(forKey: "DispatchHostStatsPopover")
     }
 
@@ -139,9 +139,7 @@ struct HostStatsDebugLaunch: ViewModifier {
                 // The demo's hosts connect in about 200 ms.
                 for _ in 0..<40 where !session.link.isConnected { try? await Task.sleep(for: .milliseconds(50)) }
                 if UserDefaults.standard.string(forKey: "DispatchHostStatsState") == "offline" { session.park() }
-                if UserDefaults.standard.string(forKey: "DispatchHostDetail") != nil {
-                    composition.navigator.path = [.host(session.id)]
-                }
+                if UserDefaults.standard.string(forKey: "DispatchHostEdit") != nil { composition.navigator.editHost = session.id }
                 if UserDefaults.standard.string(forKey: "DispatchHostStats") != nil { host = session.id }
                 if UserDefaults.standard.string(forKey: "DispatchHostStatsPopover") != nil { popover = session.id }
             }

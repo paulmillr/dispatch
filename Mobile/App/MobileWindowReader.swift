@@ -7,7 +7,8 @@ import UIKit
 /// composer lost focus and the keyboard went down again. The window's bounds change with rotation, Split View and
 /// Stage Manager resizes, never with the keyboard. Reported after the layout pass that changed it, once per change.
 struct MobileWindowReader: UIViewRepresentable {
-    let changed: (CGSize) -> Void
+    /// The window's size, and the depth of the Dynamic Island or notch (`MobileLandscape.island`).
+    let changed: (CGSize, CGFloat) -> Void
 
     func makeUIView(context: Context) -> Probe {
         let probe = Probe()
@@ -21,8 +22,9 @@ struct MobileWindowReader: UIViewRepresentable {
     }
 
     final class Probe: UIView {
-        var changed: ((CGSize) -> Void)?
+        var changed: ((CGSize, CGFloat) -> Void)?
         private var last: CGSize?
+        private var lastIsland: CGFloat?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -35,10 +37,14 @@ struct MobileWindowReader: UIViewRepresentable {
         }
 
         func report() {
-            guard let size = window?.bounds.size, size.width > 0, size != last else { return }
+            guard let window, window.bounds.width > 0 else { return }
+            let size = window.bounds.size, island = MobileLandscape.island(window.safeAreaInsets)
+            guard size != last || island != lastIsland else { return }
             last = size
-            // After this layout pass: the split's state changes with it, not during SwiftUI's update.
-            DispatchQueue.main.async { [weak self] in self?.changed?(size) }
+            lastIsland = island
+            // After this layout pass: the split's state changes with it, not during SwiftUI's update. The size and the
+            // island together, so a phone's first layout on its side already stands its rail clear of the island.
+            DispatchQueue.main.async { [weak self] in self?.changed?(size, island) }
         }
     }
 }

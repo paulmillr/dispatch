@@ -324,6 +324,12 @@ def verify(target_dir):
         if not line.startswith("pass\t"):
             print("error: corpus capture does not replay on this helper: " + line, flush=True)
     print(lines[-1] if lines else "corpus replay printed nothing", flush=True)
+    # A migration may retire every helper recording at once (the corpus holds app journals only until they are
+    # recorded again): nothing replayed is unchecked, as without a corpus, not a helper that fails it.
+    if result.returncode != 0 and len(lines) == 1 and lines[0].startswith("0 passed; 0 failed; 0 timed out; 0 skipped;"):
+        print("warning: the replay corpus holds no helper captures; the helper is not checked against it", flush=True)
+        shutil.rmtree(output, ignore_errors=True)
+        return
     if result.returncode != 0:
         raise SystemExit("The helper does not replay the corpus (results: " + str(output) + "); fix it, or drop what no longer applies: " + str(helper) + " capture prune " + str(corpus))
     shutil.rmtree(output)

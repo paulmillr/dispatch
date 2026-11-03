@@ -40,7 +40,7 @@ struct ChatStep: Identifiable, Equatable {
     var id: String { item.id }
 
     static var added: Color { .added }
-    static var removed: Color { .destructive }
+    static var removed: Color { .removed }
 
     init(_ item: ChatItem, directory: String?) {
         self.item = item
@@ -119,6 +119,17 @@ struct ChatStep: Identifiable, Equatable {
     static func steps(_ turn: ChatTurn, directory: String?, reasoning: Bool) -> [ChatStep] {
         ChatTurnSummary.displayed(turn.items, turnID: turn.id)
             .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty }
+            .map { ChatStep($0, directory: directory) }
+    }
+
+    /// The open turn's steps since the agent last wrote (a message or Claude's thinking), with reasoning summaries: the
+    /// Mac's live tool group, which its header counts. The working row's count and log.
+    static func current(_ turn: ChatTurn, directory: String?) -> [ChatStep] {
+        let items = ChatTurnSummary.displayed(turn.items, turnID: turn.id)
+        let start = items.lastIndex { $0.kind == .assistant || $0.kind == .reasoning && $0.isNarration && !$0.text.isEmpty }
+            .map { $0 + 1 } ?? 0
+        return items[start...]
+            .filter { $0.kind == .tool || $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty }
             .map { ChatStep($0, directory: directory) }
     }
 }

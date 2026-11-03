@@ -49,6 +49,8 @@ final class MobileSettings {
     nonisolated static let notificationSoundKey = "notify.sound"
     nonisolated static let notificationTextKey = "notify.text"
     nonisolated static let notificationBadgeKey = "notify.badge"
+    nonisolated static let colorVisionKey = "colorVision"
+    nonisolated static let hostColorsKey = "hosts.colors"
 
     @ObservationIgnored let defaults: UserDefaults
 
@@ -173,6 +175,52 @@ final class MobileSettings {
         didSet { if notificationBadge != oldValue { defaults.set(notificationBadge, forKey: Self.notificationBadgeKey) } }
     }
 
+    /// Colorblind-friendly (the Mac's `colorVision`): hosts take that vision's colours (`HostColor.look`), diffs its
+    /// schemes' (`CodePalette.added`), and Color scheme lists only its schemes (`TerminalSchemes.listed`). Turning it on,
+    /// off or to the other vision gives the terminal that vision's scheme on the same side, or Dispatch's.
+    var colorVision: ColorVision {
+        didSet {
+            guard colorVision != oldValue else { return }
+            defaults.set(colorVision.rawValue, forKey: Self.colorVisionKey)
+            applyHostColors()
+            conformScheme()
+        }
+    }
+
+    /// Color-code hosts (the Mac's `showHostColors`); off draws every host in neutral grey.
+    var showHostColors: Bool {
+        didSet {
+            guard showHostColors != oldValue else { return }
+            defaults.set(showHostColors, forKey: Self.hostColorsKey)
+            applyHostColors()
+        }
+    }
+
+    /// Where host colours are drawn from (`HostTint`): the composition sets `HostColorStore.shared`; tests leave it nil
+    /// or give their own.
+    @ObservationIgnored var hostColors: HostColorStore? {
+        didSet { applyHostColors() }
+    }
+
+    private func applyHostColors() {
+        guard let hostColors else { return }
+        if hostColors.vision != colorVision { hostColors.vision = colorVision }
+        if hostColors.enabled != showHostColors { hostColors.enabled = showHostColors }
+    }
+
+    /// A scheme not made for `colorVision` gives way to that vision's own on the same side, or, leaving colorblind mode,
+    /// to Dispatch's (the Mac's `conformSchemes`).
+    private func conformScheme() {
+        guard ColorVision(bundledScheme: terminalScheme) != colorVision else { return }
+        guard let own = ColorVision.bundledSchemes[colorVision] else {
+            terminalScheme = TerminalConfiguration.defaultScheme
+            return
+        }
+        let dark = TerminalSchemes.url(terminalScheme).flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            .map { TerminalSchemes.parse($0, file: terminalScheme).isDark } ?? true
+        terminalScheme = (dark ? own.dark : own.light).first ?? terminalScheme
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         autoApproveUnsafePastes = Self.autoApprovesUnsafePastes(defaults)
@@ -197,6 +245,69 @@ final class MobileSettings {
         notificationSound = defaults.string(forKey: Self.notificationSoundKey).flatMap(NotificationSound.init(rawValue:)) ?? .standard
         notificationText = defaults.object(forKey: Self.notificationTextKey) as? Bool ?? true
         notificationBadge = defaults.object(forKey: Self.notificationBadgeKey) as? Bool ?? true
+        colorVision = defaults.string(forKey: Self.colorVisionKey).flatMap(ColorVision.init(rawValue:)) ?? .typical
+        showHostColors = defaults.object(forKey: Self.hostColorsKey) as? Bool ?? true
+        // The old contrast switch is saved under the new key, which the Settings app's page shows.
+        if defaults.string(forKey: Self.textContrastKey) == nil, defaults.object(forKey: Self.terminalContrastKey) != nil {
+            defaults.set(textContrast.rawValue, forKey: Self.textContrastKey)
+        }
+    }
+
+    @ObservationIgnored private var outsideChanges: (any NSObjectProtocol)?
+
+    isolated deinit {
+        if let outsideChanges { NotificationCenter.default.removeObserver(outsideChanges) }
+    }
+
+    /// The Settings app's Dispatch page (`Settings.bundle`) writes the same keys while the app is away; iOS posts the
+    /// change when it is back. What changed is taken (`reload`), and `changed` runs after (the badge follows its switch).
+    func followOutsideChanges(_ changed: @escaping @MainActor @Sendable () -> Void) {
+        outsideChanges = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
+                                                                queue: nil) { [weak self, defaults] note in
+            // Changes made outside the process have no object; other suites' writes are not ours.
+            guard note.object == nil || note.object as AnyObject === defaults else { return }
+            // After the write that posted, never inside one of this model's own setters.
+            Task { @MainActor in if self?.reload() == true { changed() } }
+        }
+    }
+
+    /// Takes what the defaults hold now and differs, through the setters: a terminal setting restyles the open
+    /// terminals. True when something changed.
+    @discardableResult
+    func reload() -> Bool {
+        let saved = MobileSettings(defaults: defaults)
+        var changed = false
+        func take<Value: Equatable>(_ key: ReferenceWritableKeyPath<MobileSettings, Value>) {
+            guard self[keyPath: key] != saved[keyPath: key] else { return }
+            self[keyPath: key] = saved[keyPath: key]
+            changed = true
+        }
+        take(\.autoApproveUnsafePastes)
+        take(\.appearance)
+        take(\.backgroundRefresh)
+        take(\.dictationEngine)
+        take(\.whisperModel)
+        take(\.theme)
+        take(\.terminalFont)
+        take(\.terminalScheme)
+        take(\.textContrast)
+        take(\.boldIsBright)
+        take(\.cursor)
+        take(\.cursorBlink)
+        take(\.ligatures)
+        take(\.lineSpacing)
+        take(\.chatFont)
+        take(\.chatTextSize)
+        take(\.notifyNeedsYou)
+        take(\.notifyFinished)
+        take(\.notifyFailed)
+        take(\.notificationSound)
+        take(\.notificationText)
+        take(\.notificationBadge)
+        take(\.showHostColors)
+        // After the scheme: a new vision conforms the scheme, which the saved one must not undo.
+        take(\.colorVision)
+        return changed
     }
 
     /// A terminal setting saved: the open terminals take it (`TerminalPresence` observes `TerminalStyle.changed`).

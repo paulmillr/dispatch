@@ -80,7 +80,7 @@ struct HostSessionContext: Sendable {
     /// Whether the host's key is still on the phone: a driver that keeps the key it read for its reconnects asks before
     /// each one, so a deleted key is never used again.
     var keyAvailable: @Sendable () async -> Bool = { true }
-    /// The host's multiplexer preference each time it changes while the run lasts (host detail, Settings): the driver
+    /// The host's multiplexer preference each time it changes while the run lasts (Edit host, Settings): the driver
     /// follows the new choice on the live connection, without reconnecting.
     var preferences: AsyncStream<HostRecord.MultiplexerPreference> = AsyncStream { $0.finish() }
 }

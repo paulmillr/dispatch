@@ -145,6 +145,81 @@ struct ChatSubagentList: View {
     }
 }
 
+/// The agent's background shells beside its subagents, while they run (they outlive their turn): their count, and
+/// on click one row each with what it does, its command and how long it has run.
+struct ChatComposerShells: View {
+    @Environment(\.chatTheme) private var theme
+    let session: ChatSession
+    @State private var details = false
+
+    static func title(_ count: Int) -> String { count == 1 ? "1 shell running" : "\(count) shells running" }
+
+    var body: some View {
+        let shells = session.shells
+        if session.active && !shells.isEmpty {
+            Button { details.toggle() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "apple.terminal").imageScale(.small)
+                    Text("\(shells.count)").monospacedDigit()
+                }.foregroundStyle(theme.muted).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .font(theme.typography.detail)
+                .help(Self.title(shells.count))
+                .accessibilityLabel(Self.title(shells.count))
+                .accessibilityIdentifier("chat-shells")
+                .popover(isPresented: $details) {
+                    ChatShellList(session: session)
+                        // On glass the popover's own system glass shows through instead of the sidebar fill.
+                        .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)
+                        .preferredColorScheme(theme.isDark ? .dark : .light)
+                }
+        }
+    }
+}
+
+/// The shells popover: one row per running background shell, oldest first. The clocks tick once a second while it shows.
+struct ChatShellList: View {
+    @Environment(\.chatTheme) private var theme
+    let session: ChatSession
+
+    static func elapsed(_ shell: ChatShell, now: Date) -> String { ChatTranscript.elapsed(now.timeIntervalSince(shell.started)) }
+
+    var body: some View {
+        let shells = session.shells
+        VStack(alignment: .leading, spacing: 10) {
+            Text(ChatComposerShells.title(shells.count)).foregroundStyle(theme.ink)
+            ScrollView {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(shells) { shell in row(shell, now: timeline.date) }
+                    }
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: 360)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(theme.typography.detail).foregroundStyle(theme.muted)
+        .padding(14).frame(width: 360, alignment: .leading)
+        .accessibilityIdentifier("chat-shells-list")
+    }
+
+    private func row(_ shell: ChatShell, now: Date) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(shell.title).foregroundStyle(theme.ink).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = shell.detail {
+                    Text(detail).font(theme.typography.codeDetail).lineLimit(1).truncationMode(.middle)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Text(Self.elapsed(shell, now: now)).foregroundStyle(theme.ink).monospacedDigit().fixedSize()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-shell-\(shell.id)")
+    }
+}
+
 /// Keep animation ticks in the footer, outside the transcript and native editor.
 struct ChatComposerActivity: View {
     @Environment(\.chatTheme) private var theme

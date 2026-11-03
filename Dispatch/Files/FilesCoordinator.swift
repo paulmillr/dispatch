@@ -143,7 +143,8 @@ enum TabMode: String, Hashable, Sendable {
     func switchState(_ id: UUID) -> ModeSwitchState {
         // With Files off the button is chat's alone, and no host is blamed for files it would not show anyway.
         let host = enabled ? plainSSHHost(id) : nil
-        return ModeSwitchState(mode: mode(for: id), chat: chatAvailable(id), files: enabled && host == nil, host: host)
+        let reachable = chatAvailable(id), leads = reachable && chat.map { $0.chatLeads($0.session(for: id)) } == true
+        return ModeSwitchState(mode: mode(for: id), chat: leads, files: enabled && host == nil, host: host, retained: reachable && !leads)
     }
 
     /// Settings › Features › Files.

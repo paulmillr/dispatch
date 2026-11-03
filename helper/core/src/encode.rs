@@ -219,31 +219,17 @@ records! {
         file,
         offset
     };
-    State {
-        busy,
-        activity,
-        model,
-        model_label,
-        effort,
-        usage,
-        goal,
-        draft,
-        attention,
-        leaf,
-        dialog,
-        title,
-        version,
-        pending,
-        compacting,
-        service_tier,
-        mode,
-        agents
-    };
     Agent {
         id,
         kind,
         name,
         tokens,
+        started_ms
+    };
+    Shell {
+        id,
+        name,
+        command,
         started_ms
     };
     Choice {
@@ -490,6 +476,36 @@ impl Encode for Block {
 impl Encode for &str {
     fn encode(&self, out: &mut Vec<u8>) {
         (*self).encode(out);
+    }
+}
+/// `shells` joined State later and goes only with a running shell: a state without one keeps the
+/// layout every earlier recording holds.
+impl Encode for State {
+    fn encode(&self, out: &mut Vec<u8>) {
+        let mut fields: Vec<(&str, &dyn Encode)> = vec![
+            ("busy", &self.busy),
+            ("activity", &self.activity),
+            ("model", &self.model),
+            ("model_label", &self.model_label),
+            ("effort", &self.effort),
+            ("usage", &self.usage),
+            ("goal", &self.goal),
+            ("draft", &self.draft),
+            ("attention", &self.attention),
+            ("leaf", &self.leaf),
+            ("dialog", &self.dialog),
+            ("title", &self.title),
+            ("version", &self.version),
+            ("pending", &self.pending),
+            ("compacting", &self.compacting),
+            ("service_tier", &self.service_tier),
+            ("mode", &self.mode),
+            ("agents", &self.agents),
+        ];
+        if !self.shells.is_empty() {
+            fields.push(("shells", &self.shells));
+        }
+        object(out, &fields);
     }
 }
 pub(crate) fn object(out: &mut Vec<u8>, fields: &[(&str, &dyn Encode)]) {

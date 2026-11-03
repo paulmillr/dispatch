@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// New host (M8a, from Add host in Spaces), and Edit from host detail. Name, host and port, username, and Password or
-/// Key file: the key list shows each key's type and SHA256 fingerprint to match against `authorized_keys`, the
-/// checked one is used. Create connects once to verify, asking about the host key on first use inside the sheet,
-/// and saves only when that connection succeeds; the verified connection becomes the host's session. Below them the
-/// multiplexer, the Helper switch and Chat (`HostFeatureDraft`): with Helper off the host is plain SSH (docs/ios.md),
-/// the multiplexer and Chat rows go and the words say that nothing is installed.
+/// New host (M8a, from Add host in Spaces), and Edit host from the host sheet's pencil (every setting of a host is
+/// here). Name, host and port, username, and Password or Key file: the key list shows each key's type and SHA256
+/// fingerprint to match against `authorized_keys`, the checked one is used. Create connects once to verify, asking about
+/// the host key on first use inside the sheet, and saves only when that connection succeeds; the verified connection
+/// becomes the host's session. Below them the multiplexer, the Helper switch, Chat and Files & git
+/// (`HostFeatureDraft`): with Helper off the host is plain SSH (docs/ios.md), the multiplexer, Chat and Files rows go
+/// and the words say that nothing is installed. Editing adds the host's Color and, last, Remove host. Nothing is saved
+/// before Save.
 struct NewHostSheet: View {
     enum Method: Hashable { case password, key }
 
@@ -26,6 +28,11 @@ struct NewHostSheet: View {
     @State private var importingKey = false
     @State private var creatingKey = false
     @State private var features: HostFeatureDraft
+    /// Edit host's Color: a picked colour, nil for Automatic (`HostColorPicker`).
+    @State private var color: HostColor?
+    @State private var confirmingRemoval = false
+    /// Removal waits for the sheet to go, so the host sheet under it closes after it.
+    @State private var removing = false
     /// The connection Create makes to verify the host; it becomes the host's session when it connects.
     @State private var probe: HostSession?
     @State private var failure: String?
@@ -44,6 +51,7 @@ struct NewHostSheet: View {
         _port = State(initialValue: String(editing?.port ?? 22))
         _user = State(initialValue: editing?.user ?? "")
         _features = State(initialValue: HostFeatureDraft(editing))
+        _color = State(initialValue: editing.flatMap { $0.colorPicked ? $0.color : nil })
         switch editing?.auth {
         case .key(let key)?:
             _method = State(initialValue: .key)
@@ -81,6 +89,7 @@ struct NewHostSheet: View {
         record.user = trimmedUser
         record.auth = auth
         features.apply(to: &record)
+        if editing != nil { sessions.setColor(color, in: &record) }
         return record
     }
 
@@ -168,12 +177,41 @@ struct NewHostSheet: View {
                             .accessibilityHint(Self.helperHint)
                         if features.showsHelperRows {
                             Toggle("Chat", isOn: $features.chat)
-                            Toggle(HostFilesSwitch.title, isOn: $features.files)
+                            Toggle("Files & git", isOn: $features.files)
                         }
                     } header: {
                         MobileSectionHeader("On the host")
                     } footer: {
                         Text(Self.statement(helper: features.helper))
+                    }
+                    if let editing {
+                        Section {
+                            NavigationLink {
+                                HostColorPicker(host: editing, choice: $color)
+                            } label: {
+                                LabeledContent("Color") {
+                                    HStack(spacing: 8) {
+                                        Circle().fill(editing.tint.showing(color ?? sessions.automaticColor(of: editing.id)).color)
+                                            .frame(width: 14, height: 14).accessibilityHidden(true)
+                                        Text(color?.title ?? "Automatic")
+                                    }
+                                }
+                            }
+                        }
+                        Section {
+                            Button(role: .destructive) { confirmingRemoval = true } label: {
+                                Text("Remove host").frame(maxWidth: .infinity)
+                            }
+                            // Anchored to the button, so the dialog rises from it.
+                            .confirmationDialog("Remove \(editing.name)?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+                                Button("Remove host", role: .destructive) {
+                                    removing = true
+                                    dismiss()
+                                }
+                            } message: {
+                                Text(HostSessions.removalMessage)
+                            }
+                        }
                     }
                     if let failure {
                         Section {
@@ -225,8 +263,12 @@ struct NewHostSheet: View {
         // M8a draws the sheet's grabber, as New space's and New chat's do.
         .mobileSheetGrabber()
         .interactiveDismissDisabled(verifying)
-        // Swiped away after a failed attempt: nothing of the unsaved host stays behind.
-        .onDisappear { if !saved, editing == nil { discardProbe() } }
+        // Swiped away after a failed attempt: nothing of the unsaved host stays behind. Remove host removes once the
+        // sheet is gone.
+        .onDisappear {
+            if removing, let editing { sessions.remove(editing.id) }
+            if !saved, editing == nil { discardProbe() }
+        }
     }
 
     /// The words under the Helper switch: what the helper does on the host, or with the switch off what plain SSH does.

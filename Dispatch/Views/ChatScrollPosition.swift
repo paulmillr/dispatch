@@ -307,13 +307,21 @@ final class ChatScrollPosition {
         let generation = System.uuid()
         mountCheckGeneration = generation
         let interaction = interactionRevision
-        for delay in [0.15, 0.4, 0.8] {
+        let start = ProcessInfo.processInfo.systemUptime
+        for delay in [0.1, 0.15, 0.4, 0.8] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.mountCheckGeneration == generation else { return }
-                self.mountCheck(rebuild: !afterRebuild && delay == 0.4 && self.interactionRevision == interaction)
+                // A blank whose layout has gone quiet stays blank (a chat of tall rows, whose estimated document
+                // was half its height, kept only hidden rows until the rebuild): rebuild it at once, not at 0.4 s.
+                // A rebuild verifies itself with new checks, which end these: one rebuild per mount.
+                let quiet = ProcessInfo.processInfo.systemUptime - max(start, self.lastGeometryChange) >= Self.mountQuiet
+                self.mountCheck(rebuild: !afterRebuild && (delay == 0.4 || delay < 0.4 && quiet)
+                                && self.interactionRevision == interaction)
             }
         }
     }
+    /// How long a fresh mount's layout must have been still before a blank viewport counts as stuck.
+    static let mountQuiet: TimeInterval = 0.06
     private func mountCheck(rebuild: Bool) {
         guard let scroll, scroll.window?.isVisible == true, !scroll.isHiddenOrHasHiddenAncestor,
               hasContent?() == true else { return }

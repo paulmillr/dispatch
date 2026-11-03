@@ -12,7 +12,6 @@ dispatch-helper-native = { path = "../multiplexers/native" }
 dispatch-helper-herdr = { path = "../multiplexers/herdr" }
 dispatch-helper-claude = { path = "../harnesses/claude" }
 dispatch-helper-pi = { path = "../harnesses/pi" }
-dispatch-helper-nanocodex = { path = "../harnesses/nanocodex" }
 dispatch-helper-codex = { path = "../harnesses/codex" }
 dispatch-helper-files = { path = "../plugins/files" }
 dispatch-helper-stats = { path = "../plugins/stats" }
@@ -43,3 +42,8 @@ path = "tests/queue_drain.rs"
 [[test]]
 name = "chat_attachments"
 path = "tests/chat_attachments.rs"
+
+# Live: a topology.bound client's first topology names the agent already running (ignored by default).
+[[test]]
+name = "bound_topology"
+path = "tests/bound_topology.rs"

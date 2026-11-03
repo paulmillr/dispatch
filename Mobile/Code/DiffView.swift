@@ -24,11 +24,11 @@ struct DiffView: View {
     }
 
     /// From message details: the turn's patch steps, with the files of the tapped one open.
-    init(session: MobileChatSession, steps: [ChatStep], opening: ChatStep, directory: String?) {
+    init(session: MobileChatSession, steps: [ChatStep], opening: ChatStep, directory: String?, back: String = "Message") {
         let patches = steps.filter { $0.kind == .patch }.map(\.item)
         self.init(model: DiffViewModel(items: patches.isEmpty ? [opening.item] : patches, opening: opening.item,
                                        directory: directory, host: session.hostName, load: { try await session.fileText($0) }),
-                  fetch: { try await session.fullItem($0) })
+                  back: back, fetch: { try await session.fullItem($0) })
     }
 
     var body: some View {

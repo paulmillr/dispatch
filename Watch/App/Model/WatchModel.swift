@@ -5,7 +5,7 @@ import Observation
 struct WatchSection: Identifiable, Equatable {
     struct Space: Identifiable, Equatable {
         let space: WatchSpace
-        /// Most recent first, as the phone's Activity sort (`TabsOrdering.sorted`).
+        /// Most recent first, as the phone lists them (`MobileTabs.rows(in:)`).
         let tabs: [WatchTab]
         var id: String { space.id }
     }
@@ -136,22 +136,17 @@ final class WatchModel {
 
     func tab(host: String, key: String) -> WatchTab? { snapshot?.tabs.first { $0.host == host && $0.key == key } }
 
-    /// The phone's Activity sort (`TabsOrdering.sorted(_:by: .activity)`): most recent first, unknown times last, then
-    /// by name as Finder sorts, then by key so the order never flickers.
+    /// The phone's order (`MobileTabs.rows(in:)`): most recent first, unknown times last, ties in the snapshot's (server)
+    /// order.
     static func sorted(_ tabs: [WatchTab]) -> [WatchTab] {
-        tabs.sorted { a, b in
-            switch (a.activity, b.activity) {
-            case let (x?, y?) where x != y: return x > y
-            case (.some, nil): return true
-            case (nil, .some): return false
-            default: break
+        tabs.enumerated().sorted { a, b in
+            switch (a.element.activity, b.element.activity) {
+            case let (x?, y?) where x != y: x > y
+            case (.some, nil): true
+            case (nil, .some): false
+            default: a.offset < b.offset
             }
-            switch a.name.localizedStandardCompare(b.name) {
-            case .orderedAscending: return true
-            case .orderedDescending: return false
-            case .orderedSame: return a.key < b.key
-            }
-        }
+        }.map(\.element)
     }
 
     /// A host's spaces and tabs as Spaces lists them, for K6's "2 spaces · 5 tabs".

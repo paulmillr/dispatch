@@ -96,7 +96,7 @@ struct TabsHeaderPill<Label: View>: View {
     }
 }
 
-/// The back pill: a chevron and the previous screen's title (a tab's is `TabsBackDisc`).
+/// The back pill: a chevron and the previous screen's title (a tab's is `TabHeaderBackAndMenu`).
 struct TabsBackPill: View {
     /// A screen's name truncates past this, so the bar keeps room for the title and the trailing pill: a long space
     /// or tab name pushed every item into the bar's "…" menu.
@@ -120,9 +120,9 @@ struct TabsBackPill: View {
     }
 }
 
-/// A tab's back button (X9b): the system's chevron circle without a label, so the title gets the bar; how many
-/// conversations elsewhere need the user is a badge on its corner (Messages' unread count). VoiceOver still names the
-/// screen it returns to, and reads the count as its value.
+/// Back on a tab that is gone (no tab, no menu beside it; a tab's is `TabHeaderBackAndMenu`): the system's chevron
+/// circle without a label; how many conversations elsewhere need the user is a badge on its corner (Messages' unread
+/// count). VoiceOver still names the screen it returns to, and reads the count as its value.
 struct TabsBackDisc: View {
     /// The screen Back returns to.
     let back: String
@@ -207,6 +207,9 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     /// A tab on the phone (X9b): the title block two lines tall (`TabsTitleBlock`), the subtitle only under a title
     /// that fits on one line.
     var titleBlock = false
+    /// The trailing control is a system bar item (a phone tab's mode button): the bar draws its glass. Otherwise the
+    /// controls bring their own.
+    var trailingGlass = false
     @ViewBuilder var back: Back
     @ViewBuilder var subtitle: Subtitle
     @ViewBuilder var trailing: Trailing
@@ -230,7 +233,7 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .topBarTrailing) { trailing }
-            .sharedBackgroundVisibility(.hidden)
+            .sharedBackgroundVisibility(trailingGlass ? .automatic : .hidden)
     }
 
     private var titleColumn: some View {
@@ -253,9 +256,9 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     }
 }
 
-/// A tab's title on the phone (X9b): two lines tall, top-aligned, subheadline semibold. A title that fits on one line
+/// A tab's title on the phone (B7): two lines tall, top-aligned, subheadline semibold. A title that fits on one line
 /// keeps the subtitle (host · folder) under it; a longer one takes both lines and the subtitle goes (the host is the
-/// trailing disc). Only the title decides: the subtitle truncates in what the title leaves.
+/// glyph beside Back). Only the title decides: the subtitle truncates in what the title leaves.
 struct TabsTitleBlock<Subtitle: View>: View {
     let title: String
     @ViewBuilder var subtitle: Subtitle
@@ -410,15 +413,19 @@ struct TabsSidebarPill: View {
 /// The back pill's count of conversations that need the user, as a badge (Messages' unread count).
 struct TabsCountBadge: View {
     let label: String
+    @ReduceMotion private var reduceMotion
 
     var body: some View {
         Text(label)
             .font(.footnote.weight(.bold))
             .monospacedDigit()
             .foregroundStyle(Color.onAccent)
+            // The number rolls as conversations come to need the user and leave it.
+            .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(label) ?? 0))
             .padding(.horizontal, 6)
             .frame(minWidth: 20, minHeight: 20)
             .background(Color.dispatchPink, in: Capsule())
+            .animation(.snappy(duration: 0.25), value: label)
     }
 }
 

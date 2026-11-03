@@ -9,8 +9,6 @@ enum TabsRoute: Hashable {
     case space(SpaceRef)
     /// P1's Detached row: a host's detached work, to restore or remove from the list.
     case detached(UUID)
-    /// M1f: host detail (Hosts' view), from the Info button in edit mode, and Files' Change integration… (S2).
-    case host(UUID)
     /// A screen a tab's Files mode pushes (a file, a diff, a commit: `FilesModeContent.destination`).
     case files(TabRef, FilesRoute)
 
@@ -71,6 +69,8 @@ final class SpacesNavigator {
     }
     /// The split hides its sidebar (`toggleSidebar`): an iPad's does, the Duo's never (`MobileRoot` sets it).
     var sidebarHides = false
+    /// The phone is on its side (`MobileLandscape`, set by `MobileRoot`): Review and Commits open beside their lists.
+    var landscape = false
     /// The iPad split's sidebar is hidden and the tab takes the window (`MobileRoot`, `toggleSidebar`). Only while a tab
     /// is shown: without one the sidebar is all there is.
     var sidebarHidden = false {
@@ -88,8 +88,11 @@ final class SpacesNavigator {
     var editing = false
     var picking = false
     var newSpace: NewSpaceRequest?
-    /// The host whose stats sheet shows (a host disc in the tree, the switcher's host row): `hostStatsSheet(host:)`.
+    /// The host whose sheet shows (a host disc in the tree, Info in edit mode, the switcher's host row):
+    /// `hostStatsSheet(host:)`.
     var statsHost: UUID?
+    /// The host Edit host shows for (Files' Change integration…, S2): `SpacesHostViews.edit`.
+    var editHost: UUID?
     /// P3: the space switcher over this tab (the iPad strip's space capsule).
     var switcher: TabRef?
     /// What the switcher asked for once it is gone (Rename's and Terminate's dialogs show over the stack, not the sheet).
@@ -102,8 +105,9 @@ final class SpacesNavigator {
     /// Each host's agents for that menu, read when a space screen or the switcher shows (a menu's items are fixed
     /// when it opens).
     var agentChoices: [UUID: [SpacesAgentChoice]] = [:]
-    /// Spaces an agent is being started in from New tab's menu: its entries wait, so a second pick starts no second one.
-    private(set) var startingAgents: Set<SpaceRef> = []
+    /// Spaces an agent is being started in from New tab's menu, to the agent's label: its entries wait, so a second pick
+    /// starts no second one, and New tab says what starts ("Starting Claude…", as the Mac's tab does).
+    private(set) var startingAgents: [SpaceRef: String] = [:]
     /// Hosts a space from the quick menu (holding New space) is being made on: their New space rows wait.
     var creatingSpace: Set<UUID> = []
     let model: MobileTabs
@@ -283,7 +287,7 @@ final class SpacesNavigator {
         }
     }
 
-    /// The detail column's stack moved: a screen over the tab (a Files push, host detail), or Back from it. A tab it
+    /// The detail column's stack moved: a screen over the tab (a Files push, detached work), or Back from it. A tab it
     /// opens takes the column.
     func setDetail(_ routes: [TabsRoute]) {
         let shown = splitPath
@@ -292,15 +296,6 @@ final class SpacesNavigator {
         } else if let tab = shown.tab {
             path = shown.sidebar + [.tab(tab)] + routes
         }
-    }
-
-    /// Host detail's Spaces rows: the space's tabs (P2) over the detail; `MobileSpace.shellNode` is a plain host's Shell
-    /// space.
-    func openSpace(host: UUID, node: UInt64) {
-        guard let workspace = model.workspace(host),
-              let space = node == MobileSpace.shellNode ? workspace.shellSpace : workspace.spaces.first(where: { $0.node == node && $0.kind == .multiplexer })
-        else { return }
-        path.append(.space(space.ref))
     }
 
     /// What closed leaves the stack: a tab takes the screens its Files modes pushed (and the switcher over it), a space
@@ -343,9 +338,10 @@ final class SpacesNavigator {
     /// P2e's agent entries: the agent starts in a new tab of `space` and opens in Chat, as New chat's Start does.
     func startAgent(_ choice: SpacesAgentChoice, in space: MobileSpace) {
         let ref = space.ref
-        guard let agentLauncher, startingAgents.insert(ref).inserted else { return }
+        guard let agentLauncher, startingAgents[ref] == nil else { return }
+        startingAgents[ref] = choice.label
         Task {
-            defer { startingAgents.remove(ref) }
+            defer { startingAgents[ref] = nil }
             do { try await agentLauncher.start(choice, space) } catch {
                 actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
@@ -419,7 +415,7 @@ final class SpacesNavigator {
                         let route = FilesRoute(mode: mode, path: parts.count > 2 ? parts[2] : nil,
                                                revision: parts.count > 1 ? parts[1] : nil)
                         // The iPad's strip opens a commit in the pane beside the log (I3).
-                        if sidebarHides, split, route.opensInPane {
+                        if (sidebarHides && split) || landscape, route.opensInPane {
                             model.paneRoutes[ref, default: [:]][mode] = route
                         } else {
                             path.append(.files(ref, route))
@@ -487,19 +483,8 @@ struct TabsDestination: View {
             SpaceTabsScreen(navigator: navigator, ref: ref, path: $navigator.path)
         case .detached(let host):
             SpacesDetachedScreen(model: model, actions: navigator.actions, host: host, path: $navigator.path)
-        case .host(let id):
-            // M1f's back pill names Spaces, as M2c's does (the system's button showed a bare chevron here).
-            hostViews.detail(id)
-                .navigationBarBackButtonHidden(true)
-                .background(TabsSwipeBack())
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        TabsBackPill(label: "Spaces") { if !navigator.path.isEmpty { navigator.path.removeLast() } }
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                }
         case .files(let tab, let route):
-            content.files.destination(tab, route)
+            FilesZoomed(path: route.path) { content.files.destination(tab, route) }
         }
     }
 }
@@ -547,7 +532,15 @@ private struct SpacesPresentations: ViewModifier {
                     .tint(.dispatchPink)
             }
             .hostStatsSheet(host: $navigator.statsHost)
+            .sheet(item: Binding(get: { navigator.editHost.map(EditHostItem.init) }, set: { navigator.editHost = $0?.id })) { item in
+                hostViews.edit(item.id)
+            }
     }
+}
+
+/// Presents Edit host over Spaces.
+private struct EditHostItem: Identifiable {
+    let id: UUID
 }
 
 /// The Spaces tab (P1, W0): the hosts as sections of spaces under a filter row, the OFFLINE group at the end, and the
@@ -1050,7 +1043,7 @@ struct SpacesHostHeader: View {
                 }
             }
             Spacer(minLength: 0)
-            NavigationLink(value: TabsRoute.host(section.host.id)) {
+            Button(action: stats) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 22))
                     .foregroundStyle(Color.dispatchPink)

@@ -5,15 +5,15 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// The composer with code (M5e), with a small interface (the draft, a placeholder, the trailing slot's state and its
-/// actions): "+" for attachments and the code keys, the field, and the slot (mic while the draft is empty, Stop while the
-/// agent works with an empty draft, else the pink send; a tap sends as the draft goes now, a long press only offers the
-/// ways it can go, `sendOptions`: Send, or Send now and Queue while the agent works). The mic dictates with
+/// actions): "+" for attachments, conversation mode and the code keys, the field, and the slot (mic while the draft is empty,
+/// else the pink send; a tap sends as the draft goes now, a long press only offers the ways it can go, `sendOptions`:
+/// Send, or Send now and Queue while the agent works). Stop is on the working row (`ChatWorkingRow`). The mic dictates with
 /// Settings' engine (`Dictation`): what it hears fills the draft as it comes, and tapped again it stops; while it listens a
 /// capsule above the field says so, and after a failure, why. The field is a
 /// `UITextView` that grows with the draft up to a bound and renders its Markdown as you type (`CodeTextView`). With a
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. With "Show code keys" picked
 /// under "+" (off by default, kept app-wide: `MobileSettings.composerCodeKeysKey`), while the field is focused a glass key row above the field
-/// offers the backtick, the fence and code pairs; a paste of several lines offers "Paste as code". With a hardware
+/// offers the backtick, the fence and code pairs. With a hardware
 /// keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends and Shift-Return starts a new line,
 /// which puts the draft in editor mode, where Return inserts newlines and ⌘Return sends; ⌥Return steers, ⌘E toggles
 /// editor mode, Esc leaves editor mode, else stops a running turn, else leaves the field. The key row stays away then:
@@ -21,7 +21,7 @@ import UniformTypeIdentifiers
 /// files, an image pasted into the field or a drop on the composer attaches, and a strip above the field shows them
 /// (docs/ios.md, Attachments); a draft with attachments sends without text.
 struct CodeComposer: View {
-    enum Slot: Equatable { case mic, send, stop }
+    enum Slot: Equatable { case mic, send }
 
     /// What a long press on send offers; a tap does what the first that is not `sendNow` would (the draft's own route).
     enum SendOption: Hashable, Identifiable {
@@ -68,9 +68,8 @@ struct CodeComposer: View {
 
     @Binding var text: String
     var placeholder: String
-    /// The agent works: an empty draft shows Stop.
+    /// The agent works: Esc from a hardware keyboard stops it.
     var working: Bool
-    var stopping = false
     var focus: FocusState<Bool>.Binding
     var send: () -> Void
     var steer: (() -> Void)?
@@ -97,11 +96,10 @@ struct CodeComposer: View {
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
     @ReduceMotion private var reduceMotion
 
-    /// The trailing slot: send for text or attachments, else Stop while the agent works, else the mic.
-    static func slot(text: String, working: Bool, dictating: Bool = false, attached: Bool = false) -> Slot {
+    /// The trailing slot: send for text or attachments, else the mic.
+    static func slot(text: String, dictating: Bool = false, attached: Bool = false) -> Slot {
         if dictating { return .mic }
-        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !attached
-        return empty ? (working ? .stop : .mic) : .send
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !attached ? .mic : .send
     }
 
     /// Edit › Attach Files… (⇧⌘A, `MobileCommands`): the composer on screen opens its file picker.
@@ -143,18 +141,8 @@ struct CodeComposer: View {
         VStack(spacing: 0) {
             if keyRow {
                 // Above the field, where the eye already is while typing; on an iPad the terminal capsule's width,
-                // centred: six keys spread over a 1,000-point column read as a phone's row stretched. A paste's offer
-                // takes the row's place for its few seconds, right above the field it pasted into (the row keeps its
-                // room, so nothing moves).
+                // centred: six keys spread over a 1,000-point column read as a phone's row stretched.
                 CodeKeyRow { editor.press($0) }
-                    .opacity(editor.pasteOffer == nil ? 1 : 0)
-                    .allowsHitTesting(editor.pasteOffer == nil)
-                    .accessibilityHidden(editor.pasteOffer != nil)
-                    .overlay(alignment: .leading) {
-                        if editor.pasteOffer != nil {
-                            pasteAsCode.padding(.leading, 46).transition(pasteTransition)
-                        }
-                    }
                     .frame(maxWidth: CodeKeyRow.maxWidth(idiom: UIDevice.current.userInterfaceIdiom))
                     .padding(.horizontal, 10)
                     .padding(.top, 8)
@@ -169,6 +157,9 @@ struct CodeComposer: View {
                     Menu {
                         Button("Photo or screenshot", systemImage: "photo") { choosingPhotos = true }.disabled(!attaching)
                         Button("File", systemImage: "doc") { choosingFiles = true }.disabled(!attaching)
+                        if let converse {
+                            Section { Button("Conversation Mode", systemImage: "waveform", action: converse) }
+                        }
                         if !keyboard.attached {
                             // A hardware keyboard has the keys, and the row never shows with it.
                             Section {
@@ -193,7 +184,7 @@ struct CodeComposer: View {
                     .buttonStyle(.plain)
                     .glassEffect(.regular.interactive(), in: Circle())
                     .accessibilityLabel("Attach")
-                    .accessibilityHint("Photos, files and the code keys")
+                    .accessibilityHint(converse == nil ? "Photos, files and the code keys" : "Photos, files, conversation mode and the code keys")
                     VStack(alignment: .trailing, spacing: 6) {
                         HStack(alignment: .bottom, spacing: 6) {
                             CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
@@ -226,8 +217,7 @@ struct CodeComposer: View {
         }
         // Over the key row and the strip too: the hints float above whatever the composer shows on top.
         .overlay(alignment: .topTrailing) {
-            if dictationStatus == nil, editor.pasteOffer == nil,
-               Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
+            if dictationStatus == nil, Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
                 // The Mac's "editor" badge: Return now starts a line, so say what sends.
                 Text("Editor · ⌘↩ sends")
                     .font(.caption2.weight(.medium))
@@ -259,17 +249,10 @@ struct CodeComposer: View {
                 .alignmentGuide(.top) { $0[.bottom] + 4 }
                 .accessibilityIdentifier("composer-dictation-status")
                 .transition(.opacity)
-            } else if editor.pasteOffer != nil, !keyRow {
-                // No key row (a hardware keyboard): just above the field, as the hints float.
-                pasteAsCode
-                    .padding(.leading, 56)
-                    .alignmentGuide(.top) { $0[.bottom] + 2 }
-                    .transition(pasteTransition)
             }
         }
         // Its own height always: the thread above gives way (with the keyboard up, too).
         .fixedSize(horizontal: false, vertical: true)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: editor.pasteOffer != nil)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: dictationStatus == nil)
         .onChange(of: stacked) { _, _ in editor.measure(text: text) }
         .photosPicker(isPresented: $choosingPhotos, selection: $photos, maxSelectionCount: attachments?.remaining ?? 1,
@@ -305,24 +288,6 @@ struct CodeComposer: View {
     /// The key row shows: the field edits and no hardware keyboard has the keys.
     private var keyRow: Bool {
         Self.showsKeyRow(enabled: codeKeys, editing: editor.editing, hardwareKeyboard: keyboard.attached)
-    }
-
-    /// "Paste as code", offered after a paste of several lines.
-    private var pasteAsCode: some View {
-        Button { editor.pasteAsCode() } label: {
-            Label("Paste as code", systemImage: "curlybraces")
-                .scaledFont(14, weight: .medium, relativeTo: .subheadline)
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .frame(minHeight: 34)
-                .glassEffect(.regular.interactive(), in: .capsule)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var pasteTransition: AnyTransition {
-        reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .bottomLeading))
     }
 
     private var dictationStatus: (text: String, failed: Bool)? {
@@ -400,24 +365,9 @@ struct CodeComposer: View {
 
     @ViewBuilder private var slot: some View {
         let dictating = dictation.active(dictationOwner)
-        switch Self.slot(text: text, working: working, dictating: dictating, attached: attached) {
+        switch Self.slot(text: text, dictating: dictating, attached: attached) {
         case .mic:
             micSlot(dictating: dictating)
-        case .stop:
-            Button(action: stop) {
-                RoundedRectangle(cornerRadius: 2).fill(Color(uiColor: .systemBackground)).frame(width: 10, height: 10)
-                    .frame(width: 28, height: 28)
-                    .background(Color.primary, in: Circle())
-                    .opacity(stopping ? 0.5 : 1)
-                    .padding(8)
-                    .contentShape(Rectangle())
-                    .contentShape(.hoverEffect, Circle().inset(by: 8))
-                    .hoverEffect(.highlight)
-            }
-            .buttonStyle(.plain)
-            .padding(-8)
-            .disabled(stopping)
-            .accessibilityLabel("Stop")
         case .send:
             // A tap sends; a long press presents the ways the draft can go and sends nothing by itself.
             Menu {
@@ -488,16 +438,14 @@ struct CodeKeyRow: View {
     private var height: CGFloat { min(typeSize, .accessibility1).scaled(Self.height, relativeTo: .subheadline) }
 }
 
-/// The composer's state outside the text view: its height, whether it is editing, the paste offer.
+/// The composer's state outside the text view: its height and whether it is editing.
 @MainActor @Observable final class CodeEditorModel {
     var height: CGFloat = 36
     private(set) var editing = false
-    private(set) var pasteOffer: NSRange?
     @ObservationIgnored var pillWidth: CGFloat = 0 {
         didSet { if pillWidth != oldValue, let view { measure(text: view.textStorage.string) } }
     }
     @ObservationIgnored weak var view: CodeTextView?
-    @ObservationIgnored private var offerExpiry: Task<Void, Never>?
 
     /// The field's width in the pill for `text` (beside the slot, or full width over it).
     func fieldWidth(text: String) -> CGFloat {
@@ -514,33 +462,11 @@ struct CodeKeyRow: View {
     }
 
     func began() { editing = true }
-    func ended() { editing = false; dismissOffer() }
+    func ended() { editing = false }
 
     func focus() { view?.becomeFirstResponder() }
 
-    func press(_ key: ComposerKey) {
-        dismissOffer()
-        view?.press(key)
-    }
-
-    func offer(_ range: NSRange?) {
-        offerExpiry?.cancel()
-        pasteOffer = range
-        guard range != nil else { return }
-        offerExpiry = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
-            guard !Task.isCancelled else { return }
-            self?.pasteOffer = nil
-        }
-    }
-
-    func dismissOffer() { if pasteOffer != nil { offer(nil) } }
-
-    func pasteAsCode() {
-        guard let range = pasteOffer else { return }
-        offer(nil)
-        view?.fence(range)
-    }
+    func press(_ key: ComposerKey) { view?.press(key) }
 }
 
 /// The `UITextView` in SwiftUI: the binding is the draft; the view reports edits, focus and its height.
@@ -565,7 +491,6 @@ struct CodeEditorField: UIViewRepresentable {
         editor.view = view
         let coordinator = context.coordinator
         view.changed = { [weak coordinator] text in coordinator?.changed(text) }
-        view.pasted = { [weak editor] range in editor?.offer(range) }
         return view
     }
 
@@ -578,7 +503,6 @@ struct CodeEditorField: UIViewRepresentable {
         if view.placeholder != placeholder { view.placeholder = placeholder }
         if view.textStorage.string != text {
             view.setDraft(text)
-            editor.dismissOffer()
             editor.measure(text: text)
         }
         // A request for focus (a new chat, Reply, the slash list): the binding's rising edge, so the field never fights
@@ -631,11 +555,6 @@ struct CodeEditorField: UIViewRepresentable {
             parent.editor.measure(text: text)
         }
 
-        func textViewDidChange(_ textView: UITextView) {
-            // CodeTextView restyles and reports the text itself (UITextView.textDidChangeNotification).
-            parent.editor.dismissOffer()
-        }
-
         func textViewDidChangeSelection(_ textView: UITextView) {
             (textView as? CodeTextView)?.updateCaretContext()
         }
@@ -651,16 +570,6 @@ struct CodeEditorField: UIViewRepresentable {
             parent.editor.ended()
             if parent.focus.wrappedValue { parent.focus.wrappedValue = false }
             ended = Date()
-        }
-
-        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
-            guard let view = textView as? CodeTextView, let string = UIPasteboard.general.string,
-                  ComposerMarkdown.offersCode(string), !view.markdown.isCode(at: range.location, in: view.textStorage.string)
-            else { return nil }
-            let action = UIAction(title: "Paste as Code", image: UIImage(systemName: "curlybraces")) { [weak view] _ in
-                view?.pasteAsCode(nil)
-            }
-            return UIMenu(children: suggestedActions + [action])
         }
     }
 }

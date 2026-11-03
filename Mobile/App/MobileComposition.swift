@@ -107,6 +107,10 @@ final class MobileComposition {
             self.updateBadge()
         }
         conversations.arrived = { [weak self] previous, current in self?.arrived(previous, current) }
+        // Hosts draw in Settings' colorblind colours, or grey with Color-code hosts off.
+        settings.hostColors = .shared
+        // The Settings app's Dispatch page: its badge switch reaches the icon as Settings' own does.
+        settings.followOutsideChanges { [weak self] in self?.updateBadge() }
         // Close, Detach and Terminate from the phone: those agents leaving is the user's doing, no failure.
         tabs.userClosed = { [weak self] host, panes in
             self?.alerts?.userClosed(panes.map { ChatConversationKey(host: host, node: $0) })
@@ -135,6 +139,11 @@ final class MobileComposition {
             guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key) else { return nil }
             return TabUrgency(row)
         }
+        tabs.agentState = { host, terminal in
+            guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key),
+                  !row.stale else { return nil }
+            return row.urgency
+        }
         tabs.status = { host, terminal in
             guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key) else { return nil }
             return Self.status(row, session: conversations.sessions[key])
@@ -157,7 +166,7 @@ final class MobileComposition {
         tabs.shellSessions = { hosts.session($0)?.shells }
         tabs.updated = { hosts.session($0)?.updated }
         tabs.refresh = { await hosts.refresh() }
-        // New space on a multiplexer the host does not show: the host follows it from now on, as Host detail's choice.
+        // New space on a multiplexer the host does not show: the host follows it from now on, as Edit host's choice.
         tabs.follow = { id, name in
             guard var record = hosts.session(id)?.host,
                   let preference = HostRecord.MultiplexerPreference(rawValue: name), record.multiplexer != preference else { return }
@@ -620,20 +629,12 @@ final class MobileComposition {
         return content
     }
 
-    /// Hosts' screens embedded in Spaces: New host (M8a) and host detail (M1f) with the host's spaces opening in
-    /// Spaces: the topology's, then a plain host's Shell space (Tabs' own, no topology names it).
+    /// Hosts' sheets presented from Spaces: New host (M8a) and Edit host (Files' Change integration…).
     var hostViews: SpacesHostViews {
-        let hosts = hosts, navigator = navigator, tabs = tabs
+        let hosts = hosts
         return SpacesHostViews(
             newHost: { done in hosts.newHostSheet(created: { done($0) }) },
-            detail: { id in
-                AnyView(hosts.hostDetail(id, count: { session in
-                    HostSummary(session: session).spaces.count + (tabs.workspace(session.id)?.shellSpace == nil ? 0 : 1)
-                }) { session in
-                    HostSpacesList(session: session)
-                    if let space = tabs.workspace(session.id)?.shellSpace { HostShellSpaceRow(session: session, space: space) }
-                }.environment(\.hostSpaceOpening, navigator))
-            },
+            edit: { id in hosts.editHostSheet(id) },
             statsLine: { [feedsTabs] id in
                 #if DEBUG
                 if !feedsTabs { return TabsSample.statsLine(id) }
@@ -721,43 +722,6 @@ private struct TerminalSegment: View {
                               terminal: pane.id, client: client,
                               scrollback: TerminalScrollback(multiplexer: session.following),
                               grid: node?.size.map { (Int($0.columns), Int($0.rows)) })
-    }
-}
-
-/// Host detail's row for a plain host's Shell space, after the topology's rows (`HostSpacesList`), as they draw theirs:
-/// it opens the space (`MobileSpace.shellNode`).
-private struct HostShellSpaceRow: View {
-    let session: HostSession
-    let space: MobileSpace
-    @Environment(\.hostSpaceOpening) private var spaceOpening
-
-    var body: some View {
-        if let spaceOpening {
-            Button { spaceOpening.open(host: session.id, space: MobileSpace.shellNode) } label: {
-                HStack {
-                    row
-                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                }
-            }
-            .foregroundStyle(.primary)
-        } else {
-            row
-        }
-    }
-
-    private var row: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "apple.terminal")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(Color.secondary.opacity(0.15), in: Circle())
-                .accessibilityHidden(true)
-            Text(space.name).font(.headline)
-            Text(space.tabs.count == 1 ? "1 shell" : "\(space.tabs.count) shells")
-                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            Spacer(minLength: 0)
-        }
     }
 }
 
@@ -893,9 +857,5 @@ extension TabUrgency {
         default: return nil
         }
     }
-}
-
-extension SpacesNavigator: HostSpaceOpening {
-    func open(host: UUID, space: UInt64) { openSpace(host: host, node: space) }
 }
 

@@ -29,8 +29,10 @@ extension ChatCoordinator {
                 session.helperTask?.cancel()
             }
             session.active = false
-            session.busy = false; session.subagents = []
+            session.busy = false; session.subagents = []; session.shells = []
             session.relinquish()
+            // Disconnects and withdrawn integrations name their cause; a bare exit is the agent's own.
+            if status == nil, !disabled, !session.agentExited { session.agentExited = true }
             session.status = status ?? "\(session.agentTitle) exited. This transcript is read-only."
             if disabled {
                 session.helper?.close()
@@ -216,6 +218,7 @@ extension ChatCoordinator {
             // The helper sends its state with every transcript read: write only what differs, so an unchanged
             // field invalidates no view (Observation reports every write, equal or not).
             if !session.active { session.active = true }
+            if session.agentExited { session.agentExited = false }
             if let version = state.version, session.version != version { session.version = version }
             // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
             // runs after the session registers): Chat opens once it closes.
@@ -227,6 +230,8 @@ extension ChatCoordinator {
             // Before busy, so a turn ending while its agents run keeps one working clock.
             let subagents = ChatSubagent.merge(state.agents ?? [], previous: session.subagents)
             if session.subagents != subagents { session.subagents = subagents }
+            let shells = ChatShell.merge(state.shells ?? [], previous: session.shells)
+            if session.shells != shells { session.shells = shells }
             let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
             if session.busy != busy { session.busy = busy }
             if session.starting { session.starting = false }

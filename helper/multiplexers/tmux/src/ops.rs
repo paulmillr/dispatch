@@ -257,13 +257,29 @@ impl Tmux {
         let size = measure(self, loc, &window.visible)
             .filter(|s| s.0 <= 10000 && s.1 <= 10000);
         let current = (window.layout.width, window.layout.height);
+        // Once a control client sizes one window, tmux counts it for every window of its session, with its own size
+        // where it gave none (80x24 until set): under `window-size latest` the session's current window and, with no
+        // other client, all of them took that size and redrew. Steady, it first takes the current window's size, so
+        // the windows it does not size stay as they are.
+        let whole = snapshot
+            .windows
+            .iter()
+            .find(|w| w.active)
+            .map_or(current, |w| (w.layout.width, w.layout.height));
+        let steady = self.steady;
         let window = window.id;
         let client = &mut self.backends.get_mut(&loc.backend).unwrap().clients[loc.client];
         Ok(size
             .filter(|s| client.available.get(&window).copied().unwrap_or(current) != *s)
             .map(|(x, y)| {
                 client.available.insert(window, (x, y));
-                vec![format!("refresh-client -C @{window}:{x}x{y}")]
+                let mut commands = Vec::new();
+                if steady && !client.sized && (1..=10000).contains(&whole.0) && (1..=10000).contains(&whole.1) {
+                    client.sized = true;
+                    commands.push(format!("refresh-client -C {}x{}", whole.0, whole.1));
+                }
+                commands.push(format!("refresh-client -C @{window}:{x}x{y}"));
+                commands
             })
             .unwrap_or_default())
     }

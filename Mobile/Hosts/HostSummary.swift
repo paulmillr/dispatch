@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// What the host screens say about a session: Spaces' host tint and host detail's status and spaces (M1f), derived in
-/// one place so the screens and the tests agree.
+/// What the host screens say about a session: Spaces' host tint and the host's status (M1f's words), derived in one place
+/// so the screens and the tests agree.
 @MainActor
 struct HostSummary {
     let session: HostSession
@@ -48,18 +48,8 @@ struct HostSummary {
 
     static let plainSSH = "Plain SSH"
 
-    /// Host detail's Plain SSH line (docs/ios.md, Plain SSH): with the reason the helper could not start when the
-    /// Helper switch is on and this connection fell back, else just "Plain SSH" for a host without its helper (by
-    /// choice, or a fallback without a reason); nil for a host on its helper.
-    var plainLine: String? {
-        if host.helper, case .plain(let reason?) = session.mode {
-            return "\(Self.plainSSH) · helper could not be installed: \(reason)"
-        }
-        return session.plainSSH ? Self.plainSSH : nil
-    }
-
-    /// The fallback can be made permanent ("Use plain SSH for this host", which turns the Helper switch off): the
-    /// switch is on and this connection is plain.
+    /// The fallback can be made permanent ("Use plain SSH" on the stats' plain card, which turns the Helper switch
+    /// off): the switch is on and this connection is plain.
     var offersPlainSSH: Bool { host.helper && session.isPlain }
 
     var statusColor: Color {
@@ -77,44 +67,10 @@ struct HostSummary {
         let value = Double(seconds) * 1000 + Double(attoseconds) / 1e15
         return value < 10 ? String(format: "%.1f ms", max(value, 0.1)) : "\(Int(value.rounded())) ms"
     }
-
-    /// The spaces of the topology (workspace nodes), each with the folder its first terminal is in.
-    struct Space: Identifiable, Equatable {
-        let id: UInt64
-        let name: String
-        let folder: String?
-    }
-
-    var spaces: [Space] {
-        // A plain SSH host has no spaces from a server, whatever was kept from an earlier helper.
-        guard !session.plainSSH, let topology = session.topology else { return [] }
-        let nodes = topology.nodes.filter { !$0.detached }
-        let homes = HomePath(session.hello)
-        func folder(under id: UInt64) -> String? {
-            for child in nodes where child.parent == id {
-                if let cwd = child.cwd { return cwd }
-                if let found = folder(under: child.id) { return found }
-            }
-            return nil
-        }
-        return nodes.filter { $0.kind == .workspace }.map { node in
-            Space(id: node.id, name: node.name, folder: (node.cwd ?? folder(under: node.id)).map { homes.abbreviate($0) })
-        }
-    }
-
 }
 
 extension HostSession {
     /// Plain SSH (docs/ios.md): by choice (the host's Helper switch is off) or on this connection (the helper could
     /// not start). Agents, background refresh and the watch leave such a host out; Spaces marks it.
     var plainSSH: Bool { !host.helper || isPlain }
-}
-
-/// Opens one of a host's spaces from Host detail (Tabs owns the space screens). Rows show no chevron without it.
-@MainActor protocol HostSpaceOpening: AnyObject {
-    func open(host: UUID, space: UInt64)
-}
-
-extension EnvironmentValues {
-    @Entry var hostSpaceOpening: (any HostSpaceOpening)? = nil
 }

@@ -40,10 +40,14 @@ pub(super) fn boot() -> io::Result<String> {
 }
 
 pub(super) fn host(host: &mut Host, local: bool) {
+    // Each mach_host_self() adds a reference to the host port, and this runs in the long-lived helper (a
+    // native job, every sample): one per sample, released at the end.
+    // SAFETY: a scalar Mach call returning a send right this function owns.
+    let port = unsafe { mach_host_self() };
     let (mut cores, mut count) = (0, 0);
     let mut info = ptr::null_mut();
     // SAFETY: Mach initializes an owned array and its exact element count on success.
-    if unsafe { host_processor_info(mach_host_self(), 2, &mut cores, &mut info, &mut count) } == 0
+    if unsafe { host_processor_info(port, 2, &mut cores, &mut info, &mut count) } == 0
         && !info.is_null()
     {
         if count as usize == cores as usize * 4 && (local || (cores > 0 && cores <= 8192)) {
@@ -85,7 +89,7 @@ pub(super) fn host(host: &mut Host, local: bool) {
     let mut vm = MaybeUninit::<Vm>::zeroed();
     let mut length = (size_of::<Vm>() / size_of::<i32>()) as u32;
     // SAFETY: HOST_VM_INFO64 writes its complete native structure into this exact storage.
-    if unsafe { host_statistics64(mach_host_self(), 4, vm.as_mut_ptr().cast(), &mut length) } == 0 {
+    if unsafe { host_statistics64(port, 4, vm.as_mut_ptr().cast(), &mut length) } == 0 {
         let vm = unsafe { vm.assume_init() };
         let pages = u64::from(vm.active_count)
             + u64::from(vm.inactive_count)
@@ -99,6 +103,8 @@ pub(super) fn host(host: &mut Host, local: bool) {
                 .map(|total| total.min(pages.saturating_sub(reclaimable) * page as u64));
         }
     }
+    // SAFETY: release the one reference taken above; nothing uses the port after this.
+    unsafe { mach_port_deallocate(mach_task_self_, port) };
     if let Ok(bytes) = sysctl(c"vm.swapusage", 32)
         && bytes.len() >= 24
     {
@@ -112,41 +118,9 @@ pub(super) fn host(host: &mut Host, local: bool) {
     }
     // CLOCK_UPTIME_RAW matches local awake uptime; remote CLOCK_MONOTONIC_RAW includes sleep.
     host.uptime = ffi::clock(if local { 8 } else { 4 }).ok();
-    let mut interfaces = ptr::null_mut();
-    // SAFETY: successful getifaddrs initializes an owned native linked list.
-    if unsafe { getifaddrs(&mut interfaces) } == 0 {
+    if let Ok(mut rows) = interfaces((!local).then_some(4096)) {
         if local {
             host.time = ffi::time(true).ok();
-        }
-        let mut rows = Vec::new();
-        let mut cursor = interfaces;
-        loop {
-            if cursor.is_null() || (!local && rows.len() == 4096) {
-                break;
-            }
-            // SAFETY: cursor follows this live list; no pointers escape its lifetime.
-            let entry = unsafe { &*cursor };
-            cursor = entry.ifa_next;
-            if entry.ifa_addr.is_null() || entry.ifa_data.is_null() || entry.ifa_flags & 8 != 0 {
-                continue;
-            }
-            // SAFETY: Darwin sockaddr starts with two bytes, length and address family.
-            let address = unsafe { &*entry.ifa_addr.cast::<[u8; 2]>() };
-            if address[1] != 18 {
-                continue;
-            }
-            let data = unsafe { &*entry.ifa_data };
-            rows.push(Link {
-                name: unsafe { CStr::from_ptr(entry.ifa_name) }
-                    .to_string_lossy()
-                    .into_owned(),
-                received: data.ifi_ibytes.into(),
-                sent: data.ifi_obytes.into(),
-            });
-        }
-        // SAFETY: release the list once after copying its counters and names.
-        unsafe { freeifaddrs(interfaces) };
-        if local {
             let mut names = std::collections::BTreeMap::new();
             for row in rows {
                 names.insert(row.name.clone(), row);
@@ -156,6 +130,91 @@ pub(super) fn host(host: &mut Host, local: bool) {
             rows.sort_by(|a, b| a.name.cmp(&b.name));
         }
         host.network = Some(rows);
+    }
+}
+
+/// Every interface's 64-bit byte counters, loopback left out, at most `limit`, from the interface MIB: the highest
+/// index (net.link.generic.system.ifcount: CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_SYSTEM, IFMIB_IFCOUNT), then each
+/// index's ifmibdata (net.link.generic.ifdata.<index>.general: …, IFMIB_IFDATA, index, IFDATA_GENERAL). getifaddrs and
+/// NET_RT_IFLIST2 tell an account without Apple's network-statistics entitlement its counters cut to 32 bits (and
+/// rounded to KiB): they wrap every 4 GiB, under a minute at 600 Mbit/s, so a background sample a minute after the
+/// last could find a counter smaller and leave out the rate. A removed interface leaves its index unreadable: skipped.
+fn interfaces(limit: Option<usize>) -> io::Result<Vec<Link>> {
+    let (mut count, mut size) = (0i32, size_of::<i32>());
+    let mut name = [4, 18, 0, 1, 1];
+    // SAFETY: the kernel writes one int into this exact storage; no new value.
+    if unsafe {
+        sysctl_mib(
+            name.as_mut_ptr(),
+            5,
+            (&raw mut count).cast(),
+            &mut size,
+            ptr::null(),
+            0,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let mut rows = Vec::new();
+    for index in 1..=count.clamp(0, 65_535) {
+        if limit.is_some_and(|limit| rows.len() == limit) {
+            break;
+        }
+        let mut record = [0u8; 180];
+        let mut length = record.len();
+        let mut name = [4, 18, 0, 2, index, 1];
+        // SAFETY: the kernel writes at most `length` bytes into this buffer and reports how many it wrote.
+        if unsafe {
+            sysctl_mib(
+                name.as_mut_ptr(),
+                6,
+                record.as_mut_ptr().cast(),
+                &mut length,
+                ptr::null(),
+                0,
+            )
+        } == 0
+            && let Some(row) = link(&record[..length.min(record.len())])
+        {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
+}
+
+/// One ifmibdata as a link, None for loopback or a short record: the name (IFNAMSIZ 16 bytes, NUL-ended) at 0, the
+/// interface flags at 20, its if_data64 at 52 (4-byte packed) with ifi_ibytes at 116 and ifi_obytes at 124.
+pub(super) fn link(record: &[u8]) -> Option<Link> {
+    let bytes = |at: usize, length: usize| record.get(at..at + length);
+    let counter = |at: usize| Some(u64::from_ne_bytes(bytes(at, 8)?.try_into().ok()?));
+    let flags = u32::from_ne_bytes(bytes(20, 4)?.try_into().ok()?);
+    let name = bytes(0, 16)?;
+    let name = &name[..name.iter().position(|byte| *byte == 0)?];
+    if flags & 8 != 0 || name.is_empty() {
+        return None; // IFF_LOOPBACK
+    }
+    Some(Link {
+        name: String::from_utf8_lossy(name).into_owned(),
+        received: counter(116)?,
+        sent: counter(124)?,
+    })
+}
+
+/// Moves this process, and the /bin/ps it starts, to Darwin's background band while the Mac is not busy: its
+/// 1-minute load below its core count. Called only by the isolated `stats.processes` worker (system::isolated), a
+/// process of its own. ps costs about 36 ms of CPU on a Mac with 1,500 processes, on a performance core at about
+/// 3.5 W; in the background band it runs on the efficiency cores at about 0.18 W, taking 80 to 160 ms, so about a
+/// fifth of the energy. On a busy Mac the band can wait more than a second, past the list's 750 ms budget, so then
+/// the list keeps the default priority. A failure only leaves the default.
+pub(in crate::system) fn background() {
+    let mut load = [0.0; 1];
+    let cores = std::thread::available_parallelism().map_or(1, usize::from) as f64;
+    // SAFETY: exactly one writable double is passed to getloadavg.
+    if unsafe { getloadavg(load.as_mut_ptr(), 1) } == 1 && load[0] < cores {
+        // SAFETY: a scalar call on this process: PRIO_DARWIN_PROCESS (4), itself (0), PRIO_DARWIN_BG (0x1000),
+        // which its children inherit.
+        unsafe { setpriority(4, 0, 0x1000) };
     }
 }
 

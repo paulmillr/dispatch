@@ -177,7 +177,7 @@ struct ChatTypography: Equatable, Sendable {
     var ligatures = true
     /// What ligatures off turns off, in Ghostty's font-feature syntax: programming (calt), standard and discretionary.
     static let noLigatures = "-calt, -liga, -dlig"
-    /// San Francisco, New York or SF Rounded: the system font in its design; nil: a font by name.
+    /// San Francisco (drawn in SF Rounded) or New York: the system font in its design; nil: a font by name.
     private var systemChoice: ChatFont?
     private var systemDesign: Font.Design? {
         switch systemChoice?.systemDesign {
@@ -201,6 +201,11 @@ struct ChatTypography: Equatable, Sendable {
         }
         if weight == .regular, fontName == codeFontName, let plain = unligated(fontName, pointSize(offset: offset)) { return Font(plain) }
         return .custom(fontName, fixedSize: pointSize(offset: offset)).weight(weight)
+    }
+    /// `font` in italic; in SF Rounded, which has none, San Francisco's italic (`ChatFont.italic(for:)`).
+    func italic(offset: CGFloat = 0, weight: Font.Weight = .regular) -> Font {
+        if systemDesign == .rounded { return .system(size: pointSize(offset: offset), weight: weight, design: .default).italic() }
+        return font(offset: offset, weight: weight).italic()
     }
     func codeFont(offset: CGFloat = 0) -> Font {
         unligated(codeFontName, size + offset).map { Font($0) } ?? .custom(codeFontName, fixedSize: size + offset)

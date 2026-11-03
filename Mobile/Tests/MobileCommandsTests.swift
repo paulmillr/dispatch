@@ -258,7 +258,7 @@ final class MobileCommandsTests: XCTestCase {
     func testSectionsGoBackToTheTabBar() {
         let navigator = navigator()
         let shown = tab(mba2, "herdr:app:2")
-        navigator.path = [.space(space(mba2, "herdr:app")), .tab(shown), .host(mba2)]
+        navigator.path = [.space(space(mba2, "herdr:app")), .tab(shown), .detached(mba2)]
         navigator.showRoot()
         XCTAssertEqual(navigator.path, [])
         navigator.split = true

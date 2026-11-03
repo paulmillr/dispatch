@@ -309,17 +309,6 @@ extension MobileTranscript {
         return turn
     }
 
-    /// The row of the open turn's newest agent bubble, a message or Claude's thinking (`rows`), which carries the
-    /// turn's progress in its corner (S6e); nil while the turn has no agent text yet (the working row shows then) or no
-    /// turn is open. At the turn's end the summary goes on its last message, which is the same bubble unless the turn
-    /// ended on thinking.
-    var progressRow: String? {
-        guard let turn = openTurn, let item = turn.items.last(where: {
-            $0.kind == .assistant || ($0.kind == .reasoning && $0.isNarration && !$0.text.isEmpty)
-        }) else { return nil }
-        return item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)"
-    }
-
     /// The newest agent message (the Agents preview, M3a).
     var lastAgentItem: ChatItem? {
         turns.reversed().lazy.compactMap { $0.items.last { $0.kind == .assistant } }.first

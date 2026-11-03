@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 import XCTest
 @testable import DispatchMobile
 
-/// M5e: the composer's Markdown (chips, fences, language tags), its keys and "Paste as code", its growth, and the
+/// M5e: the composer's Markdown (chips, fences, language tags), its keys, its growth, and the
 /// styling that happens in place, in the same editing pass as each keystroke.
 @MainActor
 final class CodeComposerTests: XCTestCase {
@@ -98,38 +98,8 @@ final class CodeComposerTests: XCTestCase {
         XCTAssertEqual(ComposerKey.allCases.map(\.label), ["`", "```", "{ }", "( )", "=>", "tab"], "The mockup's key row")
     }
 
-    func testPasteAsCodeFencesThePasteOnItsOwnLines() {
-        XCTAssertTrue(ComposerMarkdown.offersCode("let a = 1\nlet b = 2\n"))
-        XCTAssertFalse(ComposerMarkdown.offersCode("one line\n"), "One line is pasted as it is")
-        let text = "See let a = 1\nlet b = 2\n now"
-        let range = NSRange(location: 4, length: 20)
-        let edit = ComposerMarkdown.fenced("let a = 1\nlet b = 2\n", replacing: range, in: text)
-        XCTAssertEqual(edit.text, "\n```\nlet a = 1\nlet b = 2\n```\n")
-        let result = (text as NSString).replacingCharacters(in: edit.range, with: edit.text)
-        XCTAssertEqual(result, "See \n```\nlet a = 1\nlet b = 2\n```\n now")
-        XCTAssertEqual(ComposerMarkdown(result).fences.count, 1)
-        XCTAssertEqual(ComposerMarkdown(result).fences.first?.closing != nil, true)
-    }
-
     /// Lets the run loop end the undo manager's group for the current event, as between two touches.
     private func nextEvent() async throws { try await Task.sleep(for: .milliseconds(50)) }
-
-    func testPasteAsCodeIsOneUndoableStep() async throws {
-        let view = editor("See ")
-        view.selectedRange = NSRange(location: 4, length: 0)
-        view.insertText("a()\nb()")
-        try await nextEvent()
-        let pasted = NSRange(location: 4, length: 7)
-        view.fence(pasted)
-        try await nextEvent()
-        XCTAssertEqual(view.textStorage.string, "See \n```\na()\nb()\n```")
-        XCTAssertEqual(view.markdown.fences.count, 1)
-        let undo = try XCTUnwrap(view.undoManager)
-        XCTAssertTrue(undo.canUndo)
-        undo.undo()
-        XCTAssertEqual(view.textStorage.string, "See a()\nb()", "Undo restores the paste as it was")
-        XCTAssertTrue(view.markdown.fences.isEmpty, "And its styling")
-    }
 
     func testAChipFormsInTheSameEditAsItsClosingBacktick() {
         let view = editor()

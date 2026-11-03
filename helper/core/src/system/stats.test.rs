@@ -76,3 +76,47 @@ fn a_proc_stat_line_is_a_row_with_its_start_and_cpu_time() {
     ]);
     assert_eq!(write(&row.data()).unwrap(), write(&expected).unwrap());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn host_samples_release_the_host_port() {
+    // stats.host runs in the long-lived helper: each mach_host_self() it takes is released, or every sample
+    // would add a reference to the host port until Mach refuses more.
+    unsafe extern "C" {
+        fn mach_port_get_refs(task: u32, name: u32, right: u32, refs: *mut u32) -> i32;
+    }
+    let references = || {
+        let mut count = 0;
+        // SAFETY: scalar Mach calls on this task's own send right (MACH_PORT_RIGHT_SEND, 0), released after.
+        unsafe {
+            let port = darwin::mach_host_self();
+            assert_eq!(mach_port_get_refs(darwin::mach_task_self_, port, 0, &mut count), 0);
+            darwin::mach_port_deallocate(darwin::mach_task_self_, port);
+        }
+        count
+    };
+    let before = references();
+    for _ in 0..100 {
+        macos::host(&mut Host::default(), true);
+    }
+    assert_eq!(references(), before);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn interface_records_are_links_with_64_bit_counters() {
+    // ifmibdata: the name at 0, flags at 20, ifi_ibytes and ifi_obytes at 116 and 124 (if_data64 at 52).
+    let record = |name: &str, flags: u32, received: u64, sent: u64| {
+        let mut record = vec![0u8; 180];
+        record[..name.len()].copy_from_slice(name.as_bytes());
+        record[20..24].copy_from_slice(&flags.to_ne_bytes());
+        record[116..124].copy_from_slice(&received.to_ne_bytes());
+        record[124..132].copy_from_slice(&sent.to_ne_bytes());
+        record
+    };
+    let row = macos::link(&record("en0", 0x8863, 11 << 30, 7)).unwrap();
+    assert_eq!((row.name.as_str(), row.received, row.sent), ("en0", 11 << 30, 7));
+    assert!(macos::link(&record("lo0", 0x8049, 1, 1)).is_none(), "IFF_LOOPBACK is left out");
+    assert!(macos::link(&record("en1", 0, 1, 1)[..131]).is_none(), "a short record is no link");
+    assert!(macos::link(&record("", 0, 1, 1)).is_none());
+}

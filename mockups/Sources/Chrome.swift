@@ -4,23 +4,41 @@ import SwiftUI
 
 let hostTint = Color(red: 0x7E / 255, green: 0xA6 / 255, blue: 0xC9 / 255)
 
-/// The back pill: chevron plus the needs-you badge, or a title.
+/// Back. A tab's (X9b, `TabsBackDisc`): the chevron alone on a 44-point glass disc, how many conversations need the
+/// user as a pink badge on its corner. A pushed screen's (`TabsBackPill`): the chevron and the previous screen's title.
 struct BackPill: View {
     var count: Int? = 2
     var title: String? = nil
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.dispatchPink)
-            if let title {
-                Text(title).font(.body).foregroundStyle(Color.dispatchPink)
-            } else if let count {
-                Text("\(count)").font(.subheadline.weight(.semibold)).foregroundStyle(Color.onAccent)
-                    .frame(width: 26, height: 26).background(Color.dispatchPink, in: Circle())
+        if let title {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left").font(.system(size: 19, weight: .medium)).frame(width: 11)
+                Text(title).font(.body).lineLimit(1)
             }
+            .foregroundStyle(Color.dispatchPink)
+            .padding(.leading, 12).padding(.trailing, 16)
+            .frame(height: 44)
+            .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color.dispatchPink)
+                .frame(width: 44, height: 44)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if let count, count > 0 { CountBadge(label: "\(count)").offset(x: 6, y: -4) }
+                }
         }
-        .padding(.leading, 14).padding(.trailing, title == nil ? 9 : 16)
-        .frame(height: 44)
-        .glassEffect(.regular.interactive(), in: Capsule())
+    }
+}
+
+/// The needs-you count (`TabsCountBadge`): white on pink.
+struct CountBadge: View {
+    let label: String
+    var body: some View {
+        Text(label).font(.footnote.weight(.bold)).monospacedDigit()
+            .foregroundStyle(Color.onAccent)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(Color.dispatchPink, in: Capsule())
     }
 }
 
@@ -32,13 +50,44 @@ struct HostDisc: View {
     }
 }
 
+/// A tab's menu on the phone (X9b, `TabHeaderMenu`): the host disc with a ⋯ badge on its lower trailing edge. It holds
+/// the conversation's items on Chat, the tab's and the host's.
+struct TabMenuDisc: View {
+    var body: some View {
+        HostDisc()
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "ellipsis").font(.system(size: 8, weight: .heavy)).foregroundStyle(.primary)
+                    .frame(width: 17, height: 17)
+                    .background(Color(uiColor: .systemGray4), in: Circle())
+                    .overlay { Circle().stroke(Color.canvas, lineWidth: 2) }
+                    .offset(x: 2, y: 2)
+            }
+    }
+}
+
+/// A tab's subtitle on the phone (X9b): host · folder, and the shell's name in Terminal ("mba2 · web · pnpm").
+struct TabSubtitle: View {
+    var host = "mba2"
+    var folder = "web"
+    var shell: String? = nil
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(host).foregroundStyle(hostTint)
+            Text(" · " + folder + (shell.map { " · " + $0 } ?? "")).foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .lineLimit(1)
+    }
+}
+
 /// host · path, the host in its tint.
 struct HostPath: View {
+    var host = "mba2"
     let path: String
     var mono = true
     var body: some View {
         HStack(spacing: 0) {
-            Text("mba2").foregroundStyle(hostTint)
+            Text(host).foregroundStyle(hostTint)
             Text(" · ").foregroundStyle(.secondary)
             Text(path).foregroundStyle(.secondary).font(mono ? .system(.caption, design: .monospaced) : .caption)
         }
@@ -47,21 +96,36 @@ struct HostPath: View {
     }
 }
 
-/// A tab screen's bar: back pill, title + subtitle, host disc.
+/// A tab screen's bar. A tab (X9b): Back with the needs-you badge, the title block (subheadline semibold, two lines
+/// tall: host · folder under a title that fits one line, else the title on both), the tab's menu disc. A pushed screen:
+/// the back pill with its title, the title over its subtitle, the screen's control.
 struct TabHeader: ToolbarContent {
     var title = "Sidebar theme toggle"
-    var subtitle: AnyView
+    var subtitle: AnyView = AnyView(TabSubtitle())
     var back: BackPill = BackPill()
-    var trailing: AnyView = AnyView(HostDisc())
+    var trailing: AnyView = AnyView(TabMenuDisc())
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             HStack(spacing: 12) {
                 back
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.headline).lineLimit(1)
-                    subtitle.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if back.title == nil {
+                    ViewThatFits(in: .horizontal) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title).lineLimit(1)
+                            subtitle.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Text(title).lineLimit(2, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 40, alignment: .topLeading)
+                    .padding(.leading, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.headline).lineLimit(1)
+                        subtitle.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .padding(.leading, 4)
                 }
-                .padding(.leading, 4)
             }
             .frame(width: 402 - 52 - 44, alignment: .leading)
         }
