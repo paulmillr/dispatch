@@ -17,7 +17,7 @@ final class MobileComposition {
     let navigator: SpacesNavigator
     let cache: HostCache
     let settings: MobileSettings
-    /// New chat's and the threads' last agent, model and effort (`chat-models.json`).
+    /// New chat's last agent and the model menus seen (`chat-models.json`).
     let modelMemory: ChatModelMemory
     /// Set by `app()`; tests make their own.
     var refresh: BackgroundRefresh?
@@ -485,28 +485,23 @@ final class MobileComposition {
         return row.summary.preview.map { TabsStatus(text: $0) }
     }
 
-    /// New tab's agents (P2e): the host's launches with the model New chat would start each on (its last, from the
-    /// model memory); a start goes through `ChatConversations.start` as New chat's does and opens the thread in Chat.
+    /// New tab's agents (P2e): the host's launches; a start goes through `ChatConversations.start` as New chat's does,
+    /// on the agent's own default model, and opens the thread in Chat.
     var agentLauncher: SpacesAgentLauncher {
         let hosts = hosts, conversations = conversations, memory = modelMemory
         return SpacesAgentLauncher(choices: { id in
             guard let client = hosts.session(id)?.client, hosts.session(id)?.host.chat == true,
                   let launches = try? await client.launches() else { return [] }
-            return launches.map { launch in
-                let agent = memory.agent(launch.key)
-                let note = agent.model.map { model in agent.models.first { $0.id == model }?.label ?? model }
-                return SpacesAgentChoice(key: launch.key, label: launch.label, note: note)
-            }
+            return launches.map { SpacesAgentChoice(key: $0.key, label: $0.label) }
         }, start: { [weak self] choice, space in
             guard let session = hosts.session(space.ref.host), let client = session.client else { throw TabsFailure.disconnected }
             guard let launch = try await client.launches().first(where: { $0.key == choice.key }) else {
                 throw TabsFailure(message: "\(choice.label) is no longer on \(session.host.name).")
             }
-            let remembered = memory.agent(launch.key)
             let target = ChatSpaceChoice(host: space.ref.host, hostName: session.host.name, key: space.ref.key, name: space.name)
             do {
-                let key = try await conversations.start(launch, in: target, settings: remembered.model.map { ($0, remembered.effort) })
-                memory.remember(agent: launch.key, model: remembered.model, effort: remembered.effort)
+                let key = try await conversations.start(launch, in: target, settings: nil)
+                memory.remember(agent: launch.key)
                 self?.openChat(key, keyboard: true)
             } catch let consent as ChatIntegrationConsent {
                 throw TabsFailure(message: consent.message + " Start it once from New chat to add it.")

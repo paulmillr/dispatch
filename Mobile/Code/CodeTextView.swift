@@ -196,8 +196,13 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
             let images = MobileAttachmentSource.images(on: pasteboard)
             if !images.isEmpty { pasteImages(images); return }
         }
+        let lines = pasteboard.string?.contains(where: \.isNewline) == true
         super.paste(sender)
+        if lines { pastedLines?() }
     }
+
+    /// A paste of text with more than one line: the composer enters editor mode.
+    var pastedLines: (() -> Void)?
 
     /// The draft's editor mode and whether the agent works, for the hardware keys (`ComposerHardwareKeys`).
     var keyState: () -> (multiline: Bool, working: Bool) = { (false, false) }

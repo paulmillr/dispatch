@@ -60,7 +60,7 @@ final class CommitsUITests: XCTestCase {
         XCTAssertTrue(row(app, "Upgrade react-router to v7").exists)
         tap(app.buttons["Close search"])
         tap(app.buttons["Uncommitted changes"])
-        let review = app.tabBars.buttons["Review"]
+        let review = app.otherElements["files-modes"].buttons["Review"]
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: review)
         waitForExpectations(timeout: 5)

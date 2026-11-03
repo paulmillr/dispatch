@@ -14,17 +14,20 @@ enum TabSegment: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Glyphs as the Mac's: Chat is `text.bubble`.
+    /// Glyphs as the Mac's, but Chat's is the app's own capsule (`dispatch.chat`, drawn with `Image(symbol:)`).
     var symbol: String {
         switch self {
         case .terminal: "apple.terminal"
-        case .chat: "text.bubble"
+        case .chat: "dispatch.chat"
         case .files: "folder"
         }
     }
 
     /// Chat when the tab runs an agent, else Terminal (M4a, M6a).
-    @MainActor static func initial(for tab: MobileTab) -> TabSegment { tab.isChat ? .chat : .terminal }
+    /// An agent tab opens on Chat unless Settings › Chat says Terminal (`agentStart`); the user's pick then sticks.
+    @MainActor static func initial(for tab: MobileTab) -> TabSegment { tab.isChat && agentStart == .chat ? .chat : .terminal }
+    /// Settings › Chat › Open agents in (`MobileSettings.chatAgentStart`).
+    @MainActor static var agentStart = ChatAgentStart.chat
 
     /// The segments the tab's capsule offers: Terminal · Files for a plain SSH shell tab, all three otherwise (a tab
     /// without an agent keeps Chat, which says how to start one).
@@ -929,7 +932,7 @@ struct TabModeButton: View {
             }
         } label: {
             Label(next.map { "Show \($0.title)" } ?? shown.title,
-                  systemImage: Self.symbol(shown: shown, agent: agent) + (on ? ".fill" : ""))
+                  symbol: Self.symbol(shown: shown, agent: agent) + (on ? ".fill" : ""))
         } primaryAction: {
             if let next { choose(next, nil) }
         }
@@ -950,7 +953,7 @@ struct TabModeButton: View {
         Toggle(isOn: Binding(get: { checked }, set: { _ in action() })) {
             Text(title)
             if let detail { Text(detail) }
-            Image(systemName: symbol)
+            Image(symbol: symbol)
         }
     }
 }
@@ -1056,7 +1059,7 @@ private struct TabSegmentRow<Item: TabCapsuleItem>: View {
                     selection = segment
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: segment.symbol)
+                        Image(symbol: segment.symbol)
                             .font(.subheadline.weight(.medium))
                         if !compact {
                             Text(segment.title)
@@ -1083,7 +1086,7 @@ private struct TabSegmentRow<Item: TabCapsuleItem>: View {
                 .buttonStyle(.plain)
                 .contentShape(.hoverEffect, Capsule())
                 .hoverEffect(.highlight)
-                .accessibilityShowsLargeContentViewer { Label(segment.title, systemImage: segment.symbol) }
+                .accessibilityShowsLargeContentViewer { Label(segment.title, symbol: segment.symbol) }
                 .accessibilityLabel(segment.title)
                 .accessibilityValue(segment == badged && badge > 0 ? "\(badge) \(badge == 1 ? "comment" : "comments")" : "")
                 .accessibilityAddTraits(on ? .isSelected : [])

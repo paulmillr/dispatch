@@ -85,14 +85,26 @@ final class HelperSession: @unchecked Sendable {
       try fields.encode(process, forKey: .process)
       try fields.encodeIfPresent(features, forKey: .features)
     }
+
+    /// Both helper launch paths require the same hello version and transport fields. Their user-facing failures
+    /// remain the launcher's decision (a desktop helper failure, or the phone's plain-SSH fallback).
+    nonisolated(nonsending) func configure(_ connection: HelperConnection) async throws {
+      let transport = try HelperHello.Transport(version: version, expectedVersion: HelperBinary.version,
+                                              limit: limit, chunkKind: chunkKind, chunkLimit: chunkLimit, ops: ops)
+      try await connection.configure(limit: transport.limit, chunkKind: transport.chunkKind,
+                                     chunkLimit: transport.chunkLimit, ops: transport.ops)
+    }
   }
 
   /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's). `terminals.window` only with
   /// `outputWindow` on.
   static var features: [String] {
-    ["terminals.coalesce", ChatAttachment.feature, screensHost, terminalsFollow, requestsBacklog]
+    ["terminals.coalesce", ChatAttachment.feature, screensHost, terminalsFollow, requestsBacklog, membershipsAppend]
       + (outputWindow ? [terminalsWindow] : [])
   }
+  /// `memberships.append`: a `memberships.move` without `before` puts the node after its new parent's last member.
+  /// Without it herdr's helper sends the last tab's index, and herdr inserts before that tab (one short of the end).
+  static let membershipsAppend = "memberships.append"
   /// `requests.backlog`: the helper keeps reading this app's requests (keystrokes, cancels, `terminals.follow`,
   /// pings) while terminal output to it is backed up, instead of reading nothing until the output drains.
   static let requestsBacklog = "requests.backlog"
@@ -112,7 +124,6 @@ final class HelperSession: @unchecked Sendable {
   /// `login.release`: named only by the SSH greeting probe, whose helper then releases the waiting login
   /// (`SSHBootstrap.startHelper`); a helper that is not such a probe accepts nothing for it.
   static let loginRelease = "login.release"
-  private struct Hello: Encodable, Sendable { let features: [String] }
 
   // The Mac app runs its helper as a child process; the iPhone app reaches helpers over SSH channels only.
   #if canImport(AppKit)
@@ -219,7 +230,7 @@ final class HelperSession: @unchecked Sendable {
     // `requests.backlog`: requests are read while output to this app is backed up. `terminals.window` (only with
     // `outputWindow`): acknowledged output (HelperOutputWindow). `login.release` (the SSH greeting probe only):
     // SSHBootstrap.startHelper releases the waiting login through it. A helper that knows no feature answers as before.
-    let hello: HelperConnection.Call<Info> = await connection.submit("hello", params: Hello(features: features))
+    let hello: HelperConnection.Call<Info> = await connection.submit("hello", params: HelperHello(features: features))
     return Started(connection: connection, process: process, exited: exited, identifier: identifier, hello: hello)
   }
 
@@ -233,18 +244,13 @@ final class HelperSession: @unchecked Sendable {
     do {
       info = try await started.hello.value
       if info.features?.contains(Self.terminalsWindow) == true { HelperOutputWindow.enable(connection) }
-      guard info.version == HelperBinary.version else {
-        throw HelperFailure(
-          code: "protocol_version", message: "The helper protocol is incompatible.")
+      do {
+        try await info.configure(connection)
+      } catch HelperHello.Failure.protocolVersion {
+        throw HelperFailure(code: "protocol_version", message: "The helper protocol is incompatible.")
+      } catch HelperHello.Failure.transportLimits {
+        throw HelperFailure(code: "protocol_version", message: "The helper transport limits are missing.")
       }
-      guard let limit = info.limit, let chunkKind = info.chunkKind,
-        let chunkLimit = info.chunkLimit
-      else {
-        throw HelperFailure(
-          code: "protocol_version", message: "The helper transport limits are missing.")
-      }
-      try await connection.configure(
-        limit: limit, chunkKind: chunkKind, chunkLimit: chunkLimit, ops: info.ops)
     } catch {
       Self.close(connection, process)
       throw error

@@ -296,6 +296,10 @@ targets:
       - Dispatch/Chat/ChatAttachments.swift
       - Dispatch/Chat/ChatCommands.swift
       - Dispatch/Chat/ChatDrafts.swift
+      - Dispatch/Chat/ChatFontChoice.swift
+      - Dispatch/Chat/HelperChatTransport.swift
+      - Dispatch/Chat/ChatMarkdownPolicy.swift
+      - Dispatch/Chat/ChatQuestionPolicy.swift
       - Dispatch/Chat/ChatMarkdownBlock.swift
       - Dispatch/Chat/ChatModelChoicesCache.swift
       - Dispatch/Chat/ChatModels.swift
@@ -306,7 +310,10 @@ targets:
       - Dispatch/Chat/ChatTranscript.swift
       - Dispatch/Chat/ChatTypingReveal.swift
       - Dispatch/Chat/ClaudeQuestions.swift
+      - Dispatch/Chat/DictationModels.swift
       - Dispatch/Chat/HelperChat.swift
+      - Dispatch/Chat/SpokenMarkdown.swift
+      - Dispatch/Chat/SyntaxScanner.swift
       - Dispatch/Chat/ToolCommandPresentation.swift
       - Dispatch/Chat/ToolCommandWords.swift
       - Dispatch/Chat/ToolDocument.swift
@@ -315,20 +322,30 @@ targets:
       - Dispatch/Chat/ToolPresentation.swift
       - Dispatch/Chat/ToolPresentationCache.swift
       - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Files/FilePreviewContent.swift
+      - Dispatch/Files/FilePreviewImage.swift
       - Dispatch/Files/FilesFormatting.swift
       - Dispatch/Files/FilesModels.swift
+      - Dispatch/Files/FilesSourceFailure.swift
+      - Dispatch/Files/FilesWire.swift
+      - Dispatch/Files/GitReadCore.swift
       - Dispatch/Files/GitDiffPresentation.swift
       - Dispatch/Files/GitGraph.swift
       - Dispatch/Files/GitLog.swift
       - Dispatch/Files/GitModels.swift
       - Dispatch/Files/GitParsers.swift
+      - Dispatch/Files/GitSignatureExplanation.swift
       - Dispatch/Files/Review.swift
       - Dispatch/Files/ReviewRefresh.swift
       - Dispatch/Files/ReviewRepository.swift
+      - Dispatch/Files/TextOccurrences.swift
       - Dispatch/Helper/AppReplay.swift
       - Dispatch/Helper/HelperBackend.swift
       - Dispatch/Helper/HelperBinary.swift
       - Dispatch/Helper/HelperClient.swift
+      - Dispatch/Helper/HelperCapabilities.swift
+      - Dispatch/Helper/HelperHello.swift
+      - Dispatch/Helper/HelperMultiplexer.swift
       - Dispatch/Helper/HelperConnection.swift
       - Dispatch/Helper/HelperDescriptors.swift
       - Dispatch/Helper/HelperSession.swift
@@ -339,19 +356,24 @@ targets:
       - Dispatch/Hosts/HostRegistry.swift
       - Dispatch/Hosts/TerminalHistoryStore.swift
       - Dispatch/SSH/SSHInvocation.swift
+      - Dispatch/Stats/HostStatsWire.swift
+      - Dispatch/Stats/StatisticsHistory.swift
       - Dispatch/Terminal/LineSpacing.swift
-      - Dispatch/Terminal/TerminalFontScale.swift
-      - Dispatch/Terminal/TextContrast.swift
       - Dispatch/Terminal/ProgramStatusStore.swift
+      - Dispatch/Terminal/TerminalFontCatalog.swift
+      - Dispatch/Terminal/TerminalFontScale.swift
       - Dispatch/Terminal/TerminalMachine.swift
       - Dispatch/Terminal/TerminalScrollState.swift
+      - Dispatch/Terminal/TextContrast.swift
+      - Dispatch/Themes/ColorVision.swift
+      - Dispatch/Themes/SchemeAudit.swift
+      - Dispatch/Themes/SchemeGroup.swift
+      - Dispatch/Themes/TerminalTheme.swift
+      - Dispatch/Themes/ThemeColorMath.swift
       - Dispatch/Views/Chrome.swift
       - Dispatch/Views/ComposerFences.swift
       - Dispatch/Views/HostGlyph.swift
       - Dispatch/Views/HostTint.swift
-      - Dispatch/Themes/ColorVision.swift
-      - Dispatch/Themes/SchemeGroup.swift
-      - Dispatch/Themes/SchemeAudit.swift
       - Dispatch/WorkspaceModels.swift
       # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
       - path: Watch/Shared
@@ -417,6 +439,15 @@ targets:
       - DispatchTests/GitGraphTests.swift
       - DispatchTests/GitParsersTests.swift
       - DispatchTests/PortableTestSupport.swift
+      - DispatchTests/SharedStatsVoiceTests.swift
+      - DispatchTests/FilesSharedTests.swift
+      - DispatchTests/SyntaxScannerTests.swift
+      - DispatchTests/TerminalCatalogTests.swift
+      - DispatchTests/GitReadCoreTests.swift
+      - DispatchTests/HelperChatTransportTests.swift
+      - DispatchTests/SurfaceSessionCoreTests.swift
+      - DispatchTests/HelperPolicyTests.swift
+      - DispatchTests/ChatPresentationPolicyTests.swift
     dependencies:
       - target: DispatchMobile
       - target: TermMobile

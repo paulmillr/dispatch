@@ -31,34 +31,34 @@ final class TerminalMachineTests: XCTestCase {
     }
 
     @MainActor
-    func testIndependentAutoClosePreferencesMigrateAndReachWorkspace() throws {
-        for value in [false, true] {
-            let data = Data("{\"autoCloseNativeSpace\":\(value)}".utf8)
-            var preferences = try JSONDecoder().decode(Preferences.self, from: data)
-            XCTAssertEqual(preferences.closeLaunching[on: "tmux"], value)
-            XCTAssertEqual(preferences.closeLaunching[on: "herdr"], value)
-            preferences.closeLaunching[on: "tmux"] = !value
-            let restored = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
-            XCTAssertEqual(restored.closeLaunching[on: "tmux"], !value)
-            XCTAssertEqual(restored.closeLaunching[on: "herdr"], value)
-            let runtime = TerminalRuntime(), workspace = Workspace()
-            runtime.preferences = restored
-            runtime.workspace = workspace
-            XCTAssertEqual(workspace.closeLaunching[on: "tmux"], !value)
-            XCTAssertEqual(workspace.closeLaunching[on: "herdr"], value)
+    func testRemovedPreferencesAreIgnoredWithoutResettingCurrentChoices() throws {
+        let removed = ["autoCloseNativeSpace", "sidebarTheme", "appearance", "largeSidebarItems", "optionAsAlt",
+                       "improveTextContrast", "enableTmuxIntegration", "enableHerdrIntegration", "autoCloseTmuxNativeSpace",
+                       "autoCloseHerdrNativeSpace", "dictationRightCommand", "prefixKeys", "backendPrefixKeys", "closeLaunching"]
+        var expected = Preferences()
+        expected.fontSize = 16; expected.allowClipboardWrites = false; expected.newHostPolicy = .plain
+        expected.spaces = ["tmux": false]; expected.dictationKey = .off; expected.prefixKeys = .off
+        let current = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(expected)) as? [String: Any])
+        for value: Any in [false, true, "herdr", ["tmux": false], ["unexpected": [1, 2]]] {
+            var fields = current
+            for key in removed { fields[key] = value }
+            let restored = try JSONDecoder().decode(Preferences.self, from: JSONSerialization.data(withJSONObject: fields))
+            XCTAssertEqual(restored, expected, "Removed values must not affect current preferences, even if malformed")
+            let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+            XCTAssertTrue(removed.allSatisfy { saved[$0] == nil })
         }
     }
 
-    func testIntegrationPreferencesMigrateAndRoundTrip() throws {
+    func testIntegrationPreferencesRoundTrip() throws {
         let defaults = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
         XCTAssertTrue(defaults.spaces[on: "herdr"])
         XCTAssertTrue(defaults.spaces[on: "tmux"])
         XCTAssertFalse(defaults.enableKittyGraphics)
         XCTAssertFalse(defaults.autoReconnectSSH)
-        XCTAssertTrue(defaults.closeLaunching[on: "tmux"] && defaults.closeLaunching[on: "herdr"])
+        XCTAssertEqual(defaults.spaces, [:])
         var changed = defaults
         changed.spaces[on: "herdr"] = false; changed.spaces[on: "tmux"] = false
-        changed.enableKittyGraphics = true; changed.closeLaunching = ["tmux": false, "herdr": false]
+        changed.enableKittyGraphics = true
         changed.autoReconnectSSH = true
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed)), changed)
     }

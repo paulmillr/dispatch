@@ -1,17 +1,6 @@
 import Dictation
 import Foundation
 
-/// The Mac app's chat dictation (Packages/Dictation): one model store in Dispatch's support folder (Whisper/ and
-/// Parakeet/), and one dictation at a time for every composer.
-extension DictationModelStore {
-    static let shared = DictationModelStore(whisper: Home.support.appendingPathComponent("Whisper"),
-                                            parakeet: Home.support.appendingPathComponent("Parakeet"))
-}
-
-extension Dictation {
-    static let shared = Dictation(models: .shared)
-}
-
 /// A chat's dictation into its draft. What it hears takes the selection's place as it comes (the composer shows it
 /// muted and takes no typing meanwhile); cancelling or failing puts the draft back as it was. The microphone button and
 /// the voice key shortcut both use it:
@@ -272,7 +261,7 @@ final class ChatDictation {
             let at = min(NSMaxRange(draft.selection), source.length)
             let text = source.replacingCharacters(in: NSRange(location: draft.selection.location, length: at - draft.selection.location),
                                                   with: "\n")
-            session.drafts.edit(text: text, multiline: true, selection: NSRange(location: draft.selection.location + 1, length: 0))
+            session.drafts.edit(text: text, selection: NSRange(location: draft.selection.location + 1, length: 0))
         case .scratch:
             let draft = session.drafts.current
             guard let last = added.last, last.draft == draft.id, NSMaxRange(last.range) <= (draft.text as NSString).length,

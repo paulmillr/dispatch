@@ -12,11 +12,16 @@ enum ReviewGitError: Error, Equatable, Sendable, LocalizedError {
     /// The read failed before git answered (the link dropped, the helper's deadline, a busy helper): says nothing
     /// about the repository, so what was shown stays and the next read asks again.
     case source(String)
+    /// A whole-file read says the path is gone. Keep this typed until review relocation distinguishes it from an
+    /// unreadable file, which must keep its comment numbers.
+    case notFound(String)
+    case notDirectory(String)
 
     var message: String {
         switch self {
         case .notRepository: "Not a repository"
-        case .failed(let message), .unavailable(let message), .source(let message): message
+        case .failed(let message), .unavailable(let message), .source(let message),
+             .notFound(let message), .notDirectory(let message): message
         }
     }
 
@@ -63,8 +68,6 @@ struct ReviewHelperGit: Sendable {
     static let statusLimit: UInt64 = 8 << 20
     /// What an untracked file is read up to for its diff (`GitQueries.readBound`).
     static let readBound: UInt64 = 2 << 20
-    /// git's own binary test: a NUL in the first 8,000 bytes.
-    static let binaryProbe = 8_000
     /// Untracked files counted per status, the bytes a count may read, and what one status may read for counts
     /// (`GitLoader.countedUntracked`, `countedBytes`, `countBudget`).
     static let countedUntracked = 50
@@ -90,9 +93,6 @@ struct ReviewHelperGit: Sendable {
         let stagedOutput = try await stagedRead.get()
         var porcelain = GitParsers.porcelain(output.output)
         porcelain.truncated = output.truncated
-        var counts = [GitChangeArea.unstaged: [String: GitNumstat](), .staged: [:]]
-        for count in GitParsers.numstat(unstagedOutput.output) { counts[.unstaged]?[count.path] = count }
-        for count in GitParsers.numstat(stagedOutput.output) { counts[.staged]?[count.path] = count }
 
         let key = key(root)
         let known = memory.counted(key)
@@ -116,21 +116,9 @@ struct ReviewHelperGit: Sendable {
         }
         memory.setCounted(key, next)
 
-        var changes = porcelain.changes.map { change -> GitChange in
-            var change = change
-            if change.area == .untracked {
-                guard let counted = next[change.path] else { return change }
-                change.additions = counted.lines
-                change.deletions = counted.lines.map { _ in 0 }
-                change.binary = counted.binary
-                if counted.binary { change.newSize = counted.size }
-            } else if let count = counts[change.area]?[change.path] {
-                // Only what the status lists takes counts: numstat also names a binary that is merely stat-dirty.
-                change.additions = count.additions
-                change.deletions = count.deletions
-                change.binary = count.binary
-            }
-            return change
+        var changes = GitStatusEnrichment.counts(porcelain.changes, unstaged: GitParsers.numstat(unstagedOutput.output),
+                                                  staged: GitParsers.numstat(stagedOutput.output)) { path in
+            next[path].map { .init(lines: $0.lines, binary: $0.binary, size: $0.size) }
         }
 
         // A binary's sizes, so the list says "binary · 48 KB → 51 KB": at most `sizedBinaries` asked per status.
@@ -187,19 +175,7 @@ struct ReviewHelperGit: Sendable {
             throw .failed("\(path.dropLast()) is a folder git does not track yet: its files show in the Files tab")
         }
         let read = try await read(root, path, length: Self.readBound)
-        if Self.isBinary(read.data) { return GitDiff(path: path, text: "", binary: true, oldSize: nil, newSize: read.size) }
-        let truncated = UInt64(read.data.count) < read.size
-        var text = String(decoding: truncated ? Self.wholeLines(read.data) : read.data, as: UTF8.self)
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let endsInNewline = lines.last == ""
-        if endsInNewline { lines.removeLast() }
-        text = "diff --git a/\(path) b/\(path)\nnew file mode 100644\n--- /dev/null\n+++ b/\(path)\n"
-        if !lines.isEmpty {
-            text += "@@ -0,0 +1\(lines.count == 1 ? "" : ",\(lines.count)") @@\n"
-            text += lines.map { "+" + $0 + "\n" }.joined()
-            if !endsInNewline, !truncated { text += "\\ No newline at end of file\n" }
-        }
-        return GitDiff(path: path, text: text, oldSize: nil, newSize: read.size, truncated: truncated)
+        return GitContent.untracked(path: path, data: read.data, size: read.size)
     }
 
     // MARK: Text
@@ -210,8 +186,13 @@ struct ReviewHelperGit: Sendable {
         do {
             let text: String = try await client.connection.request("files.text", params: ["plugin": "files", "path": path])
             return text
-        } catch let failure as HelperFailure where failure.code == "unsupported" {
-            return nil
+        } catch let failure as HelperFailure {
+            switch FilesSourceFailure(code: failure.code, message: failure.message).kind {
+            case .unsupported: return nil
+            case .notFound: throw .notFound(failure.message.isEmpty ? "The file does not exist" : failure.message)
+            case .notDirectory: throw .notDirectory(failure.message.isEmpty ? "The folder does not exist" : failure.message)
+            default: throw Self.failure(failure)
+            }
         } catch {
             throw Self.failure(error)
         }
@@ -298,26 +279,10 @@ struct ReviewHelperGit: Sendable {
     // MARK: Helpers
 
     /// Paths after `--`; one holding pathspec magic is passed literally (`GitQueries.paths`).
-    static func paths(_ path: String, old: String?) -> [String] {
-        (old.map { [literal($0)] } ?? []) + [literal(path)]
-    }
+    static func paths(_ path: String, old: String?) -> [String] { GitCommands.paths(path, old: old) }
+    static func isBinary(_ data: Data) -> Bool { GitContent.isBinary(data) }
+    static func lineCount(_ data: Data) -> Int { GitContent.lineCount(data) }
 
-    static func literal(_ path: String) -> String {
-        path.contains(where: { "*?[\\".contains($0) }) || path.hasPrefix(":") ? ":(literal)" + path : path
-    }
-
-    static func isBinary(_ data: Data) -> Bool { data.prefix(binaryProbe).contains(0) }
-
-    static func lineCount(_ data: Data) -> Int {
-        let newlines = data.reduce(0) { $1 == 0x0a ? $0 + 1 : $0 }
-        return newlines + (data.last.map { $0 == 0x0a ? 0 : 1 } ?? 0)
-    }
-
-    /// The data up to its last newline: a cut file shows whole lines only.
-    static func wholeLines(_ data: Data) -> Data {
-        guard let last = data.lastIndex(of: 0x0a) else { return Data() }
-        return data[...last]
-    }
 }
 
 /// What the helper reader keeps between status reads, per connection and repository: the untracked files' line counts

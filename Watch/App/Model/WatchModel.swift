@@ -160,17 +160,6 @@ final class WatchModel {
         }.map(\.element)
     }
 
-    /// A host's spaces and tabs as Spaces lists them, for K6's "2 spaces · 5 tabs".
-    func counts(host: String) -> (spaces: Int, tabs: Int) {
-        ((snapshot?.spaces ?? []).filter { $0.host == host }.count, (snapshot?.tabs ?? []).filter { $0.host == host }.count)
-    }
-
-    /// A host's conversations that need you, and whether one works (K6's blue count and amber dot).
-    func activity(host: String) -> (needsYou: Int, working: Bool) {
-        let rows = (snapshot?.conversations ?? []).filter { $0.host == host }
-        return (rows.filter(\.needsYou).count, rows.contains { $0.busy && !$0.needsYou })
-    }
-
     /// The banner the lists show at `date`, if any.
     func notice(at date: Date) -> WatchNotice? {
         guard let snapshot else { return reachable ? nil : .waiting }

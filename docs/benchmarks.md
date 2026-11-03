@@ -21,7 +21,7 @@ python3 scripts/benchmark.py run --suite full --environment vm --desktop --label
 | soak | Longer idle and mixed-output phases; `--duration` is seconds **per phase** |
 
 - Desktop suites (`quick` and up) need `--desktop`, prepared offline dependencies, a current generated project, and an unlocked, idle desktop. Use the [VM](vm_testing.md) or a dedicated Mac, never alongside another desktop test runner. `--environment` is only a label: the runner doesn't boot or control a VM.
-- The `full` and `soak` SSH workload needs a root-owned sshd, because Release helpers always check for one. The runner uses the first running `dispatch-*` Lima VM that accepts a non-interactive SSH login (never `dispatch-manual-ssh`). Without one, it uses the loopback sshd if `sudo -n` works, as in the test VM. Otherwise it skips the four `ssh-*` metrics and says so. `report.json` records the choice as `ssh_backend`.
+- The `full` and `soak` SSH workload needs a root-owned sshd, because Release helpers always check for one. The runner uses the first running `dispatch-*` Lima VM that accepts a non-interactive SSH login (never `dispatch-manual-ssh`). Without one, it uses the loopback sshd if `sudo -n` works, as in the test VM. Otherwise it skips the two SSH workloads (`ssh-input-reply` and `ssh-terminal-scroll`) and says so. `report.json` records the choice as `ssh_backend`.
 - Missing dependencies, skipped tests, failed assertions, incomplete reports, or source changes during a run fail it. Labels never overwrite existing runs. `--runs 1` checks the harness, not performance.
 - Artifacts: `build/benchmarks/<label>/report.json` (revision, content hash, hardware/OS, tool versions, power, display, raw samples) plus per-repetition logs and xcresults.
 
@@ -40,7 +40,7 @@ python3 scripts/benchmark.py run --suite full --environment vm --desktop --label
 |---|---|---|
 | `benchmark-terminal-throughput.py` | Any terminal's consume speed, writer stalls, and CPU per MB | Run *inside* the terminal under test (Dispatch, Ghostty, Terminal.app…). `--ceiling`: the pty's own limit on this machine. `--self-test`: checks for loss or reordering (also an XCTest). Uses no Dispatch code. |
 | `benchmark-terminal-fps.py --label L` | Distinct composited frames with contrast off/on | Hardware desktop. Frame-numbered output captured from its own window, so duplicate captures can't inflate FPS. Includes capture overhead, not panel scanout, and is capped by the display refresh rate. Output in `build/terminal-fps-benchmark/`. |
-| `benchmark-long-chat.py --label L` | Native transcript reader and chat view on large synthetic JSONL | No CLI, network, or personal data. `--profile` timings are diagnostic only. |
+| `benchmark-long-chat.py --label L --foreground` | Native transcript reader and chat view on large synthetic JSONL | No CLI, network, or personal data. `--foreground` activates the isolated app and is required for UI measurements; omit it for reader measurements only. `--profile` timings are diagnostic only. |
 | `benchmark-chat-scroll.py SESSION --label L` | Scrolling a real, chosen Codex conversation | Uses personal history. Supports profiler captures. |
 | `benchmark-host-scaling.py --label L` | 1–4 remote hosts with Thinking animation: scrolling, switching, typing, idle CPU | Needs `dispatch-perf-{1..4}` Linux guests from `scripts/ssh-vm.py`. `--backend tmux` (default) or `ssh`. |
 
@@ -65,6 +65,8 @@ mkdir -p build/chat-viewport-capture && cp ~/Library/Logs/Dispatch/Diagnostics/*
 - Visible markers throughout: content, drawing, or compositing. Markers don't prove pixels reached the screen; confirm with a screen recording or Instruments.
 
 Leave the trace off for performance baselines. `DISPATCH_CHAT_VIEWPORT_TRACE=0` suppresses it without changing the setting, and `DISPATCH_TESTING=1` disables the production sink.
+
+What caused it before (fixed 2026-10-27): many rows (10 and more) leaving at once at the followed bottom, a user-expanded tool group collapsing because a history replacement reset it, left the lazy stack showing only hidden rows, on macOS 27 only. `ChatBlankTranscriptTests` (markers sampled every 8 ms) reproduces that class of failure and blanks only on macOS 27: run it on a macOS 27 machine or guest. Already ruled out as causes, so not worth auditing again: theme, font, sanitization and colour scheme; the always-on `.mask`; Liquid Glass; opacity transitions; drawing loss on occlusion, order-out or miniaturize; accessibility clients (though `AXScrollToBottom` on the lazy stack crashes SwiftUI on macOS 27); estimate drift alone; search; the empty-conversation placeholder; a new chat session; SSH reconnect resets; re-entering Chat during the mode transition. Bursts, a single row shrinking, width, theme and font changes, occlusion and remounts did not blank.
 
 ### Measuring frame presentation
 
@@ -130,3 +132,64 @@ what the agents produce.
 ## Build profiling
 
 Keep DerivedData. `python3 scripts/profile-build.py --label L [--clean] [--diagnostics] [--cache]` writes to `tmp/profiling/compilation/`, and `bash scripts/build.sh -showBuildTimingSummary` lists build tasks. Compiler caching (`COMPILATION_CACHE_ENABLE_CACHING=YES SWIFT_ENABLE_EXPLICIT_MODULES=YES`) speeds clean builds (about 55 s to 4 s once the cache is warm) but slows every edit (about +0.8 s for a body change, 15 s to 22 s for an interface change), so it's opt-in.
+
+## Profiling and debugging recipes
+
+These are throwaway setups: the probe test, extension or script lives in `tmp/` or a scratch worktree and is removed
+afterwards.
+
+### SwiftUI redraws on the Mac
+
+- Attach `xcrun xctrace record --template SwiftUI` (or `Time Profiler`) to the XCTest host's pid. The probe test writes
+  its pid to a file and **waits for a `ready` file before it creates any window** (views created before the attach show
+  as "[unknown view: created before tracing started?]"), and **waits for a `release` file after its last phase**: stop
+  xctrace with SIGINT first, since a host that exits while recording leaves the trace's log data incomplete.
+- Points of Interest signposts come back empty under attach. Align phases by printing `Date().timeIntervalSince1970`
+  and subtracting the trace's `<start-date>`. Export with `xctrace export --xpath` (`swiftui-updates`, `time-profile`);
+  rows use id/ref deduplication, so resolve refs while streaming (about 600 MB of XML for 60 s).
+- Instruments inflates SwiftUI time. For CPU numbers, build Release for testing (`ENABLE_TESTABILITY=YES
+  ENABLE_HARDENED_RUNTIME=NO`, as `scripts/benchmark.py` does) and measure each phase in-process with `getrusage` and
+  the main thread's `thread_info`. If an incremental Release rebuild leaves the test bundle with "different Team IDs",
+  build clean.
+
+### Animations frame by frame
+
+- **Mac:** append a throwaway test that mounts the real view (`ChatView`) in a borderless window, makes the change the
+  way the coordinator does, and loops `SCScreenshotManager.captureImage` about every 5 ms. Write a GIF at real timing
+  and a contact sheet (every frame for the first 60 ms, then every 30–40 ms) under `build/`. Captures need the test
+  host's Screen Recording permission, so this runs on the host, live.
+- **iPhone:** host the real view in a 402×874 `UIWindow` inside a unit test and take
+  `window.drawHierarchy(afterScreenUpdates: false)` about every 16 ms; in-flight animations and zoom transitions show.
+  Activate buttons with `accessibilityActivate()`; drags cannot be driven this way.
+
+### CPU of iPhone and Watch views in the simulator
+
+Measure, don't judge by feel: launch a Release simulator build with `simctl launch` (environment through
+`SIMCTL_CHILD_*`), feed it a fixed workload (a debug hook that replays a fixture snapshot every second), and read
+`ps -o time= -p <pid>` deltas, plus the device's `backboardd` for render-server cost. `xcrun xctrace record --device
+<udid> --attach <pid>` (Time Profiler) gives the stacks. The simulator caps at 60 fps; devices run 120.
+
+### SSH over a slow or lossy link
+
+The Lima guest's sshd is reached over vsock, so `tc netem` on the guest's interfaces changes nothing for `limactl`'s
+forwarded port. Shape the guest's loopback instead and reach it through a tunnel:
+
+```sh
+ssh -N -L 127.0.0.1:2223:127.0.0.1:22 -p <sshLocalPort> -i ~/.lima/_config/user user@127.0.0.1 &
+limactl shell <vm> -- sudo sh -c 'ip link set lo mtu 1500; ethtool -K lo tso off gso off gro off;
+  tc qdisc replace dev lo root netem delay 300ms 30ms loss 3% rate 2mbit limit 20000'
+```
+
+Connections to `127.0.0.1:2223` then cross the shaped loopback (delay and loss apply per direction). Change or clear
+the qdisc through `limactl shell`, never through the tunnel (a 100 % loss profile could not be cleared), and restore
+`mtu 65536` afterwards. `test/helper-stdio.py`'s fixture session speaks the phone's `--stdio` channel over such a port.
+
+### A frozen terminal tab
+
+Measure the I/O before theorizing. While typing into the frozen tab, `sudo fs_usage -w -f filesys <app pid> <helper
+pid>` and sum the `B=` bytes per descriptor: equal counts at every hop mean input and output flow. Then `sample <app
+pid>`: each terminal has a poll thread and two condition-wait threads, and its render thread is the `CFRunLoopRun`
+thread created just before them; a set without a render thread means the render thread ended (a run loop returns once it
+has no sources left, which is why the render thread keeps a port on it). A tab that draws once on resize points at the
+display link or render thread, not I/O. Find the app with `pgrep -f MacOS/Dispatch$`: `pgrep -x Dispatch` also matches
+the `Dispatch --ssh-launch` children.

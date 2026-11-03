@@ -17,7 +17,7 @@ extension TabsSample {
         defaults.removePersistentDomain(forName: "tabs-sample-spaces")
         let store = TabActivityStore(url: nil)
         let model = MobileTabs(activity: store, defaults: defaults,
-                               deviceState: SpacesDeviceState(url: nil, migrating: defaults))
+                               deviceState: SpacesDeviceState(url: nil))
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         let src = "/Users/alex/src"
         let mba = TopologySketch(backend: 1, first: 10, spaces: [

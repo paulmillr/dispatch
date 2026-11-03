@@ -3,6 +3,7 @@
 //! The helper binary is the hook; it reads its endpoint from DISPATCH_HELPER_ENDPOINT.
 use crate::{
     channel::{failure, os},
+    hooks::EVENTS,
     jobs::{self, Jobs},
 };
 use dispatch_helper_core::{
@@ -11,22 +12,6 @@ use dispatch_helper_core::{
     wire::{LIMIT, body::Encoded},
 };
 use std::{collections::BTreeMap, path::PathBuf};
-
-/// AgentHookSetup.events (CodexHookSetup.swift:4), then the subagent lifecycle (`State.agents`).
-const EVENTS: [&str; 12] = [
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PermissionRequest",
-    "PreCompact",
-    "PostCompact",
-    "Stop",
-    "Interrupt",
-    "SubagentStart",
-    "SubagentStop",
-];
 
 /// No key twice in any object (c51466a hooks.rs:194-196 UniqueValue: rewriting such a file could
 /// delete an unrelated handler or setting).
@@ -147,7 +132,7 @@ fn plan(before: Option<&[u8]>, command: &str) -> Result<(Option<Vec<u8>>, bool),
     };
     let opted = installed("PermissionRequest");
     let missing: Vec<&str> = EVENTS
-        .into_iter()
+        .iter().copied()
         .filter(|event| !installed(event))
         .collect();
     if missing.is_empty() {
@@ -471,3 +456,7 @@ fn facts(edits: Vec<Edit>, installed: bool) -> Install {
         trust: Some("/hooks".into()),
     }
 }
+
+#[cfg(test)]
+#[path = "install.test.rs"]
+mod tests;

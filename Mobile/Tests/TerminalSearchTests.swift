@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+@preconcurrency import Term
 import UIKit
 import XCTest
 @testable import DispatchMobile

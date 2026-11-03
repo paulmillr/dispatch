@@ -44,7 +44,7 @@ extension ChatCoordinator {
     }
 
     func connectHelper(_ session: ChatSession, refresh: Bool = false) {
-        guard let space = TerminalRuntime.shared.workspace?.spaces.first(where: { $0.tabs.contains { $0.id == session.id } }),
+        guard let space = TerminalRuntime.shared.workspace?.space(containingTab: session.id),
               let tab = space.tabs.first(where: { $0.id == session.id }) else {
             // No terminal: an archived conversation reads its transcript through the harness,
             // independent of the chat switch like the old transcript reader.
@@ -223,7 +223,7 @@ extension ChatCoordinator {
             // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
             // runs after the session registers): Chat opens once it closes.
             if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat,
-               !filesShowing(session) {
+               agentStart == .chat, !filesShowing(session) {
                 setChatVisible(true, session: session)
                 adoptTerminalTypeahead(session)
             }
@@ -281,7 +281,7 @@ extension ChatCoordinator {
     /// Chat opens, so the agent's first second of terminal output never flashes before it. Only where discovery would
     /// open Chat by itself: never over files, an agent already attached, or a tab the user put on its terminal.
     func terminalSubmitted(_ line: String, tab: UUID) {
-        guard enabled, let session = sessions[tab], !session.showChat, !session.active, !session.manualViewChoice,
+        guard enabled, agentStart == .chat, let session = sessions[tab], !session.showChat, !session.active, !session.manualViewChoice,
               !session.exitRequested, !filesShowing(session), session.launchingAgent == nil,
               let agent = Self.launchedAgent(line, programs: launchPrograms) else { return }
         let cover = System.uuid()
@@ -808,8 +808,7 @@ extension ChatCoordinator {
         guard !session.approvals.contains(where: { $0.interaction == interaction.id && $0.pending }),
               !session.questions.contains(where: { $0.id == interaction.id }) else { return }
         // Tool questions stay with their inline card; standalone multi-question forms keep their ordered answers.
-        let choices = interaction.questions.allSatisfy { $0.options.count >= 2 && !$0.secret }
-        if let permission = interaction.permission {
+        if case .permission(let permission) = interaction.presentation {
             let key = interaction.key ?? interaction.id
             session.approvals.append(PendingApproval(key: key, interaction: interaction.id, operation: permission.operation,
                                                      item: interaction.tool(in: session.turns), turnID: interaction.turn, toolItemID: interaction.record,
@@ -817,8 +816,7 @@ extension ChatCoordinator {
                 guard let self, let session else { return }
                 self.completeHelper($0, interaction: interaction, helper: helper, session: session)
             })
-        } else if interaction.blocking, !interaction.approval, choices,
-                  interaction.questions.count == 1 || interaction.record != nil {
+        } else if case .toolQuestions = interaction.presentation {
             let questions = ClaudeQuestions(interaction.questions.map { question in
                 ClaudeQuestions.Question(text: question.text, header: question.header,
                                          options: question.options.map { .init(label: $0.label, description: $0.detail ?? "", preview: nil) },
@@ -848,17 +846,16 @@ extension ChatCoordinator {
         var input = HelperChat.Input(helper.route)
         input.interaction = interaction.id
         var method = "interactions.answer"
+        let response: HelperChat.Interaction.Response?
         switch (approval.decision, approval.questionDraft) {
-        case (.allow, _?):
-            // The submitted answers (the form's or a caller's), never the form's editing state.
-            input.answers = interaction.answers(approval.answers ?? [:])
-        case (.deny, _?):
-            input.answers = Dictionary(uniqueKeysWithValues: interaction.questions.map { ($0.id, .skip) })
-        case (.allow, nil), (.deny, nil):
-            guard let question = interaction.questions.first else { return }
-            input.answers = [question.id: .options([approval.decision == .allow ? 0 : 1])]
-        default:
-            method = "interactions.dismiss"
+        case (.allow, _?): response = approval.structuredAnswers.map { .ordered($0) } ?? .labels(approval.answers ?? [:])
+        case (.deny, _?): response = .skip
+        case (.allow, nil), (.deny, nil): response = .option(approval.decision == .allow ? 0 : 1)
+        default: response = nil; method = "interactions.dismiss"
+        }
+        if let response {
+            guard let answer = interaction.answerInput(route: helper.route, response: response) else { return }
+            input = answer
         }
         let installation = method == "interactions.dismiss" ? integrationChanges : nil
         let id = System.uuid()
@@ -889,7 +886,7 @@ extension ChatCoordinator {
     func answerHelper(_ question: ChatSideQuestion, skip: Bool, session: ChatSession) {
         guard enabled, let helper = session.helper, session.active, session.showChat,
               session.sessionID == question.threadID, session.questions.contains(where: { $0 === question }),
-              !question.submitted, skip || question.complete else { return }
+              question.canSubmit(skip: skip) else { return }
         var input = HelperChat.Input(helper.route)
         input.interaction = question.id
         input.answers = skip ? Dictionary(uniqueKeysWithValues: question.questions.map { ($0.id, .skip) }) : question.answers
@@ -1084,11 +1081,6 @@ extension ChatCoordinator {
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed
-                }
-                // An earlier opt-in missing hooks a newer helper installs (its audit shows the edit) is upgraded.
-                if !off, install.optional != true, install.installed == true, install.edits.contains(where: { $0.before != $0.after }),
-                   let upgraded = try? await HelperChat.setup(.local, key: launch.key, enabled: true, terminal: nil) {
-                    install = upgraded
                 }
                 chat.helperInstalls[launch.key] = install
             }

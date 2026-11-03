@@ -316,7 +316,8 @@ def verify(target_dir):
             raise SystemExit("A replay migration did not apply (" + str(migrations) + "): fix it before the corpus replays")
     state = corpus_state(corpus, migrations, version, content=False)
     # The per-capture timeout catches a hung replay, not a slow one: the large herdr session
-    # (HerdrTests/testLargeSession…) replays in 20-23 s of CPU here, past the tool's 20 s default.
+    # (HerdrTests/testLargeSession…) replays in 20-23 s of CPU here. 60 s is also the tool's default (REPLAY_TIMEOUT),
+    # so prune, store and replace judge captures the same way.
     result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--timeout", "60",
                              "--output", str(output)], stdout=subprocess.PIPE, text=True)
     lines = result.stdout.splitlines()

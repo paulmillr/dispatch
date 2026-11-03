@@ -19,7 +19,7 @@ struct FilePreviewPane: View {
         let source = session.source
         Group {
             if let preview = session.preview {
-                FilePreviewContent(session: session, preview: preview)
+                FilePreviewDetail(session: session, preview: preview)
                     .id(ObjectIdentifier(preview))
             } else {
                 Text("Select a file to preview it")
@@ -72,7 +72,7 @@ extension FilesFormatting {
 }
 
 /// One selection's header and body. Its view state (find, rendered, fit) belongs to this file only.
-private struct FilePreviewContent: View {
+private struct FilePreviewDetail: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
     let session: FilesSession

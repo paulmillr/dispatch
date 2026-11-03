@@ -1,21 +1,39 @@
 import SwiftUI
 
-/// The Spaces tab (docs/watch.md, Behaviour, Spaces): every host in the phone's order, a section each with its spaces.
-/// A space pushes its tabs (`SpaceScreen`), a tab its thread or its screen: two pushes, because a 42 mm list holding
-/// hosts, spaces and tabs at once would be mostly indentation and a host with ten tabs would bury the next host.
+/// The Spaces tab (docs/watch.md, Behaviour, Spaces): every host in the phone's order, a section each with its load (the
+/// statistics card) and its spaces. A space pushes its tabs (`SpaceScreen`), a tab its thread or its screen: two pushes,
+/// because a 42 mm list holding hosts, spaces and tabs at once would be mostly indentation and a host with ten tabs would
+/// bury the next host.
+///
+/// Spaces follows the phone's snapshots and its 30-second clock only while `active` (its page on screen, nothing pushed
+/// over it). Hidden, it keeps drawing what it showed when it was left, so the snapshots agents send while working cost it
+/// nothing; coming back reads the model afresh.
 struct SpacesScreen: View {
     let model: WatchModel
     var router: WatchRouter = .shared
+    var active = true
+
+    @State private var now = Date()
+    /// What the hidden page draws: the lists as they were when it was left.
+    @State private var frozen: SpacesContent?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            ScrollViewReader { proxy in
-                list(now: context.date)
-                    .onAppear {
-                        guard let target = router.scrollTarget else { return }
-                        router.scrollTarget = nil
-                        proxy.scrollTo(target, anchor: .top)
-                    }
+        ScrollViewReader { proxy in
+            // Read only while shown (or hidden before the first freeze): a hidden page observes nothing.
+            list(active ? SpacesContent(model, now: now) : frozen ?? SpacesContent(model, now: now))
+                .onAppear { scroll(proxy) }
+                .onChange(of: router.scrollTarget) { scroll(proxy) }
+        }
+        .task(id: active) {
+            guard active else {
+                frozen = SpacesContent(model, now: now)
+                return
+            }
+            frozen = nil
+            // Not a TimelineView around the List: one inside a row as well loops the list's layout (AgentsScreen).
+            while !Task.isCancelled {
+                now = Date()
+                try? await Task.sleep(for: .seconds(30))
             }
         }
         .navigationTitle("Spaces")
@@ -34,20 +52,29 @@ struct SpacesScreen: View {
         }
     }
 
-    private func list(now: Date) -> some View {
-        let notice = model.notice(at: now)
-        return List {
+    /// A host to bring to the top (a Host widget's tap, `WatchRouter.Show.host`), once.
+    private func scroll(_ proxy: ScrollViewProxy) {
+        guard let target = router.scrollTarget else { return }
+        router.scrollTarget = nil
+        proxy.scrollTo(target, anchor: .top)
+    }
+
+    private func list(_ content: SpacesContent) -> some View {
+        List {
             // A row only when there is a notice: an empty row (a TimelineView with no content) in a watch list looped
             // its layout at full CPU.
-            if let notice {
-                WatchNoticeBanner(content: notice.content(now: now))
+            if let notice = content.notice {
+                WatchNoticeBanner(content: notice.content(now: content.now))
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
             }
-            ForEach(model.sections) { section in
-                SpacesHostSection(section: section, notice: notice, now: now)
+            ForEach(content.sections) { section in
+                SpacesHostSection(section: section, notice: content.notice, now: content.now,
+                                  connecting: content.connecting.contains(section.host.id)) {
+                    Task { await model.connect(host: section.host.id) }
+                }
             }
-            if model.snapshot?.truncated == true {
+            if content.truncated {
                 Text(SpacesText.truncated)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -57,142 +84,119 @@ struct SpacesScreen: View {
     }
 }
 
-/// One host: its header (mark, name, state, multiplexer), what blocks it, then its spaces.
+/// What Spaces draws, read from the model at once: the hidden page keeps one.
+struct SpacesContent {
+    var sections: [WatchSection]
+    var notice: WatchNotice?
+    var truncated: Bool
+    /// Hosts with a Connect on its way.
+    var connecting: Set<String>
+    var now: Date
+
+    @MainActor init(_ model: WatchModel, now: Date) {
+        sections = model.sections
+        notice = model.notice(at: now)
+        truncated = model.snapshot?.truncated == true
+        connecting = model.connecting
+        self.now = now
+    }
+}
+
+/// One host: its header (mark, name, state, multiplexer), its load (`HostStatsCard`: as last known and dimmed while not
+/// connected), what blocks it, Connect while offline, then its spaces.
 struct SpacesHostSection: View {
     let section: WatchSection
     var notice: WatchNotice?
     let now: Date
+    var connecting = false
+    var connect: () -> Void = {}
 
     var body: some View {
+        let host = section.host
+        let offline = SpacesText.offline(host)
+        let problem = SpacesText.problem(host, now: now, notice: notice)
         Section {
-            if let problem = SpacesText.problem(section.host, now: now, notice: notice) {
+            if host.stats != nil {
+                HostStatsCard(stats: host.stats, tint: Color(watchHex: host.tint), live: !offline)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 4, trailing: 0))
+            }
+            if let problem {
                 WatchHostProblemLine(symbol: problem.symbol, text: problem.text, detail: problem.detail)
                     .listRowBackground(Color.clear)
+            } else if let since = HostStatsText.offlineSince(host, now: now) {
+                Label(since, systemImage: "wifi.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+            }
+            if offline, WatchModel.blockedMessage(host) == nil {
+                Group {
+                    if connecting {
+                        HStack(spacing: 6) {
+                            ProgressView().frame(width: 18, height: 18)
+                            Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                    } else {
+                        Button(action: connect) {
+                            CapsuleLabel(title: "Connect", symbol: "bolt.fill", style: .accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Connect")
+                        .accessibilityHint("Asks your iPhone to connect \(host.name)")
+                    }
+                }
+                .listRowBackground(Color.clear)
             }
             ForEach(section.spaces) { space in
                 NavigationLink(value: WatchSpaceRoute(host: space.space.host, space: space.space.key)) {
-                    SpacesSpaceRow(space: space.space, tabs: space.tabs.count, stale: section.host.stale, now: now)
+                    SpacesSpaceRow(space: space.space, tabs: space.tabs.count, stale: host.stale, now: now)
                 }
             }
             if section.spaces.isEmpty {
-                Text(section.host.sameMachine.map(SpacesText.sameMachine) ?? SpacesText.noSpaces)
+                Text(host.sameMachine.map(SpacesText.sameMachine) ?? SpacesText.noSpaces)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .listRowBackground(Color.clear)
             }
         } header: {
-            // The header opens the host's screen (K6: its statistics, Connect).
-            NavigationLink(value: WatchHostRoute(host: section.host.id)) {
-                SpacesHostHeader(host: section.host)
-            }
-            .buttonStyle(.plain)
-            .accessibilityHint("Shows the host's load and connection")
-            .id(section.host.id)
+            SpacesHostHeader(host: host)
+                .id(host.id)
         }
     }
 }
 
-/// The section header: the host's mark, its name, a state dot (or "Connecting…"/"Offline") and the multiplexer chip.
+/// The section header: the host's mark, its name, a state dot and the multiplexer chip.
 struct SpacesHostHeader: View {
     let host: WatchHost
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                WatchHostMark(host: host, size: 20)
-                    .opacity(host.state == .offline ? 0.5 : 1)
-                Text(host.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                Circle().fill(SpacesText.stateColor(host)).frame(width: 6, height: 6).accessibilityHidden(true)
-                if let multiplexer = host.multiplexer {
-                    Text(multiplexer)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+        HStack(spacing: 5) {
+            WatchHostMark(host: host, size: 20)
+                .opacity(host.state == .offline ? 0.5 : 1)
+            Text(host.name)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Circle().fill(SpacesText.stateColor(host)).frame(width: 6, height: 6).accessibilityHidden(true)
+            if let multiplexer = host.multiplexer {
+                Text(multiplexer)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(.quaternary, in: Capsule())
+                    .fixedSize()
             }
-            if let stats = HostStatsLine.stats(host) {
-                HostStatsLine(stats: stats, tint: Color(watchHex: host.tint))
-            }
+            Spacer(minLength: 0)
         }
         .textCase(nil)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(host.name)
-        .accessibilityValue(([SpacesText.state(host) ?? "Connected", host.multiplexer]
-            + [HostStatsLine.stats(host).map(HostStatsLine.accessibilityLabel)]).compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue([SpacesText.state(host) ?? "Connected", host.multiplexer].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isHeader)
-    }
-}
-
-/// The host's load under its Spaces header, one line: CPU % with a small 15-minute sparkline, then memory used of
-/// total; red where the phone flags it high, dimmed while the phone's numbers are not current. Only for a connected
-/// host with a reading (the host screen keeps the last-known strip of one that is not).
-struct HostStatsLine: View {
-    let stats: WatchHostStats
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 5) {
-            HStack(spacing: 3) {
-                Text("CPU").foregroundStyle(.secondary)
-                Text(HostStatsText.cpu(stats).value + "%")
-                    .foregroundStyle(stats.warnings.contains(.cpu) ? AgentsColor.destructive : .primary)
-            }
-            if stats.history.compactMap({ $0 }).count > 1 {
-                Sparkline(values: stats.history, color: tint)
-                    .frame(width: 44, height: 14)
-            }
-            Spacer(minLength: 4)
-            if let memory = Self.memory(stats) {
-                Text(memory)
-                    .foregroundStyle(stats.warnings.contains(.memory) ? AgentsColor.destructive : .secondary)
-            }
-        }
-        .font(.caption2.monospacedDigit())
-        .lineLimit(1)
-        .opacity(stats.stale ? 0.5 : 1)
-    }
-
-    /// A connected host's stats; nil otherwise.
-    static func stats(_ host: WatchHost) -> WatchHostStats? {
-        guard host.state == .connected, let stats = host.stats, stats.cpu != nil || stats.memoryUsed != nil else { return nil }
-        return stats
-    }
-
-    /// "11/16 GB" (one unit when both share it), "512 MB/16 GB", "11 GB" without a total.
-    static func memory(_ stats: WatchHostStats) -> String? {
-        guard stats.memoryUsed != nil else { return nil }
-        let used = HostStatsText.bytes(stats.memoryUsed)
-        guard stats.memoryTotal != nil else { return "\(used.value) \(used.unit)" }
-        let total = HostStatsText.bytes(stats.memoryTotal)
-        return used.unit == total.unit ? "\(used.value)/\(total.value) \(total.unit)"
-            : "\(used.value) \(used.unit)/\(total.value) \(total.unit)"
-    }
-
-    /// "CPU 34 percent, memory 11 of 16 GB used, not current".
-    static func accessibilityLabel(_ stats: WatchHostStats) -> String {
-        var parts: [String] = []
-        if let cpu = stats.cpu { parts.append("CPU \(Int(cpu.rounded())) percent") }
-        if stats.memoryUsed != nil {
-            let used = HostStatsText.bytes(stats.memoryUsed)
-            if stats.memoryTotal != nil {
-                let total = HostStatsText.bytes(stats.memoryTotal)
-                parts.append("memory \(used.value) \(used.unit) of \(total.value) \(total.unit) used")
-            } else {
-                parts.append("memory \(used.value) \(used.unit) used")
-            }
-        }
-        if stats.stale { parts.append("not current") }
-        return parts.joined(separator: ", ")
     }
 }
 

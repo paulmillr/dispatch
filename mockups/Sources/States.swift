@@ -234,53 +234,6 @@ struct DiffFoldOutdatedScreen: View {
     }
 }
 
-/// The way in from chat: after an agent's turn, the turn's patch summary offers Review alongside the existing
-/// Changes viewer, and the tab's Files segment carries the comment count.
-struct ChatEntryScreen: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 10) {
-                    Spacer(minLength: 120)
-                    Bubble(text: "Add a theme toggle to the sidebar and make the unread rows stand out.", user: true)
-                    Bubble(text: "Added ThemeToggle in the sidebar footer and a useTheme hook that follows the system preference. Unread rows now carry an unread class on the item.", user: false)
-                    // The turn's footnotes, as the app draws them today: plain secondary lines under the message.
-                    Text("5 steps in 1m 26s · 4 files +61 −9")
-                        .font(.footnote).foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 22)
-                    Bubble(text: "Put the class on the link, not the item.", user: true)
-                    Bubble(text: "Moving it. I'll also drop the `end` prop since it breaks nested routes.", user: false)
-                    Color.clear.frame(height: 8)
-                }
-                .padding(.horizontal, 16)
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .safeAreaBar(edge: .bottom) {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 44, height: 44)
-                        .glassEffect(.regular.interactive(), in: Circle())
-                    HStack {
-                        Text("Message").foregroundStyle(.tertiary)
-                        Spacer()
-                        Image(systemName: "mic").foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 16).frame(height: 44)
-                    .glassEffect(.regular.interactive(), in: Capsule())
-                }
-                .padding(.horizontal, 16).padding(.bottom, 4)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.canvas)
-            .safeAreaBar(edge: .top, spacing: 0) {
-                SegmentCapsule(selected: 1, badge: 3).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { TabHeader(title: "Sidebar theme toggle") }
-        }
-    }
-}
-
 struct Bubble: View {
     let text: String
     let user: Bool

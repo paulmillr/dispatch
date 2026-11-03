@@ -5,6 +5,8 @@ struct ChatReplyButton: View {
     let canSubmit: Bool
     var optionHeld = false
     var busy = false
+    /// Return steers while the agent works (`ChatCoordinator.returnSteers`): ⌥ then queues.
+    var steers = false
     var editingQueued = false
     var multiline = false
     var command = false
@@ -13,7 +15,18 @@ struct ChatReplyButton: View {
     var showsKey = true
     let action: () -> Void
 
-    private var title: String { optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send" }
+    private var title: String {
+        steers ? (optionHeld ? "Queue" : "Steer")
+            : optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send"
+    }
+    private var label: String {
+        switch title {
+        case "Requeue": "Requeue message"
+        case "Queue": "Queue message"
+        case "Send": command ? "Send command" : "Send message"
+        default: title
+        }
+    }
     private var key: String { optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎" }
 
     var body: some View {
@@ -42,7 +55,7 @@ struct ChatReplyButton: View {
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }.buttonStyle(.plain).disabled(!canSubmit).fixedSize()
             .accessibilityIdentifier(identifier)
-            .accessibilityLabel(optionHeld ? "Steer" : editingQueued ? "Requeue message" : busy ? "Queue message" : command ? "Send command" : "Send message")
+            .accessibilityLabel(label)
     }
 
     private var standardBody: some View {
@@ -66,7 +79,7 @@ struct ChatReplyButton: View {
         }.font(theme.typography.detail).buttonStyle(.plain).disabled(!canSubmit).fixedSize()
             .help("\(title) · \(key)")
             .accessibilityIdentifier(identifier)
-            .accessibilityLabel(optionHeld ? "Steer" : editingQueued ? "Requeue message" : busy ? "Queue message" : command ? "Send command" : "Send message")
+            .accessibilityLabel(label)
     }
 }
 

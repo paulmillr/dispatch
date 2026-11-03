@@ -91,7 +91,7 @@ struct ChatMarkdown: View {
         }.frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
             .environment(\.openURL, OpenURLAction { url in
                 if let link = ChatFileLink(url) { fileLink = link; return .handled }
-                return Self.isWebLink(url) ? .systemAction : .discarded
+                return ChatMarkdownPolicy.isWebLink(url) ? .systemAction : .discarded
             })
             .sheet(item: $fileLink) { ChatFileLinkPreview(link: $0) }
     }
@@ -123,19 +123,7 @@ struct ChatMarkdown: View {
     }
 
     static func safeInlineMarkdown(_ text: String) -> AttributedString {
-        let visible = TextRendering.visible(text)
-        var value = (try? AttributedString(markdown: visible, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(visible)
-        let unsafe = value.runs.compactMap { run -> Range<AttributedString.Index>? in
-            guard let url = run.link else { return nil }
-            guard isWebLink(url) || ChatFileLink(url) != nil else { return run.range }
-            return nil
-        }
-        for range in unsafe { value[range].link = nil }
-        return value
-    }
-    private static func isWebLink(_ url: URL) -> Bool {
-        ["http", "https"].contains(url.scheme?.lowercased()) && url.host != nil
-            && url.user == nil && url.password == nil
+        ChatMarkdownPolicy.inline(text, allowingAdditionalLink: { ChatFileLink($0) != nil })
     }
 }
 
@@ -147,23 +135,21 @@ struct ChatMarkdown: View {
         let blocks: [ChatMarkdownBlock]
         let truncated: Bool
     }
-    private static var documents: [String: Document] = [:]
-    private static var inlines: [String: AttributedString] = [:]
+    private static var documents = ChatTextCache<String, Document>(limit: .init(count: documentLimit.count, bytes: documentLimit.bytes))
+    private static var inlines = ChatTextCache<String, AttributedString>(limit: .init(count: inlineLimit.count, bytes: inlineLimit.bytes))
     /// Parses done, for tests.
     private(set) static var documentParses = 0
     private(set) static var inlineParses = 0
     /// Longer texts are parsed each time rather than kept: at most about 8 MB of messages and 8 MB of blocks.
-    static let documentLimit = (count: 128, bytes: 64 * 1024)
-    static let inlineLimit = (count: 1024, bytes: 8 * 1024)
+    static let documentLimit = ChatMarkdownCacheBounds.document
+    static let inlineLimit = ChatMarkdownCacheBounds.inline
 
     static func document(_ text: String) -> Document {
         if let cached = documents[text] { return cached }
         documentParses += 1
         let rendered = TextRendering.rich(text)
         let document = Document(blocks: ChatMarkdownBlock.parse(rendered.text), truncated: rendered.truncated)
-        guard text.utf8.count <= documentLimit.bytes else { return document }
-        if documents.count >= documentLimit.count { documents.removeAll(keepingCapacity: true) }
-        documents[text] = document
+        documents.insert(document, for: text, source: text)
         return document
     }
 
@@ -171,9 +157,7 @@ struct ChatMarkdown: View {
         if let cached = inlines[text] { return cached }
         inlineParses += 1
         let value = ChatMarkdown.safeInlineMarkdown(text)
-        guard text.utf8.count <= inlineLimit.bytes else { return value }
-        if inlines.count >= inlineLimit.count { inlines.removeAll(keepingCapacity: true) }
-        inlines[text] = value
+        inlines.insert(value, for: text, source: text)
         return value
     }
 }

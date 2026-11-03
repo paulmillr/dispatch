@@ -219,6 +219,22 @@ final class CodeComposerTests: XCTestCase {
         XCTAssertTrue(CodeComposer.stacked("```ts\nlet a"))
     }
 
+    /// A paste of more than one line enters editor mode (the composer's `pastedLines`); one line does not.
+    func testAPasteOfLinesAsksForEditorMode() throws {
+        let view = editor("Look")
+        let board = try XCTUnwrap(UIPasteboard(name: UIPasteboard.Name("composer-\(UUID().uuidString)"), create: true))
+        defer { UIPasteboard.remove(withName: board.name) }
+        view.pasteboard = board
+        var asked = 0
+        view.pastedLines = { asked += 1 }
+        board.string = " here"
+        view.paste(nil)
+        XCTAssertEqual(asked, 0)
+        board.string = "\nfirst\nsecond"
+        view.paste(nil)
+        XCTAssertEqual(asked, 1)
+    }
+
     /// A paste of images (a screenshot, a copied photo) attaches them and leaves the text alone; Paste is offered for
     /// them. Without a taker the composer offers nothing new.
     func testAPastedImageAttachesAndLeavesTheText() async throws {

@@ -102,10 +102,11 @@ final class ChatSideConversation: Identifiable {
     func close() {
         guard !closed else { return }
         closed = true; task?.cancel(); task = nil; ready = false; busy = false
+        let fork = helper?.route
         helper?.close(); helper = nil
         if let parent {
-            let route = parent.route
-            Task { let _: HelperClient.Empty? = try? await parent.call("chat.side.close", input: .init(route)) }
+            // The fork is closed by its own session; a fork still starting is closed when chat.side answers (start).
+            if let fork { Self.end(fork, on: parent) }
             self.parent = nil
         }
         messages = []; draft = ""; draftMultiline = false; composingText = false
@@ -117,6 +118,12 @@ final class ChatSideConversation: Identifiable {
 
 // Side chat through the helper: chat.side opens a binding that is read and answered like any chat.
 extension ChatSideConversation {
+    /// Ends a fork's process: `chat.side.close` names the fork's own session (the helper keeps forks by terminal and
+    /// fork session, and refuses the parent's), sent through the parent's helper.
+    private static func end(_ fork: HelperChat.Route, on parent: HelperChat) {
+        Task { let _: HelperClient.Empty? = try? await parent.call("chat.side.close", input: .init(fork)) }
+    }
+
     func start(helper parent: HelperChat, question: String) {
         self.parent = parent
         messages.append(.init(id: "pending-" + System.uuid().uuidString, user: true, text: question))
@@ -125,7 +132,7 @@ extension ChatSideConversation {
             guard let self else { return }
             do {
                 let side = try await parent.side(question: question, readOnly: mode.readOnly)
-                guard !closed else { side.close(); return }
+                guard !closed else { side.close(); Self.end(side.route, on: parent); return }
                 helper = side
                 side.receive = { [weak self] in self?.receive($0) }
                 side.failed = { [weak self] error in self?.failure = error.localizedDescription; self?.busy = false }

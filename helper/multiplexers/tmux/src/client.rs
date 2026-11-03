@@ -95,6 +95,14 @@ pub(crate) struct Client {
     pub ended: bool,
     pub notices: Vec<Notice>,
     pub refreshing: bool,
+    /// Each window's pane this client focused (`Tmux::focus`). tmux 3.8 removed the per-client `active-pane` flag
+    /// (profile.tmux), so another client's select-pane now moves this client's pane too: a read keeps the focused
+    /// one unless this client's own change led to it (`steering`, a creation or a waiter: then it takes what tmux
+    /// shows) or the pane left the window. Like tmux 3.7's own client pane, a window nobody focused here follows the
+    /// window's active pane; tmux 3.7 already reports the focused one, so there the two agree.
+    pub chosen: BTreeMap<u64, u32>,
+    /// Own mutations sent and not yet answered (`Tmux::mutate`): a read meanwhile may show their focus change.
+    pub steering: usize,
     pub again: bool,
     pub waiters: Vec<crate::mux::Continue<Result<(), Error>>>,
     /// Waiters registered while a read was in flight; the next read completes them.

@@ -40,23 +40,25 @@ final class ClaudeQuestionDraft {
     init(_ questionnaire: ClaudeQuestions) { self.questionnaire = questionnaire }
     var question: ClaudeQuestions.Question { questionnaire.questions[index] }
     func clearAnswers() { selected = [:]; custom = [:]; usingCustom = [] }
-    func back() { if index > 0 { index -= 1 } }
-    func next() { if answer(question) != nil && index + 1 < questionnaire.questions.count { index += 1 } }
+    var actions: ChatQuestionPolicy.Actions {
+        .init(index: index, count: questionnaire.questions.count, answered: answer(question) != nil,
+              complete: questionnaire.accepts(answers))
+    }
+    func back() { if actions.canGoBack { index -= 1 } }
+    func next() { if actions.canGoNext { index += 1 } }
+    func isSelected(_ label: String, in question: ClaudeQuestions.Question) -> Bool {
+        ChatQuestionPolicy.isSelected(label, selected: selected[question.id, default: []], usingCustom: usingCustom.contains(question.id))
+    }
     func select(_ label: String) {
         guard question.options.contains(where: { $0.label == label }) else { return }
         let id = question.id
         usingCustom.remove(id)
-        if question.multiple {
-            if selected[id, default: []].contains(label) { selected[id]?.remove(label) }
-            else { selected[id, default: []].insert(label) }
-        } else { selected[id] = [label] }
+        selected[id] = ChatQuestionPolicy.selecting(label, in: selected[id, default: []], multiple: question.multiple)
     }
     func type(_ text: String) { custom[question.id] = text; usingCustom.insert(question.id) }
     func answer(_ question: ClaudeQuestions.Question) -> String? {
         if usingCustom.contains(question.id) {
-            guard let value = custom[question.id], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  value.utf8.count <= 8192, !value.unicodeScalars.contains(where: { $0.value == 0 }) else { return nil }
-            return value
+            return ChatQuestionPolicy.customAnswer(custom[question.id], byteLimit: 8192)
         }
         let labels = question.options.filter { selected[question.id, default: []].contains($0.label) }.map(\.label)
         return labels.isEmpty ? nil : labels.joined(separator: ", ")

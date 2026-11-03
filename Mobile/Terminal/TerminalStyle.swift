@@ -23,9 +23,9 @@ struct TerminalFont: Identifiable, Equatable, Sendable {
 
     var id: String { name }
 
-    static let jetBrainsMono = TerminalFont(name: "JetBrains Mono", family: nil)
+    static let jetBrainsMono = TerminalFont(name: TerminalFontCatalog.fallbackFamily, family: nil)
     /// The default, as the Mac's (`Settings.fontFamily`).
-    static let sourceCodePro = TerminalFont(name: "Source Code Pro", family: "Source Code Pro")
+    static let sourceCodePro = TerminalFont(name: TerminalFontCatalog.defaultFamily, family: TerminalFontCatalog.defaultFamily)
     static let menlo = TerminalFont(name: "Menlo", family: "Menlo", system: true)
 
     /// The list's first part, before the Mac's separator: the default and the system's.
@@ -33,11 +33,10 @@ struct TerminalFont: Identifiable, Equatable, Sendable {
 
     /// Dispatch's own fonts after the separator, by name as the Mac sorts them (`localizedStandardCompare`): the
     /// Mac's bundled monospaced families and its `moreBundledFontFamilies`.
-    static let bundled: [TerminalFont] = ([jetBrainsMono] + [
-        "0xProto", "Cascadia Code", "CommitMono", "Departure Mono", "Fira Code", "Geist Mono", "Hack", "Hasklig",
-        "IBM Plex Mono", "Inconsolata", "Intel One Mono", "Ioskeley Mono Term", "Latin Modern Mono", "Maple Mono",
-        "Rec Mono Casual", "Victor Mono",
-    ].map { TerminalFont(name: $0, family: $0) }).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    static let bundled: [TerminalFont] = TerminalFontCatalog.bundled
+        .filter { $0.family != TerminalFontCatalog.defaultFamily }
+        .map { $0.family == TerminalFontCatalog.fallbackFamily ? jetBrainsMono : TerminalFont(name: $0.family, family: $0.family) }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
     /// The whole list, in order.
     static let all: [TerminalFont] = leading + bundled
@@ -72,9 +71,8 @@ struct TerminalStyle: Equatable, Sendable {
         font = TerminalFont.named(defaults.string(forKey: MobileSettings.terminalFontKey))
         scheme = defaults.string(forKey: MobileSettings.terminalSchemeKey).flatMap { TerminalSchemes.url($0) == nil ? nil : $0 }
             ?? TerminalConfiguration.defaultScheme
-        // Replaces the `terminal.contrast` switch, saved only when changed: on stays on, off stays off.
         textContrast = defaults.string(forKey: MobileSettings.textContrastKey).flatMap(TextContrast.init(rawValue:))
-            ?? (defaults.object(forKey: MobileSettings.terminalContrastKey) as? Bool).map { $0 ? .always : .never } ?? .lightThemes
+            ?? .lightThemes
         boldIsBright = defaults.bool(forKey: MobileSettings.boldIsBrightKey)
         cursor = defaults.string(forKey: MobileSettings.cursorKey).flatMap(TerminalCursorStyle.init(rawValue:)) ?? .block
         cursorBlink = defaults.object(forKey: MobileSettings.cursorBlinkKey) as? Bool ?? true

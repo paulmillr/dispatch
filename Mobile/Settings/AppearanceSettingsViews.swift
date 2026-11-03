@@ -85,8 +85,8 @@ struct TerminalSchemeSettingsView: View {
         List {
             Group {
                 if !own.isEmpty { Section("Dispatch") { rows(own) } }
-                sections(others.filter { $0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.dark, side: "Dark")
-                sections(others.filter { !$0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.light, side: "Light")
+                sections(others.filter { $0.side != true || SchemeGroup.bothSides.contains($0.file) }, light: false)
+                sections(others.filter { $0.side != false || SchemeGroup.bothSides.contains($0.file) }, light: true)
                 if settings.colorVision != .typical {
                     Section {} footer: {
                         Text("Colorblind-friendly lists only the schemes made for \(settings.colorVision.title.lowercased()) color blindness.")
@@ -105,10 +105,10 @@ struct TerminalSchemeSettingsView: View {
     }
 
     /// One side's schemes, a section per group: "Dark · OLED", "Light · Cream".
-    private func sections(_ schemes: [TerminalSchemes.Scheme], groups: [SchemeGroup], side: String) -> some View {
-        ForEach(groups, id: \.self) { group in
-            let shown = group.ordered(schemes.filter { $0.group == group }, name: \.file)
-            if !shown.isEmpty { Section("\(side) · \(group.title)") { rows(shown) } }
+    private func sections(_ schemes: [TerminalSchemes.Scheme], light: Bool) -> some View {
+        ForEach(light ? SchemeGroup.light : SchemeGroup.dark, id: \.self) { group in
+            let shown = group.ordered(schemes.filter { $0.group(light: light) == group }, name: \.file)
+            if !shown.isEmpty { Section("\(light ? "Light" : "Dark") · \(group.title)") { rows(shown) } }
         }
     }
 

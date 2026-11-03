@@ -384,27 +384,8 @@ enum CommitSignatureText {
         }
     }
 
-    /// The signer and the key, the verdict first unless it is a trusted key's good signature (the Mac's
-    /// `GitSignatureText.detail`).
     static func detail(_ check: GitSignatureCheck?, kind: GitSignatureKind) -> String {
-        guard let check else { return "Checking the \(kind.title) signature…" }
-        let kind = check.kind ?? kind
-        let name = kind.title
-        let verdict: String? = switch check.verdict {
-        case .good(true): nil
-        case .good(false): "Good \(name) signature, key not certified"
-        case .bad: "Bad \(name) signature"
-        case .unknownKey: kind == .ssh ? "\(name) signature from a key not in your allowed signers"
-                                       : "\(name) signature from a key not in your keyring"
-        case .expiredSignature: "Expired \(name) signature"
-        case .expiredKey: "\(name) signature from an expired key"
-        case .revokedKey: "\(name) signature from a revoked key"
-        case .unsigned: "Not signed"
-        case .unchecked(let reason): "Signed with \(name) · couldn’t check: \(reason)"
-        }
-        let key = check.key.map { kind == .ssh ? "SSH key: \($0)" : "\(name) key ID: \($0)" }
-        let parts = [verdict, check.signer, key].compactMap { $0 }
-        return parts.isEmpty ? "Good \(name) signature" : parts.joined(separator: " · ")
+        GitSignatureExplanation.detail(check, kind: kind)
     }
 }
 

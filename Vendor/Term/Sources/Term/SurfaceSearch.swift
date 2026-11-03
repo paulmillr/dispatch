@@ -18,6 +18,32 @@ public struct SearchHighlights {
     public init() {}
 }
 
+/// Ghostty's search thread reads the terminal again every 24 ms while output comes; frames come up to 120 times a
+/// second, and a refresh costs about half a millisecond under the session's lock. Frames whose viewport changed refresh
+/// at most once per interval; a change inside the interval waits (`pending`) for a frame at `due`, so the last output
+/// is always searched. Times are nanoseconds on any monotonic clock. The embedder's renderer keeps one per surface.
+public struct SearchRefreshThrottle: Equatable {
+    public init() {}
+    public static let interval: UInt64 = 24_000_000
+    public private(set) var last: UInt64?
+    public private(set) var pending = false
+
+    /// A frame at `now` (`changed`: its viewport changed since the last frame): whether it refreshes the search.
+    public mutating func frame(at now: UInt64, changed: Bool) -> Bool {
+        guard changed || pending else { return false }
+        if let last, now &- last < Self.interval {
+            pending = true
+            return false
+        }
+        last = now
+        pending = false
+        return true
+    }
+
+    /// When the held-back refresh may run.
+    public var due: UInt64? { pending ? last.map { $0 &+ Self.interval } : nil }
+}
+
 extension Surface {
     /// `search:<needle>` (empty: stop).
     func search(_ needle: [UInt8]) -> Bool {

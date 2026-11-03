@@ -14,8 +14,8 @@ import UniformTypeIdentifiers
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. With "Show code keys" picked
 /// under "+" (off by default, kept app-wide: `MobileSettings.composerCodeKeysKey`), while the field is focused a glass key row above the field
 /// offers the backtick, the fence and code pairs. With a hardware
-/// keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends and Shift-Return starts a new line,
-/// which puts the draft in editor mode, where Return inserts newlines and ⌘Return sends; ⌥Return steers, ⌘E toggles
+/// keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends and Shift-Return starts a new line;
+/// in editor mode (⌘E, a multi-line paste, Settings' default) Return inserts newlines and ⌘Return sends; ⌥Return steers, ⌘E toggles
 /// editor mode, Esc leaves editor mode, else stops a running turn, else leaves the field. The key row stays away then:
 /// the keyboard has every key it offers. With `attachments`, "+" picks photos or
 /// files, an image pasted into the field or a drop on the composer attaches, and a strip above the field shows them
@@ -23,7 +23,8 @@ import UniformTypeIdentifiers
 struct CodeComposer: View {
     enum Slot: Equatable { case mic, send }
 
-    /// What a long press on send offers; a tap does what the first that is not `sendNow` would (the draft's own route).
+    /// What a long press on send offers; a tap does what the first that is not `sendNow` would (the draft's own route),
+    /// or Send now when Settings steers while the agent works (`queue` is given).
     enum SendOption: Hashable, Identifiable {
         /// The agent takes it now.
         case send
@@ -73,6 +74,8 @@ struct CodeComposer: View {
     var focus: FocusState<Bool>.Binding
     var send: () -> Void
     var steer: (() -> Void)?
+    /// Given when `send` steers (Settings › Chat, While the agent works: Steer): what Queue and ⌥Return do then.
+    var queue: (() -> Void)? = nil
     var stop: () -> Void
     /// What send's long press offers (`sendOptions`, or completing a command, opening Terminal); a tap does what the
     /// first that is not Send now would.
@@ -94,6 +97,9 @@ struct CodeComposer: View {
     @State private var dropTargeted = false
     @State private var visible = false
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
+    /// Settings › Chat › Esc stops the agent: pressed twice, the first Esc only arms the stop (`stopArmed`).
+    @AppStorage(MobileSettings.chatEscapeStopKey) private var escapeStop = ChatEscapeStop.once
+    @State private var stopArmed: Date?
     @ReduceMotion private var reduceMotion
 
     /// The trailing slot: send for text or attachments, else the mic.
@@ -125,12 +131,26 @@ struct CodeComposer: View {
     private func perform(_ action: ComposerKeyAction) {
         switch action {
         case .send: send()
-        case .steer: (steer ?? send)()
-        case .stop: stop()
+        // ⌥Return goes the other way from Return: steers, or queues when Return steers.
+        case .steer: (queue ?? steer ?? send)()
+        case .stop: escape()
         case .toggleEditor: multiline.wrappedValue.toggle()
         case .leaveEditor: multiline.wrappedValue = false
         case .newline, .resign, .system: break
         }
+    }
+
+    /// Esc while the agent works: stops, or with Esc twice arms the stop for `ChatEscapeStop.window` and stops on the
+    /// second press.
+    private func escape() {
+        guard escapeStop == .twice else { return stop() }
+        let now = Date()
+        if let armed = stopArmed, now.timeIntervalSince(armed) <= ChatEscapeStop.window {
+            stopArmed = nil
+            return stop()
+        }
+        stopArmed = now
+        DispatchQueue.main.asyncAfter(deadline: .now() + ChatEscapeStop.window) { if stopArmed == now { stopArmed = nil } }
     }
 
     /// The slot sits under the text once the draft holds a fenced block.
@@ -188,8 +208,10 @@ struct CodeComposer: View {
                     VStack(alignment: .trailing, spacing: 6) {
                         HStack(alignment: .bottom, spacing: 6) {
                             CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
-                                            keyState: { (multiline.wrappedValue, working) }, keyAction: perform,
-                                            pasteImages: attaching ? attachments?.add : nil)
+                                            // Return still sends a one-line command in editor mode, as on the Mac.
+                                            keyState: { (multiline.wrappedValue && !AgentInput.isCommand(text, multiline: text.contains(where: \.isNewline)), working) },
+                                            keyAction: perform, pasteImages: attaching ? attachments?.add : nil,
+                                            pastedLines: { multiline.wrappedValue = true })
                                 .frame(height: editor.height)
                                 .focused(focus)
                             if !stacked { slot.padding(.bottom, 4) }
@@ -217,7 +239,18 @@ struct CodeComposer: View {
         }
         // Over the key row and the strip too: the hints float above whatever the composer shows on top.
         .overlay(alignment: .topTrailing) {
-            if dictationStatus == nil, Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
+            if stopArmed != nil, working {
+                Text("Esc again to stop")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .padding(.trailing, 20)
+                    .alignmentGuide(.top) { $0[.bottom] + 2 }
+                    .accessibilityIdentifier("composer-stop-armed")
+                    .allowsHitTesting(false)
+            } else if dictationStatus == nil, Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
                 // The Mac's "editor" badge: Return now starts a line, so say what sends.
                 Text("Editor · ⌘↩ sends")
                     .font(.caption2.weight(.medium))
@@ -391,7 +424,7 @@ struct CodeComposer: View {
             .menuOrder(.fixed)
             .accessibilityLabel("Send")
             .accessibilityActions {
-                if let steer { Button("Send now", action: steer) }
+                if let queue { Button("Queue", action: queue) } else if let steer { Button("Send now", action: steer) }
             }
             .padding(-8)
         }
@@ -399,7 +432,8 @@ struct CodeComposer: View {
 
     private func perform(_ option: SendOption) {
         switch option {
-        case .send, .queue, .complete, .terminal: send()
+        case .send, .complete, .terminal: send()
+        case .queue: (queue ?? send)()
         case .sendNow: (steer ?? send)()
         }
     }
@@ -480,6 +514,8 @@ struct CodeEditorField: UIViewRepresentable {
     var keyAction: ((ComposerKeyAction) -> Void)? = nil
     /// Takes the images a paste carries (nil: a paste of images does nothing, text pastes as ever).
     var pasteImages: (([MobileAttachmentSource]) -> Void)? = nil
+    /// A paste of more than one line (editor mode).
+    var pastedLines: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> CodeTextView {
         let view = CodeTextView()
@@ -500,6 +536,7 @@ struct CodeEditorField: UIViewRepresentable {
         view.keyState = keyState
         view.keyAction = keyAction
         view.pasteImages = pasteImages
+        view.pastedLines = pastedLines
         if view.placeholder != placeholder { view.placeholder = placeholder }
         if view.textStorage.string != text {
             view.setDraft(text)

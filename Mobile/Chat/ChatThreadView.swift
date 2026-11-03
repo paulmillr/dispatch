@@ -68,6 +68,8 @@ struct ChatThreadView: View {
     @Environment(\.tabRail) private var rail
     /// Reply was tapped: the composer shows and takes the focus until it is left empty and unfocused again.
     @State private var replying = false
+    /// Settings › Chat: send's tap queues or steers while the agent works.
+    @AppStorage(MobileSettings.chatSendWhileWorkingKey) private var sendWhileWorking = ChatSendWhileWorking.queue
     @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
     @Environment(\.dynamicTypeSize) private var typeSize
     /// How long the thread rides out the moment after the agent stops or its turn ends (`settling`).
@@ -225,7 +227,7 @@ struct ChatThreadView: View {
                 // The rows' frames in the content (`ChatFollower.rowFrames`), its top the scroll view's content top.
                 .coordinateSpace(.named(Self.contentSpace))
                 .background(ChatKeyboardDragDismissal { updateFollow { $0.draggedKeyboardDown() } })
-                .background(ChatScrollViewProbe(follower: follower))
+                .background(ChatScrollViewProbe(follower: follower, attached: attached))
                 .environment(\.chatSearchMarks, session.search.active
                              ? ChatSearchMarks(query: session.search.query.trimmingCharacters(in: .whitespacesAndNewlines)) : nil)
                 if showsWorkingRow {
@@ -260,6 +262,7 @@ struct ChatThreadView: View {
                     // Where it stopped is where the thread opens next time.
                     if restoring == nil { saveReading() }
                 case .interacting, .tracking:
+                    if phase == .interacting { updateFollow { $0.dragBegan() } }
                     // The user's own scroll takes over from putting the place back.
                     follower.restoring = nil
                 default: break
@@ -478,14 +481,17 @@ struct ChatThreadView: View {
                     ChatGoalStatusLine(parts: session.goalStatus)
                 }
                 let routes = composerRoutes
+                // Settings › Chat may make send's tap steer while the agent works; its long press queues then.
+                let steers = sendWhileWorking == .steer && routes.steer == .steer
                 if !composerFolded {
                 CodeComposer(text: draft, placeholder: placeholder, working: session.working && session.phase == .verified,
                              focus: $focused,
-                             send: send,
+                             send: { send(steer: steers) },
                              steer: routes.steer == .steer ? {
                                  session.send(steer: true)
                                  followAfterSending()
                              } : nil,
+                             queue: steers ? { send(steer: false) } : nil,
                              stop: { session.stop() },
                              sendOptions: sendOptions(routes),
                              attachments: attachments,
@@ -508,9 +514,9 @@ struct ChatThreadView: View {
     private var slashCommands: [ChatSlashCommand] { session.slashCommands }
 
     /// The composer's send, its button and Return (`MobileChatSession.sendFromComposer`): the slash list's lit row,
-    /// "/terminal", or the draft.
-    private func send() {
-        switch session.sendFromComposer(showTerminal: showTerminal.map { terminal in { terminal.show() } }) {
+    /// "/terminal", or the draft, steered into the running turn when `steer`.
+    private func send(steer: Bool = false) {
+        switch session.sendFromComposer(steer: steer, showTerminal: showTerminal.map { terminal in { terminal.show() } }) {
         case .completed: focused = true
         case .sent: followAfterSending()
         case .terminal: break
@@ -565,6 +571,7 @@ struct ChatThreadView: View {
     /// The composer's hint (M4a, M4c, M5a, M5c).
     private var placeholder: String {
         if session.route(steer: false) == .outbox { return "Queue a message…" }
+        if sendWhileWorking == .steer, session.route(steer: true) == .steer { return "Steer the current turn…" }
         if !session.queueRows.isEmpty { return "Queue another…" }
         return session.working ? "Queue a message…" : "Message"
     }
@@ -614,7 +621,7 @@ struct ChatThreadView: View {
                     .transition(row.id == session.optimisticPrompt?.id ? sendRise : .identity)
             case .approval(let approval):
                 if approval.pending.questions != nil {
-                    ChatQuestionFormView(approval: approval) { session.answer(approval, answers: $0) }
+                    ChatQuestionFormView(approval: approval) { session.answerDraft(approval, skip: $0) }
                 } else {
                     ChatApprovalView(approval: approval) { session.answer(approval, with: $0) }
                 }
@@ -864,6 +871,20 @@ struct ChatThreadView: View {
         if abs(scroll.contentOffset.y - target) > 0.5 { scroll.contentOffset.y = target }
     }
 
+    /// The scroll view came into its window. Its layouts before went unread (`ChatFollower.attached`): on a busy phone
+    /// the bars' inset of a push arrives in one of them and lowers the offset, with nothing changing after to tell. The
+    /// thread is put where it shows: the place being put back, else its end while it follows; an offset from before is
+    /// no scroll of the user's.
+    private func attached() {
+        updateFollow { $0.attached() }
+        guard let scroll = follower.scrollView, scroll.contentSize.height > 0 else { return }
+        if follower.restoring != nil { return applyReading() }
+        guard shownFollow.following else { return }
+        let end = max(-scroll.adjustedContentInset.top,
+                      scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
+        if scroll.contentOffset.y < end - 0.5 { scroll.contentOffset.y = end }
+    }
+
     /// Keeps where the thread is being read (`MobileChatSession.readingPosition`): the first row drawn whose bottom is
     /// below the visible top, and how far it is scrolled past; nothing while the thread follows its end.
     private func saveReading() {
@@ -1034,15 +1055,19 @@ struct ChatReadingPosition: Equatable {
 /// Finds the thread's `UIScrollView` for `ChatFollower`, as `ChatKeyboardDragDismissal` finds it for its drag.
 struct ChatScrollViewProbe: UIViewRepresentable {
     let follower: ChatFollower
+    /// The scroll view came into a window (`ChatThreadView.attached`).
+    let attached: () -> Void
 
-    func makeUIView(context: Context) -> Probe { Probe(follower: follower) }
-    func updateUIView(_ view: Probe, context: Context) {}
+    func makeUIView(context: Context) -> Probe { Probe(follower: follower, attached: attached) }
+    func updateUIView(_ view: Probe, context: Context) { view.attached = attached }
 
     final class Probe: UIView {
         private weak var follower: ChatFollower?
+        var attached: () -> Void
 
-        init(follower: ChatFollower) {
+        init(follower: ChatFollower, attached: @escaping () -> Void) {
             self.follower = follower
+            self.attached = attached
             super.init(frame: .zero)
             isUserInteractionEnabled = false
             isAccessibilityElement = false
@@ -1057,6 +1082,7 @@ struct ChatScrollViewProbe: UIViewRepresentable {
             var view = superview
             while let current = view, !(current is UIScrollView) { view = current.superview }
             follower?.scrollView = view as? UIScrollView
+            attached()
         }
     }
 }

@@ -68,6 +68,8 @@ extension MobileReview {
         do {
             guard let text = try await reader.text(FilesPath.join(root, path)) else { return .unknown }
             return .lines(ReviewRefresh.lines(text))
+        } catch ReviewGitError.notFound, ReviewGitError.notDirectory {
+            return .gone
         } catch let failure as HelperFailure where failure.code == "not_found" || failure.code == "not_directory" {
             return .gone
         } catch {

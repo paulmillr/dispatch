@@ -161,7 +161,7 @@ final class ClaudeHookTests: XCTestCase {
             ]]]
             try System.write(JSONSerialization.data(withJSONObject: original), to: config)
             let audit = try await install(nil)
-            XCTAssertEqual(audit.installed, true, "An earlier approval opt-in counts as installed")
+            XCTAssertEqual(audit.installed, false, "An approval-only installation must be explicitly reinstalled")
             try await install(true)
             let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? [String: Any])
             let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
@@ -209,13 +209,13 @@ final class ClaudeHookTests: XCTestCase {
         }
     }
 
-    func testPreviousApprovalOptInSurvivesQuestionHookUpgrade() async throws {
+    func testApprovalOnlyHooksNeedAnExplicitInstall() async throws {
         try await settings {
             let command = try await command()
             let legacy: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [["type": "command", "command": command, "timeout": 60]]]]]]
             try System.write(JSONSerialization.data(withJSONObject: legacy), to: config)
             let audit = try await install(nil)
-            XCTAssertEqual(audit.installed, true)
+            XCTAssertEqual(audit.installed, false)
             try await install(true)
             let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? [String: Any])
             let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
@@ -223,19 +223,22 @@ final class ClaudeHookTests: XCTestCase {
         }
     }
 
-    /// An approval-only opt-in from an older helper: its audit shows the upgrade and the next launch installs the
-    /// lifecycle hooks (subagents among them). A complete installation is never rewritten, so a reformatted file
+    /// An approval-only installation is incomplete and requires an explicit install to add current hooks.
+    /// A complete installation is never rewritten, so a reformatted file
     /// audits without an edit and launches leave it alone.
-    func testLaunchUpgradesOlderOptInAndLeavesCompleteInstallations() async throws {
+    func testExplicitInstallReplacesIncompleteHooksAndLeavesCompleteInstallations() async throws {
         try await settings {
             let command = try await command()
             let legacy: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [["type": "command", "command": command, "timeout": 60]]]]]]
             try System.write(JSONSerialization.data(withJSONObject: legacy), to: config)
             let audit = try await install(nil)
-            XCTAssertEqual(audit.installed, true)
+            XCTAssertEqual(audit.installed, false)
             XCTAssertTrue(audit.edits.contains { $0.before != $0.after }, "The audit shows the upgrade")
             let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
             chat.loadLaunches()
+            await chat.integrationChanges?.value
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary, legacy as NSDictionary)
+            try await install(true)
             let config = config
             try await TestSupport.eventually(timeout: .seconds(10)) {
                 let root = try? JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary

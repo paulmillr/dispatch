@@ -1,52 +1,6 @@
 import Foundation
 import Observation
 
-/// The helper's stats plugin as the phone reads it (helper/PROTOCOL.md: `stats.sample`, `stats.processes`,
-/// `stats.disks`). The Mac decodes the same shapes in `Dispatch/Stats/HelperStatistics.swift`, which is bound to its
-/// AppKit helper connection; these are the fields the phone shows.
-enum HostStatsWire {
-    struct Sample: Decodable, Sendable {
-        let cpu: Double?
-        let load: [Double]
-        /// `[total, used]` bytes.
-        let memory: [UInt64]?
-
-        init(from decoder: any Decoder) throws {
-            let fields = try decoder.container(keyedBy: CodingKeys.self)
-            cpu = try fields.decodeIfPresent(Double.self, forKey: .cpu)
-            load = try fields.decodeIfPresent([Double].self, forKey: .load) ?? []
-            memory = try fields.decodeIfPresent([UInt64].self, forKey: .memory)
-        }
-
-        private enum CodingKeys: String, CodingKey { case cpu, load, memory }
-    }
-
-    struct Row: Decodable, Sendable {
-        let pid: UInt32
-        let name: String
-        let cpu: Double?
-        let rss: UInt64?
-    }
-
-    /// `(rows, truncated)`.
-    struct Processes: Decodable, Sendable {
-        let rows: [Row]
-        let partial: Bool
-
-        init(from decoder: any Decoder) throws {
-            var values = try decoder.unkeyedContainer()
-            rows = try values.decode([Row].self)
-            partial = try values.decode(Bool.self)
-        }
-    }
-
-    struct Disk: Decodable, Sendable {
-        let paths: [String]
-        let total: UInt64
-        let available: UInt64
-    }
-}
-
 /// One host's stats (docs/ios.md, Host stats): CPU, load, memory, the home volume's disk and the top processes from its
 /// helper, and the last 15 minutes of CPU and memory as 60 bars of 15 s. Owned by the `HostSession`, which hands it
 /// each helper connection's client (`attach`); it samples only while `active` (the app in the foreground) and a helper
@@ -355,21 +309,8 @@ final class HostStatistics {
 
     nonisolated static func bars(_ history: [Point], metric: Metric, at now: Date, count: Int = barCount,
                                  hold: TimeInterval = barHold) -> [Double?] {
-        let span = window / Double(count)
-        func slot(_ date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate / span).rounded(.down)) }
-        let first = slot(now) - (count - 1)
-        var bars = [Double?](repeating: nil, count: count), held = bars
-        var previous: Date?
-        for point in history where point.date <= now {
-            defer { previous = point.date }
-            guard let raw = metric == .cpu ? point.cpu : point.memory, raw.isFinite else { continue }
-            let value = min(100, max(0, raw)), own = slot(point.date) - first
-            if bars.indices.contains(own) { bars[own] = max(bars[own] ?? 0, value) }
-            guard let previous, point.date > previous, point.date.timeIntervalSince(previous) <= hold else { continue }
-            let gap = max(0, slot(previous) + 1 - first), end = min(count, own)
-            if gap < end { for index in gap..<end { held[index] = max(held[index] ?? 0, value) } }
-        }
-        return zip(bars, held).map { $0 ?? $1 }
+        StatisticsHistory.bars(history, at: now, window: window, count: count, hold: hold,
+                               date: { $0.date }, value: { metric == .cpu ? $0.cpu : $0.memory })
     }
 
     /// When bar `index` of `bars(_:at:)` starts.

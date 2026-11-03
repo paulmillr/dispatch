@@ -12,8 +12,8 @@ final class TerminalContrastTests: XCTestCase {
         XCTAssertEqual(legacy.textContrast, .lightThemes, "light schemes improve by default, dark ones don't")
         XCTAssertTrue(legacy.textContrast.improves(dark: false))
         XCTAssertFalse(legacy.textContrast.improves(dark: true))
-        // The old switch: on stays on everywhere; off, written by every save, takes the default.
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"improveTextContrast":true}"#.utf8)).textContrast, .always)
+        // The removed switch has no effect on the current contrast default.
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"improveTextContrast":true}"#.utf8)).textContrast, .lightThemes)
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"improveTextContrast":false}"#.utf8)).textContrast, .lightThemes)
         XCTAssertFalse(TextContrast.never.improves(dark: false))
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)

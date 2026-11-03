@@ -1,43 +1,43 @@
 {
   "codex": {
-    "version": "0.164.0",
+    "version": "0.166.0",
     "check": [
       "--version"
     ],
     "banner": "codex-cli {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/openai/codex/releases/download/rust-v0.164.0/codex-package-aarch64-apple-darwin.tar.gz",
-        "sha256": "dd99e9092270691a67bdde7be04ac283dea9da8e86cbde356c2cc851a79205fa",
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-apple-darwin.tar.gz",
+        "sha256": "55a440cb579f970abe7c79ab181e54b0ea4c419be99f333bbd868eebac9c21f0",
         "binary": "bin/codex"
       }
     }
   },
   "claude": {
-    "version": "2.1.311",
+    "version": "2.1.316",
     "check": [
       "--version"
     ],
     "banner": "{version} (Claude Code)",
     "archives": {
       "arm64": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.311/darwin-arm64/claude",
-        "sha256": "85d8c08707fcfd1e78ffa0204eefbc6ec9e4fe22f375fb2767ef85d957ed3161",
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.316/darwin-arm64/claude",
+        "sha256": "64c327e92b2c5e0f78c0a980c5a518121e1f0d140ca771ca5dd4488d1a2dcb3f",
         "binary": "bin/claude",
         "format": "binary"
       }
     }
   },
   "pi": {
-    "version": "1.4.0",
+    "version": "1.5.0",
     "check": [
       "--version"
     ],
     "banner": "{version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v1.4.0/pi-darwin-arm64.tar.gz",
-        "sha256": "79d9979d76a2a5adb7c28e27e9b44629928ccd0dc9fbb6ae7217860bd5e8be5d",
+        "url": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-darwin-arm64.tar.gz",
+        "sha256": "a9bf0d82d58d2a7d337f4ae4171b5fc9ebffe42509527a831364c4b65adf2cdf",
         "binary": "pi/pi"
       }
     }
@@ -58,16 +58,16 @@
     }
   },
   "tmux": {
-    "version": "3.7",
+    "version": "3.8",
     "check": [
       "-V"
     ],
     "banner": "tmux {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz",
-        "sha256": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
-        "binary": "tmux-3.7/tmux"
+        "url": "https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz",
+        "sha256": "e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e",
+        "binary": "tmux-3.8/tmux"
       }
     },
     "sources": [
@@ -103,7 +103,7 @@
         ]
       },
       {
-        "directory": "tmux-3.7",
+        "directory": "tmux-3.8",
         "commands": [
           [
             "./configure",

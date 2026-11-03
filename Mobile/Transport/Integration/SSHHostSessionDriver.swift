@@ -215,7 +215,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         do {
             let hello: HelperSession.Info
             do {
-                hello = try await connection.request("hello", params: Hello(features: Self.features))
+                hello = try await connection.request("hello", params: HelperHello(features: Self.features))
             } catch let error where !(error is CancellationError) {
                 // The channel closed under the request: a helper that exited (it could not run, its cached copy failed the
                 // check) says why in its status and on stderr.
@@ -224,15 +224,15 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 }
                 throw HelperUnavailable("The helper on \(host.name) did not answer: \(HostConnectionPolicy.describe(error))")
             }
-            guard hello.version == HelperBinary.version else {
+            do {
+                try await hello.configure(connection)
+            } catch HelperHello.Failure.protocolVersion {
                 throw HelperUnavailable("The helper on \(host.name) speaks another protocol version. Update Dispatch.")
-            }
-            guard let limit = hello.limit, let chunkKind = hello.chunkKind, let chunkLimit = hello.chunkLimit else {
+            } catch HelperHello.Failure.transportLimits {
                 throw HelperUnavailable("The helper on \(host.name) did not report its transport limits.")
             }
-            try await connection.configure(limit: limit, chunkKind: chunkKind, chunkLimit: chunkLimit, ops: hello.ops)
             let client = HelperClient(connection)
-            async let kinds: [TabsMultiplexer] = connection.request("multiplexers.list", params: [String: String]())
+            async let kinds = client.multiplexers()
             async let backends = client.backends()
             let rows = try await kinds
             return HelperLink(login: login, process: process, client: client, hello: hello, rows: rows,
@@ -374,7 +374,6 @@ struct SSHHostSessionDriver: HostSessionDriver {
         error is HostRefusal || HostConnectionPolicy.refused(error)
     }
 
-    private struct Hello: Encodable, Sendable { let features: [String] }
 }
 
 /// The helper started but cannot be used on this connection (no answer to `hello`, another protocol version, no transport

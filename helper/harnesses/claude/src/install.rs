@@ -1,6 +1,6 @@
 //! Native settings installation; every filesystem operation is a System job.
 use crate::{
-    history::{error, text},
+    history::error,
     settings,
 };
 use dispatch_helper_core::{
@@ -68,22 +68,7 @@ impl Setup {
             .map(Json::parse)
             .transpose()
             .map_err(|e| error("settings", e.message))?;
-        self.installed = doc.as_ref().is_some_and(|doc| {
-            doc.root()
-                .get("hooks")
-                .and_then(|hooks| hooks.get("PermissionRequest"))
-                .and_then(|groups| groups.array())
-                .into_iter()
-                .flatten()
-                .any(|group| {
-                    group
-                        .get("hooks")
-                        .and_then(|handlers| handlers.array())
-                        .into_iter()
-                        .flatten()
-                        .any(|handler| text(handler, "command") == Some(&self.command))
-                })
-        });
+        self.installed = settings::complete(doc.as_ref(), &self.command);
         // Remote setup appends only missing handlers like the old SSH helper
         // (c51466a hooks.rs:85-166; its install_for has no remove, so turning the integration off
         // leaves the remote file as it is); local setup keeps the app's merge
@@ -101,9 +86,8 @@ impl Setup {
         self.after = match (self.remote, self.enabled) {
             (true, _) => settings::installation(self.before.as_deref(), &self.command)?
                 .unwrap_or_else(|| self.before.clone().unwrap_or_default()),
-            // A complete installation is never rewritten, so an audit shows no edit; an older
-            // opt-in missing hooks shows the upgrade an install makes.
-            (false, None | Some(true)) if settings::complete(doc.as_ref(), &self.command) => {
+            // A complete installation is never rewritten. An incomplete one needs an explicit install.
+            (false, None | Some(true)) if self.installed => {
                 self.before.clone().unwrap_or_default()
             }
             _ => settings::merge(doc.as_ref(), &self.command, self.enabled.unwrap_or(true))?,

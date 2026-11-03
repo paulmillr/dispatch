@@ -155,6 +155,8 @@ final class PendingApproval: Identifiable {
     let questions: ClaudeQuestions?
     let questionDraft: ClaudeQuestionDraft?
     private(set) var answers: [String: String]?
+    /// Present only for an explicit native-draft submission; string-payload callers keep their own semantics.
+    private(set) var structuredAnswers: [HelperChat.Answer]?
     private(set) var decision: Decision?
     @ObservationIgnored private let complete: (PendingApproval) -> Void
     init(key: String, interaction: String? = nil, operation: String, item: ChatItem? = nil, turnID: String? = nil, toolItemID: String? = nil,
@@ -177,6 +179,14 @@ final class PendingApproval: Identifiable {
         // Questions require the explicit, complete answer payload below.
         guard questions == nil || value != .allow else { return }
         decision = value
+        complete(self)
+    }
+    /// Freeze both the receipt and the typed wire answers before invoking delivery.
+    func answerDraft() {
+        guard decision == nil, let snapshot = questionDraft?.replySnapshot else { return }
+        answers = snapshot.displayAnswers
+        structuredAnswers = snapshot.responses
+        decision = .allow
         complete(self)
     }
     func answer(_ answers: [String: String]) {
@@ -382,7 +392,15 @@ struct ChatSendFlight: Equatable {
 }
 
 /// How much of a tool group the transcript shows: nothing but its header, the step the live turn is on, or all of it.
-enum ChatToolGroupDisclosure { case collapsed, current, all }
+/// How much of a tool group shows: none of its steps, only the one the agent is on, or all of them. Also Settings ›
+/// Chat mode's Tool steps, how groups start (`ChatSession.toolSteps`) until the user opens or closes one.
+enum ChatToolGroupDisclosure: String, Codable, TitledChoice, Sendable {
+    case collapsed, current, all
+    var id: Self { self }
+    var title: String {
+        switch self { case .collapsed: "Collapsed"; case .current: "Current step"; case .all: "All steps" }
+    }
+}
 
 struct ChatTranscriptRow: Identifiable {
     let id: String
@@ -467,6 +485,38 @@ enum ChatQueuePause: Equatable {
         case .needsEdit(let reason): reason
         }
     }
+}
+
+/// A setting's choices, each with the title Settings lists it by (a dropdown on the Mac, a picker on iPhone).
+protocol TitledChoice: CaseIterable, Identifiable, Equatable {
+    var title: String { get }
+}
+
+/// What the composer's send (Return, the send button's tap) does with a message while the agent works: queue it for
+/// after the turn, or steer it into the turn. The other way stays one key away (⌥⏎, send's long press). Mac:
+/// Settings › Features › Chat mode; iPhone: Settings › Chat.
+enum ChatSendWhileWorking: String, Codable, TitledChoice, Sendable {
+    case queue, steer
+    var id: Self { self }
+    var title: String { self == .queue ? "Queue" : "Steer" }
+}
+
+/// What a tab shows when an agent starts in its terminal and Chat finds it (Mac: Settings › Features › Chat mode;
+/// iPhone: Settings › Chat, for an agent tab opened from Spaces). The tab's Chat switch shows the other.
+enum ChatAgentStart: String, Codable, TitledChoice, Sendable {
+    case chat, terminal
+    var id: Self { self }
+    var title: String { self == .chat ? "Chat" : "Terminal" }
+}
+
+/// Esc in a single-line draft while the agent works (a hardware keyboard on iPhone): stop the turn at once, or only
+/// when pressed again within a second, so a stray Esc never interrupts. The Stop button always stops at once.
+enum ChatEscapeStop: String, Codable, TitledChoice, Sendable {
+    case once, twice
+    var id: Self { self }
+    var title: String { self == .once ? "Pressed once" : "Pressed twice" }
+    /// How long the first press waits for the second.
+    static let window: TimeInterval = 1
 }
 
 /// Only transport failures proven to precede any input may retry automatically.
@@ -781,6 +831,8 @@ final class ChatSession: Identifiable {
     static let massChange = 10
 
     var collapsedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil } }
+    /// Settings › Chat mode's Tool steps (`ChatCoordinator.toolSteps`): how groups show until opened or closed.
+    var toolSteps = ChatToolGroupDisclosure.current { didSet { if toolSteps != oldValue { cachedVisibleRows = nil } } }
     var collapsedLiveTools: Set<String> = []
 
     /// The turn the agent is working on. A prompt shows the agent busy before its turn starts, while `activeTurnID`
@@ -800,11 +852,16 @@ final class ChatSession: Identifiable {
         return expanded.contains(row.id) || (newestPatch && !collapsedLiveTools.contains(row.id))
     }
 
-    /// A group the user opened shows all its steps. The live turn's newest group, unless the user closed it, shows
-    /// just the step the agent is on: the next step replaces it.
+    /// A group the user opened shows all its steps, one they closed none. Otherwise Settings' Tool steps decides: by
+    /// default the live turn's newest group shows just the step the agent is on (the next step replaces it).
     func groupDisclosure(_ group: ChatToolGroup, turnID: String?) -> ChatToolGroupDisclosure {
         if expandedToolGroups.contains(group.id) { return .all }
-        return !collapsedToolGroups.contains(group.id) && groupIsLive(group, turnID: turnID) ? .current : .collapsed
+        if collapsedToolGroups.contains(group.id) { return .collapsed }
+        switch toolSteps {
+        case .all: return .all
+        case .current: return groupIsLive(group, turnID: turnID) ? .current : .collapsed
+        case .collapsed: return .collapsed
+        }
     }
 
     /// The live turn's newest group: the agent is on its last step, so neither shows a time yet.
@@ -826,7 +883,7 @@ final class ChatSession: Identifiable {
     /// group never mounts thousands of tool cards inside an eager container.
     var visibleTranscriptRows: [ChatTranscriptRow] {
         let rows = transcriptRows
-        _ = busy; _ = activeTurnID; _ = expandedToolGroups; _ = collapsedToolGroups
+        _ = busy; _ = activeTurnID; _ = expandedToolGroups; _ = collapsedToolGroups; _ = toolSteps
         if let cachedVisibleRows { return cachedVisibleRows }
         var visible: [ChatTranscriptRow] = []
         var shownNow: [String: ShownStep] = [:]
@@ -1201,6 +1258,9 @@ final class ChatSession: Identifiable {
     /// Why the last attach was refused (too many, too large); shown beside the attachment chips.
     var attachmentError: String?
     var editingQueuedID: UUID?
+    /// Esc was pressed once to stop (Settings: Esc stops the agent when pressed twice): the composer says to press it
+    /// again; the time of that press, from the key event.
+    var stopArmedAt: TimeInterval?
     var editingQueuedDraftID: UUID?
     var selectedQueuedID: UUID?
     var hoveredQueuedID: UUID?

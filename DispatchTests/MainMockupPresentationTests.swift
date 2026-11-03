@@ -35,7 +35,7 @@ final class MainMockupPresentationTests: XCTestCase {
         let terminal = try XCTUnwrap(runtime.views[tab.id])
         TerminalTestSupport.send("printf 'THEME_%s\\n' READY", to: terminal)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: terminal).contains("THEME_READY") }
-        for theme in SidebarTheme.allCases {
+        for theme in SidebarTheme.allCases where AppTheme(rawValue: theme.rawValue) != nil {
             controller.settings.values.appTheme = AppTheme(rawValue: theme.rawValue)!
             try runtime.apply(controller.settings.values)
             try await TestSupport.eventually { SidebarThemeStore.shared.current == theme }

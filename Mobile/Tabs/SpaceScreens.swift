@@ -268,7 +268,7 @@ enum SpaceCloseCopy {
 }
 
 /// P2e: the New tab capsule. A tap opens a shell in this space (a new shell on a plain host); held, the menu: Shell (the
-/// shell and folder it opens in), the agents the host can start with the model New chat would use, and "In another
+/// shell and folder it opens in), the agents the host can start (each on its own default model), and "In another
 /// space…" (New tab's picker). While an agent picked there starts, the capsule says so with a spinner ("Starting
 /// Claude…", the Mac's launch cover) until its tab opens in Chat.
 struct SpaceNewTabButton: View {
@@ -333,7 +333,7 @@ struct SpaceNewTabMenu: View {
                         Button { act { navigator.startAgent(choice, in: space) } } label: {
                             Text(choice.label)
                             if let note = choice.note { Text(note) }
-                            Image(systemName: TabSegment.chat.symbol)
+                            Image(symbol: TabSegment.chat.symbol)
                         }
                         .disabled(navigator.startingAgents[space.ref] != nil)
                     }
@@ -359,11 +359,11 @@ struct SpaceNewTabMenu: View {
     }
 }
 
-/// An agent New tab's menu can start (P2e): the helper's launch key and label, and the model New chat would use.
+/// An agent New tab's menu can start (P2e): the helper's launch key and label, and a note under it.
 struct SpacesAgentChoice: Identifiable, Hashable, Sendable {
     let key: String
     let label: String
-    /// The model it starts on ("fable-5.1"), or its version; nil says nothing.
+    /// A line under the label (the sample's model or version); nil says nothing.
     var note: String? = nil
     var id: String { key }
 }

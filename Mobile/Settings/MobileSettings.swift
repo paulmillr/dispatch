@@ -30,8 +30,6 @@ final class MobileSettings {
     nonisolated static let themeKey = "theme"
     nonisolated static let terminalFontKey = "terminal.font"
     nonisolated static let terminalSchemeKey = "terminal.scheme"
-    /// The old Improve text contrast switch, read once by `TerminalStyle` when there is no `textContrastKey`.
-    nonisolated static let terminalContrastKey = "terminal.contrast"
     nonisolated static let textContrastKey = "terminal.textContrast"
     nonisolated static let boldIsBrightKey = "terminal.boldIsBright"
     nonisolated static let cursorKey = "terminal.cursor"
@@ -41,6 +39,15 @@ final class MobileSettings {
     nonisolated static let lineSpacingKey = "text.lineSpacing"
     nonisolated static let chatFontKey = "chat.font"
     nonisolated static let chatTextSizeKey = "chat.textSize"
+    /// Send's tap (and Return) while the agent works, as the Mac's Settings › Chat mode; the composer reads it
+    /// (`@AppStorage`).
+    nonisolated static let chatSendWhileWorkingKey = "chat.sendWhileWorking"
+    /// New drafts start in editor mode (`ChatDraft.editorByDefault`), as the Mac's Settings › Chat mode.
+    nonisolated static let chatEditorByDefaultKey = "chat.editorByDefault"
+    /// What an agent tab opens on (`TabSegment.initial`), as the Mac's Settings › Chat mode.
+    nonisolated static let chatAgentStartKey = "chat.agentStart"
+    /// A hardware keyboard's Esc stops the turn once or twice pressed; the composer reads it (`@AppStorage`).
+    nonisolated static let chatEscapeStopKey = "chat.escapeStop"
     /// The composer's code keys row ("+" › Show code keys), off by default; the composer reads it (`@AppStorage`).
     nonisolated static let composerCodeKeysKey = "composer.codeKeys"
     nonisolated static let notifyNeedsYouKey = "notify.needsYou"
@@ -147,6 +154,34 @@ final class MobileSettings {
         didSet { if chatTextSize != oldValue { defaults.set(chatTextSize.rawValue, forKey: Self.chatTextSizeKey) } }
     }
 
+    /// An agent tab opens on Chat or on its terminal.
+    var chatAgentStart: ChatAgentStart {
+        didSet {
+            TabSegment.agentStart = chatAgentStart
+            if chatAgentStart != oldValue { defaults.set(chatAgentStart.rawValue, forKey: Self.chatAgentStartKey) }
+        }
+    }
+
+    /// Esc from a hardware keyboard stops the running turn at once, or only pressed twice.
+    var chatEscapeStop: ChatEscapeStop {
+        didSet { if chatEscapeStop != oldValue { defaults.set(chatEscapeStop.rawValue, forKey: Self.chatEscapeStopKey) } }
+    }
+
+    /// New drafts start in editor mode: a hardware keyboard's Return adds a line and ⌘Return sends.
+    var chatEditorByDefault: Bool {
+        didSet {
+            ChatDraft.editorByDefault = chatEditorByDefault
+            if chatEditorByDefault != oldValue { defaults.set(chatEditorByDefault, forKey: Self.chatEditorByDefaultKey) }
+        }
+    }
+
+    /// Queue (send's long press steers) or steer (its long press queues) a message while the agent works.
+    var chatSendWhileWorking: ChatSendWhileWorking {
+        didSet {
+            if chatSendWhileWorking != oldValue { defaults.set(chatSendWhileWorking.rawValue, forKey: Self.chatSendWhileWorkingKey) }
+        }
+    }
+
     /// What the notifications say (G5, `AgentAlerts`): an agent that needs you (approvals and questions notify
     /// whatever this says), one that finished its turn, one that stopped while working.
     var notifyNeedsYou: Bool {
@@ -239,6 +274,10 @@ final class MobileSettings {
         lineSpacing = style.lineSpacing
         chatFont = defaults.string(forKey: Self.chatFontKey).flatMap(MobileChatFont.init(rawValue:)) ?? .system
         chatTextSize = defaults.string(forKey: Self.chatTextSizeKey).flatMap(ChatTextSize.init(rawValue:)) ?? .standard
+        chatSendWhileWorking = defaults.string(forKey: Self.chatSendWhileWorkingKey).flatMap(ChatSendWhileWorking.init(rawValue:)) ?? .queue
+        chatEditorByDefault = defaults.bool(forKey: Self.chatEditorByDefaultKey)
+        chatAgentStart = defaults.string(forKey: Self.chatAgentStartKey).flatMap(ChatAgentStart.init(rawValue:)) ?? .chat
+        chatEscapeStop = defaults.string(forKey: Self.chatEscapeStopKey).flatMap(ChatEscapeStop.init(rawValue:)) ?? .once
         notifyNeedsYou = defaults.object(forKey: Self.notifyNeedsYouKey) as? Bool ?? true
         notifyFinished = defaults.object(forKey: Self.notifyFinishedKey) as? Bool ?? true
         notifyFailed = defaults.object(forKey: Self.notifyFailedKey) as? Bool ?? true
@@ -247,10 +286,9 @@ final class MobileSettings {
         notificationBadge = defaults.object(forKey: Self.notificationBadgeKey) as? Bool ?? true
         colorVision = defaults.string(forKey: Self.colorVisionKey).flatMap(ColorVision.init(rawValue:)) ?? .typical
         showHostColors = defaults.object(forKey: Self.hostColorsKey) as? Bool ?? true
-        // The old contrast switch is saved under the new key, which the Settings app's page shows.
-        if defaults.string(forKey: Self.textContrastKey) == nil, defaults.object(forKey: Self.terminalContrastKey) != nil {
-            defaults.set(textContrast.rawValue, forKey: Self.textContrastKey)
-        }
+        // What the shared models read (`didSet` does not run in an initializer).
+        ChatDraft.editorByDefault = chatEditorByDefault
+        TabSegment.agentStart = chatAgentStart
     }
 
     @ObservationIgnored private var outsideChanges: (any NSObjectProtocol)?
@@ -298,6 +336,10 @@ final class MobileSettings {
         take(\.lineSpacing)
         take(\.chatFont)
         take(\.chatTextSize)
+        take(\.chatSendWhileWorking)
+        take(\.chatEditorByDefault)
+        take(\.chatAgentStart)
+        take(\.chatEscapeStop)
         take(\.notifyNeedsYou)
         take(\.notifyFinished)
         take(\.notifyFailed)

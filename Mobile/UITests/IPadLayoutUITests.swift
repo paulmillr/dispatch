@@ -54,7 +54,7 @@ final class IPadLayoutUITests: XCTestCase {
         let full = window.size == screen || window.size == CGSize(width: screen.height, height: screen.width)
         if entry == "Fill", full { return }
         if full { drag(by: CGVector(dx: -150, dy: -150)) }
-        let controls = springboard.descendants(matching: .any)["window-controls:yachts.dispatch.mobile"].firstMatch
+        let controls = springboard.descendants(matching: .any)["window-controls:\(MobileUITests.targetBundleIdentifier)"].firstMatch
         XCTAssertTrue(controls.waitForExistence(timeout: 5), "window controls")
         controls.tap()
         let zoom = springboard.buttons["Zoom-button"].firstMatch

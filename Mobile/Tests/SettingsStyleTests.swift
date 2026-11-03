@@ -98,11 +98,11 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertTrue(settings.boldIsBright, "the rest stays")
     }
 
-    /// The old contrast switch was saved only when changed: on stays on, off stays off.
-    func testTheOldContrastSwitchIsKept() {
-        for (stored, expected) in [(true, TextContrast.always), (false, .never)] {
+    /// Removed settings are ignored without overriding the current choice.
+    func testTheOldContrastSwitchIsIgnored() {
+        for (stored, expected) in [(true, TextContrast.lightThemes), (false, .lightThemes)] {
             let store = defaults()
-            store.set(stored, forKey: MobileSettings.terminalContrastKey)
+            store.set(stored, forKey: "terminal.contrast")
             XCTAssertEqual(MobileSettings(defaults: store).textContrast, expected)
         }
     }

@@ -85,7 +85,7 @@ final class WatchAgentsViewTests: XCTestCase {
     /// The phone's one bubble for every agent, by key or by the thread's label; the terminal without one.
     func testAgentMarks() {
         for agent in ["claude", "Claude Code", "Codex", "pi", "aider", "pipeline"] {
-            XCTAssertEqual(AgentsGlyph.symbol(agent), "text.bubble", agent)
+            XCTAssertEqual(AgentsGlyph.symbol(agent), "dispatch.chat", agent)
         }
         XCTAssertEqual(AgentsGlyph.symbol(nil), "apple.terminal")
         XCTAssertEqual(AgentsGlyph.symbol(""), "apple.terminal")

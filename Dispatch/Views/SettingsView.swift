@@ -10,6 +10,7 @@ struct SettingsView: View {
     static let typography = AppTypography(contentSize: 13)
     let store: SettingsStore
     let workspace: Workspace
+    var updater: AppUpdater? = nil
     var diagnostics: ChatViewportTrace = .shared
     var sshPermissions: SSHIntegrationPermissions = TerminalRuntime.shared.ssh.permissions
     var hasActiveSSHConnections: () -> Bool = { TerminalRuntime.shared.hasActiveSSHConnections }
@@ -59,9 +60,7 @@ struct SettingsView: View {
 
     /// More bundled coding fonts, listed under a separator after the main list (the default, Dispatch's own fonts and
     /// the installed ones). Commit Mono and Rec Mono don't mark themselves monospaced, so they are listed by name.
-    static let moreBundledFontFamilies = ["Cascadia Code", "CommitMono", "Geist Mono", "Hack", "Hasklig", "IBM Plex Mono",
-                                          "Inconsolata", "Intel One Mono", "Latin Modern Mono", "Maple Mono", "Rec Mono Casual",
-                                          "Victor Mono"]
+    static let moreBundledFontFamilies = TerminalFontCatalog.bundled.filter(\.listedExplicitly).map(\.family)
 
     static var moreFontFamilies: [String] {
         AppFont.register()
@@ -236,6 +235,29 @@ struct SettingsView: View {
     /// included, are under Features; troubleshooting is under Extra.
     private var generalSettings: some View {
         VStack(spacing: 8) {
+            if let updater {
+                settingsGroup("Updates") {
+                    row("Automatic updates", detail: "downloads new releases; asks before restarting",
+                        privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
+                        settingToggle("Automatic updates", isOn: Binding(
+                            get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
+                            .accessibilityIdentifier("settings-automatic-updates")
+                    }
+                    row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
+                        if updater.state == .ready {
+                            Button("Restart and install") { updater.restart() }
+                                .accessibilityIdentifier("settings-install-update")
+                        } else if updater.state == .available {
+                            Button("Download update") { updater.download() }
+                                .accessibilityIdentifier("settings-download-update")
+                        } else {
+                            Button("Check for updates") { updater.check() }
+                                .disabled(updater.busy)
+                                .accessibilityIdentifier("settings-check-updates")
+                        }
+                    }
+                }
+            }
             settingsGroup("Text") {
                 fontRow
                 sizeRow
@@ -566,7 +588,36 @@ struct SettingsView: View {
             // An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
             integrationCard("Chat mode", detail: "coding agent CLIs as chat",
                             privacy: "Adds hooks to the agents' own config and reads their transcripts, in memory only.",
-                            enabled: chatEnabled, fold: agentFold) {
+                            enabled: chatEnabled, fold: chatFold) {
+                cardOption("While the agent works", detail: "⏎ queues the message for after the turn, or steers it into the turn; ⌥⏎ does the other",
+                           detailBelow: true) {
+                    choice("While the agent works", $draft.chatSendWhileWorking)
+                        .accessibilityIdentifier("settings-chat-send-while-working")
+                }
+                cardOption("Editor mode by default", detail: "new drafts start in editor mode: ⏎ adds a line, ⌘⏎ sends; ⌘E switches",
+                           detailBelow: true) {
+                    settingToggle("Editor mode by default", isOn: $draft.chatEditorByDefault)
+                        .accessibilityIdentifier("settings-chat-editor-by-default")
+                }
+                cardOption("Open agents in", detail: "what a tab shows when an agent starts in its terminal; its Chat switch shows the other",
+                           detailBelow: true) {
+                    choice("Open agents in", $draft.chatAgentStart)
+                        .accessibilityIdentifier("settings-chat-agent-start")
+                }
+                cardOption("Esc stops the agent", detail: "twice: a second press within a second stops, so a stray Esc never interrupts",
+                           detailBelow: true) {
+                    choice("Esc stops the agent", $draft.chatEscapeStop)
+                        .accessibilityIdentifier("settings-chat-escape-stop")
+                }
+                cardOption("Tool steps", detail: "how a turn's tool groups show until you open or close one", detailBelow: true) {
+                    choice("Tool steps", $draft.chatToolSteps)
+                        .accessibilityIdentifier("settings-chat-tool-steps")
+                }
+                cardOption("Double ⌃D closes the tab", detail: "in an empty draft: quits the agent, or shows Terminal while it works",
+                           detailBelow: true) {
+                    settingToggle("Double ⌃D closes the tab", isOn: $draft.chatControlDExits)
+                        .accessibilityIdentifier("settings-chat-control-d")
+                }
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
             }.accessibilityIdentifier("settings-agents")
             if let chatError = TerminalRuntime.shared.chat.error {
@@ -1027,11 +1078,13 @@ struct SettingsView: View {
         }
     }
 
-    /// Chat mode's agents, counted in its header until opened.
-    private var agentFold: Fold {
+    /// Chat mode's options and agents, counted in its header until opened.
+    private var chatFold: Fold {
         let chat = TerminalRuntime.shared.chat
         // Every agent is on unless turned off here.
-        return Fold(title: "Agents", changed: chat.listedLaunches.filter { chat.disabledIntegrations.contains($0.key) }.count,
+        return Fold(title: "Options", changed: chat.listedLaunches.filter { chat.disabledIntegrations.contains($0.key) }.count
+                        + changed { [$0.chatSendWhileWorking, $0.chatEditorByDefault, $0.chatAgentStart, $0.chatEscapeStop,
+                                     $0.chatToolSteps, $0.chatControlDExits] },
                     isExpanded: $agentsExpanded)
     }
 
@@ -1214,6 +1267,13 @@ struct SettingsView: View {
         SettingsDropdown(title: title, selection: selection, choices: choices, fontName: fontName, fontScale: fontScale, checked: checked,
                          previewFont: previewFont)
             .frame(width: pickerWidth, height: typography.expanded(27))
+    }
+
+    /// A dropdown of an option's choices, by their titles.
+    private func choice<Option: TitledChoice>(_ title: String, _ selection: Binding<Option>) -> some View {
+        dropdown(title, selection: Binding(get: { selection.wrappedValue.title }, set: { picked in
+            if let option = Option.allCases.first(where: { $0.title == picked }) { selection.wrappedValue = option }
+        }), choices: Option.allCases.map(\.title))
     }
 
     private func settingToggle(_ title: String, isOn: Binding<Bool>, compact: Bool = false) -> some View {
@@ -1552,34 +1612,13 @@ struct ColorSchemes {
     /// true: light, false: dark, nil: either. A background darker than its text and well below the middle is dark;
     /// lighter than its text and well above it, light.
     static func side(_ theme: String) -> Bool? {
-        let rgb = { (c: (Double, Double, Double)) in ThemeColor(red: c.0, green: c.1, blue: c.2) }
-        guard let background = color("background", in: theme).map(rgb) else { return nil }
-        return TerminalTheme.side(background: background, foreground: color("foreground", in: theme).map(rgb))
+        TerminalTheme.parse(theme).side
     }
 
     /// A light or dark scheme's `SchemeGroup`, from its background and palette colors 1 to 6 (red to cyan).
     static func group(_ name: String, theme: String, light: Bool) -> SchemeGroup {
-        var accents: [Int: (Double, Double, Double)] = [:]
-        for line in theme.split(separator: "\n") {
-            // palette = N=#rrggbb
-            let parts = line.split(separator: "=", maxSplits: 2).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 3, parts[0] == "palette", let index = Int(parts[1]), (1...6).contains(index) else { continue }
-            accents[index] = color(parts[1], in: "\(parts[1]) = \(parts[2])")
-        }
-        return SchemeGroup.of(name, background: color("background", in: theme) ?? (0, 0, 0),
-                              accents: (1...6).compactMap { accents[$0] }, light: light)
-    }
-
-    /// A `key = #rrggbb` line's color as 0...1 components.
-    static func color(_ key: String, in theme: String) -> (Double, Double, Double)? {
-        for line in theme.split(separator: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 2, parts[0] == key else { continue }
-            var hex = parts[1].hasPrefix("#") ? String(parts[1].dropFirst()) : parts[1]
-            if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
-            guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
-            return (Double(value >> 16 & 0xFF) / 255, Double(value >> 8 & 0xFF) / 255, Double(value & 0xFF) / 255)
-        }
-        return nil
+        let parsed = TerminalTheme.parse(theme)
+        return SchemeGroup.of(name, background: parsed.hasBackground ? parsed.theme.background.components : (0, 0, 0),
+                              accents: parsed.theme.palette[1...6].compactMap { $0?.components }, light: light)
     }
 }

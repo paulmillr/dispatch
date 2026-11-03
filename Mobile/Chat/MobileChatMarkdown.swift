@@ -8,14 +8,7 @@ enum MobileChatMarkdown {
     /// system's monospaced one. `emphasis`: emphasized text's font where the text's own has no italic
     /// (`ChatTypography.emphasis`); nil lets the text's font italicize.
     static func text(_ text: String, code: Font? = nil, emphasis: Font? = nil) -> AttributedString {
-        let visible = TextRendering.visible(text)
-        var value = (try? AttributedString(
-            markdown: visible, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(visible)
-        let unsafe = value.runs.compactMap { run -> Range<AttributedString.Index>? in
-            guard let url = run.link, !isWebLink(url) else { return nil }
-            return run.range
-        }
-        for range in unsafe { value[range].link = nil }
+        var value = ChatMarkdownPolicy.inline(text)
         if let emphasis {
             let spans = value.runs.compactMap { run -> (Range<AttributedString.Index>, Bool)? in
                 guard let intent = run.inlinePresentationIntent, intent.contains(.emphasized), !intent.contains(.code) else { return nil }
@@ -31,8 +24,7 @@ enum MobileChatMarkdown {
     }
 
     static func isWebLink(_ url: URL) -> Bool {
-        ["http", "https"].contains(url.scheme?.lowercased()) && url.host != nil
-            && url.user == nil && url.password == nil
+        ChatMarkdownPolicy.isWebLink(url)
     }
 
     static var openURL: OpenURLAction {
@@ -104,8 +96,7 @@ struct MobileChatMarkdownView: View {
         var none = ChatSearchMarker(query: "", current: nil)
         let contents = contents(text, code: code, emphasis: emphasis, marker: &none)
         // A streamed message leaves a parse per update behind: the cache starts over rather than tracking use.
-        if parsed.count >= 512 { parsed.removeAll(keepingCapacity: true) }
-        parsed[key] = contents
+        parsed.insert(contents, for: key, source: text)
         return contents
     }
 
@@ -114,7 +105,8 @@ struct MobileChatMarkdownView: View {
         let code: Font?
         let emphasis: Font?
     }
-    private static var parsed: [Parsed: (blocks: [Content], truncated: Bool)] = [:]
+    private static var parsed = ChatTextCache<Parsed, (blocks: [Content], truncated: Bool)>(
+        limit: .init(count: ChatMarkdownCacheBounds.document.count, bytes: ChatMarkdownCacheBounds.document.bytes))
 
     /// The blocks as drawn: marked by an open search, else from the cache. A typing reply's are its safe part's.
     private var shownContents: (blocks: [Content], truncated: Bool) {

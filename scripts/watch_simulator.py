@@ -4,7 +4,7 @@ The watch is found by name or UDID as scripts/ios_simulator.py finds an iPhone. 
 with; a watch without a pair is paired with a simulator of our own, "Dispatch Watch iPhone" (an iPhone 18 Pro, made
 once), never with an existing phone that another run may be using. A phone can hold several watches but shows one:
 the pair is made active. simctl pairs only a phone and a watch of compatible runtimes, and a runtime may support few
-device types (Xcode 27's iOS 27.1 is the iPhone Duo's alone), so the phone is made on the newest iOS runtime that
+device types (Xcode 27.2 has an iOS 27.2 for the iPhone Duo alone), so the phone is made on the newest iOS runtime that
 supports its device type."""
 import json
 import re

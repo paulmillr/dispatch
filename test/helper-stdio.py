@@ -633,6 +633,8 @@ class Fixture:
             raise RuntimeError(f'{self.root} exists')
         host.mkdir(self.root)
         self.home = self.root / 'h'
+        # mkdir -p applies its mode only to the last component; a remote umask 0002 would otherwise make HOME 0775.
+        host.mkdir(self.home)
         # Programs where a user installs them; only the login shell's profile names the folder.
         bin = self.home / '.local/bin'
         host.mkdir(bin)
@@ -762,19 +764,20 @@ LogLevel ERROR
         return ['/usr/bin/ssh', *self.ssh_options, '127.0.0.1', command]
 
     # -- helper sessions ------------------------------------------------------------------------
-    def command(self, extra=None):
+    def command(self, extra=None, capabilities=CAPABILITIES):
         """The exact command line the phone runs on its exec channel. On a remote host whose sshd
         this test does not configure, the isolation variables are set by `env` instead. `extra`:
         test-only variables for this session."""
         extra = ' '.join(shlex.quote(f'{k}={v}') for k, v in (extra or {}).items())
+        capabilities = shlex.quote(capabilities)
         if self.host.remote:
             values = ' '.join(shlex.quote(f'{k}={v}') for k, v in
                               dict(HOME=str(self.home), SHELL='/bin/bash', **self.isolation).items())
             return (f'cd {shlex.quote(str(self.home))} && exec env -u TMUX -u TMUX_PANE {values} {extra} '
-                    f'{shlex.quote(str(self.installed))} --remote --capabilities {CAPABILITIES} --stdio')
+                    f'{shlex.quote(str(self.installed))} --remote --capabilities {capabilities} --stdio')
         if extra:
-            return f'exec env {extra} "$HOME/{self.relative}" --remote --capabilities {CAPABILITIES} --stdio'
-        return f'exec "$HOME/{self.relative}" --remote --capabilities {CAPABILITIES} --stdio'
+            return f'exec env {extra} "$HOME/{self.relative}" --remote --capabilities {capabilities} --stdio'
+        return f'exec "$HOME/{self.relative}" --remote --capabilities {capabilities} --stdio'
 
     async def connect(self, transport, name='helper', extra=None, limit=1 << 24):
         log = open(self.local / f'{name}.log', 'ab')
@@ -1390,10 +1393,11 @@ print(json.dumps(claude_fixture.environment(state, {port}, config)))
             session = await fixture.connect('ssh', 'survival-0')
             await self.hello(session)
             chats = await attach(session)
+            queued = {}
             for name, (agent, backend, node, chat, opened) in chats.items():
                 route = {'terminal': node['id'], 'session': agent['session']}
                 await session.request('queue.hold', dict(route, held=True))
-                await session.request('queue.add', dict(route, text='queued before the drop', mode='prompt', command=False))
+                queued[name] = await session.request('queue.add', dict(route, text='queued before the drop', mode='prompt', command=False))
             for mode in ('ssh-client', 'helper'):
                 helpers = fixture.helpers()
                 self.assertEqual(len(helpers), 1, helpers)
@@ -1442,10 +1446,14 @@ print(json.dumps(claude_fixture.environment(state, {port}, config)))
                     self.assertGreaterEqual(len(pages[name]['records']), agent['records'])
                     self.assertTrue(any('queued one edited' in r.get('text', '') for r in pages[name]['records']))
                     route = {'terminal': node['id'], 'session': agent['session']}
-                    # The helper-held queue lived in the dead helper.
+                    # The held queue lives on the host: both reconnects keep the exact accepted item.
                     queue = await session.request('queue.list', route)
                     print(f'{name} queue after {mode} drop:', queue, flush=True)
-                    self.assertEqual(queue, [])
+                    self.assertEqual(len(queue), 1)
+                    # Holds belong to the connection. Losing it can race a send claim; a lost claim must pause
+                    # for review (store::Op::Lost/Release), preserving the accepted identity, revision and content.
+                    self.assertIn(queue[0]['paused'], (None, 'uncertain'))
+                    self.assertEqual(queue, [dict(queued[name], paused=queue[0]['paused'])])
             # Input and approvals route to the new helper.
             # Chat input needs the client's screen: the phone attaches the agent's terminal and
             # publishes what its Term surface shows.
@@ -1795,7 +1803,7 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 if transport == 'pipes':
                     argv, env, cwd = [fixture.installed, '--remote', '--capabilities', '', '--stdio'], fixture.environment(), fixture.home
                 else:
-                    argv = fixture.ssh(f'exec "$HOME/{fixture.relative}" --remote --capabilities \'\' --stdio')
+                    argv = fixture.ssh(fixture.command(capabilities=''))
                     env = {k: v for k, v in os.environ.items() if k not in ('SSH_AUTH_SOCK', 'TMUX', 'TMUX_PANE')}
                     cwd = '/tmp'
                 probe = await Session.start(fixture.codec, argv, env, log=open(fixture.local / f'release-{transport}.log', 'ab'),

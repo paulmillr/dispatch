@@ -13,24 +13,26 @@ struct AgentsScreen: View {
     var body: some View {
         let rows = model.conversations
         let blocked = Self.blocked(hosts: model.hosts, conversations: rows)
-        TimelineView(.everyMinute) { context in
-            List {
-                // A row, not an overlay: it stays under the shell's notice banner and scrolls at large text sizes. Before
-                // the first snapshot it is the only word (the shell's banner leaves `waiting` to it).
-                if rows.isEmpty {
-                    AgentsEmptyState(waiting: model.snapshot == nil).listRowBackground(Color.clear)
-                }
-                ForEach(rows) { conversation in
-                    NavigationLink(value: conversation.key) {
+        List {
+            // A row, not an overlay: it stays under the shell's notice banner and scrolls at large text sizes. Before
+            // the first snapshot it is the only word (the shell's banner leaves `waiting` to it).
+            if rows.isEmpty {
+                AgentsEmptyState(waiting: model.snapshot == nil).listRowBackground(Color.clear)
+            }
+            ForEach(rows) { conversation in
+                NavigationLink(value: conversation.key) {
+                    // Each row keeps its own minute clock: a TimelineView around the List with another inside a row (a
+                    // working row's seconds) relaid the list out at full CPU for as long as the row showed.
+                    TimelineView(.everyMinute) { context in
                         AgentsRow(conversation: conversation, host: model.host(conversation.host), now: context.date)
                     }
-                    .id(conversation.key)
                 }
-                if !blocked.isEmpty {
-                    Section {
-                        ForEach(blocked, id: \.host.id) { entry in
-                            AgentsBlockedNote(message: entry.message)
-                        }
+                .id(conversation.key)
+            }
+            if !blocked.isEmpty {
+                Section {
+                    ForEach(blocked, id: \.host.id) { entry in
+                        AgentsBlockedNote(message: entry.message)
                     }
                 }
             }

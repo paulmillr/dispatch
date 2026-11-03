@@ -53,18 +53,11 @@ pub fn publish(
                 binding: binding.clone(),
                 state,
             });
-            let interactive = runtime
-                .borrow()
-                .registrations
-                .get(&binding.process.pid)
-                .is_some_and(|record| record.version == "extension-v2");
-            if interactive {
-                for interaction in interactions(value) {
-                    ui.update(Update::Interaction {
-                        binding: binding.clone(),
-                        interaction,
-                    });
-                }
+            for interaction in interactions(value) {
+                ui.update(Update::Interaction {
+                    binding: binding.clone(),
+                    interaction,
+                });
             }
             if let Some(partial) = value.get("partial") {
                 snapshot(runtime, ui, binding, partial, false);

@@ -2,7 +2,7 @@ import UIKit
 
 /// What a hardware key does in the composer: the Mac composer's rules (`ChatEditorTextView.keyDown`,
 /// `ChatComposer`'s editor-mode and interrupt shortcuts, the shortcut sheet in `ChatComposerShortcuts`). A draft is in
-/// editor mode (`ChatDraft.multiline`) once it holds a newline or after ⌘E; out of it Return sends, in it Return
+/// editor mode (`ChatDraft.multiline`) after ⌘E, a multi-line paste or by Settings' default; out of it Return sends, in it Return
 /// inserts a newline. Only hardware key events reach these rules (`UIKeyCommand`): the software keyboard's Return
 /// keeps inserting a newline, as on the phone.
 enum ComposerKeyAction: Equatable {

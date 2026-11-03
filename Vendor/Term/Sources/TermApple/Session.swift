@@ -9,7 +9,6 @@
 // Hosts call the surface inside `locked` and `pump()` after it.
 #if canImport(AppKit)
 import AppKit
-import CoreText
 import CoreVideo
 import IOSurface
 import Metal
@@ -41,6 +40,8 @@ public final class Session {
     var wide: WideColors?
     /// What changed since the last frame (the renderer rebuilds only that).
     var state = RenderState(), grid = (cols: 0, rows: 0)
+    /// The open search's refreshes while output comes, and whether a held-back one has a frame scheduled (under `lock`).
+    var snapshotCoordinator = SurfaceSnapshotCoordinator()
     /// A main-queue pump is on its way (under the lock); the scrollbar the last frame saw (drawLock).
     var posted = false, scrollbar: Scrollbar?
     /// Main-queue pumps output posted (under the lock).
@@ -88,11 +89,11 @@ public final class Session {
         metal = try MetalRenderer(device: device)
         let scale = RenderSize.contentScale(scale)
         (self.config, self.scale) = (config, scale)
-        cells = try Self.cells(config, scale)
+        cells = try SurfaceSessionCore.cells(config, scale)
         var options = HandlerOptions()
         (options.hostname, options.version, options.checksumReports) = (Array(machine.host.utf8), ghosttyVersion, config.checksumReports)
-        var size = RenderSize(screen: (800, 600), cell: Self.cell(cells))
-        size.pad(Self.padding(config, scale), .off)
+        var size = RenderSize(screen: (800, 600), cell: SurfaceSessionCore.cell(cells))
+        size.pad(SurfaceSessionCore.padding(config, scale), .off)
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)
         (o.blocks, o.kitty, o.maxScrollbackBytes, o.maxScrollbackLines, o.kittyImageStorageLimit) =
             (blocks, allowHostMedia ? .apple : .appleInline, config.scrollbackLimitBytes, config.scrollbackLimitLines, config.imageStorageLimitBytes)
@@ -215,11 +216,7 @@ public final class Session {
         if restart, blinkTimer != nil { runBlink() }
         locked {
             posted = false
-            for _ in 0..<2 {   // handling messages can queue replies again
-                surface.drain(reply: { pty?.write($0) }, event: { _ in })
-                surface.takeMessages(surface.handle)
-            }
-            surface.reportScrollbar()
+            SurfaceSessionCore.pump(surface, reply: { pty?.write($0) })
             if surface.terminal.grid != grid {
                 grid = surface.terminal.grid
                 pty?.resize(winsize())
@@ -320,11 +317,12 @@ public final class Session {
     func frame(into target: MTLTexture, completed: (() -> Void)?) -> MTLCommandBuffer? {
         let (preedit, size, bar, due) = demanded { () -> ([(cp: UInt32, wide: Bool)]?, RenderSize, Scrollbar, UInt64?) in
             // Animations advance before the snapshot (a new frame changes what is drawn).
-            let due = surface.terminal.animationTick((DispatchTime.now().uptimeNanoseconds - clock) / 1_000_000)
-            state.update(surface.terminal)
-            cells.snapshot(surface.terminal, look, focused: surface.focused, blinkVisible: blink.visible, preedit: surface.preedit, links: surface.drawLinks(), state: &state)
-            metal.images.update(surface.terminal, cell: Self.cell(cells))
-            return (surface.preedit, surface.size, surface.terminal.scrollbar, due)
+            let now = DispatchTime.now().uptimeNanoseconds
+            let due = surface.terminal.animationTick((now - clock) / 1_000_000)
+            let snapshot = snapshotCoordinator.capture(surface, cells: &cells, look: look, blinkVisible: blink.visible, state: &state, now: now)
+            scheduleSearchRefresh(snapshot.searchRefreshDelay)
+            metal.images.update(surface.terminal, cell: SurfaceSessionCore.cell(cells))
+            return (snapshot.preedit, snapshot.size, snapshot.scrollbar, due)
         }
         if let due {
             if animation == nil {
@@ -340,11 +338,21 @@ public final class Session {
         }
         let c = cells.contents(preedit: preedit, state: &state)
         state.dirty = .false
-        var u = FrameUniforms(size: size, cell: Self.cell(cells), cols: c.cols, rows: c.rows, background: c.background, opacity: look.backgroundOpacity, block: c.block)
+        var u = FrameUniforms(size: size, cell: SurfaceSessionCore.cell(cells), cols: c.cols, rows: c.rows, background: c.background, opacity: look.backgroundOpacity, block: c.block)
         u.minContrast = Float(config.minimumContrast)
         if config.displayP3 != wide?.theme { wide = config.displayP3.isEmpty ? nil : WideColors(config.displayP3) }
         return metal.draw(c, u, gray: cells.gray, color: cells.color, into: target, glow: config.glow ? Glow() : nil, wide: wide,
                           completed: completed)
+    }
+
+    /// Called under the surface lock; the wakeup clears its claim under the same lock before requesting a frame.
+    private func scheduleSearchRefresh(_ delay: UInt64?) {
+        guard let delay else { return }
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(delay))) { [weak self] in
+            guard let self else { return }
+            self.locked { self.snapshotCoordinator.searchRefreshFired() }
+            self.frames?.request()
+        }
     }
 
     // MARK: the host's view
@@ -449,9 +457,7 @@ public final class Session {
     /// padding when they changed.
     public func configure(_ config: Config) {
         exclusive {
-            let fonts = config.fontFamily != self.config.fontFamily || config.fontSize != self.config.fontSize || config.paddingX != self.config.paddingX
-                || config.paddingY != self.config.paddingY || config.adjustCellHeight != self.config.adjustCellHeight
-                || config.fontFeatures != self.config.fontFeatures
+            let fonts = SurfaceSessionCore.needsRendererRebuild(from: self.config, to: config)
             self.config = config
             if fonts { rebuild() }
             apply()
@@ -464,44 +470,20 @@ public final class Session {
     /// The config's colors and options (Termio.changeConfig: palette entries a program set stay).
     func apply() {
         let c = config
-        (look.selectionBackground, look.selectionForeground, look.cursorColor, look.cursorText) = (c.selectionBackground, c.selectionForeground, c.cursorColor, c.cursorText)
-        // A translucent background needs a layer the window composites rather than one it treats as covering.
+        SurfaceSessionCore.apply(c, to: surface, look: &look)
+        // A translucent background needs a layer the window composites.
         look.backgroundOpacity = c.backgroundOpacity
         surfaceLayer.isOpaque = c.backgroundOpacity >= 1
-        surface.config.optionAsAlt = OptionAsAlt(rawValue: (c.optionAsAlt ?? .false).rawValue)!
-        // The keybinds after `keybind = clear` (Ghostty's default bindings are not ported: Dispatch clears them).
-        surface.config.bindings = Bindings(c.keybinds)
-        surface.config.clipboardRead = HandlerOptions.ClipboardAccess(rawValue: c.clipboardRead.rawValue)!
-        surface.stream.handler.options.clipboardWrite = HandlerOptions.ClipboardAccess(rawValue: c.clipboardWrite.rawValue)!
-        surface.terminal.setKittyGraphicsLimit(c.imageStorageLimitBytes)
-        surface.terminal.changeCursorDefaults(style: c.cursorStyle, blink: c.cursorBlink)
-        let cursor: RGB? = if case .color(let rgb)? = c.cursorColor { rgb } else { nil }
-        surface.terminal.changeDefaults(foreground: c.foreground, background: c.background, cursor: cursor, palette: c.palette)
         state.dirty = .full
     }
 
     /// Fonts at the config's size and the current scale, the padding in pixels, a whole frame.
     func rebuild() {
-        guard let next = try? Self.cells(config, scale) else { return }
+        guard let next = try? SurfaceSessionCore.cells(config, scale) else { return }
         cells = next
         metal.invalidateTextures()
-        surface.setCell(Self.cell(cells), padding: Self.padding(config, scale))
+        surface.setCell(SurfaceSessionCore.cell(cells), padding: SurfaceSessionCore.padding(config, scale))
         state = RenderState()
-    }
-
-    static func cells(_ config: Config, _ scale: Double) throws -> CellRenderer {
-        let fonts = try FontCollection(families: config.fontFamily, points: config.fontSize, dpi: Int(72 * scale))
-        let primary = fonts.face(fonts.faces[0][0].entry)
-        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics, cellHeight: config.adjustCellHeight),
-                            features: config.fontFeatures.map { ($0.tag, $0.value) })
-    }
-
-    static func cell(_ cells: CellRenderer) -> (width: Int, height: Int) { (Int(cells.metrics.cellWidth), Int(cells.metrics.cellHeight)) }
-
-    /// window-padding-x/-y in pixels (Ghostty's scaledPadding).
-    static func padding(_ c: Config, _ scale: Double) -> (top: Int, bottom: Int, right: Int, left: Int) {
-        let px = { (points: Int) in RenderSize.pixels(points: points, dpi: Float(72 * scale)) }
-        return (px(c.paddingY.0), px(c.paddingY.1), px(c.paddingX.1), px(c.paddingX.0))
     }
 }
 #endif

@@ -440,9 +440,6 @@ extension FilesCoordinator {
             async let unstagedRead = queries.numstat(cached: false)
             async let stagedRead = queries.numstat(cached: true)
             let porcelain = try await porcelainRead, unstaged = try await unstagedRead, staged = try await stagedRead
-            var counts = [GitChangeArea.unstaged: [String: GitNumstat](), .staged: [:]]
-            for count in unstaged { counts[.unstaged]?[count.path] = count }
-            for count in staged { counts[.staged]?[count.path] = count }
             var next: [String: Counted] = [:]
             var budget = countBudget
             let untracked = porcelain.changes.filter { $0.area == .untracked && !$0.path.hasSuffix("/") && $0.representable }
@@ -466,21 +463,8 @@ extension FilesCoordinator {
                 next[change.path] = Counted(lines: count.lines, binary: count.binary,
                                             stamp: stamp ?? Stamp(size: count.size, modified: count.modified))
             }
-            var changes = porcelain.changes.map { change -> GitChange in
-                var change = change
-                if change.area == .untracked {
-                    guard let known = next[change.path] else { return change }
-                    change.additions = known.lines
-                    change.deletions = known.lines.map { _ in 0 }
-                    change.binary = known.binary
-                    if known.binary { change.newSize = known.stamp?.size }
-                } else if let count = counts[change.area]?[change.path] {
-                    // Only what the status lists takes counts: numstat also names a binary that is merely stat-dirty.
-                    change.additions = count.additions
-                    change.deletions = count.deletions
-                    change.binary = count.binary
-                }
-                return change
+            var changes = GitStatusEnrichment.counts(porcelain.changes, unstaged: unstaged, staged: staged) { path in
+                next[path].map { .init(lines: $0.lines, binary: $0.binary, size: $0.stamp?.size) }
             }
             // A binary's sizes, so the list says "binary · 48 KB → 51 KB" before anything is selected. Asked again
             // after a prompt (`pass`) or, for the work tree's side, when its listing shows the file changed.

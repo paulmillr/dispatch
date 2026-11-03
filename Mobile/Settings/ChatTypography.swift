@@ -3,14 +3,9 @@ import UIKit
 
 /// Chat's font (Settings, Chat, Font, G3): the Mac's choices (`ChatFont`, the same names). iOS has no Comic Sans:
 /// Chalkboard SE, its system font in that hand, stands in. Latin Modern is bundled (`TermFonts`).
-enum MobileChatFont: String, CaseIterable, Identifiable, Sendable {
-    case system = "San Francisco"
-    case sameAsCode = "Same as code"
-    case comicSans = "Comic Sans"
-    case latinModernRoman = "Latin Modern Roman"
-    case newYork = "New York"
+typealias MobileChatFont = ChatFontChoice
 
-    var id: Self { self }
+extension ChatFontChoice {
 
     /// The system font's own designs; nil for fonts drawn by name. San Francisco draws in SF Rounded, whose missing
     /// italic is San Francisco's own (`ChatTypography.emphasis`).
@@ -34,12 +29,7 @@ enum MobileChatFont: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Latin Modern's small lowercase drawn at the Mac's calibrated size (`ChatFont.sizeScale`).
-    var sizeScale: CGFloat {
-        switch self {
-        case .latinModernRoman: 1.126
-        case .system, .sameAsCode, .comicSans, .newYork: 1
-        }
-    }
+    var sizeScale: CGFloat { CGFloat(scale(on: .iOS)) }
 }
 
 /// Chat's text size relative to Dynamic Type (G3): one text style smaller or larger than the bubbles' callout.
@@ -96,9 +86,7 @@ struct ChatTypography: Equatable, Sendable {
         switch choice {
         case .system, .newYork: nil
         case .sameAsCode: terminalFont.name
-        case .comicSans: "Chalkboard SE"
-        // By PostScript name, as the Mac draws it.
-        case .latinModernRoman: "LMRoman10-Regular"
+        case .comicSans, .latinModernRoman: choice.namedFace(on: .iOS)
         }
     }
 

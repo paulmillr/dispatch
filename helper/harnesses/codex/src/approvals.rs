@@ -1,6 +1,5 @@
-//! Main-thread approvals from the Codex PermissionRequest hook: the card of c1654cc
-//! ChatCoordinator.swift:784-795 with the shared PendingApproval (ChatModels.swift:103-138), the
-//! PreCompact/PostCompact compacting status (:795-796) and the SubagentStart/SubagentStop agents.
+//! Main-thread PermissionRequest approvals and SubagentStart/SubagentStop activity.
+//! Native conversation changes and process exit clear the running agents in the harness.
 use crate::{channel::failure, tools::printable};
 use dispatch_helper_core::{
     api::*,
@@ -194,47 +193,21 @@ impl Approvals {
         owners: &dyn Fn(&str) -> Vec<Owner>,
         states: &RefCell<BTreeMap<String, State>>,
     ) -> bool {
-        // Core C-COMPACT (c1654cc ChatCoordinator.swift:795-796): PreCompact/PostCompact set the
-        // bound session's compacting status. They are lifecycle datagrams on the private 0600
-        // route (no reply, no peer: core system/hooks.rs), so the session id selects the chat.
+        // Subagent lifecycle datagrams update `State.agents` like the Claude harness's.
         if let Event::Hook { message, reply, .. } = event
             && let Ok(document) = Json::parse(message)
             && let root = document.root()
-            && let Some(on) = match root.get("hook_event_name").and_then(Value::string) {
-                Some("PreCompact") => Some(true),
-                Some("PostCompact") => Some(false),
-                _ => None,
-            }
+            && let Some(name @ ("SubagentStart" | "SubagentStop")) =
+                root.get("hook_event_name").and_then(Value::string)
+            && let Some(session) = root.get("session_id").and_then(Value::string)
         {
             if let Some(reply) = reply {
                 fallback(io, *reply);
             }
-            let session = root.get("session_id").and_then(Value::string).unwrap_or("");
-            if let Some(owner) = owners(session).into_iter().next() {
-                let mut states = states.borrow_mut();
-                let state = states.entry(owner.binding.session.clone()).or_default();
-                state.compacting = on;
-                let state = state.clone();
-                ui.update(Update::State {
-                    binding: owner.binding,
-                    state,
-                });
-            }
-            return true;
-        }
-        // Subagent lifecycle datagrams update `State.agents` like the Claude harness's; a new or
-        // ended session forgets its agents (other handlers still see SessionStart/SessionEnd).
-        if let Event::Hook { message, reply, .. } = event
-            && let Ok(document) = Json::parse(message)
-            && let root = document.root()
-            && let Some(name @ ("SubagentStart" | "SubagentStop" | "SessionStart" | "SessionEnd")) =
-                root.get("hook_event_name").and_then(Value::string)
-            && let Some(session) = root.get("session_id").and_then(Value::string)
-        {
-            let subagent = name.starts_with("Subagent");
-            if subagent && let Some(reply) = reply {
-                fallback(io, *reply);
-            }
+            // A late datagram from a conversation we left must not rebuild its old roster.
+            let Some(owner) = owners(session).into_iter().next() else {
+                return true;
+            };
             let agent = root.get("agent_id").and_then(Value::string).unwrap_or("");
             let agents = self.agents.entry(session.to_owned()).or_default();
             let changed = match name {
@@ -252,7 +225,6 @@ impl Approvals {
                     agents.retain(|(id, _)| id != agent);
                     agents.len() != count
                 }
-                "SessionStart" | "SessionEnd" => std::mem::take(agents).len() > 0,
                 _ => false,
             };
             // Codex keeps no subagent files: id and type only, timed by the client.
@@ -263,7 +235,7 @@ impl Approvals {
             if kinds.is_empty() {
                 self.agents.remove(session);
             }
-            if changed && let Some(owner) = owners(session).into_iter().next() {
+            if changed {
                 let mut states = states.borrow_mut();
                 let state = states.entry(owner.binding.session.clone()).or_default();
                 state.agents = kinds;
@@ -273,9 +245,7 @@ impl Approvals {
                     state,
                 });
             }
-            if subagent {
-                return true;
-            }
+            return true;
         }
         match event {
             Event::Hook {

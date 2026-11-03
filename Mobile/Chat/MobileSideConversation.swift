@@ -120,64 +120,26 @@ final class MobileSideConversation: Identifiable {
         if ended { connection.cancel(id) } else { observation = id }
     }
 
-    private struct History: Decodable {
-        let terminal: UInt64
-        let session: String
-        let records: [HelperChat.Record]
-        let state: HelperChat.State?
-        let history_pending: Bool
-    }
-    private struct Records: Decodable {
-        let terminal: UInt64
-        let session: String
-        let records: [HelperChat.Record]
-        let replace: Bool?
-    }
-    private struct Status: Decodable {
-        let terminal: UInt64
-        let session: String
-        let state: HelperChat.State
-    }
-    private struct Opened: Decodable {
-        let terminal: UInt64
-        let session: String
-        let interaction: HelperChat.Interaction
-    }
-
     /// One notification of the fork's subscription (testable: the helper's shapes).
     func notify(_ method: String, _ value: HelperBinary.Value) {
         guard !ended else { return }
         do {
-            switch method {
-            case "chat.history":
-                let history = try HelperBinary.decode(History.self, from: value)
-                guard accepts(history.terminal, history.session) else { return }
+            guard let notification = try HelperChat.Notification.decode(method, from: value),
+                  notification.matches(.init(terminal: terminal, session: session)) else { return }
+            switch notification {
+            case .history(let history):
                 if !history.history_pending { apply(history.records, historical: true) }
                 if let state = history.state { busy = state.busy } else if !history.history_pending, transcript.openTurn == nil,
                                                                          !history.records.isEmpty { busy = false }
-            case "chat.records":
-                let records = try HelperBinary.decode(Records.self, from: value)
-                guard accepts(records.terminal, records.session) else { return }
+            case .records(let records):
                 if records.replace == true { transcript.clear() }
                 apply(records.records, historical: records.replace == true)
-            case "chat.state":
-                let status = try HelperBinary.decode(Status.self, from: value)
-                guard accepts(status.terminal, status.session) else { return }
-                busy = status.state.busy
-            case "interaction.opened":
-                let opened = try HelperBinary.decode(Opened.self, from: value)
-                guard accepts(opened.terminal, opened.session) else { return }
-                receive(opened.interaction)
-            case "terminal.exit":
-                let exit = try HelperBinary.decode(HelperClient.Exit.self, from: value)
-                if exit.terminal == terminal { failure = "The agent exited."; busy = false }
-            default: return
+            case .state(let status): busy = status.state.busy
+            case .interaction(let opened): receive(opened.interaction)
+            case .exit: failure = "The agent exited."; busy = false
+            case .queue, .archive: return
             }
         } catch { failure = error.localizedDescription }
-    }
-
-    private func accepts(_ terminal: UInt64, _ session: String) -> Bool {
-        terminal == self.terminal && (self.session == nil || self.session == session)
     }
 
     /// The fork's records; a user record takes its question's pending bubble (ChatSideConversation's rule).
@@ -246,10 +208,9 @@ final class MobileSideConversation: Identifiable {
 
     /// Answers the fork's permission request; a read-only side only ever refuses (option 1).
     func answer(allow: Bool) {
-        guard let permission, let session, let question = permission.interaction.questions.first else { return }
-        var input = HelperChat.Input(HelperChat.Route(terminal: terminal, session: session))
-        input.interaction = permission.interaction.id
-        input.answers = [question.id: .options([allow && !readOnly ? 0 : 1])]
+        guard let permission, let session,
+              let input = permission.interaction.answerInput(route: .init(terminal: terminal, session: session),
+                                                             response: .option(allow && !readOnly ? 0 : 1)) else { return }
         self.permission = nil
         let connection = client.connection
         Task {

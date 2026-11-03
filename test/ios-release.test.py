@@ -213,6 +213,9 @@ class DeviceDiscoveryTests(unittest.TestCase):
         self.assertEqual(phone, ('PHONE', 'dispatch-ipad-iphone (iPhone, iOS 27.0)'))
         self.assertFalse(simulators.is_ipad(phone[1]), 'an iPhone whose name mentions iPad')
         self.assertEqual(simulators.choose_simulator(document, 'iPhone Duo'), ('DUO', 'iPhone Duo (iOS 27.1)'))
+        # Xcode 27.2 gives the Duo a runtime of its own, named after its model.
+        document['devices'][prefix + 'iOS-27-2-iPhone19-4'] = [device('DUO2', 'iPhone Duo', 'iPhone-Duo')]
+        self.assertEqual(simulators.choose_simulator(document, 'iPhone Duo'), ('DUO2', 'iPhone Duo (iOS 27.2)'))
         self.assertEqual(simulators.family('com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro'), '')
 
     def test_an_unknown_simulator_stops_before_the_build(self):

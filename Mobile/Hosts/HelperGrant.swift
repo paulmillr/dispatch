@@ -8,29 +8,24 @@ import Foundation
 /// `command(sha256:)` on a plain exec channel: no PTY, no extra environment.
 enum HelperGrant {
     /// Everything with Chat and Files on: the default for a new host.
-    static let capabilities = [
-        "agent.events", "agent.inspect", "agent.pi", "agent.pi.configure", "agent.queue", "agent.side", "agent.submit",
-        "agent.version", "backend.register", "cancel", "events", "file.read", "file.text", "git.read", "herdr.rpc",
-        "herdr.start", "herdr.terminal", "hooks.configure", "host.identity", "input.window", "shell.lifecycle", "stats.ping",
-        "stats.processes", "stats.sample", "tmux.pane",
-    ]
+    static let capabilities = HelperCapabilities.mobile()
 
     /// The `--capabilities` argument.
     static var capabilityList: String { capabilities.joined(separator: ",") }
 
     /// The capabilities Chat brings: hooks and the agents'. Off, the helper neither installs hooks nor reads or drives
     /// agents; tmux, herdr, files and stats stay.
-    static func chatCapability(_ capability: String) -> Bool { capability.hasPrefix("agent.") || capability == "hooks.configure" }
+    static func chatCapability(_ capability: String) -> Bool { HelperCapabilities.isChat(capability) }
 
     /// The capability Files & git brings: git's read-only commands in the tab's folder (`files.git`, `files.branch`).
-    static let gitCapability = "git.read"
+    static let gitCapability = HelperCapabilities.git
 
     /// The grant with Chat off for a host (Settings), Files & git on.
     static let chatOffCapabilities = capabilities(chat: false, files: true)
 
     /// The grant for a host's switches.
     static func capabilities(chat: Bool, files: Bool = true) -> [String] {
-        capabilities.filter { (chat || !chatCapability($0)) && (files || $0 != gitCapability) }
+        HelperCapabilities.mobile(chat: chat, files: files)
     }
 
     static func capabilityList(chat: Bool, files: Bool = true) -> String { capabilities(chat: chat, files: files).joined(separator: ",") }

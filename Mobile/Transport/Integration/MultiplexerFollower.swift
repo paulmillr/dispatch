@@ -62,8 +62,7 @@ struct MultiplexerFollower: Sendable {
             // Before reading the preference: a change from here on ends this round at once.
             let changes = preference.changes()
             let override = preference.override
-            if Self.reportsRunning(rows), let fresh: [TabsMultiplexer] = try? await client.connection.request(
-                "multiplexers.list", params: [String: String]()) {
+            if Self.reportsRunning(rows), let fresh = try? await client.multiplexers() {
                 rows = fresh
             }
             let herdrRunning = await Self.herdrRunning(rows) { await Self.processes(client) }

@@ -6,7 +6,7 @@ import WidgetKit
 /// and circular families; the host chosen for it (a face's or the Smart Stack's recommendation), else the busiest
 /// connected one. Relevant to the Smart Stack while the phone flags its CPU high. The entry (`HostWidgetEntry`) is a
 /// JSON file in the App Group container beside the Needs you entry, written by the watch app from its snapshots
-/// (`HostWidgetWriter`); a tap opens the host's screen.
+/// (`HostWidgetWriter`); a tap opens the host's section of Spaces.
 struct HostWidget: Widget {
     static let kind = "Host"
 
@@ -83,7 +83,7 @@ struct HostWidgetEntry: Codable, Equatable, Sendable {
     /// The face older than this says "As of …": the phone has not been heard from since.
     static let staleAfter: TimeInterval = 5 * 60
 
-    /// `dispatch-watch://host?host=<id>`: the host's screen.
+    /// `dispatch-watch://host?host=<id>`: the host's section of Spaces.
     static func url(host: String) -> URL {
         var components = URLComponents()
         components.scheme = WatchComplicationEntry.scheme

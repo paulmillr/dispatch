@@ -122,7 +122,7 @@ final class TabsSpacesTreeTests: XCTestCase {
     }
 
     /// Collapsed sections, the space order and the recent space are kept on the device in a private file out of
-    /// backups (`spaces.json`), not in UserDefaults; an older build's UserDefaults values move there once.
+    /// backups (`spaces.json`); values from removed UserDefaults keys are ignored.
     func testTreeStateIsRememberedInAPrivateFile() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("spaces-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -141,19 +141,19 @@ final class TabsSpacesTreeTests: XCTestCase {
         XCTAssertEqual(second.spaceOrder[TabsFixtures.host.id], ["herdr:docs", "herdr:app"])
         XCTAssertEqual(second.recent, SpaceRef(host: TabsFixtures.host.id, key: "herdr:docs"))
 
-        // An older build's values: moved into the file and out of UserDefaults.
+        // Removed UserDefaults keys cannot populate a new device-state file.
         let old = UserDefaults(suiteName: "tabs-tree-legacy")!
         old.removePersistentDomain(forName: "tabs-tree-legacy")
         old.set([ai.id.uuidString], forKey: "tabs.collapsed")
         old.set(try JSONEncoder().encode([ai.id: ["tmux:s:2", "tmux:s:1"]]), forKey: "tabs.spaceOrder")
         old.set(try JSONEncoder().encode(SpaceRef(host: ai.id, key: "tmux:s:1")), forKey: "tabs.recent")
         let migratedURL = folder.appendingPathComponent("migrated.json")
-        let migrated = SpacesDeviceState(url: migratedURL, migrating: old)
-        XCTAssertEqual(migrated.collapsed, [ai.id])
-        XCTAssertEqual(migrated.spaceOrder[ai.id], ["tmux:s:2", "tmux:s:1"])
-        XCTAssertEqual(migrated.recent?.key, "tmux:s:1")
-        XCTAssertTrue(SpacesDeviceState.legacyKeys.allSatisfy { old.object(forKey: $0) == nil })
-        XCTAssertEqual(SpacesDeviceState(url: migratedURL).collapsed, [ai.id], "written to the file")
+        let migrated = MobileTabs(activity: TabActivityStore(url: nil), defaults: old, deviceState: SpacesDeviceState(url: migratedURL))
+        XCTAssertTrue(migrated.collapsed.isEmpty)
+        XCTAssertNil(migrated.spaceOrder[ai.id])
+        XCTAssertNil(migrated.recent)
+        migrated.removeDeviceState(); XCTAssertTrue(SpacesDeviceState.legacyKeys.allSatisfy { old.object(forKey: $0) == nil })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: migratedURL.path), "no migration writes a file")
 
         // Remove all data: the file goes; the filter and the OFFLINE group's state stay.
         second.offlineFolded = true

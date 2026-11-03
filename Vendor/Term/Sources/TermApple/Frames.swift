@@ -10,9 +10,7 @@ final class Frames: NSObject {
     let draw: () -> Void
     /// The render thread's run loop and the display link (used on the render thread only).
     var loop: CFRunLoop?, link: CADisplayLink?
-    /// Under `lock`: a change waits for a frame; the link is paused; the session is shown.
-    let lock = NSLock()
-    var changed = true, paused = false, shown = true
+    private let demand = FrameDemand()
 
     /// On the main queue (the view's display link is made there).
     init(_ view: NSView, draw: @escaping () -> Void) {
@@ -44,18 +42,12 @@ final class Frames: NSObject {
 
     /// Something changed: the next refresh draws it (the render thread is woken only from a pause).
     func request() {
-        lock.lock()
-        changed = true
-        let wake = paused && shown
-        if wake { paused = false }
-        lock.unlock()
-        if wake { perform { self.link?.isPaused = false } }
+        if demand.request() { perform { self.link?.isPaused = false } }
     }
 
     /// Hidden: no frames (the link pauses at its next refresh); shown: a frame at the next refresh.
     func show(_ visible: Bool) {
-        lock.lock(); shown = visible; lock.unlock()
-        if visible { request() }
+        if demand.show(visible) { perform { self.link?.isPaused = false } }
     }
 
     /// The view's display changed or woke, or the view joined a window again (main queue: the link
@@ -69,14 +61,14 @@ final class Frames: NSObject {
             next.add(to: .current, forMode: .default)
             link?.invalidate()
             link = next
-            lock.lock(); (changed, paused) = (true, false); lock.unlock()
+            demand.relink()
         }
     }
 
     /// Tests: the link falls silent while `paused` says it runs (what a display going away can do).
     func stall() {
         perform { [self] in
-            lock.lock(); paused = false; lock.unlock()
+            demand.stall()
             link?.isPaused = true
         }
     }
@@ -90,11 +82,7 @@ final class Frames: NSObject {
     }
 
     @objc func refresh(_ link: CADisplayLink) {
-        lock.lock()
-        let now = changed && shown
-        if now { changed = false } else { paused = true }
-        lock.unlock()
-        if now { draw() } else { link.isPaused = true }
+        if demand.frame() { draw() } else { link.isPaused = true }
     }
 }
 

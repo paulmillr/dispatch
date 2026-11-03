@@ -14,8 +14,8 @@ struct MultiplexerHint: View {
     }
 
     static let herdr = [
-        Command(title: "macOS", text: "mkdir -p ~/.local/bin && curl -fL -o ~/.local/bin/herdr https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-macos-$(uname -m | sed s/arm64/aarch64/) && chmod +x ~/.local/bin/herdr"),
-        Command(title: "Linux", text: "mkdir -p ~/.local/bin && curl -fL -o ~/.local/bin/herdr https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-linux-$(uname -m) && chmod +x ~/.local/bin/herdr"),
+        Command(title: "macOS", text: "mkdir -p ~/.local/bin && curl -fL -o ~/.local/bin/herdr https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-$(uname -m | sed s/arm64/aarch64/) && chmod +x ~/.local/bin/herdr"),
+        Command(title: "Linux", text: "mkdir -p ~/.local/bin && curl -fL -o ~/.local/bin/herdr https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-$(uname -m) && chmod +x ~/.local/bin/herdr"),
     ]
     static let tmux = [
         Command(title: "macOS (Homebrew)", text: "brew install tmux"),
@@ -47,7 +47,7 @@ struct MultiplexerHint: View {
             } header: {
                 Text("herdr")
             } footer: {
-                Text("Preferred when both are installed. Dispatch is validated with herdr 0.9.3.")
+                Text("Preferred when both are installed. Dispatch is validated with herdr 0.9.5.")
             }
             Section {
                 ForEach(Self.tmux) { CommandRow(command: $0) }

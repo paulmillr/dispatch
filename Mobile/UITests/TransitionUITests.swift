@@ -147,13 +147,16 @@ final class TransitionUITests: XCTestCase {
         tap(app.buttons["Cancel"])
     }
 
-    /// A tab's Terminal / Chat segments, back and forth.
+    /// A tab's mode button switches Terminal / Chat, back and forth.
     func testSegmentSwitch() {
         let app = launch(arguments: Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1"])
         rest()
+        let mode = app.buttons["tab-mode-button"]
         for _ in 0..<2 {
-            tap(app.buttons["Terminal"])
-            tap(app.buttons["Chat"])
+            tap(mode)
+            XCTAssertEqual(mode.label, "Show Chat")
+            tap(mode)
+            XCTAssertEqual(mode.label, "Show Terminal")
         }
     }
 

@@ -162,7 +162,7 @@ final class PadStripTests: XCTestCase {
         }
         XCTAssertEqual(PadMode.review.symbol, "pencil.and.list.clipboard")
         XCTAssertEqual(PadMode.commits.symbol, "clock.arrow.circlepath")
-        XCTAssertEqual(PadMode.chat.symbol, "text.bubble")
+        XCTAssertEqual(PadMode.chat.symbol, "dispatch.chat")
     }
 
     /// The pills are the shown tab's space's tabs in the space's order; each names its agent for its mark (the

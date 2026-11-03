@@ -74,6 +74,43 @@ pub struct Codex {
 }
 
 impl Codex {
+    /// Only an observed conversation/process change ends a roster. A transcript refresh or
+    /// an ordinary turn ending must keep background agents running across turns.
+    fn bind(&mut self, binding: &Binding) {
+        if binding.session.is_empty() { return; }
+        let retired: Vec<String> = self.bindings.values().filter(|previous| {
+            let same_process = previous.process.pid == binding.process.pid
+                && previous.process.start == binding.process.start;
+            (same_process && previous.session != binding.session)
+                || (!same_process && previous.session == binding.session)
+        }).map(|previous| previous.session.clone()).collect();
+        for session in retired {
+            self.clear_activity(&session);
+            self.bindings.remove(&session);
+        }
+        self.bindings.insert(binding.session.clone(), binding.clone());
+    }
+
+    fn clear_activity(&mut self, session: &str) {
+        self.approvals.forget(session);
+        if let Some(state) = self.states.borrow_mut().get_mut(session) {
+            state.agents.clear();
+            state.compacting = false;
+        }
+    }
+
+    /// Native /new and /resume can change the binding before the next chat/history request.
+    fn bind_main(&mut self) {
+        let bindings: Vec<_> = self.main.channels.borrow().values().filter_map(|channel| {
+            let channel = channel.borrow();
+            let known = self.bindings.get(&channel.binding.session).is_some_and(|binding| {
+                binding.process.pid == channel.binding.process.pid
+                    && binding.process.start == channel.binding.process.start
+            });
+            (channel.identified && !channel.closed && !known).then(|| channel.binding.clone())
+        }).collect();
+        for binding in bindings { self.bind(&binding); }
+    }
 
     fn archive(&mut self, io: &mut dyn Io, source: &Transcript, pages: usize, done: Done<Archive>) {
         let archives = self.archives.clone();
@@ -238,6 +275,15 @@ impl Harness for Codex {
             self.approvals.forget(&session);
             self.bindings.remove(&session);
         }
+        drop(channels);
+        // Terminal-only conversations have no native channel, but their activity ends too.
+        let sessions: Vec<_> = self.bindings.values().filter(|binding| {
+            binding.process.pid == process.pid && binding.process.start == process.start
+        }).map(|binding| binding.session.clone()).collect();
+        for session in sessions {
+            self.clear_activity(&session);
+            self.bindings.remove(&session);
+        }
         let mut parents = self.parents.borrow_mut();
         let sessions = parents
             .iter()
@@ -254,6 +300,8 @@ impl Harness for Codex {
             self.forms.borrow_mut().remove(&session);
             self.live.borrow_mut().remove(&session);
             self.states.borrow_mut().remove(&session);
+            self.approvals.forget(&session);
+            self.bindings.remove(&session);
         }
     }
 
@@ -405,8 +453,7 @@ impl Harness for Codex {
         earlier: Option<&str>,
         done: Done<Page>,
     ) {
-        self.bindings
-            .insert(binding.session.clone(), binding.clone());
+        self.bind(binding);
         let Some(path) = binding.transcript.clone() else {
             // A provisional binding (session "", core P1) has no history until its session is
             // known; a live channel's history is its live records.
@@ -527,6 +574,7 @@ impl Harness for Codex {
     }
 
     fn state(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<State>) {
+        self.bind(binding);
         let versions = self.versions.clone();
         let key = (binding.process.pid, binding.process.start);
         let done: Done<State> = Box::new(move |io, result| {
@@ -1245,6 +1293,8 @@ impl Harness for Codex {
             self.forms.borrow_mut().remove(&side.session);
             self.live.borrow_mut().remove(&side.session);
             self.states.borrow_mut().remove(&side.session);
+            self.approvals.forget(&side.session);
+            self.bindings.remove(&side.session);
             let result = channel
                 .borrow_mut()
                 .close(io, failure("closed", "The side conversation closed."));
@@ -1268,6 +1318,7 @@ impl Harness for Codex {
     }
 
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
+        self.bind_main();
         let (bindings, servers) = (&self.bindings, &self.launch.servers);
         // The bound TUI and the private server serving it (arch.md Main-thread hooks).
         let owners = |session: &str| -> Vec<Owner> {
@@ -1373,6 +1424,7 @@ impl Harness for Codex {
             if let Some(done) = self.jobs.borrow_mut().remove(&work) {
                 done(io, result.map_err(os));
             }
+            self.bind_main();
             return;
         }
         let mut messages = Vec::new();
@@ -1398,9 +1450,11 @@ impl Harness for Codex {
             let replacing = self.reading.get(&(process.pid, process.start)).is_some_and(command::Reading::replaces);
             self.main.notice(&channel, message.root(), replacing);
             self.main.resumed(io, &channel, message.root(), self.updates.clone());
+            self.bind_main();
             let binding = channel.borrow().binding.clone();
             self.publish(io, ui, binding, message.root());
         }
+        self.bind_main();
         for update in std::mem::take(&mut *self.updates.borrow_mut()) {
             ui.update(update);
         }
@@ -1440,3 +1494,7 @@ fn opened(
 #[cfg(test)]
 #[path = "attachments.test.rs"]
 mod attachment_tests;
+
+#[cfg(test)]
+#[path = "lifecycle.test.rs"]
+mod lifecycle_tests;

@@ -61,6 +61,80 @@ final class NativeChatCommandTests: XCTestCase {
         try await shellCommandAndExit()
     }
 
+    func testDoubleControlDClosesChatTabImmediately() async throws {
+        try await closeChatTab(backend: "tmux")
+    }
+
+    func testDoubleControlDClosesLocalChatTabImmediately() async throws {
+        try await closeChatTab(backend: "local")
+    }
+
+    func testDoubleControlDClosesRemoteChatTabImmediately() async throws {
+        try await closeChatTab(backend: "ssh-tmux")
+    }
+
+    func testDoubleControlDClosesLastTabWhoseProgramIsTheAgent() async throws {
+        try await closeChatTab(backend: "local-exec")
+    }
+
+    private func closeChatTab(backend: String) async throws {
+        let fixture = try CodexEndpointFixture(prefix: "dispatch-close-chat-", delay: 0.01, hooks: false)
+        var passed = false
+        defer { fixture.stop(removeState: passed) }
+        try await fixture.start(timeout: .seconds(15))
+        let runtime = TerminalRuntime.shared, previous = runtime.chat
+        runtime.chat = ChatCoordinator(enabled: true)
+        defer { runtime.chat = previous }
+        let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
+        let server = backend == "ssh-tmux" ? try await SSHTestServer(grant: .init(profile: .full, hooks: false)) : nil
+        defer { server?.stop() }
+        if let server {
+            let origin = try XCTUnwrap(app.workspace.activeSurfaceID)
+            try await app.wait { runtime.views[origin].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+            TerminalTestSupport.send("ssh " + (server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " "),
+                                     to: try XCTUnwrap(runtime.views[origin]))
+            try await TestSupport.eventually(timeout: .seconds(20)) {
+                runtime.ssh.links.values.contains { $0.launch.tabID == origin && $0.shellPID != nil }
+            }
+        }
+        if backend.hasPrefix("local") {
+            try await app.wait { app.workspace.activeTab?.terminal != nil }
+            if backend == "local" {
+                app.workspace.newTab()
+                try await app.wait { app.workspace.currentTabs.count == 2 && app.workspace.currentTabs.allSatisfy { $0.terminal != nil } }
+            }
+        }
+        else {
+            _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
+            try await app.attach(); try await app.ready()
+        }
+        let id = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { runtime.views[id].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let terminal = try XCTUnwrap(runtime.views[id]), session = runtime.chat.session(for: id)
+        TerminalTestSupport.send((backend == "local-exec" ? "exec " : "")
+            + CodexTestSupport.command(state: fixture.state, binary: fixture.binary), to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(15)) {
+            runtime.chat.quitCommand(session) != nil && terminal.agentMenuScreen.contains("dispatch-fixture default")
+        }
+        runtime.chat.chooseChat(true, session: session)
+        try await TestSupport.eventually { app.window.firstResponder is ChatComposer.ComposerTextView }
+        let editor = try XCTUnwrap(app.window.firstResponder as? ChatComposer.ComposerTextView)
+        let process = session.process
+        let event = TerminalTestSupport.keyEvent(2, "\u{04}", in: app.window, modifiers: .control, ignoringModifiers: "d")
+        editor.keyDown(with: event)
+        XCTAssertTrue(app.workspace.allTabIDs.contains(id), "The first Ctrl+D only arms the shortcut")
+        editor.keyDown(with: event)
+        XCTAssertFalse(app.workspace.allTabIDs.contains(id), "The tab disappears synchronously, before /quit is delivered")
+        XCTAssertNotEqual(app.workspace.activeSurfaceID, id)
+        XCTAssertNotNil(runtime.views[id], "Removing the view must not cancel /quit")
+        try await TestSupport.eventually(timeout: .seconds(15), diagnostic: session.submissionFailure ?? session.status ?? "Waiting for quit") {
+            process?.alive != true && runtime.views[id] == nil && runtime.chat.sessions[id] == nil
+        }
+        XCTAssertFalse(app.workspace.allTabIDs.contains(id))
+        XCTAssertTrue(app.runtime.helpers.values.allSatisfy { $0.error == nil })
+        passed = true
+    }
+
     func testRemoteTmuxExitLatency() async throws {
         let fixture = try CodexEndpointFixture(prefix: "dispatch-exit-timing-", delay: 0.01, hooks: false)
         var passed = false

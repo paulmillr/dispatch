@@ -23,12 +23,11 @@ struct TabsQuery: Equatable, Codable {
         self.filter = filter
     }
 
-    /// An older build's menu ("chats" is Agents now; its Terminals and sort are gone) or a newer build's unknown value
-    /// takes the nearest filter, else All.
+    /// An unknown or removed filter takes All.
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let raw = values.lenient(String.self, forKey: .filter, default: "")
-        filter = raw == "chats" ? .agents : Filter(rawValue: raw) ?? .all
+        filter = Filter(rawValue: raw) ?? .all
     }
 
     private enum CodingKeys: String, CodingKey { case filter }

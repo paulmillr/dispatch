@@ -2,6 +2,7 @@
 """Run real Codex against a local fixture endpoint, with isolated config."""
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ from http.server import BaseHTTPRequestHandler
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
 from codex_pty import CodexPTY
 
-from codex_fixture import FixtureServer, environment, prepare, stop
+from codex_fixture import EVENTS, FixtureServer, environment, prepare, stop
 
 
 def main():
@@ -110,37 +111,53 @@ printf '%s' "$input" | /usr/bin/curl -sf --unix-socket {shlex.quote(str(state / 
                 matches = [e for e in hook_events[after:] if e['hook_event_name'] == name]
                 if matches: return matches[-1]
             raise AssertionError('Missing real hook: ' + name)
+        def wait_record(predicate):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                cli.pump()
+                for path in home.glob('sessions/**/*.jsonl'):
+                    for line in path.read_text().splitlines():
+                        try:
+                            record = json.loads(line)
+                        except ValueError:
+                            continue  # A concurrent append may leave the last line incomplete.
+                        if predicate(record):
+                            return record
+            raise AssertionError('Missing real transcript record')
+        def wait_turn(prompt):
+            return wait_record(lambda row: row.get('type') == 'event_msg'
+                and row.get('payload', {}).get('type') == 'task_complete'
+                and 'Local fixture reply: ' + prompt in (row['payload'].get('last_agent_message') or ''))
         try:
             cli.trust_fixture_hooks()
             deadline = time.monotonic() + 10
-            while (home / 'config.toml').read_text().count('trusted_hash') < 10 and time.monotonic() < deadline:
+            while (home / 'config.toml').read_text().count('trusted_hash') < len(EVENTS) and time.monotonic() < deadline:
                 cli.pump(0.1)
-            assert (home / 'config.toml').read_text().count('trusted_hash') == 10, 'Native hook trust was not saved'
+            assert (home / 'config.toml').read_text().count('trusted_hash') == len(EVENTS), 'Native hook trust was not saved'
             (state / 'hook-review-cli.log').write_text(cli.transcript)
             cli.submit('initial local turn')
-            wait_hook('SessionStart')
-            wait_hook('Stop')
+            wait_turn('initial local turn')
             for value in ['allow', 'deny', None]:
                 decision[0] = value
                 start = len(hook_events)
-                cli.submit('approval ' + (value or 'terminal'))
+                prompt = 'approval ' + (value or 'terminal')
+                cli.submit(prompt)
                 permission = wait_hook('PermissionRequest', start)
                 assert permission['tool_name'] == 'Bash'
                 assert 'DISPATCH_LOCAL_TOOL_OK' in permission['tool_input']['command']
                 if value is None:
                     cli.expect('Would you like to run the following command?')
                     cli.send('y')  # Exercise native terminal fallback, once.
-                event = wait_hook('Stop', start)
-                assert 'Local fixture reply:' in event.get('last_assistant_message', '')
-                if value == 'allow':
-                    assert any(e['hook_event_name'] == 'PostToolUse' for e in hook_events[start:])
-                if value == 'deny':
-                    assert not any(e['hook_event_name'] == 'PostToolUse' for e in hook_events[start:])
-            start = len(hook_events)
+                wait_turn(prompt)
+                call = 'fixture_' + hashlib.sha256(prompt.encode()).hexdigest()[:16]
+                outputs = [item.get('output', '') for body in server.requests for item in body.get('input', [])
+                           if item.get('type') == 'function_call_output' and item.get('call_id') == call]
+                assert outputs, 'Codex did not return the approved or denied tool result'
+                assert any('DISPATCH_LOCAL_TOOL_OK' in str(output) for output in outputs) == (value != 'deny')
             cli.submit('/compact')
-            wait_hook('PreCompact', start); wait_hook('PostCompact', start)
+            wait_record(lambda row: row.get('type') == 'compacted')
+            assert all(event['hook_event_name'] == 'PermissionRequest' for event in hook_events)
             cli.submit('/quit')
-            wait_hook('SessionEnd')
         finally:
             print('Closing local CLI and hook receiver…', flush=True)
             (state / 'interactive-cli.log').write_text(cli.transcript)

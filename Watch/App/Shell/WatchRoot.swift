@@ -28,14 +28,14 @@ struct WatchRoot: View {
                         }
                     }
                     .tag(Page.agents)
-                SpacesScreen(model: model)
+                // Spaces follows the snapshots only while it shows: not behind Agents, nor under a push.
+                SpacesScreen(model: model, active: page == .spaces && path.isEmpty)
                     .tag(Page.spaces)
             }
             .tabViewStyle(.verticalPage)
             .navigationDestination(for: WatchConversationKey.self) { ThreadScreen(model: model, key: $0) }
             .navigationDestination(for: WatchSpaceRoute.self) { SpaceScreen(model: model, route: $0) }
             .navigationDestination(for: WatchTabRoute.self) { TabDetailScreen(model: model, route: $0) }
-            .navigationDestination(for: WatchHostRoute.self) { HostScreen(model: model, route: $0) }
         }
         // A review the phone just sent (K8), over whatever shows, while its Undo is open; after a thread's own sheet closes.
         .sheet(item: Binding(get: { router.childSheet ? nil : model.review },
@@ -69,7 +69,7 @@ struct WatchRoot: View {
                     next.append(WatchSpaceRoute(host: tab.host, space: tab.space))
                 }
                 next.append(route)
-            case .host(let route): next.append(route)
+            case .host(let route): router.scrollTarget = route.host
             }
             path = next
         }

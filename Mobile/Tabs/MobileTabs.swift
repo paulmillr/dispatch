@@ -79,11 +79,11 @@ final class MobileTabs {
     /// The filter and the OFFLINE group name no host: they stay in UserDefaults with the other preferences.
     static let queryKey = "tabs.query", showOfflineKey = "tabs.showOffline", offlineFoldedKey = "tabs.offlineFolded"
 
-    /// `deviceState` nil: the app's file with `.standard` defaults (an older build's values move there), else in memory.
+    /// `deviceState` nil: the app's file with `.standard` defaults, else in memory.
     init(activity: TabActivityStore = .shared, defaults: UserDefaults = .standard, deviceState: SpacesDeviceState? = nil) {
         self.activity = activity
         self.defaults = defaults
-        self.deviceState = deviceState ?? (defaults == .standard ? .shared : SpacesDeviceState(url: nil, migrating: defaults))
+        self.deviceState = deviceState ?? (defaults == .standard ? .shared : SpacesDeviceState(url: nil))
         query = defaults.data(forKey: Self.queryKey).flatMap { try? JSONDecoder().decode(TabsQuery.self, from: $0) } ?? TabsQuery()
         showOffline = defaults.object(forKey: Self.showOfflineKey) as? Bool ?? true
         offlineFolded = defaults.bool(forKey: Self.offlineFoldedKey)

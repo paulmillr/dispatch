@@ -345,6 +345,35 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(answers?["q1"] as? [UInt64], [1])
     }
 
+    func testNativeDraftAnswersPreserveCommaOptionsAndCustomOptionText() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in request.method == "interactions.answer" ? .result(ChatFixture.sent()) : nil }
+        let chat = try await opened(helper, records: [])
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        let options: [[String: Any]] = [["id": "a", "label": "One, two", "detail": NSNull()],
+                                       ["id": "b", "label": "Three", "detail": NSNull()]]
+        helper.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": [
+            "id": "typed-form", "key": NSNull(), "approval": false, "blocking": true, "turn": NSNull(), "record": "tool",
+            "questions": [["id": "choices", "header": "Choices", "text": "Choose several", "secret": false,
+                           "multiple": true, "custom": true, "blocks": NSNull(), "options": options],
+                          ["id": "custom", "header": "Custom", "text": "Your text", "secret": false,
+                           "multiple": false, "custom": true, "blocks": NSNull(), "options": options]]]])
+        try await TestSupport.eventually { chat.approvals.count == 1 }
+        let form = try XCTUnwrap(chat.approvals.first)
+        let draft = try XCTUnwrap(form.pending.questionDraft)
+        draft.select("One, two")
+        draft.select("Three")
+        draft.next()
+        draft.type("Three")
+        chat.answerDraft(form, skip: false)
+        draft.type("Edited after submission")
+        try await TestSupport.eventually { helper.requests("interactions.answer").count == 1 }
+        let answers = helper.requests("interactions.answer").first?.params["answers"] as? [String: Any]
+        XCTAssertEqual(answers?["choices"] as? [UInt64], [0, 1])
+        XCTAssertEqual(answers?["custom"] as? String, "Three")
+        XCTAssertEqual(form.pending.answers?["Your text"], "Three")
+    }
+
     func testQueueEditsAddressTheHelpersItemsByRevision() async throws {
         let helper = ScriptedHelper()
         script(helper) { request in request.method == "queue.start" ? .result(ChatFixture.sent()) : nil }
@@ -820,6 +849,7 @@ final class ChatSessionTests: XCTestCase {
                                                        ["id": "high", "label": "high", "detail": NSNull()]],
                                            "current": "high", "default": NSNull()])
             case "chat.settings.set": .result(ChatFixture.sent())
+            case "chat.state": .result(["state": ChatFixture.state(busy: false, model: "sonnet", effort: "low")])
             default: nil
             }
         }
@@ -841,6 +871,42 @@ final class ChatSessionTests: XCTestCase {
                       ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false, model: "claude-opus-5-5")])
         try await TestSupport.eventually { chat.model == "claude-opus-5-5" }
         XCTAssertEqual(chat.modelLabel, "opus-5.5")
+    }
+
+    func testModelReadbackFailurePreservesTheReportedSelection() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "chat.settings.set": .result(ChatFixture.sent())
+            case "chat.state": .error(code: "unavailable", message: "The state read failed.")
+            default: nil
+            }
+        }
+        let chat = try await opened(helper, records: [])
+        let previousModel = chat.model, previousEffort = chat.effort
+        do {
+            try await chat.select(model: "requested", effort: "low")
+            XCTFail("A failed readback must not confirm the request")
+        } catch let error as HelperFailure { XCTAssertEqual(error.code, "unavailable") }
+        XCTAssertEqual(chat.model, previousModel)
+        XCTAssertEqual(chat.effort, previousEffort)
+    }
+
+    func testDeclinedModelChangeUsesTheAgentsReadback() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "chat.settings.set": .result(ChatFixture.sent())
+            case "chat.state": .result(["state": ChatFixture.state(busy: false, model: "kept-model", effort: "high")])
+            default: nil
+            }
+        }
+        let chat = try await opened(helper, records: [])
+        let selected = try await chat.select(model: "requested", effort: "low")
+        XCTAssertEqual(selected.model, "kept-model")
+        XCTAssertEqual(selected.effort, "high")
+        XCTAssertEqual(chat.model, "kept-model")
+        XCTAssertEqual(chat.effort, "high")
     }
 
     func testAStepsFullOutputComesFromChatTools() async throws {

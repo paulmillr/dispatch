@@ -86,8 +86,8 @@ struct NewChatSpaceMaker {
 /// "New space…" at the end (the form over this sheet) and, as holding New space does in Spaces, a "New space on" menu
 /// of hosts and multiplexers that makes one at once with the form's defaults (a pull-down's items cannot be held, so
 /// the quick menu is a submenu here). Either way the new space becomes the chat's, its field showing the making in
-/// place of a name until the space is listed. Agent, model and effort follow, defaulting to the last used. Start opens
-/// the thread in Chat with the keyboard up.
+/// place of a name until the space is listed. Agent, model and effort follow: the last agent used, on its own default
+/// model (Claude's `/model` default) unless another is picked here. Start opens the thread in Chat with the keyboard up.
 struct NewChatSheet: View {
     let conversations: ChatConversations
     var memory: ChatModelMemory = .shared
@@ -223,6 +223,7 @@ struct NewChatSheet: View {
                         if !remembered.models.isEmpty || model != nil {
                             field("Model") {
                                 Menu {
+                                    Button("Default") { model = nil; effort = nil }
                                     ForEach(remembered.models) { choice in Button(choice.label) { choose(model: choice.id) } }
                                 } label: {
                                     HStack {
@@ -361,9 +362,8 @@ struct NewChatSheet: View {
 
     private func choose(agent key: String) {
         agent = key.isEmpty ? nil : key
-        let remembered = memory.agent(key)
-        model = remembered.model
-        effort = remembered.effort
+        model = nil
+        effort = nil
     }
 
     private func choose(model id: String) {
@@ -381,7 +381,7 @@ struct NewChatSheet: View {
             defer { starting = false }
             do {
                 let key = try await conversations.start(launch, in: space, settings: model.map { ($0, effort) }, install: install)
-                memory.remember(agent: launch.key, model: model, effort: effort)
+                memory.remember(agent: launch.key)
                 dismiss()
                 started(key)
             } catch let needed as ChatIntegrationConsent {

@@ -183,6 +183,30 @@ final class ReviewChangesTests: XCTestCase {
         XCTAssertNil(refused, "binary or too large: nothing to show")
     }
 
+    /// Exercise the production helper adapter: its typed missing-file failure must survive `files.text` until
+    /// Create review decides whether a quote is gone or merely unreadable. A direct scripted reader hid this bug.
+    func testWholeFileFailuresKeepGoneDistinctFromUnknownThroughTheHelper() async throws {
+        for code in ["not_found", "not_directory", "permission_denied", "unavailable", "unsupported"] {
+            let helper = ScriptedHelper.scripted { request in
+                guard request.method == "files.text" else { return .failure(code: "unsupported", message: "") }
+                return .failure(code: code, message: "")
+            }
+            try await helper.configureChunks()
+            let reader = ReviewGitReader.helper(helper.client)
+            let file = await MobileReview.read("a.swift", root: Self.root, reader: reader)
+            XCTAssertEqual(file, code == "not_found" || code == "not_directory" ? .gone : .unknown, code)
+            if code == "not_found" || code == "not_directory" {
+                do {
+                    _ = try await reader.text(Self.root + "/a.swift")
+                    XCTFail("a missing file answered")
+                } catch let failure as ReviewGitError {
+                    XCTAssertEqual(failure, code == "not_found" ? .notFound("The file does not exist")
+                                   : .notDirectory("The folder does not exist"))
+                }
+            }
+        }
+    }
+
     /// git's failures in the Mac's words: outside a repository, the helper's deadline, git's own message, and the
     /// helper's refusals as unavailable.
     func testErrorsAreWordedAsTheMacs() async throws {

@@ -1,19 +1,6 @@
 import Foundation
 
-/// A `multiplexers.list` row. With the `multiplexers.versions` hello feature (helper/PROTOCOL.md, Features) it also
-/// says whether the program is installed, its version, and for tmux whether it reports bracketed-paste state (3.7
-/// and later); a helper or client without the feature leaves them out. Newer helpers add `running` under the same
-/// feature: whether the multiplexer's server runs for this account (absent: ask `stats.processes`).
-struct TabsMultiplexer: Decodable, Equatable, Sendable {
-    let mux: UInt64
-    let name: String
-    let external: Bool
-    var program: String? = nil
-    var installed: Bool? = nil
-    var version: String? = nil
-    var paste_state: Bool? = nil
-    var running: Bool? = nil
-}
+typealias TabsMultiplexer = HelperClient.Multiplexer
 
 /// The multiplexer a host's new spaces go to (plan 3.2): herdr when the host has it (its workspaces and tabs map one to
 /// one onto spaces and tabs), else tmux, unless the host's record overrides it by name. Only server-owned multiplexers
@@ -152,7 +139,7 @@ struct TabCommands: Sendable {
 
     /// `multiplexers.list` and `backends.list`, enqueued together.
     func detect() async throws -> (multiplexers: [TabsMultiplexer], backends: [HelperBackend]) {
-        async let kinds: [TabsMultiplexer] = client.connection.request("multiplexers.list", params: [String: String]())
+        async let kinds = client.multiplexers()
         async let backends = client.backends()
         return try await (kinds, backends)
     }

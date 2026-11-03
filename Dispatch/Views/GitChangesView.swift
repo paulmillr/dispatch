@@ -319,10 +319,8 @@ private struct GitChangesDetail: View {
     /// Source reads the working tree, which is the change's new side for unstaged and untracked files, and for a staged
     /// one only while it has no unstaged change on top; otherwise (and for a deletion) the diff's new side shows.
     private func reader(_ change: GitChange) -> (@Sendable () async throws -> String)? {
-        guard let source = session.source, change.kind != .deleted else { return nil }
-        if change.area == .staged, status.changes.contains(where: { $0.area == .unstaged && $0.path == change.path }) {
-            return nil
-        }
+        guard let source = session.source,
+              ReviewSourcePolicy.readsWorkingTree(change, changes: status.changes) else { return nil }
         let path = FilesPath.join(repository.root, change.path)
         return { try await GitChangesText.readSource(path, from: source) }
     }

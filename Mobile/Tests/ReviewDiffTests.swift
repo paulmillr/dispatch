@@ -260,6 +260,34 @@ final class ReviewDiffTests: XCTestCase {
         XCTAssertEqual(review.count(place), 4)
     }
 
+    /// A staged diff's new side is the index while the path has another unstaged change. Source and expanded gaps
+    /// must not read working-tree text and attach comments to a different revision.
+    func testStagedSourceUsesTheIndexWhileTheFileIsChangedAgain() async throws {
+        let review = sampleReview([])
+        let staged = GitChange(path: path, kind: .modified, area: .staged)
+        let unstaged = GitChange(path: path, kind: .modified, area: .unstaged)
+        let status = GitStatus(branch: "main", head: nil, changes: [staged, unstaged], loadedAt: .distantPast)
+        let diff = GitDiff(path: path, text: "@@ -1 +1 @@\n-old\n+index version\n")
+        let reader = ReviewGitReader(status: { _ in status }, diff: { _, _ in diff }, text: { _ in
+            XCTFail("a staged file changed again must not read working-tree text")
+            return "working version\n"
+        })
+        review.reader = { _ in reader }
+        let model = ReviewDiffModel(path: path, area: .staged)
+        await model.reload(context(review))
+        let document = try XCTUnwrap(model.document)
+        XCTAssertNil(document.fileLines)
+        let rows = document.rows(.source)
+        XCTAssertEqual(rows.filter(\.commentable).map(\.text), ["index version"])
+        XCTAssertEqual(rows.filter(\.commentable).first?.line, ReviewLine(side: .new, number: 1))
+        let removed = ReviewComment(id: System.uuid(), path: path, start: ReviewLine(side: .old, number: 1),
+                                    end: ReviewLine(side: .old, number: 1),
+                                    quote: [ReviewQuote(kind: .removed, text: "previous removed version")],
+                                    text: "Comment on the previous removal", created: .distantPast, area: .staged)
+        XCTAssertEqual(document.outdated([removed], area: .staged, areas: [.staged, .unstaged]), [removed.id],
+                       "the staged diff still relocates removed comments without a working-tree read")
+    }
+
     func testWithoutAReaderTheScreenSaysSo() async {
         let review = MobileReview(repository: ReviewRepository(store: ReviewMemoryStore()), demo: nil)
         let model = ReviewDiffModel(path: path, area: .unstaged)

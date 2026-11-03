@@ -1,21 +1,10 @@
 import SwiftUI
 
-/// The queue in the working row. Today (Q0) the working row says "thinking · 38s" and, trailing, "4 steps · editing",
-/// then Stop and the steps' chevron; the queue is a line of its own under it ("Queued · 2  sends after this turn") that
-/// opens to the card. The options fold the queue into the row so the thread ends in one line while the agent works, and
-/// in all of them Stop moves beside the clock, away from the trailing controls a thumb reaches for:
-///
-/// - Q1: the step's kind goes ("4 steps"), a queue capsule (glyph and count, pink) takes its place before the chevron.
-/// - Q1b: Q1 tapped: the capsule lit as a selected toggle and the card open under the row, as today's.
-/// - Q2: the row's trailing side as controls only: queue capsule and the steps' count inside the chevron's capsule.
-/// - Q3: words, not an icon: "thinking · 38s · 2 queued" on the thinking line, "4 steps" trailing.
-/// - Q4: the queue as a stack of the user's own bubbles (their colour, the count on the top one).
-/// - Q5: the glyphs tried for the capsule.
-/// - Q6: no working row (paused after Stop, the agent idle): the queue falls back to today's line, with Resume.
-enum QueueRowStyle { case today, capsule, controls, inline, bubbles }
-
+/// The queue folded into the working row (Q1, shipped as `ChatWorkingRow`'s queue capsule): "4 steps" trailing, a
+/// queue capsule (glyph and count, pink) before the chevron, and Stop beside the clock, away from the trailing controls
+/// a thumb reaches for. Q1b: the capsule tapped, lit as a selected toggle, the card open under the row. Q6: no working
+/// row (paused after Stop, the agent idle): the queue keeps its own line, with Resume.
 struct QueueRowScreen: View {
-    var style: QueueRowStyle
     var open = false
     var body: some View {
         let state = ModeButtonState(shown: .chat, agent: true)
@@ -32,8 +21,8 @@ struct QueueRowScreen: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 4)
-                    WorkingRowMock(style: style, open: open)
-                    if style == .today || open {
+                    WorkingRowMock(open: open)
+                    if open {
                         QueueCardMock(open: open)
                             .padding(.horizontal, 16)
                             .padding(.bottom, 8)
@@ -46,18 +35,16 @@ struct QueueRowScreen: View {
             .scrollEdgeEffectStyle(.soft, for: .bottom)
             .safeAreaBar(edge: .bottom) { Composer() }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state, layout: .hostLeading) }
+            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
         }
     }
 }
 
 /// The app's working row (`ChatWorkingRow`), still: the hairline with the glint a third along it, the ◆ with its
-/// satellite, "thinking" with the light on it, the clock; the trailing side by `style`.
+/// satellite, "thinking" with the light on it, the clock, Stop; trailing, the steps and the queue capsule.
 struct WorkingRowMock: View {
-    var style: QueueRowStyle
     var open = false
     var queued = 2
-    var glyph = QueueGlyph.symbol
     var body: some View {
         VStack(spacing: 0) {
             Rectangle().fill(Color("ThinkingBorder")).frame(height: 1)
@@ -74,38 +61,18 @@ struct WorkingRowMock: View {
                                                     startPoint: .init(x: -0.2, y: 0.5), endPoint: .init(x: 0.7, y: 0.5)))
                 Text("·").foregroundStyle(.tertiary)
                 Text("38s").monospacedDigit()
-                if style == .inline {
-                    Text("·").foregroundStyle(.tertiary)
-                    Text("\(queued) queued").foregroundStyle(Color.dispatchPink)
-                }
                 // Stop beside the clock, away from the trailing controls a thumb reaches for.
                 StopDisc().padding(.leading, 2)
                 Spacer(minLength: 8)
-                switch style {
-                case .today:
-                    stepsText("4 steps · editing")
-                case .capsule:
-                    stepsText("4 steps")
-                    QueueCapsule(count: queued, lit: open, glyph: glyph)
-                case .controls:
-                    QueueCapsule(count: queued, lit: open, glyph: glyph)
-                case .inline:
-                    stepsText("4 steps")
-                case .bubbles:
-                    stepsText("4 steps")
-                    QueueBubbleStack(count: queued)
-                }
-                if style == .controls { StepsCapsule(count: 4) } else { ChevronDisc() }
+                Text("4 steps").font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                QueueCapsule(count: queued, lit: open)
+                ChevronDisc()
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .frame(minHeight: 44)
             .padding(.horizontal, 16)
         }
-    }
-
-    private func stepsText(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
     }
 }
 
@@ -138,44 +105,14 @@ struct ChevronDisc: View {
     }
 }
 
-/// Q2: the steps' count and the disclosure in one capsule, "4 ›".
-struct StepsCapsule: View {
-    let count: Int
-    var body: some View {
-        HStack(spacing: 3) {
-            Text("\(count)").font(.footnote.weight(.semibold)).monospacedDigit()
-            Image(systemName: "chevron.right").font(.caption2.weight(.bold))
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 9)
-        .frame(height: 28)
-        .background(Color.chipFill, in: Capsule())
-    }
-}
-
-enum QueueGlyph: CaseIterable {
-    case symbol, ellipsis, tray, stack, list, forward
-    var name: String {
-        switch self {
-        case .symbol: "arrow.up.message"
-        case .ellipsis: "ellipsis.message"
-        case .tray: "tray.full"
-        case .stack: "square.stack"
-        case .list: "list.number"
-        case .forward: "text.line.last.and.arrowtriangle.forward"
-        }
-    }
-}
-
 /// The queue as a capsule the size of Stop: glyph and count in pink on a faint pink fill; lit (the card open) the fill
 /// is the accent and the ink on it, as a selected toggle.
 struct QueueCapsule: View {
     let count: Int
     var lit = false
-    var glyph = QueueGlyph.symbol
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: glyph.name).font(.footnote.weight(.semibold))
+            Image(systemName: "arrow.up.message").font(.footnote.weight(.semibold))
             Text("\(count)").font(.footnote.weight(.semibold)).monospacedDigit()
         }
         .foregroundStyle(lit ? Color.onAccent : Color.dispatchPink)
@@ -185,23 +122,7 @@ struct QueueCapsule: View {
     }
 }
 
-/// Q4: the queued messages as two of the user's bubbles stacked, the count on the front one.
-struct QueueBubbleStack: View {
-    let count: Int
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            RoundedRectangle(cornerRadius: 7).fill(Color("BubbleUser").opacity(0.45))
-                .frame(width: 26, height: 20).offset(x: -5, y: -5)
-            Text("\(count)").font(.caption.weight(.bold)).monospacedDigit()
-                .foregroundStyle(Color("BubbleUserText"))
-                .frame(width: 26, height: 20)
-                .background(Color("BubbleUser"), in: RoundedRectangle(cornerRadius: 7))
-        }
-        .frame(width: 34, height: 28)
-    }
-}
-
-/// Today's queue (`ChatQueueCard`): folded, the line "Queued · 2  sends after this turn"; open, the card with its rows.
+/// The queue's card (`ChatQueueCard`): folded, the line "Queued · 2  sends after this turn"; open, the card with its rows.
 struct QueueCardMock: View {
     var open = false
     var paused = false
@@ -246,35 +167,7 @@ struct QueueCardMock: View {
     private var subtitle: String { paused ? "paused after Stop" : "sends after this turn" }
 }
 
-/// Q5: the capsule's glyph candidates, each in its row, folded and lit.
-struct QueueGlyphsScreen: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ForEach(QueueGlyph.allCases, id: \.self) { glyph in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(glyph.name).font(.caption.monospaced()).foregroundStyle(.secondary).padding(.horizontal, 16)
-                            WorkingRowMock(style: .capsule, glyph: glyph)
-                            HStack(spacing: 10) {
-                                QueueCapsule(count: 2, glyph: glyph)
-                                QueueCapsule(count: 2, lit: true, glyph: glyph)
-                                QueueCapsule(count: 12, glyph: glyph)
-                            }
-                            .padding(.horizontal, 16)
-                        }
-                    }
-                }
-                .padding(.vertical, 16)
-            }
-            .background(Color.canvas)
-            .navigationTitle("Queue glyph")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-}
-
-/// Q6: the agent stopped with messages still queued: no working row, so the queue keeps today's line, Resume in it.
+/// Q6: the agent stopped with messages still queued: no working row, so the queue keeps its own line, Resume in it.
 struct QueuePausedScreen: View {
     var body: some View {
         let state = ModeButtonState(shown: .chat, agent: true)
@@ -299,7 +192,7 @@ struct QueuePausedScreen: View {
             .scrollEdgeEffectStyle(.soft, for: .bottom)
             .safeAreaBar(edge: .bottom) { Composer() }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state, layout: .hostLeading) }
+            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
         }
     }
 }

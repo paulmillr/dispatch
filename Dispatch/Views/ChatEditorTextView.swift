@@ -84,8 +84,8 @@ class ChatEditorTextView: ChatCaretTextView {
             indent(outdent: flags == .shift); return
         }
         if (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText() {
+            // ⇧⏎ adds a line without entering editor mode: Return still sends.
             if flags.contains(.shift) || multiline {
-                multiline = true
                 insertNewlineIgnoringFieldEditor(nil)
             } else { submit?() }
             return

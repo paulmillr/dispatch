@@ -145,7 +145,7 @@ final class IPadFidelityUITests: XCTestCase {
             corner.press(forDuration: 0.5, thenDragTo: corner.withOffset(CGVector(dx: -150, dy: -150)))
             sleep(1)
         }
-        let controls = springboard.descendants(matching: .any)["window-controls:yachts.dispatch.mobile"].firstMatch
+        let controls = springboard.descendants(matching: .any)["window-controls:\(MobileUITests.targetBundleIdentifier)"].firstMatch
         guard controls.waitForExistence(timeout: 5) else { return XCTFail("window controls") }
         controls.tap()
         let zoom = springboard.buttons["Zoom-button"].firstMatch

@@ -2,10 +2,8 @@ import SwiftUI
 import UIKit
 
 /// The desktop syntax palette on the phone (M5d, M5e): keywords pink, calls blue, strings green, types purple, numbers
-/// and constants amber, comments grey, the rest light grey. A port of the Mac's `SyntaxHighlight` lexer (which needs the
-/// Mac's `ChatTheme`): the same language names, the same bounded, non-overlapping regular expression where strings
-/// and comments are consumed whole so keywords cannot repaint them, with the mockup's finer roles (types and constants
-/// apart from keywords) and keyword sets per language.
+/// and constants amber, comments grey, the rest light grey. The shared scanner's mobile profile keeps the mockup's
+/// finer roles (types and constants apart from keywords) and keyword sets per language.
 enum CodeSyntax {
     enum Role: String, CaseIterable, Sendable {
         case plain, keyword, call, string, type, number, comment
@@ -31,43 +29,19 @@ enum CodeSyntax {
     }
 
     /// Larger code is shown plain, as on the Mac.
-    static let limit = 65_536
+    static let limit = SyntaxScanner.limit
 
     /// The language for a fence tag or a path ("ts", "src/lib/idempotent.ts", "Swift"), as the Mac names them.
     static func language(_ hint: String) -> String {
-        let name = hint.lowercased().split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? "text"
-        let ext = (name as NSString).pathExtension
-        let key = ext.isEmpty ? (name as NSString).lastPathComponent : ext
-        switch key {
-        case "sh", "bash", "zsh", "fish", "shell", "console": return "shell"
-        case "js", "jsx", "javascript", "mjs", "cjs": return "javascript"
-        case "ts", "tsx", "typescript", "mts", "cts": return "typescript"
-        case "py", "python": return "python"
-        case "swift": return "swift"
-        case "json", "jsonl": return "json"
-        case "yml", "yaml": return "yaml"
-        case "c", "h", "cpp", "hpp", "cc", "rust", "rs", "go", "java", "kotlin", "kt", "cs", "m", "mm": return "code"
-        case "css", "scss": return "css"
-        case "html", "xml", "svg": return "html"
-        case "sql": return "sql"
-        case "diff", "patch": return "diff"
-        default: return "text"
-        }
+        SyntaxScanner.language(hint, profile: .mobile)
     }
 
     /// The tokens of `code`, in order and never overlapping; text between them is `.plain`.
     static func tokens(_ code: String, language hint: String) -> [Token] {
-        let language = language(hint)
-        guard language != "text", language != "diff", code.utf16.count <= limit,
-              let expression = expressions[language] else { return [] }
-        var result: [Token] = []
-        for match in expression.matches(in: code, range: NSRange(location: 0, length: code.utf16.count)) {
-            for (group, role) in groups.enumerated() where match.range(at: group + 1).location != NSNotFound {
-                result.append(Token(range: match.range, role: role))
-                break
-            }
+        SyntaxScanner.tokens(code, language: hint, profile: .mobile).map { token in
+            // The mobile profile emits only code roles; diff and Markdown keep their dedicated renderers.
+            Token(range: token.range, role: Role(rawValue: token.role.rawValue)!)
         }
-        return result
     }
 
     /// `code` as attributed text in the palette (no font).
@@ -127,76 +101,6 @@ enum CodeSyntax {
               let start = AttributedString.Index(from, within: text), let end = AttributedString.Index(to, within: text)
         else { return nil }
         return start..<end
-    }
-
-    /// The capture groups in precedence order.
-    private static let groups: [Role] = [.comment, .string, .number, .number, .keyword, .type, .number, .type, .call, .call]
-
-    private static let expressions: [String: NSRegularExpression] = {
-        ["shell", "python", "yaml", "javascript", "typescript", "swift", "json", "code", "css", "html", "sql"]
-            .reduce(into: [:]) { result, language in result[language] = try? NSRegularExpression(pattern: pattern(language)) }
-    }()
-
-    private static func words(_ list: String) -> String {
-        list.isEmpty ? #"(?!)"# : #"\b(?:"# + list.split(separator: " ").joined(separator: "|") + #")\b"#
-    }
-
-    private static func keywords(_ language: String) -> String {
-        switch language {
-        case "swift":
-            "let var func return if else guard for while in do switch case break continue default import class struct enum protocol extension public private internal fileprivate open static final override async await throws throw try catch defer self Self super init deinit where as is some any inout mutating nonisolated actor typealias associatedtype get set willSet didSet lazy weak unowned rethrows subscript repeat fallthrough consuming borrowing"
-        case "javascript", "typescript":
-            "const let var function return if else for while do switch case break continue default import from export class extends implements new this super async await throw try catch finally typeof instanceof in of yield delete void interface type enum namespace declare readonly public private protected static abstract as is keyof satisfies"
-        case "python":
-            "def class return if elif else for while in not and or is import from as with try except finally raise lambda pass yield global nonlocal async await break continue del assert match case self"
-        case "shell":
-            "if then else elif fi for do done while until case esac function in return export local readonly set unset source"
-        case "json":
-            ""
-        case "sql":
-            "select SELECT from FROM where WHERE join JOIN left LEFT inner INNER on ON insert INSERT into INTO values VALUES update UPDATE set SET delete DELETE create CREATE table TABLE limit LIMIT order ORDER by BY group GROUP and AND or OR not NOT as AS"
-        default:
-            "let var const func function fn return if else guard for while in of do switch case match break continue default import from export use class struct enum protocol extension impl trait interface type public private protected internal pub static final override async await throws throw try catch defer self super new mut ref package void this goto"
-        }
-    }
-
-    private static func constants(_ language: String) -> String {
-        switch language {
-        case "swift": "true false nil"
-        case "javascript", "typescript": "true false null undefined NaN Infinity"
-        case "python": "True False None"
-        case "shell", "css", "html", "yaml": ""
-        default: "true false null nil None"
-        }
-    }
-
-    private static func types(_ language: String) -> String {
-        switch language {
-        case "typescript", "javascript": "string number boolean any unknown never object symbol bigint"
-        case "python": "int str float bool list dict set tuple bytes object"
-        case "code": "int long short char float double bool void usize isize u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 str"
-        default: ""
-        }
-    }
-
-    private static func pattern(_ language: String) -> String {
-        let hash = ["shell", "python", "yaml"].contains(language)
-        let comments = language == "json" ? #"(?!)"#
-            : hash ? #"(?m)(?<!\S)#[^\n]*"#
-            : language == "sql" ? #"--[^\n]*|/\*[\s\S]*?(?:\*/|$)"#
-            : #"//[^\n]*|/\*[\s\S]*?(?:\*/|$)|<!--[\s\S]*?(?:-->|$)"#
-        let strings = #""""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\[\s\S]|[^"\\\n])*(?:"|$)|'(?:\\[\s\S]|[^'\\\n])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)"#
-        let numbers = #"\b(?:0x[\da-fA-F_]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"#
-        // Upper-case names that are not object keys (`TTL`, not `NX:`) read as constants.
-        let shouting = #"\b[A-Z][A-Z0-9_]+\b(?!\s*:(?!:))"#
-        // Type names: capitalised with a lower-case letter (`String`, `Promise`), or one capital (`T`).
-        let capitalized = language == "shell" ? #"(?!)"# : #"\b[A-Z](?:[A-Z0-9_]*[a-z][a-zA-Z0-9_]*)?\b"#
-        // Calls, and the receivers of a member access (`redis.incr(…)`); in the shell, variables and flags.
-        let calls = language == "shell" ? #"\$\{[^}\n]*\}|\$[a-zA-Z_][a-zA-Z_0-9]*|(?<!\S)--?[a-zA-Z][a-zA-Z0-9-]*"#
-            : #"\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()"#
-        let receivers = language == "shell" || language == "json" ? #"(?!)"# : #"\b[a-z_][a-zA-Z0-9_]*(?=\??\.[a-zA-Z_])"#
-        return [comments, strings, numbers, words(constants(language)), words(keywords(language)), words(types(language)),
-                shouting, capitalized, calls, receivers].map { "(" + $0 + ")" }.joined(separator: "|")
     }
 }
 

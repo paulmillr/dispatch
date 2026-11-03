@@ -98,48 +98,35 @@ struct CommitsQueries: Sendable {
         return hash
     }
 
+    private var commits: GitCommitReads<CommitsError> {
+        GitCommitReads(execute: { args, limit in
+            do throws(CommitsError) { return .success(try await output(args, limit: limit)) }
+            catch { return .failure(error) }
+        }, failed: { .failed($0) }, failedMessage: { error in
+            if case .failed(let message) = error { return message }
+            return nil
+        })
+    }
+
     // MARK: The log
 
     /// A page of the log with what each commit's raw headers say (its signature's kind, the author's offset, the
     /// committer), read beside it; a page whose raw read fails shows less rather than failing.
     func log(scope: GitLogScope, match: GitLogMatch, skip: Int, count: Int, tip: String?) async throws(CommitsError) -> GitLogPage {
-        var checkedTip: String?
-        if scope == .branch, let tip { checkedTip = try Self.checked(tip) }
-        let args = GitCommands.log(scope: scope, match: match, skip: skip, count: count, tip: checkedTip)
-        async let raw = try? self.output(GitCommands.raw(args))
-        let output: GitOutput
-        do throws(CommitsError) {
-            output = try await self.output(args)
-        } catch .failed(let message) where message.contains("does not have any commits") || message.contains("bad default revision") {
-            // A repository before its first commit has an empty log.
-            return GitLogPage(commits: [], exhausted: true)
-        }
-        var commits = GitParsers.log(output.output)
-        if let raw = await raw { Self.fold(GitParsers.rawHeaders(raw.output), into: &commits) }
-        return GitLogPage(commits: commits, exhausted: output.truncated ? commits.isEmpty : commits.count < count)
+        try await commits.log(scope: scope, match: match, skip: skip, count: count, tip: tip)
     }
 
     static func fold(_ headers: [String: GitRawHeaders], into commits: inout [GitCommit]) {
-        for index in commits.indices {
-            guard let read = headers[commits[index].hash] else { continue }
-            commits[index].signature = read.signature
-            commits[index].zone = read.author?.zone
-            commits[index].committer = read.committer
-        }
+        GitCommitReads<CommitsError>.fold(headers, into: &commits)
     }
 
     func refs() async throws(CommitsError) -> [GitRefRecord] {
-        GitParsers.refs(try await run(GitCommands.refs))
+        try await commits.refs()
     }
 
     /// HEAD's commit, nil before the first one.
     func head() async throws(CommitsError) -> String? {
-        do throws(CommitsError) {
-            let hash = try await run(GitCommands.head).trimmingCharacters(in: .whitespacesAndNewlines)
-            return GitParsers.isObjectName(hash) ? hash : nil
-        } catch .failed {
-            return nil
-        }
+        try await commits.head()
     }
 
     /// Whether the work tree has changes (the hollow "Uncommitted changes" row): staged, unstaged or untracked files.
@@ -153,59 +140,18 @@ struct CommitsQueries: Sendable {
 
     /// The commit, its files' counts and letters (as the Mac's `GitQueries.commit`), and its raw headers.
     func commit(_ hash: String) async throws(CommitsError) -> GitCommitDetail {
-        let hash = try Self.checked(hash)
-        async let letters = try? self.run(GitCommands.show(hash, numstat: false))
-        async let raw = try? self.run(["log", "-n", "1", "--pretty=raw", hash])
-        let output = try await run(GitCommands.show(hash, numstat: true))
-        guard var detail = GitParsers.commitDetail(output) else { throw CommitsError.failed("git described no commit \(hash)") }
-        let named: [GitNameStatus]
-        if let parent = detail.commit.parents.first, detail.commit.parents.count > 1 {
-            named = GitParsers.nameStatus(try await run(GitCommands.mergeLetters(parent: try Self.checked(parent), hash: hash)))
-        } else {
-            named = (await letters).map(GitParsers.commitNameStatus) ?? []
-        }
-        detail = GitParsers.commitDetail(output, letters: named) ?? detail
-        if let raw = await raw {
-            var commits = [detail.commit]
-            Self.fold(GitParsers.rawHeaders(raw), into: &commits)
-            detail.commit = commits[0]
-        }
-        return detail
+        try await commits.commit(hash, requireLetters: false, rawHeaders: true)
     }
 
     /// One file's diff in the commit (a merge's against its first parent), with a binary's sizes.
     func diff(_ commit: GitCommit, path: String, oldPath: String?) async throws(CommitsError) -> GitDiff {
-        guard GitChange.representable(path), oldPath.map(GitChange.representable) ?? true else {
-            throw CommitsError.failed(GitChange.unrepresentable)
-        }
-        let hash = try Self.checked(commit.hash)
-        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
-        let (args, stat) = GitCommands.fileDiff(hash, mergeParent: parent, paths: GitCommands.paths(path, old: oldPath))
-        let output = try await output(args)
-        var diff = GitParsers.diffs(output.output, truncated: output.truncated).last
-            ?? GitDiff(path: path, oldPath: oldPath, text: "", truncated: output.truncated)
-        if diff.binary, let sizes = try? await run(stat), let read = GitParsers.binarySizes(sizes) {
-            diff.oldSize = read.old
-            diff.newSize = read.new
-        }
-        return diff
+        try await commits.diff(commit, path: path, oldPath: oldPath)
     }
 
     /// The file as the commit left it (the Source view): the commit's diff of it with the whole file as context.
     func source(_ commit: GitCommit, path: String, oldPath: String?) async throws(CommitsError) -> String {
-        guard GitChange.representable(path), oldPath.map(GitChange.representable) ?? true else {
-            throw CommitsError.failed(GitChange.unrepresentable)
-        }
-        let hash = try Self.checked(commit.hash)
-        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
-        let args = GitCommands.fileSource(hash, mergeParent: parent, paths: GitCommands.paths(path, old: oldPath),
-                                          limit: Self.sourceLimit)
-        let output = try await output(args, limit: Self.sourceLimit * 2)
-        if output.truncated { throw CommitsError.failed("Over 2 MB: the terminal shows the rest") }
-        guard let text = GitParsers.newSide(output.output) else {
-            throw CommitsError.failed("git shows no lines of this file in the commit")
-        }
-        return text
+        try await commits.source(commit, path: path, oldPath: oldPath, limit: Self.sourceLimit,
+                                 tooLarge: "Over 2 MB: the terminal shows the rest")
     }
 
     /// The most of a patch Copy patch reads: the helper's cap.

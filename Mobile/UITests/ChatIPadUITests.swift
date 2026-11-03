@@ -191,9 +191,9 @@ final class ChatIPadUITests: XCTestCase {
             XCTAssertTrue(message.waitForExistence(timeout: 10))
             let column = message.frame.minX - 40
             message.tap()
-            let title = app.staticTexts["Message"]
-            XCTAssertTrue(title.waitForExistence(timeout: 5))
-            XCTAssertGreaterThan(title.frame.minX, column, "the details are in the detail column")
+            let actions = app.buttons["Message actions"]
+            XCTAssertTrue(actions.waitForExistence(timeout: 5))
+            XCTAssertGreaterThan(actions.frame.minX, column, "the details are in the detail column")
             XCTAssertTrue(app.staticTexts["Spaces"].exists, "beside the sidebar")
             shot("details-" + (orientation == .portrait ? "portrait" : "landscape"))
             app.buttons.matching(NSPredicate(format: "label == 'app' OR label CONTAINS 'Back'")).firstMatch.tap()

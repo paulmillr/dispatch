@@ -106,18 +106,13 @@ final class ChatModelPicker: Identifiable {
         self.helper = helper
     }
 
-    private func helperChoices(_ menu: HelperChat.Menu) -> [AgentModelMenu.Choice] {
-        menu.choices.enumerated().map { index, choice in
-            .init(number: index + 1, name: choice.id, detail: choice.detail ?? "",
-                         current: choice.id == menu.current, isDefault: choice.id == menu.default, effortValue: choice.id)
-        }
-    }
-
     private func loadHelper(cycle: Bool) {
         run {
             guard let helper = self.helper else { return }
-            let menu: HelperChat.Menu = try await helper.call("chat.models", input: .init(helper.route))
-            self.models = self.helperChoices(menu)
+            let menu = try await HelperChat.ModelTransport.menu(route: helper.route) { method, input in
+                try await helper.call(method, input: input)
+            }
+            self.models = HelperChat.ModelTransport.choices(menu, detail: .description)
             self.cache.store(models: self.models, quickModels: [])
             if let current = menu.current { self.cache.rememberAlias(self.currentModel, menuName: current) }
             self.currentModel = menu.current ?? self.currentModel
@@ -136,12 +131,12 @@ final class ChatModelPicker: Identifiable {
 
     private func loadHelperEfforts(_ model: String) async throws {
         guard let helper else { return }
-        var input = HelperChat.Input(helper.route)
-        input.model = model
-        let menu: HelperChat.Menu = try await helper.call("chat.settings", input: input)
+        let menu = try await HelperChat.ModelTransport.menu(route: helper.route, model: model) { method, input in
+            try await helper.call(method, input: input)
+        }
         selectedModel = model
         highlightedModel = model
-        efforts = helperChoices(menu)
+        efforts = HelperChat.ModelTransport.choices(menu, detail: .description)
         cache.store(efforts: efforts, for: model)
         highlightedEffort = efforts.first(where: \.current)?.name ?? efforts.first?.name ?? ""
         if efforts.isEmpty { try await selectHelper(model, effort: nil) }
@@ -149,24 +144,15 @@ final class ChatModelPicker: Identifiable {
 
     private func selectHelper(_ model: String, effort: String?) async throws {
         guard let helper else { return }
-        var input = HelperChat.Input(helper.route)
-        input.model = model
-        input.effort = effort
-        let sent: HelperChat.Sent = try await helper.call("chat.settings.set", input: input)
-        try sent.confirmed()
-        try Task.checkCancellation()
-        // Completing the native dialog can also mean declining the requested change.
-        struct Observed: Decodable, Sendable { let state: HelperChat.State }
-        let observed: Observed = try await helper.call("chat.state", input: .init(helper.route))
-        try Task.checkCancellation()
-        if let reported = observed.state.model {
-            if reported != currentModelID || model == currentModel {
-                cache.rememberAlias(reported, menuName: model)
-            }
-            currentModel = reported
-            currentEffort = observed.state.effort
-            confirmed(reported, currentEffort)
+        let observed = try await HelperChat.ModelTransport.select(route: helper.route, model: model, effort: effort,
+            set: { try await helper.call("chat.settings.set", input: $0) },
+            read: { try await helper.call("chat.state", input: $0) })
+        if observed.model != currentModelID || model == currentModel {
+            cache.rememberAlias(observed.model, menuName: model)
         }
+        currentModel = observed.model
+        currentEffort = observed.effort
+        confirmed(observed.model, observed.effort)
         presented = false
         finished(false)
     }
@@ -177,7 +163,7 @@ final class ChatModelPicker: Identifiable {
         interaction = value
         scopeTitle = question.header
         scopeDetail = question.text
-        scope = helperChoices(.init(choices: question.options, current: nil))
+        scope = HelperChat.ModelTransport.choices(.init(choices: question.options, current: nil), detail: .description)
         highlightedScope = scope.first?.name ?? ""
         loading = false
         return true
@@ -195,9 +181,7 @@ final class ChatModelPicker: Identifiable {
         answerTask = Task {
             defer { answerTask = nil }
             do {
-                var input = HelperChat.Input(helper.route)
-                input.interaction = interaction.id
-                input.answers = [question.id: .options([index])]
+                guard let input = interaction.answerInput(route: helper.route, response: .option(index)) else { return }
                 let sent: HelperChat.Sent = try await helper.call("interactions.answer", input: input)
                 try sent.confirmed()
                 try Task.checkCancellation()

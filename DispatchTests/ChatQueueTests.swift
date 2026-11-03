@@ -357,11 +357,11 @@ final class ChatQueueTests: XCTestCase {
             XCTAssertEqual(session.queuedMessages.last?.text, message)
         }
         XCTAssertEqual(session.queuedMessages.count, 2)
-        session.draft = "/terminal"; session.drafts.edit(multiline: true)
-        try await TestSupport.eventually { editor.string == "/terminal" }
+        session.draft = "/terminal\nquoted"; session.drafts.edit(multiline: true)
+        try await TestSupport.eventually { editor.string == "/terminal\nquoted" }
         XCTAssertTrue(editor.performKeyEquivalent(with: TerminalTestSupport.keyEvent(36, "\n", in: window, modifiers: .control)))
         XCTAssertTrue(session.showChat, "A multiline /terminal is literal text")
-        XCTAssertEqual(session.queuedMessages.last?.text, "/terminal")
+        XCTAssertEqual(session.queuedMessages.last?.text, "/terminal\nquoted")
         XCTAssertEqual(session.queuedMessages.count, 3)
         XCTAssertTrue(session.queuedMessages.last?.delivery?.draft.multiline == true)
         session.draft = "/terminal"
@@ -377,7 +377,7 @@ final class ChatQueueTests: XCTestCase {
         session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
-        for text in ["/new", "/terminal\nquoted text", "/model", "!echo example"] {
+        for text in ["/new\nnow", "/terminal\nquoted text", "/model\nfast", "!echo example\nmore"] {
             session.draft = text
             session.drafts.edit(multiline: true)
             XCTAssertFalse(session.draftIsCommand)
@@ -389,7 +389,7 @@ final class ChatQueueTests: XCTestCase {
         }
         let first = try XCTUnwrap(session.queuedMessages.first)
         chat.editQueued(first.id, in: session)
-        XCTAssertEqual(session.draft, "/new")
+        XCTAssertEqual(session.draft, "/new\nnow")
         XCTAssertTrue(session.drafts.current.multiline)
         XCTAssertFalse(session.draftIsCommand)
         chat.queue(session)
@@ -399,7 +399,7 @@ final class ChatQueueTests: XCTestCase {
         XCTAssertNil(session.queuePaused)
         XCTAssertNotNil(session.queueWaiting)
         XCTAssertTrue(session.showChat)
-        XCTAssertEqual(session.queuedMessages.first?.text, "/new")
+        XCTAssertEqual(session.queuedMessages.first?.text, "/new\nnow")
         XCTAssertNil(session.command)
         session.showOptimisticPrompt("/new")
         XCTAssertEqual(session.optimisticPrompt?.text, "/new")

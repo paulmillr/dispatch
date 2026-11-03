@@ -77,7 +77,7 @@ struct SpaceTabRow: View {
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Image(systemName: SpacesText.symbol(tab))
+                    Image(symbol: SpacesText.symbol(tab))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)

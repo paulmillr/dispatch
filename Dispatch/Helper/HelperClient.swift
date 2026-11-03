@@ -237,6 +237,10 @@ final class HelperClient: Sendable {
     try await connection.request("backends.list", params: [String: String]())
   }
 
+  nonisolated(nonsending) func multiplexers() async throws -> [Multiplexer] {
+    try await connection.request("multiplexers.list", params: [String: String]())
+  }
+
   /// An agent the helper can start; `key` is opaque, `label` is for display.
   struct Launch: Decodable, Sendable {
     let launch: UInt64
@@ -250,15 +254,7 @@ final class HelperClient: Sendable {
     try await connection.request("launches.list", params: [String: String]())
   }
 
-  /// A multiplexer kind the helper hosts, running or not; `name` is for display and settings keys.
-  struct Multiplexer: Decodable, Sendable {
-    let mux: UInt64
-    let name: String
-    /// Its sessions are started outside the app (e.g. in a terminal) and can open as spaces.
-    let external: Bool
-    /// The command a new terminal runs to start a session this multiplexer claims.
-    let program: String?
-  }
+  typealias Multiplexer = HelperMultiplexer
 
   /// enabled: false stops the helper from claiming that multiplexer's clients started in terminals.
   nonisolated(nonsending) func claim(_ mux: UInt64, enabled: Bool) async throws {

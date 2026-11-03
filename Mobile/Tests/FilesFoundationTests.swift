@@ -16,7 +16,7 @@ final class FilesFoundationTests: XCTestCase {
         XCTAssertEqual(TabSegment.available(for: try XCTUnwrap(workspace.tab("herdr:app:1"))), [.terminal, .chat, .files])
         XCTAssertEqual(TabSegment.available(for: try XCTUnwrap(workspace.tab("herdr:app:3"))), [.terminal, .chat, .files],
                        "a tab without an agent keeps Chat")
-        XCTAssertEqual(TabSegment.chat.symbol, "text.bubble")
+        XCTAssertEqual(TabSegment.chat.symbol, "dispatch.chat")
         XCTAssertEqual(TabSegment.files.symbol, "folder")
         XCTAssertEqual(FilesMode.allCases.map(\.symbol), ["folder", "pencil.and.list.clipboard", "clock.arrow.circlepath"])
         XCTAssertEqual(FilesMode.available(repository: true), [.files, .review, .commits])

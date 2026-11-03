@@ -704,6 +704,44 @@ final class SwiftTerminalSessionTests: XCTestCase {
         search.free(session.surface.terminal)
     }
 
+    /// The find bar's matches are drawn: a frame lays the open search's highlights on the rows (as the iPhone's
+    /// renderer does), and ending the search draws the rows as before. Output that arrives while the search is open
+    /// is searched again by a later frame, so its match is drawn too.
+    func testSearchMatchesAreHighlightedUntilTheSearchEnds() throws {
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
+        session.setSize(width: 400, height: 120)
+        session.locked { Array("plain text\r\nfind me here\r\n".utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
+        func pixels() -> [UInt8] {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 400, height: 120, mipmapped: false)
+            (descriptor.usage, descriptor.storageMode) = ([.renderTarget, .shaderRead], .shared)
+            let target = session.device.makeTexture(descriptor: descriptor)!
+            guard let commands = session.render(into: target) else { XCTFail("Metal frame was not submitted"); return [] }
+            commands.waitUntilCompleted()
+            var bytes = [UInt8](repeating: 0, count: 400 * 120 * 4)
+            target.getBytes(&bytes, bytesPerRow: 400 * 4, from: MTLRegionMake2D(0, 0, 400, 120), mipmapLevel: 0)
+            return bytes
+        }
+        func action(_ name: String) { _ = session.locked { session.surface.bindingAction(Array(name.utf8)) } }
+        let plain = pixels()
+        action("search:find")
+        let found = pixels()
+        XCTAssertNotEqual(found, plain, "The match is highlighted")
+        XCTAssertFalse(session.locked { session.surface.searchHighlights.changed }, "The frame took the highlights")
+        XCTAssertEqual(session.locked { session.surface.searchHighlights.matches.count }, 1)
+        action("end_search")
+        XCTAssertEqual(pixels(), plain, "Ending the search draws the rows as before")
+
+        action("search:find")
+        _ = pixels()
+        session.locked { Array("find again\r\n".utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while session.locked({ session.surface.searchHighlights.matches.count }) < 2, Date() < deadline {
+            _ = pixels()
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        XCTAssertEqual(session.locked { session.surface.searchHighlights.matches.count }, 2, "New output's match is found by a later frame")
+    }
+
     /// The reusable AppKit view may approve a local paste, but it must never silently approve a
     /// clipboard read initiated by terminal output.
     func testTerminalViewDoesNotAutomaticallyConfirmProgramClipboardRequests() {

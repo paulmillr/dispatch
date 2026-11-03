@@ -107,6 +107,8 @@
     @ObservationIgnored private var renaming: [UUID: (name: String, node: UInt64?, failed: Bool)] = [:]
     /// Spaces and windows hidden while the server closes them; a failed close shows them again.
     @ObservationIgnored private var closing: Set<UInt64> = []
+    /// A chat leaves the layout immediately, but keeps its terminal and discovery until its quit finishes.
+    @ObservationIgnored private var preparingCloses: [UInt64: Space] = [:]
     /// Closing nodes no topology has shown yet (a dismissed creation's terminal): kept closing until one does.
     @ObservationIgnored private var unseen: Set<UInt64> = []
     /// Created terminals of dismissed windows: their window is detached once a topology shows it.
@@ -454,6 +456,13 @@
       workspace?.spaces.filter { $0.remote == endpoint.connection } ?? []
     }
 
+    func closingSpace(containing tab: UUID) -> Space? {
+      preparingCloses.first { node, space in
+        space.tabs.contains { $0.id == tab && $0.terminal == node }
+          || space.containers.contains { $0.node == node && $0.terminals.contains { $0.id == tab } }
+      }?.value
+    }
+
     /// Whether `tab`, a tab of this helper's spaces, publishes its screen to it (`TerminalView.publishScreen`): always
     /// to a helper without `screens.host`, and to one with it only for a native terminal, which has no host source;
     /// that helper reads tmux and herdr screens itself. Nothing before the hello is known or while the tab's
@@ -462,9 +471,9 @@
     func publishes(_ tab: UUID) -> Bool {
       guard let hostsScreens else { return false }
       guard hostsScreens else { return true }
-      guard let backend = workspace?.spaces.first(where: {
+      guard let backend = (workspace?.spaces.first(where: {
         $0.remote == endpoint.connection && $0.tabs.contains { $0.id == tab }
-      })?.backend, let kind = kind(of: backend) else { return false }
+      }) ?? closingSpace(containing: tab))?.backend, let kind = kind(of: backend) else { return false }
       return !Self.hostedScreens.contains(kind.name)
     }
 
@@ -595,7 +604,9 @@
 
     /// The tab showing a terminal of this helper, or the tab an observed terminal belongs to.
     func tab(of terminal: UInt64) -> UUID? {
-      owned.flatMap(\.tabs).first { $0.terminal == terminal }?.id ?? observed[terminal]
+      if let tab = owned.flatMap(\.tabs).first(where: { $0.terminal == terminal }) { return tab.id }
+      if let tab = preparingCloses[terminal]?.tabs.first(where: { $0.terminal == terminal }) { return tab.id }
+      return observed[terminal]
         ?? controlTerminals.first { $0.value == terminal }?.key
         ?? gateways.first { $0.value.terminal == terminal }?.key
         ?? assigned[terminal].flatMap { terminals[$0] == nil ? nil : $0 }
@@ -1899,7 +1910,8 @@
     }
 
     @discardableResult
-    func close(_ node: UInt64, policy: HelperClient.Policy) -> Task<Void, Never> {
+    func close(_ node: UInt64, policy: HelperClient.Policy,
+               preparing: (@MainActor () async throws -> Void)? = nil) -> Task<Void, Never> {
       if policy == .detach, let pending = dismissals[node] { return pending.task }
       // A space still restoring shows the view saved from an earlier connection: its node ids are that connection's,
       // not this helper's, until the restore has matched them to this server's topology. Sent here, an old id names
@@ -1916,6 +1928,7 @@
           || space.tabs.contains { $0.terminal == node }
       }
       let route = source?.backend.flatMap { routes[$0] }
+      if preparing != nil, let source { preparingCloses[node] = source }
       if let source, let route { hosts[route] = source.hostID }
       let waiting = route.flatMap { creations[$0] }.map { Array($0.values) } ?? []
       let spaces = owned.filter { $0.node == node }
@@ -1952,9 +1965,11 @@
           close(terminal, policy: policy)
         }
       }
-      // Their output stops now, before the close request: an attach still in flight cancels itself on return (the tab
-      // is no longer bound), one that returned is cancelled here. Either way the helper sees the cancel first.
-      for tab in terminals { attachments.removeValue(forKey: tab).map { connection?.cancel($0) } }
+      // Output stops before the close request, after any graceful quit that still needs the terminal's screen.
+      let stopOutput = { [self] in
+        for tab in terminals { attachments.removeValue(forKey: tab).map { connection?.cancel($0) } }
+      }
+      if preparing == nil { stopOutput() }
       // Replay: a closing tab's view gets no more layout, so what its renderer recorded next waits for none (no-op live).
       if policy != .detach { for tab in terminals { System.terminal(tab)?.ticket.closing() } }
       let continuing = route.map { route in
@@ -2008,7 +2023,22 @@
         for task in waiting { await task.value }
         guard !self.stopped, !Task.isCancelled else { return }
         let result: HelperClient.Closed
-        do { result = try await client.close(.init(node: node, policy: policy)) } catch {
+        do {
+          if let preparing {
+            try await preparing()
+            guard !self.stopped, !Task.isCancelled else { return }
+            self.preparingCloses.removeValue(forKey: node)
+            stopOutput()
+            // An agent launched as the terminal's program can take the terminal with it when it quits.
+            if let route, let topology = self.snapshots[route], !topology.nodes.contains(where: { $0.id == node }) {
+              self.closing.remove(node)
+              self.workspace?.onCloseTabs(released)
+              return
+            }
+          }
+          result = try await client.close(.init(node: node, policy: policy))
+        } catch {
+          self.preparingCloses.removeValue(forKey: node)
           if !self.stopped, !Task.isCancelled, policy != .detach { self.reveal(node) }
           throw error
         }
@@ -2230,6 +2260,9 @@
     func stop(retaining: Bool = false) {
       if !retaining { cancelRestores() }
       guard !stopped else { return }
+      // A lost connection cannot confirm a quit. Put its hidden tabs back before retaining the offline layout.
+      for node in Array(preparingCloses.keys) { reveal(node) }
+      preparingCloses.removeAll()
       stopped = true
       marked.removeAll()
       sized.removeAll()
@@ -2700,7 +2733,7 @@
           .map { (tab, $0) }
       })
       func handOff() {
-        guard workspace.closeLaunching[on: multiplexer(of: topology.backend) ?? ""] else { return }
+        guard !System.testing || workspace.closeLaunching[on: multiplexer(of: topology.backend) ?? ""] else { return }
         // A control gateway hides its UI but keeps carrying the mux. An observed SSH login carries the link
         // these spaces live on: it stays for tmux, while Herdr's views keep that connection through the SSH
         // master until the last one detaches (SSHCoordinator), so the login closes like tmux -CC's tab.
@@ -2731,7 +2764,7 @@
       guard releases else { return handOff() }
       // Herdr's launchers stay shown until it releases them. They count as leaving meanwhile, so the round trip
       // does not flash the sidebar either; whatever the release's outcome, they count again once it ends.
-      let retiring = workspace.closeLaunching[on: "herdr"] ? sources : []
+      let retiring = (!System.testing || workspace.closeLaunching[on: "herdr"]) ? sources : []
       workspace.retiringLaunchers.formUnion(retiring)
       let release = perform { client in
         // The retiring frontend can still request mouse reports until its reset output arrives.

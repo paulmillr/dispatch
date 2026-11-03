@@ -145,11 +145,7 @@ struct ReviewDiffDocument: Equatable {
             return ReviewDiffRow(id: .diff(row), content: .hunk(hunk.section.isEmpty ? hunk.range : hunk.range + " " + hunk.section))
         case .line(let index):
             let line = presentation.lines[index]
-            let found: (ReviewLine, ReviewQuote)? = switch line.kind {
-            case .removed: line.old.map { (ReviewLine(side: .old, number: $0), ReviewQuote(kind: .removed, text: line.text)) }
-            case .added: line.new.map { (ReviewLine(side: .new, number: $0), ReviewQuote(kind: .added, text: line.text)) }
-            case .context: line.new.map { (ReviewLine(side: .new, number: $0), ReviewQuote(kind: .context, text: line.text)) }
-            }
+            let found = ReviewPlacement.anchor(line)
             return ReviewDiffRow(id: .diff(row), content: .code(line.kind, old: line.old, new: line.new), text: line.text,
                                  line: found?.0, quote: found?.1)
         case .fold(_, let count):
@@ -221,7 +217,7 @@ struct ReviewDiffDocument: Equatable {
     /// the file (the new side) nor among the diff's removed lines (the old side), or found in more than one place
     /// (`ReviewRefresh.relocate`, this being `area`'s diff of a file changed in `areas`). Unknown when the file is.
     func outdated(_ comments: [ReviewComment], area: GitChangeArea = .unstaged, areas: Set<GitChangeArea> = []) -> Set<UUID> {
-        if case .unknown = file { return [] }
+        if case .unknown = file, !(area == .staged && areas.contains(.unstaged)) { return [] }
         let relocated = ReviewRefresh.relocate(comments, file: file, diffs: [area: presentation], areas: areas.union([area]))
         return Set(relocated.filter { $0.outdated == true }.map(\.id))
     }
@@ -516,9 +512,10 @@ final class ReviewDiffModel {
         }
         let root = context.place.root, change = change
         let deleted = change.kind == .deleted
+        let readsWorkingTree = ReviewSourcePolicy.readsWorkingTree(change, areas: areas)
         do {
             async let diff = reader.diff(root, change)
-            async let text: String? = deleted ? nil : (try? await reader.text(FilesPath.join(root, change.path)))
+            async let text: String? = readsWorkingTree ? (try? await reader.text(FilesPath.join(root, change.path))) : nil
             let read = try await diff
             let document = ReviewDiffDocument(diff: read, file: await text, gone: deleted)
             if document != self.document { load = .loaded(document) }

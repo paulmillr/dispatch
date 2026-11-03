@@ -348,26 +348,12 @@ final class MobileVoiceConversation {
         }
     }
 
-    /// A reply as words to say (the Mac's `VoiceConversation.spoken`): Markdown's marks gone, code blocks and tables
-    /// named rather than read, long ones cut short.
     static func spoken(_ markdown: String) -> String {
-        let blocks = ChatMarkdownBlock.parse(TextRendering.visible(markdown))
-        let parts = blocks.compactMap { block -> String? in
-            switch block.kind {
-            case .rule: return nil
-            case .code: return "There's a code block on screen."
-            case .table: return "There's a table on screen."
-            default:
-                let value = try? AttributedString(markdown: block.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-                return value.map { String($0.characters) } ?? block.text
-            }
-        }
-        return bounded(parts.joined(separator: "\n"), 1_500, more: " The rest is on screen.")
+        SpokenMarkdown.text(markdown)
     }
 
     private static func bounded(_ text: String, _ limit: Int, more: String = "…") -> String {
-        let prefix = TextRendering.prefix(text, scalars: limit)
-        return prefix.text + (prefix.truncated ? more : "")
+        SpokenMarkdown.bounded(text, limit, more: more)
     }
 
     /// "0:08", "1:12": how long it has been reading.

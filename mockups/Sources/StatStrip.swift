@@ -2,40 +2,6 @@ import SwiftUI
 
 // Three small-sheet designs without rings: the same header and Disconnect, different metric displays.
 
-/// Shared: the sheet shell around a content block.
-struct SmallSheetShell<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 14) {
-                content
-                Text("Disconnect").font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity).frame(height: 50).glassEffect(.regular.interactive(), in: Capsule())
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16).padding(.top, 4)
-            .background(Color.canvas)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "apple.logo").font(.system(size: 17)).foregroundStyle(hostTint)
-                            .frame(width: 34, height: 34).background(hostTint.opacity(0.15), in: Circle())
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("mba2").font(.headline)
-                            HStack(spacing: 5) {
-                                Circle().fill(Color.stateConnected).frame(width: 6, height: 6)
-                                Text("macOS 26.1 · 18 ms").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) { Button {} label: { Image(systemName: "xmark") } }
-            }
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-}
-
 /// A tiny sparkline of the last 15 minutes.
 struct Sparkline: View {
     let bars: [Double?]
@@ -99,21 +65,5 @@ struct StatStripCard: View {
             Text(sub).font(.caption2).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// The small sheet: the strip card and Disconnect.
-struct SmallVariantB: View {
-    var body: some View { SmallSheetShell { StatStripCard() } }
-}
-
-struct SmallVariantHost<V: View>: View {
-    let height: CGFloat
-    @ViewBuilder var sheet: V
-    var body: some View {
-        SpacesRootScreen()
-            .sheet(isPresented: .constant(true)) {
-                sheet.presentationDetents([.height(height)]).presentationDragIndicator(.visible)
-            }
     }
 }

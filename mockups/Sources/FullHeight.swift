@@ -1,12 +1,11 @@
 import SwiftUI
 
-// iPhone on its side, every point of height to the content (L9–L13). No header row, no composer row, no tab bar: the
-// chrome stands in two rails beside the content, just inside the safe area (the Dynamic Island sits mid-height in the
-// side margin the phone turns it to, so nothing goes in the margins). The leading rail is the tab's: Back with the
-// needs-you count at the top, the five modes stacked in the middle, the menu disc at the bottom. The trailing rail is
-// the mode's: Chat's composer while empty is a button there, Terminal's keys, Review's Create review. What the header
-// said (the title, host · folder) moves into the content: the thread's first lines, the list's header, or a chip that
-// shows for a moment as the tab opens and on a tap of the menu disc's rail.
+// iPhone on its side, every point of height to the content (L12–L15, as the app ships it). No header row, no composer
+// row, no tab bar: the chrome stands in one rail beside the content, just inside the safe area (the Dynamic Island
+// sits mid-height in the side margin the phone turns it to, so nothing goes in the margins). The rail is the tab's:
+// Back with the needs-you count and the menu disc at the top, the five modes stacked in the middle, the mode's action
+// at its foot (Chat's Reply, Review's Create review, Terminal's keyboard). What the header said (the title, host ·
+// folder) moves into the content: the thread's first lines or the list's header.
 
 enum FullHeight {
     /// A rail's width: a 44-point control and its glass inset.
@@ -14,21 +13,18 @@ enum FullHeight {
     static let control: CGFloat = 44
 }
 
-/// The leading rail: Back on top, the modes in the middle, the menu disc at the bottom. Above a keyboard (`compact`)
-/// only Back and the disc: the modes wait for the keyboard to go. With the mode's `primary` action (L12, L13: Reply,
-/// Create review) the disc goes up under Back and the action takes the bottom, where the thumb rests, and the
-/// trailing rail is gone.
+/// The rail: Back and the menu disc on top, the modes in the middle, the mode's `primary` action at the bottom, where
+/// the thumb rests. Above a keyboard (`compact`) only Back and the disc: the modes and the action wait for the
+/// keyboard to go.
 struct TabRail: View {
     var mode: PadMode
     var count = 2
     var compact = false
-    var primary: AnyView? = nil
+    var primary: AnyView
     var body: some View {
         VStack(spacing: 0) {
             BackPill(count: count)
-            if primary != nil {
-                TabMenuDisc().padding(.top, 8)
-            }
+            TabMenuDisc().padding(.top, 8)
             Spacer(minLength: 10)
             if !compact {
             VStack(spacing: 2) {
@@ -36,7 +32,7 @@ struct TabRail: View {
                     let on = m == mode
                     Image(systemName: m.symbol).font(.system(size: 16, weight: .medium))
                         .foregroundStyle(on ? Color.dispatchPink : .primary)
-                        .frame(width: FullHeight.control - 4, height: primary == nil ? 38 : 35)
+                        .frame(width: FullHeight.control - 4, height: 35)
                         .background { if on { Capsule().fill(Color.lens) } }
                         .overlay(alignment: .topTrailing) {
                             if m == .review {
@@ -51,11 +47,7 @@ struct TabRail: View {
             .glassEffect(.regular, in: Capsule())
             Spacer(minLength: 10)
             }
-            if let primary {
-                if !compact { primary }
-            } else {
-                TabMenuDisc()
-            }
+            if !compact { primary }
         }
         .frame(width: FullHeight.rail)
         .padding(.vertical, 10)
@@ -76,34 +68,18 @@ struct InlineTitle: View {
     }
 }
 
-/// The tab's name in a glass chip at the content's top, for a moment as the tab opens (and while the menu disc is
-/// held): the terminal has no first line of its own to carry it.
-struct TitleChip: View {
-    var title = "dev"
-    var shell: String? = "pnpm"
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(title).font(.subheadline.weight(.semibold))
-            TabSubtitle(shell: shell)
-        }
-        .padding(.horizontal, 14).frame(height: 32)
-        .glassEffect(.regular, in: Capsule())
-    }
-}
-
-/// The full-height frame: leading rail, content, trailing rail, the content from the window's top to its bottom.
-struct FullHeightShell<Content: View, Trailing: View>: View {
+/// The full-height frame: the rail and the content, the content from the window's top to its bottom.
+struct FullHeightShell<Content: View>: View {
     var mode: PadMode
     var dark = false
     var compact = false
-    var primary: AnyView? = nil
+    var primary: AnyView
     /// L15: the window's width too. iOS keeps a 62-point inset on both sides of a phone on its side, for the Dynamic
     /// Island, which is on one side only (the one the phone's top points to). The rail stands on the island's side,
     /// just clear of it (50 points in, against the inset's 62), and the content runs into the other side's inset to
     /// 12 points from the glass, where only the rounded corners are.
     var edgeToEdge = false
     @ViewBuilder var content: Content
-    @ViewBuilder var trailing: Trailing
     var body: some View {
         if edgeToEdge {
             HStack(spacing: 6) {
@@ -122,8 +98,8 @@ struct FullHeightShell<Content: View, Trailing: View>: View {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(edges: .vertical)
-                trailing
             }
+            .padding(.trailing, 6)
             .background((dark ? Color.black : Color.canvas).ignoresSafeArea())
         }
     }
@@ -154,202 +130,6 @@ struct FullHeightThread: View {
         }
         .defaultScrollAnchor(.bottom)
         .scrollEdgeEffectStyle(.soft, for: .all)
-    }
-}
-
-/// Chat's rail: the composer while empty is a pink button at the bottom (a tap brings the field and the keyboard),
-/// dictation above it, "+" (attach, the send options) above that; Jump to latest takes the top when the thread is
-/// scrolled up.
-struct ChatRail: View {
-    var draft = false
-    var body: some View {
-        VStack(spacing: 10) {
-            Spacer()
-            Image(systemName: "plus").font(.body.weight(.semibold))
-                .frame(width: FullHeight.control, height: FullHeight.control)
-                .glassEffect(.regular.interactive(), in: Circle())
-            Image(systemName: "mic").font(.body.weight(.medium))
-                .frame(width: FullHeight.control, height: FullHeight.control)
-                .glassEffect(.regular.interactive(), in: Circle())
-            Image(systemName: draft ? "text.bubble.fill" : "square.and.pencil").font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(Color.onAccent)
-                .frame(width: FullHeight.control + 6, height: FullHeight.control + 6)
-                .glassEffect(.regular.tint(.dispatchPink).interactive(), in: Circle())
-                .overlay(alignment: .topTrailing) {
-                    // A draft kept while the keyboard is down: its first words on hold.
-                    if draft { Circle().fill(Color.stateUnread).frame(width: 12, height: 12).overlay(Circle().stroke(Color.canvas, lineWidth: 2)) }
-                }
-        }
-        .frame(width: FullHeight.rail)
-        .padding(.vertical, 10)
-    }
-}
-
-/// L9: Chat with 100% of the height: no header, no composer row.
-struct FullHeightChatScreen: View {
-    var body: some View {
-        FullHeightShell(mode: .chat) {
-            FullHeightThread()
-        } trailing: {
-            ChatRail()
-        }
-    }
-}
-
-/// L9b: writing. The button opened the field over the thread's bottom, above the keyboard; the rails stay, their lower
-/// half under the keyboard. Send is the field's own arrow; dismissing the keyboard with words left turns the field back
-/// into the button, marked (L9c).
-struct FullHeightChatTypingScreen: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            FullHeightShell(mode: .chat, compact: true) {
-                FullHeightThread(bottom: 6)
-                    .safeAreaBar(edge: .bottom) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "plus").font(.body.weight(.semibold))
-                                .frame(width: 38, height: 38).glassEffect(.regular.interactive(), in: Circle())
-                            HStack {
-                                Text("Also keep the hover state on the link").lineLimit(1)
-                                Spacer()
-                                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(Color.onAccent)
-                                    .frame(width: 30, height: 30).background(Color.dispatchPink, in: Circle())
-                            }
-                            .padding(.leading, 14).padding(.trailing, 4).frame(height: 38)
-                            .glassEffect(.regular.interactive(), in: Capsule())
-                        }
-                        .frame(maxWidth: 600).frame(maxWidth: .infinity)
-                        .padding(.horizontal, 8).padding(.bottom, 4)
-                    }
-            } trailing: {
-                Color.clear.frame(width: FullHeight.rail)
-            }
-            LandscapeKeyboard().ignoresSafeArea()
-        }
-        .ignoresSafeArea(.container, edges: .bottom)
-    }
-}
-
-/// L9c: the keyboard down with a draft: the button is marked, the thread keeps the full height.
-struct FullHeightChatDraftScreen: View {
-    var body: some View {
-        FullHeightShell(mode: .chat) {
-            FullHeightThread()
-        } trailing: {
-            ChatRail(draft: true)
-        }
-    }
-}
-
-// MARK: - Terminal
-
-private let fullTerminalLines: [String] = [
-    "~/src/web $ git status --short",
-    " M src/components/Sidebar.tsx",
-    " M src/styles/tokens.css",
-    "?? tests/theme.test.ts",
-] + [
-    "~/src/web $ pnpm test --filter web -- --reporter=dot",
-    "",
-    " RUN  v3.2.4 /Users/alex/src/web",
-    "",
-    " ✓ src/theme.test.ts (12 tests) 38ms",
-    " ✓ src/components/Sidebar.test.tsx (9 tests) 211ms",
-    " ✓ src/components/ThemeToggle.test.tsx (6 tests) 96ms",
-    " ✗ src/routes/settings.test.tsx > Settings > keeps the theme across a reload",
-    "   AssertionError: expected 'light' to be 'dark' // Object.is equality",
-    "    ❯ src/routes/settings.test.tsx:48:31",
-    "",
-    " Test Files  1 failed | 23 passed (24)",
-    "      Tests  1 failed | 187 passed (188)",
-    "   Duration  4.12s (transform 612ms, setup 0ms, collect 2.31s, tests 1.48s)",
-    "",
-    "~/src/web $ ▯",
-]
-
-/// L10: the terminal from the window's top to its bottom (20 rows of 80 columns, against 16 under L1's header and 10
-/// in today's landscape); the keys are the trailing rail.
-struct FullHeightTerminalScreen: View {
-    var chip = false
-    var body: some View {
-        FullHeightShell(mode: .terminal, dark: true) {
-            WideTerminal(lines: fullTerminalLines)
-                .padding(.bottom, 8)
-                .overlay(alignment: .top) { if chip { TitleChip().padding(.top, 10) } }
-        } trailing: {
-            KeyRail().padding(.vertical, 10)
-        }
-        .colorScheme(.dark)
-    }
-}
-
-// MARK: - Review
-
-/// L11: Review's list and diff both full height. The context row (branch, counts) is the list's first lines; Create
-/// review is the trailing rail's pink button with the comment count, search above it.
-struct FullHeightReviewScreen: View {
-    var body: some View {
-        FullHeightShell(mode: .review) {
-            HStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            InlineTitle(centered: false)
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                Text(MockGit.branch).font(.subheadline.weight(.semibold))
-                                Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.caption, design: .monospaced))
-                            }
-                        }
-                        .padding(.horizontal, 12).padding(.top, 14)
-                        ForEach([MockChange.Area.staged, .unstaged, .untracked], id: \.rawValue) { area in
-                            let rows = MockGit.changes.filter { $0.area == area }
-                            SectionHeader(title: area.rawValue, count: rows.count).padding(.leading, -4)
-                            VStack(spacing: 0) {
-                                ForEach(Array(rows.enumerated()), id: \.element.id) { index, change in
-                                    ChangeRow(change: change, last: index == rows.count - 1, selected: change.name == "Sidebar.tsx")
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 12))
-                        }
-                        Color.clear.frame(height: 20)
-                    }
-                }
-                .scrollEdgeEffectStyle(.soft, for: .all)
-                .frame(width: 280)
-                Rectangle().fill(Color(uiColor: .separator)).frame(width: 0.5)
-                VStack(spacing: 0) {
-                    HStack(spacing: 6) {
-                        Text("Sidebar.tsx").font(.headline)
-                        Text("M").font(.system(.caption, design: .monospaced).weight(.bold)).foregroundStyle(Color.caution)
-                        Counts(add: 14, del: 6, font: .system(.caption, design: .monospaced))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4)
-                    GlassDiffScreen(mode: .comments).pane(bottomBar: false, cardWidth: 380)
-                }
-            }
-        } trailing: {
-            VStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").font(.body.weight(.semibold))
-                    .frame(width: FullHeight.control, height: FullHeight.control)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                Image(systemName: "plus.bubble").font(.body.weight(.semibold))
-                    .frame(width: FullHeight.control, height: FullHeight.control)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                Spacer()
-                Image(systemName: "paperplane.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.onAccent)
-                    .frame(width: FullHeight.control + 6, height: FullHeight.control + 6)
-                    .glassEffect(.regular.tint(.dispatchPink).interactive(), in: Circle())
-                    .overlay(alignment: .topTrailing) {
-                        Text("3").font(.caption2.weight(.bold)).foregroundStyle(Color.dispatchPink)
-                            .frame(minWidth: 18, minHeight: 18).background(Color.onAccent, in: Capsule())
-                            .offset(x: 3, y: -3)
-                    }
-            }
-            .frame(width: FullHeight.rail)
-            .padding(.vertical, 10)
-        }
     }
 }
 
@@ -386,8 +166,6 @@ struct OneRailChatScreen: View {
         FullHeightShell(mode: .chat, primary: AnyView(PrimaryRailButton(symbol: draft ? "text.bubble.fill" : "arrowshape.turn.up.left.fill", marked: draft)),
                         edgeToEdge: edgeToEdge) {
             FullHeightThread(measure: edgeToEdge ? nil : 600)
-        } trailing: {
-            Color.clear.frame(width: 0)
         }
     }
 }
@@ -411,8 +189,6 @@ struct OneRailChatTypingScreen: View {
                         .frame(maxWidth: 600).frame(maxWidth: .infinity)
                         .padding(.horizontal, 8).padding(.bottom, 4)
                     }
-            } trailing: {
-                Color.clear.frame(width: 0)
             }
             LandscapeKeyboard().ignoresSafeArea()
         }
@@ -470,15 +246,13 @@ struct OneRailReviewScreen: View {
                     GlassDiffScreen(mode: .comments).pane(bottomBar: false, cardWidth: 420)
                 }
             }
-        } trailing: {
-            Color.clear.frame(width: 0)
         }
     }
 }
 
 // MARK: - Terminal on one rail (L14)
 
-/// The terminal's keys as one slim row riding the keyboard (L2's), the arrows inline.
+/// The terminal's keys as one slim row riding the keyboard, the arrows inline.
 struct KeyboardKeyRow: View {
     var body: some View {
         HStack(spacing: 0) {
@@ -523,9 +297,9 @@ struct TerminalKeysMenu: View {
     }
 }
 
-/// L14: the terminal on one rail: the window's full height and everything right of the rail (22 columns more than
-/// L10's). The keyboard is the rail's foot: a tap raises it with the key row riding it (L14b), held it offers the keys
-/// a program at rest needs (L14c). Esc without the keyboard is two taps, not one.
+/// L14: the terminal on one rail: the window's full height and everything right of the rail. The keyboard is the
+/// rail's foot: a tap raises it with the key row riding it (L14b), held it offers the keys a program at rest needs
+/// (L14c). Esc without the keyboard is two taps, not one.
 struct OneRailTerminalScreen: View {
     var menu = false
     var edgeToEdge = false
@@ -536,8 +310,6 @@ struct OneRailTerminalScreen: View {
                 .overlay(alignment: .bottomLeading) {
                     if menu { TerminalKeysMenu().padding(.leading, 4).padding(.bottom, 14) }
                 }
-        } trailing: {
-            Color.clear.frame(width: 0)
         }
         .colorScheme(.dark)
     }
@@ -549,8 +321,6 @@ struct OneRailTerminalTypingScreen: View {
         VStack(spacing: 0) {
             FullHeightShell(mode: .terminal, dark: true, compact: true, primary: AnyView(PrimaryRailButton(symbol: "keyboard"))) {
                 WideTerminal(lines: Array(oneRailTerminalLines.suffix(8)))
-            } trailing: {
-                Color.clear.frame(width: 0)
             }
             KeyboardKeyRow().padding(.horizontal, 8).padding(.bottom, 4).background(Color.black)
             LandscapeKeyboard().ignoresSafeArea()

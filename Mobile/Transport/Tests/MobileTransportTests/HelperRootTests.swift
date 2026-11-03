@@ -32,7 +32,7 @@ final class HelperRootTests: XCTestCase {
     let launch = SSHBootstrapScript.cachePreamble(digest: digest) + "\n" + SSHBootstrapScript.verify(size: 1, digest: digest)
     XCTAssertEqual(sha256(launch), "8824c674e47821a4d6fb25250fb20519458b5e18e0181fcf586438c7597a4346")
     let upload = SSHBootstrapScript.upload(digest: digest, size: 1, staging: "upload-0")
-    XCTAssertEqual(sha256(upload), "e23e329e7f0d98e3c01c166fbbd043074dd0ee7a4c381bd751c2259d8c3a68fd")
+    XCTAssertEqual(sha256(upload), "ace4dd39c1ea8ed0d003db259ae2b2e6c775a943c81b5c30c3438e3ff493e6c6")
     XCTAssertEqual(SSHBootstrapScript.cachePreamble(digest: digest, root: .home), SSHBootstrapScript.cachePreamble(digest: digest))
     XCTAssertEqual(SSHBootstrapScript.upload(digest: digest, size: 1, staging: "upload-0", root: .home), upload)
     XCTAssertEqual(SSHBootstrapScript.privateDirectoryScript(root: .home), SSHBootstrapScript.privateDirectoryScript)

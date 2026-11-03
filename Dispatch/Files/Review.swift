@@ -304,6 +304,28 @@ enum ReviewPlacement {
         var text: String
     }
 
+    /// A diff line's comment anchor: removed lines belong to the old side, added and context lines to the new.
+    static func anchor(_ line: GitDiffPresentation.Line) -> (line: ReviewLine, quote: ReviewQuote)? {
+        let number: Int?
+        let side: ReviewLine.Side
+        let kind: ReviewQuote.Kind
+        switch line.kind {
+        case .removed:
+            number = line.old
+            side = .old
+            kind = .removed
+        case .added:
+            number = line.new
+            side = .new
+            kind = .added
+        case .context:
+            number = line.new
+            side = .new
+            kind = .context
+        }
+        return number.map { (ReviewLine(side: side, number: $0), ReviewQuote(kind: kind, text: line.text)) }
+    }
+
     /// For each placed comment, the comment on its lines as numbered now and the index in `candidates` of its last line.
     static func locate(_ comments: [ReviewComment], among candidates: [Candidate])
         -> [UUID: (comment: ReviewComment, index: Int)] {

@@ -2,8 +2,8 @@
 
 A thin client for SSH hosts. The device has no shell and starts no processes: the Rust helper on each host does the
 work, and the app speaks the helper protocol (`helper/PROTOCOL.md`) over one in-process SSH connection per host.
-iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), sideloaded (no App Store: the macOS helper would
-have to become a non-Mach-O payload, ITMS-90171). Sources are in `Mobile/`; privacy, trust, keys and the helper's
+iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), with local device installs and a TestFlight release
+pipeline ([Release](#release)). Sources are in `Mobile/`; privacy, trust, keys and the helper's
 grant are in [security](security.md#dispatch-for-iphone); the Apple Watch companion in [watch](watch.md).
 
 **Hosts need** SSH (password, key or keyboard-interactive), macOS 14+ on Apple silicon or Linux arm64/x86-64, and
@@ -26,11 +26,12 @@ python3 test/ios-release.py [--simulator NAME]              # Release check, bel
 ```
 
 - Needs Xcode 27 with an iOS simulator runtime. The simulator window is DeviceHub (`com.apple.dt.Devices`, which
-  `./run.sh --ios` opens); Simulator.app is gone, and without DeviceHub the simulator runs headless
+  `./run.sh --ios` tries first, falling back to Simulator.app); without either the simulator runs headless
   (`xcrun simctl io booted screenshot`). `--simulator` takes a name or UDID (`scripts/ios_simulator.py`: the booted
   one wins, then the newest runtime); the default is `DISPATCH_IOS_SIMULATOR`, else iPhone Air.
-- **iPad simulators need the iOS 27.0 runtime**: 27.1 has only the iPhone Duo. `xcrun simctl create my-ipad "iPad Pro
-  11-inch (M5)" com.apple.CoreSimulator.SimRuntime.iOS-27-0`.
+- **Two iOS 27.2 runtimes**: `iOS-27-2` has every iPhone and iPad but the Duo, and `iOS-27-2-iPhone19-4` has only the
+  iPhone Duo. Name the runtime when creating one: `xcrun simctl create my-ipad "iPad Pro 11-inch (M5)"
+  com.apple.CoreSimulator.SimRuntime.iOS-27-2`.
 - **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, for every
   scheme (the Mac app's too), so the pinned Rust with its iOS targets and
   `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh` does it through
@@ -104,9 +105,32 @@ linked: `AppReplay` compiles for its types, but no journal ever starts.
 Mac sources the phone uses stay in `Dispatch/` and are listed by path in `project.yml` ("Shared with the Mac app").
 They change only by `#if canImport(AppKit)` guards or additive, behaviour-preserving helpers; `test/ios.py` is the
 build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` stands in for the Mac's AppKit-only
-`System` (a `SystemProvider` seam replacing it is deferred). Shared today: the chat transcript merge rules (`ChatTranscript`, run by the Mac's `ChatSession` and the
-phone's `MobileTranscript`), displayed items and prompt confirmation, the git models, parsers, graph lanes and log
-commands (`Dispatch/Files/GitLog.swift`), the Files models, the Review models and text, and the Dictation package.
+`System` (a `SystemProvider` seam replacing it is deferred). Shared cores include:
+
+- Chat transcript merge rules (`ChatTranscript`), displayed items and prompt confirmation; helper notification
+  decoding, interaction replies and model menu/readback (`HelperChatTransport`). A model selection is confirmed only
+  by the agent's subsequent state; a failed read never substitutes the requested choice. An uncertain question reply
+  stays blocked until the helper resolves it.
+- Inline Markdown parsing and safe-link filtering (`ChatMarkdownPolicy`), with an explicit Mac file-link allowance;
+  count and UTF-8 byte limits on cached parses. Question selection, custom-answer validation, navigation and action
+  availability (`ChatQuestionPolicy`) are shared. Selection uses stored choices, so commas in labels do not change
+  which chips are selected, and an invalid custom answer never falls back to an old option.
+- Helper capability groups (`HelperCapabilities`), hello validation/configuration and multiplexer descriptors.
+  Platform grants and opt-in hello feature lists remain distinct; the phone still has no file-write capability.
+- Files wire shapes and error classification (`FilesWire`, `FilesSourceFailure`), strict UTF-8 prefix decoding,
+  orientation-aware image metadata/thumbnail bounds, and occurrence scanning. Preview byte/pixel limits stay with
+  each client. Invalid trailing UTF-8 is rejected; only an incomplete valid scalar at a read boundary is trimmed.
+- Git models, parsers, graph lanes, command construction and commit reads (`GitCommitReads`); untracked content and
+  status enrichment; Review models, text and source policy. Staged content changed again in the working tree uses the
+  index diff for Source and comment placement. A missing file is distinct from a failed or offline read.
+- Statistics wire decoding and history buckets, spoken Markdown, dictation model instances, signature explanations,
+  syntax scanning with each client's language/token profile, and font identities/catalogs.
+- Theme parsing and linear-light classification (`TerminalTheme`, `ThemeColorMath`); a scheme with no definite side
+  appears in both picker sections. Native fonts and views remain platform-specific.
+
+The TermApple targets share surface configuration, renderer construction (including font features), pumping,
+snapshot/search coordination and frame demand. Native display links, PTY/feed lifetime and transport ordering remain
+in their platform adapters. The Dictation package is also shared.
 Mac views built on the Mac chat stack are ported, not shared.
 
 ### Areas and seams
@@ -195,7 +219,8 @@ connection up without it: both are [plain SSH](#plain-ssh).
   Connect or Reconnect the user asks for (`connectByUser`); nothing else (network changes, pull to refresh, background
   refresh, watch requests, a relaunch) lifts it. It is saved with the host (`HostRecord.parked` in `hosts.json`).
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
-  only while its server runs or the host asks for it; otherwise tmux, retried every 2 s. A preference change switches
+  only while its server runs. Automatic prefers running herdr, otherwise tmux; an explicit herdr preference waits
+  for its server without opening it. Discovery and failed follows retry every 2 s. A preference change switches
   live without reconnecting; until the new one answers the host's spaces are unknown (`switchingMultiplexer`). The
   exec channel names no herdr socket, so the helper uses herdr's own default, as `herdr` typed in a shell does; only
   variables the login shell's `-c` exports (`.zshenv`) reach it.
@@ -400,16 +425,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   composer while any runs (one names what it does, more say how many); a tap opens a sheet with each shell's
   description, command and running time, which closes with the last shell. Attachments are offered only while the helper accepted `chat.attachments` and the
   conversation is verified; images lose their metadata before upload, uploads are session state, and a queued
-  message counts as delivered after a reconnect only with as many attachments. An ended turn's last agent bubble
-  carries the turn's summary in its bottom-right corner, where messengers put a message's time (S6d,
-  `ChatTurnSummary.corner`): the changed file's name or the file count with the added and removed lines, else "Read 12
-  files" or "40 steps" for three or more unchanged steps, then when the turn ended ("10:17", "Yesterday 10:17", "Thu
-  10:17", "Oct 12"); every other agent reply, and a plain answer, has when it was written there in the same words
-  (`ChatCorner.reply`; Claude's thinking and the user's messages have none), and message details keep "12 steps · 2m
-  4s". The text keeps the corner's
-  room on its last line, or on a short line of its own; a file name too long for the line loses its middle, and after
-  code, a table or a rule, beside a last paragraph running against the layout's direction, or when the corner is
-  wider than a line (the largest text sizes), it takes trailing lines of its own. While a turn runs its replies have only their times and the
+  message counts as delivered after a reconnect only with as many attachments. Times stay out of the bubbles' corners
+  and appear on a swipe (`ChatReveal`, below). A turn's last reply shows its step count above its time; changed files
+  and line counts stay in message details. VoiceOver still reads the full summary (changed files, read files or steps, then when the turn
+  ended) as the bubble's value (`ChatCorner.swiped`, `spokenOnly`); other replies read their own time, and Claude's
+  thinking has none. Message details keep "12 steps · 2m 4s". While a turn runs the
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's thinking), as the Mac's live tool group counts them, and it holds Stop beside
   the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware keyboard
@@ -439,7 +459,13 @@ The policies below are the ones a change must keep; the screens themselves are d
   (`MobileChatMarkdownView.contents`). Send's tap sends as the draft goes now; its long press only presents what the tap
   can do: Send; Send now and Queue while the agent works; Queue alone while the tap queues and the agent cannot take it
   into its turn (terminal not attached, not verified, a command waiting for an idle agent: "Send" would promise what
-  the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. The code keys above
+  the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. Settings › Chat ›
+  While the agent works (`MobileSettings.chatSendWhileWorkingKey`, the Mac's Chat mode option) can make the tap Send
+  now while the agent can take the draft into its turn; Queue in the long press (and ⌥Return) then queues it. Settings ›
+  Chat's other options, as the Mac's Chat mode: Editor mode by default (new drafts start in editor mode; a multi-line
+  paste or ⌘E turns it on, a typed newline never does), Open agents in (an agent tab's first segment,
+  `TabSegment.initial`; a pick on the tab sticks) and Esc stops the agent (twice: a hardware keyboard's first Esc only
+  arms the stop for a second, shown above the field). The code keys above
   the field show only once picked under "+" (Show code keys, `MobileSettings.composerCodeKeysKey`, kept app-wide; not
   offered with a hardware keyboard). Dragging the thread down onto the composer, or on into the keyboard, takes a
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
@@ -503,7 +529,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   muted conversation, a terminal the user closed from the phone in the last minute, or a stop the agent recovers from
   within 10 s. Permission is asked once a run. There is no Allow or Deny in a banner: an approval belongs to a live
   subscription.
-- **Settings.** Everything is `MobileSettings` in UserDefaults. The Settings app's Dispatch page
+- **Settings.** Everything is `MobileSettings` in UserDefaults. Removed `terminal.contrast` and the `chats` filter are ignored; use `terminal.textContrast` and `agents`. Spaces reads per-host state only from `spaces.json`, without importing the old `tabs.recent`, `tabs.collapsed` or `tabs.spaceOrder` defaults (Remove all data still clears them). The Settings app's Dispatch page
   (`Mobile/App/Settings.bundle`) mirrors the fixed choices on the same keys (appearance, theme, line spacing, the
   terminal's contrast, ligatures, bold, cursor, chat's font and size, the notification switches and sound, colour
   vision, Color-code hosts, unsafe pastes; not the font lists, colour schemes, dictation or background refresh, which need live lists or a permission
@@ -618,6 +644,33 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
 - SwiftUI's menu-group quirks (why the sections sit where they do, why Find is not a submenu) are documented in
   `MobileCommands.swift`.
 
+## SwiftUI and UIKit pitfalls
+
+Found while building the thread and its animations; each cost a debugging session.
+
+- **Scrolling.** `onAppear` in a non-lazy `VStack` fires at once for every row. `onScrollVisibilityChange` never
+  reported a child visible after a programmatic `setContentOffset`; scroll geometry does. `defaultScrollAnchor(for:
+  .sizeChanges)` does not hold after a drag, so rows drawn above the reader move `UIScrollView.contentOffset`
+  explicitly (`ChatScrollViewProbe`, `grew(by:)`). SwiftUI's `ScrollGeometry.contentOffset` is UIKit's raw offset:
+  add `contentInsets.top` to compare with the end.
+- **Pushes.** A pushed thread lays out at its end with no top inset; the navigation bar's inset arrives later and UIKit
+  lowers the offset by it, which reads like the user scrolling up (`ChatFollow.moved(resized:)` ignores drops while
+  insets or the container height change). Mid-push geometry is inconsistent, `onScrollGeometryChange` can merge
+  changes, and on a device that sample can come before the probe attaches (the simulator never does this), so the
+  probe re-applies the end on `didMoveToWindow`. On a device, tapping the composer is a quick check: a snap to the end
+  means the thread was still following. A `@State` set in the tap that pushes reads stale in the destination's first
+  body (same update): pass such decisions through a plain `@MainActor` object.
+- **Animations in the thread.** Height changes inside the thread cannot animate: the scroll content lays out at once
+  and an inserted card draws over the composer. Snap the layout and fade or transform only the inserted view
+  (`Transition.animation(...)`), or animate only same-height changes. `withAnimation` around a session call animates
+  every view reading that state; scope with `.animation(_:value:)` on the view. `navigationSubtitle` takes no content
+  transition.
+- **Type-checking.** Long `body` modifier chains in `ChatThreadView` hit "unable to type-check"; an optional ternary in
+  `.environment(\.key, cond ? nil : x)` is the usual trigger. Split into functions and type the value in a property.
+- **Reading state in `body`.** Read collections inside the `ScrollView` content closure, not in `body` above it:
+  reading `entries` in `body` made the working-row handoff test jitter. Accessibility frames lag a scroll; wait until
+  they stop changing before comparing positions.
+
 ## Testing
 
 - **Suites.** `test/run.sh --platform ios` (`test/ios.py`) runs the fast suite on the simulator, an iPhone by default;
@@ -663,6 +716,24 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
   with the app's screenshot in `build/mockup-review` (`scripts/fidelity-pairs.swift`); the mockups are SwiftUI
   screens in `mockups/`, rendered by `mockups/shoot.py`. `AppearanceUITests` runs the accessibility audit in both
   schemes; accepted reports are listed in the test.
+- **Animation frames by hand.** For a frame-by-frame look at one animation, append a throwaway extension to a test class
+  (`ChatRedesignTests` has the helpers), host the real view in a 402×874 `UIWindow`, and save
+  `window.drawHierarchy(afterScreenUpdates: false)` every ~16 ms as a numbered sheet ([benchmarks](benchmarks.md#animations-frame-by-frame)).
+  Activate buttons with `accessibilityActivate()`; drags cannot be driven. "No UIWindowScene" is a simulator hiccup:
+  rerun.
+- **Exploring the app headlessly.** Start the live fixture, add a throwaway XCUITest that adds the host like
+  `MobileLiveTests.addHost`, drives the screens and writes `XCUIScreen.main.screenshot().pngRepresentation` (and
+  `app.debugDescription`) to a folder, and delete it afterwards. The fixture's Claude echoes prompts ("Local Claude
+  fixture reply: …"); "permission tool please" yields an approval. In forms: New host defaults to Key file (tap
+  Password first); a text field's `value` comes back truncated and a tap lands mid-text, so clear a field by tapping
+  it, then tapping near its trailing edge (`coordinate(withNormalizedOffset: (0.97, 0.5))`) and deleting its length plus
+  a margin. Use `192.0.2.1` (TEST-NET-1) for a host that never answers, and don't match failure text on words the form's
+  own helper text contains.
+- **Simulator window.** DeviceHub owns the iPhone Duo's hinge (its Closed, Partially Open and Open toolbar buttons;
+  `simctl` has none). System Events sees no DeviceHub windows, but the accessibility API does
+  (`AXUIElementCreateApplication(pid)` + `AXUIElementPerformAction`, retried when SwiftUI redraws); its title names only
+  the model, so with two Duos check which one changed. `xcrun simctl io <udid> screenshot --display=3` takes the inner
+  screen, `--display=primary` the cover. Device ▸ Orientation works where repeated Rotate Right does not.
 
 ## Device checklist
 
@@ -685,7 +756,7 @@ Release build on a real iPhone, by hand. Nothing below has been run on a device 
 
 ## Known limitations
 
-- mosh deferred past v1; push notifications (need a relay) and App Store out of scope; iCloud never.
+- mosh deferred past v1; push notifications (need a relay) out of scope; iCloud never.
 - iPad: one window only (multi-window needs per-scene compositions and host sessions); no Mac Catalyst and no
   "Designed for iPad" on the Mac. Esc does not go back.
 - The iOS 26 New-button fallback (`.search` tab role) is untested: only the iOS 27 runtime has been used.

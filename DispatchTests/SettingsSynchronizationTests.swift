@@ -302,15 +302,15 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(SettingsStore(file: file).values.sidebarFontSize, 17.5)
     }
 
-    /// The sidebar style setting replaces the large-items switch: off stays compact, while on, which every save wrote,
-    /// takes the new default (icons); a chosen style round-trips, and an unknown one keeps the default.
-    func testSidebarStyleMigratesFromLargeItemsAndRoundTrips() throws {
+    /// Only the current sidebar style is read; a removed switch or unknown style keeps the default.
+    /// A chosen style and the separate branch setting round-trip.
+    func testSidebarStyleIgnoresRemovedSwitchAndRoundTrips() throws {
         func decode(_ json: String) throws -> Preferences { try JSONDecoder().decode(Preferences.self, from: Data(json.utf8)) }
         XCTAssertEqual(try decode("{}").sidebarStyle, .icons, "The host picker's rows are the default")
-        XCTAssertEqual(try decode(#"{"largeSidebarItems":false}"#).sidebarStyle, .compact, "Compact was a choice")
+        XCTAssertEqual(try decode(#"{"largeSidebarItems":false}"#).sidebarStyle, .icons, "The removed switch is ignored")
         XCTAssertEqual(try decode(#"{"largeSidebarItems":true}"#).sidebarStyle, .icons, "Large was the old default every save wrote")
         XCTAssertEqual(try decode(#"{"sidebarStyle":"large"}"#).sidebarStyle, .large)
-        XCTAssertTrue(try decode(#"{"largeSidebarItems":true}"#).showGitBranches, "Explicit large items kept their branches")
+        XCTAssertFalse(try decode(#"{"largeSidebarItems":true}"#).showGitBranches, "The removed switch is ignored")
         XCTAssertEqual(try decode(#"{"sidebarStyle":"icons","largeSidebarItems":false}"#).sidebarStyle, .icons)
         XCTAssertEqual(try decode(#"{"sidebarStyle":"unknown"}"#).sidebarStyle, .icons)
         var preferences = try decode("{}")
@@ -637,7 +637,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { LiquidGlassStore.shared.enabled = originalGlass }
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
-            for theme: SidebarTheme in [.dark, .lavender, .light, .graphite, .nautical, .dark, .lavender] {
+            for theme: SidebarTheme in [.dark, .light, .nautical, .dark, .light] {
                 app.controller.settings.values.appTheme = AppTheme(rawValue: theme.rawValue)!
                 let palette = SidebarPalette(theme: theme)
                 try await TestSupport.eventually {
@@ -922,19 +922,14 @@ final class SettingsSynchronizationTests: XCTestCase {
             XCTAssertEqual(restored.theme, "Dracula")
             XCTAssertEqual(restored.lightTheme, "Solarized Light")
         }
-        for (palette, mode, expected): (String, String, AppTheme) in [
-            ("dark", "system", .automatic), ("dark", "dark", .dark), ("dark", "light", .light),
-            ("light", "system", .light), ("graphite", "system", .graphite), ("lavender", "dark", .lavender)
-        ] {
-            let data = Data("{\"sidebarTheme\":\"\(palette)\",\"appearance\":\"\(mode)\",\"theme\":\"Dracula\",\"lightTheme\":\"Solarized Light\"}".utf8)
-            let migrated = try JSONDecoder().decode(Preferences.self, from: data)
-            XCTAssertEqual(migrated.appTheme, expected)
-            XCTAssertEqual(migrated.theme, "Dracula")
-            XCTAssertEqual(migrated.lightTheme, "Solarized Light")
-            let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(migrated)) as? [String: Any])
-            XCTAssertNil(saved["sidebarTheme"]); XCTAssertNil(saved["appearance"])
-            XCTAssertEqual(saved["appTheme"] as? String, expected.rawValue)
-        }
+        let data = Data(#"{"appTheme":"Removed Theme","sidebarTheme":"Removed Palette","appearance":"Removed Appearance","theme":"Dracula","lightTheme":"Solarized Light"}"#.utf8)
+        let restored = try JSONDecoder().decode(Preferences.self, from: data)
+        XCTAssertEqual(restored.appTheme, .automatic)
+        XCTAssertEqual(restored.theme, "Dracula")
+        XCTAssertEqual(restored.lightTheme, "Solarized Light")
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(restored)) as? [String: Any])
+        XCTAssertNil(saved["sidebarTheme"]); XCTAssertNil(saved["appearance"])
+        XCTAssertEqual(saved["appTheme"] as? String, AppTheme.automatic.rawValue)
     }
 
     func testAutomaticThemeUpdatesOpenWindowsAndPreservesTerminalSurface() async throws {
@@ -958,11 +953,11 @@ final class SettingsSynchronizationTests: XCTestCase {
             }
             XCTAssertTrue(app.runtime.views[id]?.surface === surface)
         }
-        app.controller.settings.values.appTheme = .lavender
+        app.controller.settings.values.appTheme = .light
         try app.runtime.apply(app.controller.settings.values)
         NSApp.appearance = NSAppearance(named: .darkAqua)
         app.runtime.systemAppearanceDidChange()
-        XCTAssertEqual(SidebarThemeStore.shared.current, .lavender)
+        XCTAssertEqual(SidebarThemeStore.shared.current, .light)
         XCTAssertFalse(ChatThemeStore.shared.current.isDark)
         XCTAssertTrue(app.runtime.views[id]?.surface === surface)
     }
@@ -1001,11 +996,11 @@ final class SettingsSynchronizationTests: XCTestCase {
         let originalUnlock = SidebarThemeStore.shared.nauticalUnlocked
         defer { SidebarThemeStore.shared.nauticalUnlocked = originalUnlock }
         SidebarThemeStore.shared.nauticalUnlocked = false
-        // Graphite and Lavender are withheld for now: not offered unless already chosen.
+        // The theme menu offers the current choices only.
         _ = try await themePicker(["Automatic", "Dark", "Light"])
         SidebarThemeStore.shared.nauticalUnlocked = true
         let control = try await themePicker(["Automatic", "Dark", "Light", "Nautical"])
-        for theme in AppTheme.allCases where !AppTheme.withheld.contains(theme) {
+        for theme in AppTheme.allCases {
             control.selectItem(withTitle: theme.label)
             control.sendAction(control.action, to: control.target)
             let palette = theme.sidebarTheme(systemIsDark: SidebarThemeStore.systemIsDark)
@@ -1040,7 +1035,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         preferences.theme = "dispatch-black"; preferences.lightTheme = "dispatch-black"
         try runtime.apply(preferences)
         let chat = ChatThemeStore.shared.current
-        for theme in SidebarTheme.allCases {
+        for theme in SidebarTheme.allCases where AppTheme(rawValue: theme.rawValue) != nil {
             preferences.appTheme = AppTheme(rawValue: theme.rawValue)!
             try runtime.apply(preferences)
             // The scheme keeps the colors; Nautical's radio log is the app theme's layout, not a color.
@@ -1108,7 +1103,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         }
         func inUse(_ side: String) -> [String] { PresentationTestSupport.accessibilityLabels("settings-scheme-in-use-\(side)", in: window) }
         func label(_ value: String) -> String { value == "Default" ? "Dispatch" : value }
-        for appearance: AppTheme in [.automatic, .light, .dark, .graphite, .lavender, .nautical, .automatic] {
+        for appearance: AppTheme in [.automatic, .light, .dark, .nautical, .automatic] {
             var values = store.values
             values.appTheme = appearance
             let darkAppearance = appearance.isDark(systemIsDark: SidebarThemeStore.systemIsDark)

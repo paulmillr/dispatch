@@ -116,6 +116,20 @@ struct SettingsView: View {
                         NavigationLink(value: Route.chatFont) {
                             LabeledContent("Font") { Text(settings.chatFont.rawValue) }
                         }
+                        Picker("While the agent works", selection: $settings.chatSendWhileWorking) {
+                            ForEach(ChatSendWhileWorking.allCases) { Text($0.title).tag($0) }
+                        }
+                        .accessibilityIdentifier("settings-chat-send-while-working")
+                        Toggle("Editor mode by default", isOn: $settings.chatEditorByDefault)
+                            .accessibilityIdentifier("settings-chat-editor-by-default")
+                        Picker("Open agents in", selection: $settings.chatAgentStart) {
+                            ForEach(ChatAgentStart.allCases) { Text($0.title).tag($0) }
+                        }
+                        .accessibilityIdentifier("settings-chat-agent-start")
+                        Picker("Esc stops the agent", selection: $settings.chatEscapeStop) {
+                            ForEach(ChatEscapeStop.allCases) { Text($0.title).tag($0) }
+                        }
+                        .accessibilityIdentifier("settings-chat-escape-stop")
                         NavigationLink {
                             DictationSettingsView(settings: settings)
                         } label: {
@@ -126,7 +140,12 @@ struct SettingsView: View {
                     } header: {
                         Text("Chat")
                     } footer: {
-                        Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("While the agent works, send queues a message for after the turn, or steers it into the turn; its long press offers the other.")
+                            Text("With a hardware keyboard, editor mode's Return adds a line and ⌘Return sends. New drafts start in it with Editor mode by default; a multi-line paste turns it on, ⌘E switches it.")
+                            Text("Open agents in picks what an agent tab shows first; the tab's switch shows the other. Esc twice keeps a stray Esc from a hardware keyboard from stopping the agent.")
+                            Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
+                        }
                     }
 
                     Section {

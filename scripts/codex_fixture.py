@@ -19,8 +19,7 @@ from fixture_barriers import FixtureBarriers, BarrierCancelled, interrupt_fixtur
 from codex_pty import command as codex_command
 
 ROOT = Path(__file__).resolve().parent.parent
-EVENTS = ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse',
-          'PostToolUse', 'PermissionRequest', 'PreCompact', 'PostCompact', 'Stop', 'Interrupt']
+EVENTS = ['PermissionRequest', 'SubagentStart', 'SubagentStop']
 
 
 def prepare(state, port):

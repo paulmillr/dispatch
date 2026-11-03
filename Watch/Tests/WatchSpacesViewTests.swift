@@ -109,7 +109,7 @@ final class WatchSpacesViewTests: XCTestCase {
         let lab = WatchFixtures.lab
         let agent = WatchTab(host: lab, space: "ws_1", key: "tab_2", name: "Tune", chat: true, conversation: "term_4")
         XCTAssertEqual(SpacesText.destination(agent), .thread(WatchConversationKey(host: lab, node: "term_4")))
-        XCTAssertEqual(SpacesText.symbol(agent), "text.bubble")
+        XCTAssertEqual(SpacesText.symbol(agent), "dispatch.chat")
         let shell = WatchTab(host: lab, space: "ws_1", key: "tab_5", name: "htop", program: "htop")
         XCTAssertEqual(SpacesText.destination(shell), .tab(WatchTabRoute(host: lab, tab: "tab_5")))
         XCTAssertEqual(SpacesText.symbol(shell), "apple.terminal")
@@ -224,26 +224,24 @@ final class WatchSpacesViewTests: XCTestCase {
         XCTAssertNil(Sparkline.points([5], in: CGSize(width: 100, height: 40), ceiling: 100))
     }
 
-    /// Under a connected host's header: CPU % and memory used of total, red where the phone flags them, dimmed while not
-    /// current; nothing for a host that is not connected or has no reading.
-    func testTheHostsLineUnderItsHeader() throws {
-        let gib: Int64 = 1_073_741_824
+    /// A host's section: Connect only while it is offline (not connecting) and nothing but the phone can bring it back;
+    /// "Offline since" only where no problem line already says when it was last connected.
+    func testAnOfflineHostOffersConnectInItsSection() throws {
         let demo = WatchFixtures.demo(now: now)
         let studio = try XCTUnwrap(demo.hosts.first { $0.name == "studio" })
-        let stats = try XCTUnwrap(HostStatsLine.stats(studio))
-        XCTAssertEqual(HostStatsLine.memory(stats), "11/32 GB")
-        XCTAssertEqual(HostStatsLine.accessibilityLabel(stats), "CPU 34 percent, memory 11 GB of 32 GB used")
-        XCTAssertNil(HostStatsLine.stats(try XCTUnwrap(demo.hosts.first { $0.name == "pi" })), "offline: the host screen keeps it")
+        XCTAssertFalse(SpacesText.offline(studio))
         var host = studio
         host.state = .connecting
-        XCTAssertNil(HostStatsLine.stats(host))
-        host.state = .connected
-        host.stats = WatchHostStats()
-        XCTAssertNil(HostStatsLine.stats(host), "no reading")
-        XCTAssertEqual(HostStatsLine.memory(WatchHostStats(memoryUsed: gib / 2, memoryTotal: 16 * gib)), "512 MB/16 GB")
-        XCTAssertEqual(HostStatsLine.memory(WatchHostStats(memoryUsed: 6 * gib)), "6.0 GB")
-        XCTAssertNil(HostStatsLine.memory(WatchHostStats(cpu: 3)))
-        XCTAssertEqual(HostStatsLine.accessibilityLabel(WatchHostStats(cpu: 91, warnings: [.cpu], stale: true)), "CPU 91 percent, not current")
+        XCTAssertFalse(SpacesText.offline(host), "connecting is not offline")
+        host.state = .offline
+        XCTAssertTrue(SpacesText.offline(host))
+        host.state = .unknown
+        XCTAssertTrue(SpacesText.offline(host))
+        let mockup = WatchFixtures.mockup(now: now, offline: true)
+        let mba2 = try XCTUnwrap(mockup.hosts.first { $0.id == WatchFixtures.mba2 })
+        XCTAssertTrue(SpacesText.offline(mba2))
+        XCTAssertNil(WatchModel.blockedMessage(mba2), "the mockups' offline host connects from the watch")
+        XCTAssertNotNil(HostStatsText.offlineSince(mba2, now: now))
     }
 
     // MARK: Rendering
@@ -269,15 +267,33 @@ final class WatchSpacesViewTests: XCTestCase {
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
 
-    /// Every host of the scripted phones draws its screen (connected, offline, blocked, without statistics), and a
-    /// route whose host has gone says so.
-    func testEveryHostRenders() {
+    /// Every host of the scripted phones draws its section (connected, connecting, offline, blocked, without
+    /// statistics, connecting from the watch).
+    func testEveryHostSectionRenders() {
         for scenario in ScriptedWatchLink.Scenario.allCases {
             let model = model(scenario)
-            for host in model.hosts {
-                XCTAssertNotNil(render(HostScreen(model: model, route: WatchHostRoute(host: host.id))), "\(scenario) \(host.name)")
+            for section in model.sections {
+                XCTAssertNotNil(render(List { SpacesHostSection(section: section, now: now) }), "\(scenario) \(section.host.name)")
+                XCTAssertNotNil(render(List { SpacesHostSection(section: section, now: now, connecting: true) }))
             }
-            XCTAssertNotNil(render(HostScreen(model: model, route: WatchHostRoute(host: "gone"))))
+        }
+    }
+
+    /// The lists Spaces draws, read at once: what the hidden page keeps.
+    func testSpacesContentReadsTheModelOnce() throws {
+        let model = model(.demo)
+        let content = SpacesContent(model, now: now)
+        XCTAssertEqual(content.sections, model.sections)
+        XCTAssertEqual(content.notice, model.notice(at: now))
+        XCTAssertFalse(content.truncated)
+        XCTAssertTrue(content.connecting.isEmpty)
+        XCTAssertEqual(content.now, now)
+    }
+
+    /// Spaces draws hidden too (the page behind Agents keeps what it showed).
+    func testHiddenSpacesRenders() {
+        for scenario in ScriptedWatchLink.Scenario.allCases {
+            XCTAssertNotNil(render(SpacesScreen(model: model(scenario), router: WatchRouter(), active: false)), scenario.rawValue)
         }
     }
 

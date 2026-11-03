@@ -62,11 +62,10 @@ struct SSHIntegrationScope: Hashable, Codable, Sendable {
     }
 }
 
-/// Independently selected helper features. Shared transport methods remain internal.
-enum SSHIntegrationFeature: String, Codable, CaseIterable, Sendable {
-    /// `files` lists, reads and copies out; `filesWrite` adds writing into the account's files (copy in, drop, paste).
-    case statistics, files, filesWrite, chat, hooks, git, tmux, herdr
+/// Independently selected helper features. The shared catalog carries their permissions; presentation stays here.
+typealias SSHIntegrationFeature = HelperCapabilities.Feature
 
+extension SSHIntegrationFeature {
     var title: String {
         switch self {
         case .statistics: "Stats"
@@ -91,18 +90,6 @@ enum SSHIntegrationFeature: String, Codable, CaseIterable, Sendable {
         case .herdr: "follow sessions"
         }
     }
-    var capabilities: Set<String> {
-        switch self {
-        case .statistics: ["stats.sample", "stats.ping", "stats.processes"]
-        case .files: ["file.read", "file.text"]
-        case .filesWrite: ["file.read", "file.text", "file.write"]
-        case .git: ["file.read", "file.text", "git.read"]
-        case .chat: ["agent.inspect", "agent.version", "agent.submit", "agent.events", "agent.queue", "agent.side", "backend.register", "file.read", "file.text"]
-        case .hooks: ["hooks.configure", "agent.pi", "agent.pi.configure", "backend.register"]
-        case .tmux: ["tmux.pane", "backend.register"]
-        case .herdr: ["herdr.start", "herdr.rpc", "herdr.terminal", "backend.register"]
-        }
-    }
 }
 
 struct SSHIntegrationGrant: Codable, Equatable, Sendable {
@@ -122,12 +109,7 @@ struct SSHIntegrationGrant: Codable, Equatable, Sendable {
 
     static func capabilities(_ profile: SSHIntegrationProfile, hooks: Bool) -> Set<String> {
         guard profile != .ordinary else { return [] }
-        var values: Set<String> = ["host.identity", "stats.sample", "stats.ping", "stats.processes", "shell.lifecycle", "cancel", "events", "input.window"]
-        if profile == .full {
-            values.formUnion(["agent.inspect", "agent.version", "agent.submit", "agent.events", "agent.queue", "agent.side", "backend.register", "tmux.pane", "herdr.start", "herdr.rpc", "herdr.terminal", "file.read", "file.text", "file.write", "git.read"])
-            if hooks { values.formUnion(["hooks.configure", "agent.pi", "agent.pi.configure"]) }
-        }
-        return values
+        return profile == .full ? HelperCapabilities.full(hooks: hooks) : HelperCapabilities.statistics
     }
 
     init(helperEnabled: Bool, features: Set<SSHIntegrationFeature>) {
@@ -157,9 +139,7 @@ struct SSHIntegrationGrant: Codable, Equatable, Sendable {
 
     private static func selectedCapabilities(profile: SSHIntegrationProfile, features: Set<SSHIntegrationFeature>) -> Set<String> {
         guard profile != .ordinary else { return [] }
-        return features.reduce(into: Set(["host.identity", "shell.lifecycle", "cancel", "events", "input.window"])) {
-            $0.formUnion($1.capabilities)
-        }
+        return HelperCapabilities.selected(features)
     }
 
     var isCurrent: Bool {

@@ -199,7 +199,7 @@ impl Tmux {
                         [location.client];
                     let first = client.snapshot.is_none();
                     let mut previous = None;
-                    let mut result = parsed.and_then(|(snapshot, cwd)| {
+                    let mut result = parsed.and_then(|(mut snapshot, cwd)| {
                         if client.ended {
                             return Err(error("Tmux control connection closed"));
                         }
@@ -210,6 +210,16 @@ impl Tmux {
                         client
                             .available
                             .retain(|id, _| snapshot.windows.iter().any(|window| window.id == *id));
+                        // Another client moved a window's shared active pane (tmux 3.8): keep the one this client chose.
+                        let own = client.steering > 0 || client.creating > 0 || !client.waiters.is_empty();
+                        client.chosen.retain(|id, pane| {
+                            snapshot.windows.iter().any(|window| window.id == *id && window.layout.pane(*pane).is_some())
+                        });
+                        for window in &mut snapshot.windows {
+                            if let Some(pane) = client.chosen.get_mut(&window.id) {
+                                if own { *pane = window.pane } else { window.pane = *pane }
+                            }
+                        }
                         previous = Some(client.snapshot.replace(snapshot));
                         client.cwd = cwd;
                         mux.changed = true;

@@ -184,6 +184,25 @@ pub fn model(s: &str) -> Option<String> {
         v.replace('.', "-")
     ))
 }
+/// The menu row a goal's model names: the row of that name, else the one row naming that model
+/// id ("Fable 5.1" for claude-fable-5-1), else the one non-default row describing it
+/// ("Opus 5.5 · …"), as the app's `AgentModelMenu.row(for:in:)` reads them. An app remembers
+/// the id a conversation reported when no row it had read named it.
+fn listed<'a>(rows: &'a [Row], target: &str) -> Option<&'a Row> {
+    if let Some(row) = rows.iter().find(|r| r.name == target) {
+        return Some(row);
+    }
+    let id = |s: &str| model(s).is_some_and(|m| m == target);
+    let named: Vec<_> = rows.iter().filter(|r| id(&r.name)).collect();
+    if let [row] = named[..] {
+        return Some(row);
+    }
+    let described: Vec<_> = rows.iter().filter(|r| !r.default && id(&r.detail)).collect();
+    match (named.is_empty(), &described[..]) {
+        (true, [row]) => Some(row),
+        _ => None,
+    }
+}
 /// e076fd7 ClaudeStartupConfiguration: banner `Family N.N[ (…)][ with level effort] · `, the
 /// live footer `<mark> level · /effort` wins over the banner's effort.
 pub fn startup(s: &str) -> Option<Startup> {
@@ -567,6 +586,9 @@ pub struct Walk {
     raw: Option<String>,
     /// A read catalog or effort list, returned once Escape has closed the menu (Stage::Exit).
     result: Option<Menu>,
+    /// A walk that cannot go on with the menu open: returned once Escape has closed it
+    /// (Stage::Exit), so no failure leaves /model in the terminal.
+    failure: Option<Error>,
     /// Stage::Attach: images pasted so far, the composer they made (their placeholders, and the
     /// paths Claude kept as text), the paths of those that showed nothing in time (sent as path
     /// lines with the text instead), and the settled screens the last paste has waited.
@@ -642,6 +664,12 @@ impl Walk {
             self.before = self.previous.clone();
         }
         Step::Keys(self.keys(index))
+    }
+    /// Escape out of the menu, then fail with `failure` (Stage::Exit).
+    fn abandon(&mut self, failure: Error) -> Step {
+        self.failure = Some(failure);
+        self.stage = Stage::Exit;
+        self.key(5)
     }
     fn open(&mut self) -> Step {
         self.inputs = vec![Input::Text("/model".into()), Input::Key(Key::Enter)];
@@ -768,6 +796,7 @@ impl Walk {
             self.previous = None;
             self.before = None;
             self.result = None;
+            self.failure = None;
             self.pasted = 0;
             self.draft.clear();
             self.missed.clear();
@@ -919,6 +948,9 @@ impl Walk {
                     return Step::Wait;
                 }
                 self.goal = None;
+                if let Some(failure) = self.failure.take() {
+                    return Step::Fail(failure);
+                }
                 return Step::Done(self.result.take().unwrap_or_else(|| Menu {
                     default: None,
                     result: None,
@@ -1025,13 +1057,16 @@ impl Walk {
         let target = match goal {
             // e076fd7 ChatModelPicker.loadClaudeChoices leaves the highlight where the catalog
             // walk ended; only the effort walk restores (loadClaudeEfforts).
-            Goal::Models => view.selected.as_str(),
-            Goal::Efforts { model } | Goal::Select { model, .. } => model,
+            Goal::Models => view.selected.clone(),
+            Goal::Efforts { model } | Goal::Select { model, .. } => {
+                listed(&self.rows, model).map_or_else(|| model.clone(), |row| row.name.clone())
+            }
             _ => return Step::Fail(error("invalid", "Not a model goal")),
         };
+        let target = target.as_str();
         if view.selected != target {
             let Some(row) = self.rows.iter().find(|r| r.name == target) else {
-                return Step::Fail(error("changed", "Choose a listed Claude model"));
+                return self.abandon(error("changed", "Choose a listed Claude model"));
             };
             let selected = view
                 .choices
@@ -1064,7 +1099,7 @@ impl Walk {
                 .as_ref()
                 .and_then(|s| self.ring.iter().position(|r| r == s));
             let (Some(target), Some(current)) = (target, current) else {
-                return Step::Fail(error(
+                return self.abandon(error(
                     "changed",
                     "This Claude effort is no longer available",
                 ));
@@ -1136,9 +1171,9 @@ impl Walk {
                 self.stage = Stage::Exit;
                 self.key(5)
             }
-            Goal::Select { model, effort } if self.stage == Stage::Verify => {
+            Goal::Select { effort, .. } if self.stage == Stage::Verify => {
                 if !self.cancelled
-                    && (view.choices.iter().find(|r| r.current).map(|r| &r.name) != Some(model)
+                    && (view.choices.iter().find(|r| r.current).map(|r| r.name.as_str()) != Some(target)
                         || &view.effort != effort)
                 {
                     return Step::Fail(error(
@@ -1387,6 +1422,46 @@ mod tests {
             cursor: (0, 0),
             faint_tail: false,
         }
+    }
+
+    /// Claude's /model menu: Default (Opus 5.5, current) highlighted, then Fable 5.1 and Sonnet 5.5.
+    fn models() -> Screen {
+        Screen {
+            text: format!(
+                "❯ /model\n{}\n Select model\n Switch between Claude models.\n\n \
+                 ❯ 1. Default (recommended) ✔  Opus 5.5 · Most capable for complex work\n   \
+                 2. Fable 5.1                 Fable 5.1 · Best for everyday tasks\n   \
+                 3. Sonnet 5.5                Sonnet 5.5 · Fastest\n\n \
+                 ● High effort (default) ← → to adjust\n\n \
+                 Enter to confirm · s to use this session only · Esc to cancel\n",
+                "▔".repeat(40)
+            ),
+            cursor: (0, 0),
+            faint_tail: false,
+        }
+    }
+
+    #[test]
+    fn a_model_id_selects_the_row_naming_it() {
+        assert_eq!(read(&models().text).map(|view| view.choices.len()), Some(3));
+        let goal = Goal::Select { model: "claude-fable-5-1".into(), effort: Some("high".into()) };
+        let mut walk = Walk::default();
+        assert_eq!(step(&mut walk, &goal, &models(), false), Step::Wait);
+        assert_eq!(step(&mut walk, &goal, &models(), false), Step::Keys(vec![Input::Key(Key::Down)]));
+    }
+
+    #[test]
+    fn an_unlisted_model_closes_the_menu_before_failing() {
+        let goal = Goal::Select { model: "claude-nova-9".into(), effort: Some("high".into()) };
+        let mut walk = Walk::default();
+        assert_eq!(step(&mut walk, &goal, &models(), false), Step::Wait);
+        assert_eq!(step(&mut walk, &goal, &models(), false), Step::Keys(vec![Input::Key(Key::Escape)]));
+        // Until the composer is back the menu is still closing.
+        assert_eq!(step(&mut walk, &goal, &models(), true), Step::Wait);
+        assert!(matches!(
+            step(&mut walk, &goal, &composer(""), true),
+            Step::Fail(Error { code: "changed", .. })
+        ));
     }
 
     #[test]

@@ -52,11 +52,25 @@ struct AgentGlyph: View {
     var size: CGFloat = 18
 
     var body: some View {
-        Image(systemName: agent == nil ? TabSegment.terminal.symbol : TabSegment.chat.symbol)
+        Image(symbol: agent == nil ? TabSegment.terminal.symbol : TabSegment.chat.symbol)
             .foregroundStyle(.secondary)
             .font(.system(size: size))
         .frame(width: size + 8)
         .accessibilityHidden(true)
+    }
+}
+
+/// The app's own symbols, SF Symbol templates in the asset catalog named `dispatch.*` (Chat's capsule, `dispatch.chat`
+/// and `.fill`), else the system's: a mode's `symbol` may be either.
+extension Image {
+    init(symbol name: String) {
+        self = name.hasPrefix("dispatch.") ? Image(name) : Image(systemName: name)
+    }
+}
+
+extension Label where Title == Text, Icon == Image {
+    init(_ title: String, symbol: String) {
+        self.init { Text(title) } icon: { Image(symbol: symbol) }
     }
 }
 

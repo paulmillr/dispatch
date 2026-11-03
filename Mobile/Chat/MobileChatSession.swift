@@ -383,35 +383,31 @@ final class MobileChatSession: Identifiable {
     private func notify(_ method: String, _ value: HelperBinary.Value, generation: UUID) {
         guard self.generation == generation else { return }
         do {
-            switch method {
-            case "chat.history": receive(history: try HelperBinary.decode(HelperChat.History.self, from: value))
-            case "chat.records":
-                let records = try HelperBinary.decode(Records.self, from: value)
+            guard let notification = try HelperChat.Notification.decode(method, from: value) else { return }
+            switch notification {
+            case .history(let history): receive(history: history)
+            case .records(let records):
                 guard accepts(records.terminal, records.session) else { return }
                 if records.replace == true {
                     transcript.clear(); typing.reset()
                     transcript.apply(records.records, historical: true)
                     earlier = records.earlier
                 } else { receive(live: records.records) }
-            case "chat.state":
-                let status = try HelperBinary.decode(Status.self, from: value)
+            case .state(let status):
                 guard accepts(status.terminal, status.session) else { return }
                 receive(state: status.state)
-            case "chat.queue":
-                let items = try HelperBinary.decode(Items.self, from: value)
+            case .queue(let items):
                 guard accepts(items.terminal, items.session) else { return }
                 receive(queue: items.items)
                 queueError = items.error?.localizedDescription
-            case "interaction.opened":
-                let opened = try HelperBinary.decode(Opened.self, from: value)
+            case .interaction(let opened):
                 guard accepts(opened.terminal, opened.session) else { return }
                 receive(interaction: opened.interaction, generation: generation)
-            case "terminal.exit":
-                let exit = try HelperBinary.decode(HelperClient.Exit.self, from: value)
-                guard exit.terminal == terminal else { return }
+            case .exit(let terminal):
+                guard terminal == self.terminal else { return }
                 busy = false; subagents = []; shells = []; showingShells = false; awaitingAck = false; starting = false; updateWorkingSince()
                 suspend(reason: "\(agentName) exited. This transcript is read-only.")
-            default: return
+            case .archive: return
             }
         } catch {
             failure = error.localizedDescription
@@ -422,30 +418,6 @@ final class MobileChatSession: Identifiable {
     /// Updates for this terminal's current conversation only.
     private func accepts(_ terminal: UInt64, _ session: String) -> Bool {
         terminal == self.terminal && phase == .verified && (conversation == nil || conversation == session || session.isEmpty)
-    }
-
-    private struct Records: Decodable {
-        let terminal: UInt64
-        let session: String
-        let records: [HelperChat.Record]
-        let replace: Bool?
-        let earlier: String?
-    }
-    private struct Items: Decodable {
-        let terminal: UInt64
-        let session: String
-        let items: [HelperChat.Queued]
-        let error: HelperFailure?
-    }
-    private struct Status: Decodable {
-        let terminal: UInt64
-        let session: String
-        let state: HelperChat.State
-    }
-    private struct Opened: Decodable {
-        let terminal: UInt64
-        let session: String
-        let interaction: HelperChat.Interaction
     }
 
     private func receive(history: HelperChat.History) {
@@ -606,8 +578,7 @@ final class MobileChatSession: Identifiable {
         awaitingAck = false
         guard !approvals.contains(where: { $0.interaction.id == interaction.id && $0.pending.pending }),
               !questions.contains(where: { $0.id == interaction.id }) else { return }
-        let choices = interaction.questions.allSatisfy { $0.options.count >= 2 && !$0.secret }
-        if let permission = interaction.permission {
+        if case .permission(let permission) = interaction.presentation {
             receivedApproval = true
             let pending = PendingApproval(key: interaction.key ?? interaction.id, interaction: interaction.id,
                                           operation: permission.operation, item: interaction.tool(in: transcript.turns),
@@ -616,8 +587,7 @@ final class MobileChatSession: Identifiable {
             }
             approvals.append(Approval(pending: pending, interaction: interaction, arrived: Date(), generation: generation,
                                       anchor: transcript.rows.last?.turnID))
-        } else if interaction.blocking, !interaction.approval, choices,
-                  interaction.questions.count == 1 || interaction.record != nil {
+        } else if case .toolQuestions = interaction.presentation {
             let form = ClaudeQuestions(interaction.questions.map { question in
                 ClaudeQuestions.Question(text: question.text, header: question.header,
                                          options: question.options.map { .init(label: $0.label, description: $0.detail ?? "", preview: nil) },
@@ -661,6 +631,11 @@ final class MobileChatSession: Identifiable {
         if let answers { approval.pending.answer(answers) } else { approval.pending.resolve(.deny) }
     }
 
+    /// Native forms submit the draft itself so selected options stay distinct from custom text.
+    func answerDraft(_ approval: Approval, skip: Bool) {
+        if skip { approval.pending.resolve(.deny) } else { approval.pending.answerDraft() }
+    }
+
     private func complete(_ pending: PendingApproval) {
         guard let card = approvals.first(where: { $0.pending === pending }) else { return }
         // A request belongs to the subscription that delivered it.
@@ -668,18 +643,17 @@ final class MobileChatSession: Identifiable {
             failure = "This request ended with its connection. Continue in Terminal."
             return
         }
-        var input = route()
-        input.interaction = card.interaction.id
+        let response: HelperChat.Interaction.Response
         switch (pending.decision, pending.questionDraft) {
-        case (.allow, _?):
-            input.answers = card.interaction.answers(pending.answers ?? [:])
-        case (.deny, _?):
-            input.answers = Dictionary(uniqueKeysWithValues: card.interaction.questions.map { ($0.id, .skip) })
+        case (.allow, _?): response = pending.structuredAnswers.map { .ordered($0) } ?? .labels(pending.answers ?? [:])
+        case (.deny, _?): response = .skip
         case (.allow, nil), (.deny, nil):
-            guard let question = card.interaction.questions.first else { return }
-            input.answers = [question.id: .options([card.chosen?.index ?? (pending.decision == .allow ? 0 : 1)])]
+            response = .option(card.chosen?.index ?? (pending.decision == .allow ? 0 : 1))
         default: return
         }
+        let current = route()
+        guard let input = card.interaction.answerInput(
+            route: .init(terminal: current.terminal ?? 0, session: current.session), response: response) else { return }
         let generation = generation
         Task {
             do {
@@ -694,8 +668,7 @@ final class MobileChatSession: Identifiable {
     }
 
     func answer(_ question: ChatSideQuestion, skip: Bool) {
-        guard phase == .verified, questions.contains(where: { $0 === question }), !question.submitted,
-              skip || question.complete else { return }
+        guard phase == .verified, questions.contains(where: { $0 === question }), question.canSubmit(skip: skip) else { return }
         var input = route()
         input.interaction = question.id
         input.answers = skip ? Dictionary(uniqueKeysWithValues: question.questions.map { ($0.id, .skip) }) : question.answers
@@ -1717,8 +1690,13 @@ final class MobileChatSession: Identifiable {
         if let catalog = modelChoices.catalog { return catalog.models }
         modelsLoading = true
         defer { modelsLoading = false }
-        let menu: HelperChat.Menu = try await call("chat.models", route())
-        let choices = Self.choices(menu)
+        let input = route(), generation = generation
+        let menu = try await HelperChat.ModelTransport.menu(route: .init(terminal: input.terminal ?? 0, session: input.session)) { method, input in
+            try await self.call(method, input, generation: generation)
+        }
+        try Task.checkCancellation()
+        guard self.generation == generation else { throw CancellationError() }
+        let choices = HelperChat.ModelTransport.choices(menu, detail: .label)
         modelChoices.store(models: choices, quickModels: [])
         return choices
     }
@@ -1726,20 +1704,15 @@ final class MobileChatSession: Identifiable {
     /// A model's efforts (`chat.settings`).
     func efforts(for model: String) async throws -> [AgentModelMenu.Choice] {
         if let cached = modelChoices.efforts(for: model) { return cached }
-        var input = route()
-        input.model = model
-        let menu: HelperChat.Menu = try await call("chat.settings", input)
-        let choices = Self.choices(menu)
+        let input = route(), generation = generation
+        let menu = try await HelperChat.ModelTransport.menu(route: .init(terminal: input.terminal ?? 0, session: input.session), model: model) { method, input in
+            try await self.call(method, input, generation: generation)
+        }
+        try Task.checkCancellation()
+        guard self.generation == generation else { throw CancellationError() }
+        let choices = HelperChat.ModelTransport.choices(menu, detail: .label)
         modelChoices.store(efforts: choices, for: model)
         return choices
-    }
-
-    /// The helper's menu as cache choices: `name` is the choice id the helper takes back, `detail` its label.
-    private static func choices(_ menu: HelperChat.Menu) -> [AgentModelMenu.Choice] {
-        menu.choices.enumerated().map { index, choice in
-            AgentModelMenu.Choice(number: index + 1, name: choice.id, detail: choice.label,
-                                  current: choice.id == menu.current, isDefault: choice.id == menu.default)
-        }
     }
 
     /// Applies a model and effort through the helper's verified menu transport (`chat.settings.set`), and returns what
@@ -1747,17 +1720,14 @@ final class MobileChatSession: Identifiable {
     /// change was declined, and only the reported choice is remembered.
     @discardableResult
     func select(model: String, effort: String?) async throws -> (model: String, effort: String?) {
-        var input = route()
-        input.model = model
-        input.effort = effort
-        let sent: HelperChat.Sent = try await call("chat.settings.set", input)
-        try sent.confirmed()
-        struct Observed: Decodable { let state: HelperChat.State }
-        let observed: Observed? = try? await call("chat.state", route())
-        let reported = observed?.state
-        let chosen = reported?.model.map { ($0, reported?.effort) } ?? (model, effort)
-        self.model = chosen.0
-        self.effort = chosen.1
+        let input = route(), generation = generation
+        let chosen = try await HelperChat.ModelTransport.select(
+            route: .init(terminal: input.terminal ?? 0, session: input.session), model: model, effort: effort,
+            set: { try await self.call("chat.settings.set", $0, generation: generation) },
+            read: { try await self.call("chat.state", $0, generation: generation) })
+        guard self.generation == generation else { throw CancellationError() }
+        self.model = chosen.model
+        self.effort = chosen.effort
         return chosen
     }
 

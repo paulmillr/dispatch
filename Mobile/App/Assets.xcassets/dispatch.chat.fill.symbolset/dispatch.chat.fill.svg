@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!--Dispatch's Chat glyph: the mockups' NewModeGlyph.pill (24 point grid), text.bubble's widths and centres per scale-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3300" height="2200">
+ <!--glyph: "", point size: 100.0, font version: "", template writer version: "138.0.0"-->
+ <style>.defaults {-sfsymbols-default-weight:regular;-sfsymbols-default-scale:medium}</style>
+ <g id="Notes">
+  <rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1933)">Template v.3.0</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1951)">Requires Xcode 13 or greater</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 3036 1969)">Typeset at 100 points</text>
+ </g>
+ <g id="Guides">
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696.0" y2="696.0"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <line id="left-margin-Regular-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1338.400" x2="1338.400" y1="601.000" y2="720.000"/>
+  <line id="right-margin-Regular-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1443.600" x2="1443.600" y1="601.000" y2="720.000"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126.0" y2="1126.0"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <line id="left-margin-Regular-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1325.550" x2="1325.550" y1="1031.000" y2="1150.000"/>
+  <line id="right-margin-Regular-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1456.450" x2="1456.450" y1="1031.000" y2="1150.000"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556.0" y2="1556.0"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="left-margin-Regular-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1307.982" x2="1307.982" y1="1461.000" y2="1580.000"/>
+  <line id="right-margin-Regular-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="1474.018" x2="1474.018" y1="1461.000" y2="1580.000"/>
+ </g>
+ <g id="Symbols">
+  <g id="Regular-S">
+   <path d="M1433.463 653.152L1433.595 655.759L1433.600 655.953C1433.600 672.157 1420.464 685.293 1404.260 685.293L1385.023 685.293L1364.570 698.928C1361.616 700.897 1357.801 698.148 1358.735 694.723L1362.483 680.981C1354.731 676.286 1349.486 668.150 1348.537 658.754L1348.400 655.953C1348.400 639.749 1361.536 626.613 1377.740 626.613L1404.260 626.613C1419.348 626.613 1431.935 638.053 1433.463 653.152Z"/>
+  </g>
+  <g id="Regular-M">
+   <path d="M1443.530 1081.844L1443.695 1085.103L1443.700 1085.317C1443.700 1105.268 1427.526 1121.442 1407.575 1121.442L1383.362 1121.442L1357.657 1138.578C1354.388 1140.758 1350.166 1137.715 1351.200 1133.924L1355.995 1116.341C1346.255 1110.599 1339.652 1100.480 1338.470 1088.791L1338.300 1085.317C1338.300 1065.366 1354.474 1049.192 1374.425 1049.192L1407.575 1049.192C1426.152 1049.192 1441.650 1063.278 1443.530 1081.844Z"/>
+  </g>
+  <g id="Regular-L">
+   <path d="M1457.551 1508.666L1457.761 1512.834L1457.768 1513.076C1457.768 1538.243 1437.366 1558.644 1412.199 1558.644L1381.038 1558.644L1348.002 1580.668C1344.310 1583.130 1339.541 1579.693 1340.709 1575.411L1346.970 1552.455C1334.456 1545.255 1325.955 1532.372 1324.449 1517.486L1324.232 1513.076C1324.232 1487.909 1344.634 1467.508 1369.801 1467.508L1412.199 1467.508C1435.633 1467.508 1455.182 1485.276 1457.551 1508.666Z"/>
+  </g>
+ </g>
+</svg>

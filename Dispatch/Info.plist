@@ -8,6 +8,8 @@
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>LSMinimumSystemVersion</key><string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+<!-- A bridge release may add {team, bundle} dictionaries here before a signing-account transition. -->
+<key>DispatchUpdateTrustedIdentities</key><array/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>Dispatch connects to SSH hosts on your local network.</string>
 <key>NSMicrophoneUsageDescription</key><string>Dispatch listens while you dictate a chat message.</string>

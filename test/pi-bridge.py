@@ -26,7 +26,7 @@ from pi_fixture import command, configure, environment, MODEL, PROVIDER
 
 def test(executable, state):
     started = time.monotonic()
-    extension = Path(__file__).resolve().parents[1] / 'Dispatch/Resources/pi-chat.js'
+    extension = Path(__file__).resolve().parents[1] / 'helper/harnesses/pi/resources/bridge.js'
     navigation = Path(__file__).resolve().parent.parent / 'scripts/fixtures/pi-navigation.js'
     with FixtureServer(state, delay=0.015) as server:
         home = state / 'pi-home'

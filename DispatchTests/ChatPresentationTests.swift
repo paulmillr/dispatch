@@ -257,7 +257,7 @@ final class ChatPresentationTests: XCTestCase {
                                                        windowNumber: window.windowNumber, context: nil, characters: "\r",
                                                        charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         editor.keyDown(with: enterEditor)
-        XCTAssertTrue(session.drafts.current.multiline)
+        XCTAssertFalse(session.drafts.current.multiline); session.drafts.edit(multiline: true)
         for width in [1000, 300] {
             window.setContentSize(NSSize(width: width, height: 450))
             try await Task.sleep(for: .milliseconds(250))

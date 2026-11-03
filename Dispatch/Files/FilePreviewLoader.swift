@@ -21,8 +21,8 @@ import ImageIO
     /// ImageIO for an unbounded source-sized bitmap.
     nonisolated static let imageDecodeDimensionLimit = 4_096
 
-    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "tif", "tiff", "bmp"]
-    static let markdownExtensions: Set<String> = ["md", "markdown"]
+    static let imageExtensions = FilePreviewContent.imageExtensions
+    static let markdownExtensions = FilePreviewContent.markdownExtensions
 
     /// What a file is, from its name, its size and its first window.
     enum Decision: Equatable {
@@ -39,13 +39,12 @@ import ImageIO
     }
 
     static func decide(name: String, size: UInt64, head: Data) -> Decision {
-        let ext = (name as NSString).pathExtension.lowercased()
-        if imageExtensions.contains(ext) { return size <= imageLimit ? .image : .binary }
-        if head.contains(0) { return .binary }
-        if validUTF8PrefixLength(head, allowingIncompleteSuffix: UInt64(head.count) < size) == nil { return .binary }
-        if size > textLimit { return .tooLarge }
-        if markdownExtensions.contains(ext) { return .markdown }
-        return .text(language: SyntaxHighlight.language(name))
+        switch FilePreviewContent.kind(name: name, size: size, head: head, imageLimit: imageLimit) {
+        case .image: return .image
+        case .binary: return .binary
+        case .markdown: return size > textLimit ? .tooLarge : .markdown
+        case .text: return size > textLimit ? .tooLarge : .text(language: SyntaxHighlight.language(name))
+        }
     }
 
     /// Loads `preview` once; an already loaded state is left as it is (switching modes remounts the pane, and a
@@ -202,77 +201,29 @@ import ImageIO
     /// The first image's pixels as it shows (EXIF rotation applied), from its header alone; nil when `data` holds no
     /// image ImageIO reads. Off the main actor: parsing a large file's header is not free.
     @concurrent nonisolated static func imagePixelSize(_ data: Data) async -> CGSize? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
-        // Orientations 5 to 8 turn the image a quarter.
-        let turned = (properties[kCGImagePropertyOrientation] as? Int).map { $0 >= 5 } ?? false
-        return turned ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+        FilePreviewImage.pixelSize(data)
     }
 
     /// The image in `data` decoded no larger than `maxPixels` on its long side (nil: the hard preview cap), rotated
     /// as it shows. Off the main actor, and bounded: a 40-megapixel photo is never decoded at source size.
     @concurrent nonisolated static func decodeImage(_ data: Data, maxPixels: Int?) async -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else { return nil }
-        var options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                        kCGImageSourceCreateThumbnailWithTransform: true,
-                                        kCGImageSourceShouldCacheImmediately: true]
-        options[kCGImageSourceThumbnailMaxPixelSize] = min(imageDecodeDimensionLimit, max(1, maxPixels ?? imageDecodeDimensionLimit))
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        FilePreviewImage.thumbnail(data, maxPixels: maxPixels, dimensionLimit: imageDecodeDimensionLimit)
     }
 
     nonisolated static func isSafeImageSize(_ size: CGSize) -> Bool {
-        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
-              size.width <= CGFloat(imageDimensionLimit), size.height <= CGFloat(imageDimensionLimit) else { return false }
-        return size.width * size.height <= CGFloat(imagePixelLimit)
+        FilePreviewImage.isSafeSize(size, dimensionLimit: imageDimensionLimit, pixelLimit: imagePixelLimit)
     }
 
-    /// Exact UTF-8 text. Lossy replacement characters can conceal different source bytes, so malformed input is
-    /// offered as a hex preview instead. A leading UTF-8 BOM is metadata and is omitted from display.
-    static func text(_ data: Data) -> String? {
-        guard validUTF8PrefixLength(data, allowingIncompleteSuffix: false) == data.count else { return nil }
-        let start = data.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
-        return String(decoding: data.dropFirst(start), as: UTF8.self)
-    }
+    /// Exact UTF-8 text with a leading BOM omitted from display.
+    static func text(_ data: Data) -> String? { FilePreviewContent.text(data) }
 
-    /// A bounded head can end midway through an otherwise valid scalar. Decode its complete prefix; invalid bytes
-    /// before that boundary make the head binary instead of silently changing what the user sees.
+    /// A window may end midway through a valid scalar; malformed bytes still fail.
     static func textPrefix(_ data: Data) -> String? {
-        guard let count = validUTF8PrefixLength(data, allowingIncompleteSuffix: true) else { return nil }
-        let start = data.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
-        return String(decoding: data.dropFirst(start).prefix(max(0, count - start)), as: UTF8.self)
+        FilePreviewContent.text(data, allowingIncompleteSuffix: true)
     }
 
-    /// Returns the number of bytes in the valid prefix. With `allowingIncompleteSuffix`, only a well-formed scalar
-    /// cut off at the end is accepted; overlong encodings, surrogates and values past U+10FFFF remain invalid.
     static func validUTF8PrefixLength(_ data: Data, allowingIncompleteSuffix: Bool) -> Int? {
-        let bytes = [UInt8](data)
-        var index = 0
-        while index < bytes.count {
-            let first = bytes[index]
-            if first < 0x80 { index += 1; continue }
-            let length: Int
-            let second: ClosedRange<UInt8>
-            switch first {
-            case 0xC2...0xDF: length = 2; second = 0x80...0xBF
-            case 0xE0: length = 3; second = 0xA0...0xBF
-            case 0xE1...0xEC, 0xEE...0xEF: length = 3; second = 0x80...0xBF
-            case 0xED: length = 3; second = 0x80...0x9F
-            case 0xF0: length = 4; second = 0x90...0xBF
-            case 0xF1...0xF3: length = 4; second = 0x80...0xBF
-            case 0xF4: length = 4; second = 0x80...0x8F
-            default: return nil
-            }
-            let available = min(length, bytes.count - index)
-            if available >= 2, !second.contains(bytes[index + 1]) { return nil }
-            if available >= 3 {
-                for offset in 2..<available where !(0x80...0xBF).contains(bytes[index + offset]) { return nil }
-            }
-            guard available == length else { return allowingIncompleteSuffix ? index : nil }
-            index += length
-        }
-        return index
+        FilePreviewContent.validUTF8PrefixLength(data, allowingIncompleteSuffix: allowingIncompleteSuffix)
     }
 
     private static func fail(_ preview: FilePreviewState, _ error: any Error) {

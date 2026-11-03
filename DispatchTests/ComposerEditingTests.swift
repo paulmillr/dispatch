@@ -8,7 +8,7 @@ import XCTest
     private var session: ChatSession!
     private func editor(_ value: String = "") -> ChatComposer.ComposerTextView {
         session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        session.showChat = true; session.draft = value
+        session.showChat = true; session.draft = value; if value.contains("\n") { session.drafts.edit(multiline: true) }
         delegate = ChatComposer.Coordinator(session)
         let text = ChatComposer.ComposerTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
         text.isRichText = false; text.allowsUndo = true
@@ -73,7 +73,7 @@ import XCTest
         defer { close() }
         let text = editor("a\nb")
         var interrupts = 0, exits = 0
-        text.interrupt = { interrupts += 1; return true }
+        text.interrupt = { _ in interrupts += 1; return true }
         text.exitChat = { exits += 1 }
         text.keyDown(with: key(53, "\u{1b}"))
         XCTAssertEqual(text.string, "a\nb")
@@ -255,9 +255,11 @@ import XCTest
         text.keyDown(with: key(36, "\r")); text.keyDown(with: key(76, "\r"))
         XCTAssertEqual(submits, 2)
         text.keyDown(with: key(76, "\r", .shift))
-        XCTAssertEqual(session.draft, "compact\n"); XCTAssertTrue(session.drafts.current.multiline)
+        XCTAssertEqual(session.draft, "compact\n"); XCTAssertFalse(session.drafts.current.multiline, "⇧⏎ adds a line, no editor mode")
+        text.keyDown(with: key(36, "\r")); XCTAssertEqual(submits, 3, "Return still sends")
+        XCTAssertTrue(text.performKeyEquivalent(with: key(14, "e", .command))); XCTAssertTrue(session.drafts.current.multiline)
         text.keyDown(with: key(36, "\r")); XCTAssertEqual(session.draft, "compact\n\n")
-        text.keyDown(with: key(76, "\r", .control)); XCTAssertEqual(submits, 3)
+        text.keyDown(with: key(76, "\r", .control)); XCTAssertEqual(submits, 4)
         text.selectAll(nil); text.insertText("single", replacementRange: text.selectedRange())
         XCTAssertTrue(session.drafts.current.multiline)
         text.keyDown(with: key(36, "\r")); XCTAssertEqual(session.draft, "single\n")
@@ -284,7 +286,7 @@ import XCTest
         text.pickModel = { _, _ in picked += 1 }; text.submit = { submitted += 1 }
         text.keyDown(with: key(44, "/"))
         XCTAssertEqual(text.string, "/")
-        XCTAssertFalse(session.draftIsCommand)
+        XCTAssertTrue(session.draftIsCommand, "one line is a command in editor mode too")
         text.keyDown(with: key(18, "!", .shift))
         text.keyDown(with: key(46, "µ", .option))
         XCTAssertEqual(text.string, "/!µ")
@@ -531,5 +533,48 @@ import XCTest
         text.canAttach = { true }
         XCTAssertTrue(text.performKeyEquivalent(with: shortcut))
         XCTAssertEqual(chosen, 1)
+    }
+}
+
+extension ComposerEditingTests {
+    /// Editor mode comes from ⌘E, a multi-line paste or Settings' default, never from a typed line; a one-line command
+    /// still runs from it with Return.
+    func testAPasteOfLinesEntersEditorModeAndReturnStillSendsACommand() throws {
+        defer { close() }
+        let text = editor()
+        var submits = 0; text.submit = { submits += 1 }
+        let board = NSPasteboard(name: .init("dispatch-test-" + System.uuid().uuidString))
+        defer { board.releaseGlobally() }
+        board.clearContents(); board.setString("one line", forType: .string)
+        XCTAssertTrue(text.readSelection(from: board, type: .string))
+        XCTAssertFalse(session.drafts.current.multiline, "a one-line paste keeps single-line mode")
+        board.clearContents(); board.setString("\nfirst\nsecond", forType: .string)
+        XCTAssertTrue(text.readSelection(from: board, type: .string))
+        XCTAssertEqual(session.draft, "one line\nfirst\nsecond")
+        XCTAssertTrue(session.drafts.current.multiline, "a multi-line paste enters editor mode")
+        XCTAssertFalse(session.draftIsCommand)
+
+        text.selectAll(nil); text.insertText("/compact", replacementRange: text.selectedRange())
+        XCTAssertTrue(session.drafts.current.multiline)
+        XCTAssertTrue(session.draftIsCommand)
+        text.keyDown(with: key(36, "\r"))
+        XCTAssertEqual(submits, 1, "Return sends a one-line command in editor mode")
+        XCTAssertEqual(session.draft, "/compact")
+    }
+}
+
+extension ComposerEditingTests {
+    func testDoubleControlDDoesNothingWhenTurnedOff() {
+        defer { close() }
+        let chat = TerminalRuntime.shared.chat, before = chat.controlDExits
+        defer { chat.controlDExits = before }
+        chat.controlDExits = false
+        let text = editor()
+        var exits = 0
+        text.exitChat = { exits += 1 }
+        text.keyDown(with: key(2, "\u{4}", .control, ignoringModifiers: "d", timestamp: 10))
+        text.keyDown(with: key(2, "\u{4}", .control, ignoringModifiers: "d", timestamp: 10.5))
+        XCTAssertEqual(exits, 0)
+        XCTAssertEqual(text.string, "")
     }
 }

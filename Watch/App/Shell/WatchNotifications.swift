@@ -24,7 +24,7 @@ final class WatchRouter {
         case spaces(host: String?)
         case space(WatchSpaceRoute)
         case tab(WatchTabRoute)
-        /// A host's screen (K6), pushed over Spaces.
+        /// A host's section of Spaces (K6), scrolled to the top, as `spaces(host:)`.
         case host(WatchHostRoute)
 
         /// "spaces", "spaces:<host>" (scrolled to that host), "space:<host>/<key>", "tab:<host>/<key>", "host:<host>".
@@ -44,7 +44,7 @@ final class WatchRouter {
     }
 
     var show: Show?
-    /// The host section Spaces scrolls to when it appears (`Show.spaces(host:)`).
+    /// The host section Spaces scrolls to (`Show.spaces(host:)`, `Show.host`).
     var scrollTarget: String?
 
     /// Debug only (`-DispatchWatchSheet`): a thread's sheet to open once the thread shows, for screenshots: its first
@@ -78,10 +78,10 @@ final class WatchRouter {
     }
 
     /// A complication's tap (`dispatch-watch://open?host=…&node=…`, `WatchComplicationEntry.url`): that thread, or
-    /// Agents when the URL names none; the Host widget's (`dispatch-watch://host?host=…`): the host's screen.
+    /// Agents when the URL names none; the Host widget's (`dispatch-watch://host?host=…`): the host's section of Spaces.
     func open(url: URL) {
         guard url.scheme == WatchComplicationEntry.scheme else { return }
-        // The Host widget's: the host's screen.
+        // The Host widget's: the host's section of Spaces.
         if let host = HostWidgetEntry.host(url) { show = .host(WatchHostRoute(host: host)); return }
         if let key = WatchComplicationEntry.key(url) { open(key) } else { showAgents = true }
     }

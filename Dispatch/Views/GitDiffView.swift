@@ -764,15 +764,7 @@ struct GitSourceText: Equatable {
     private func reviewLine(_ row: GitDiffDisplayRow) -> (line: ReviewLine, quote: ReviewQuote)? {
         switch row {
         case .diff(.line(let index)):
-            let line = presentation.lines[index]
-            switch line.kind {
-            case .removed:
-                return line.old.map { (ReviewLine(side: .old, number: $0), ReviewQuote(kind: .removed, text: line.text)) }
-            case .added:
-                return line.new.map { (ReviewLine(side: .new, number: $0), ReviewQuote(kind: .added, text: line.text)) }
-            case .context:
-                return line.new.map { (ReviewLine(side: .new, number: $0), ReviewQuote(kind: .context, text: line.text)) }
-            }
+            return ReviewPlacement.anchor(presentation.lines[index])
         case .diff(.gapLine(_, let new)):
             return sourceLine(new - 1).map { (ReviewLine(side: .new, number: new), ReviewQuote(kind: .context, text: $0)) }
         case .source(let index):

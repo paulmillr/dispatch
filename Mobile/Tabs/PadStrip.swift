@@ -630,7 +630,7 @@ struct PadModeSwitch: View {
                 let on = mode == selected
                 let usable = enabled?.contains(mode) ?? true
                 Button { choose(mode) } label: {
-                    Image(systemName: mode.symbol)
+                    Image(symbol: mode.symbol)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(on ? Color.dispatchPink : usable ? Color.primary : Color.secondary.opacity(0.5))
                         .frame(width: Self.slot, height: axis == .vertical ? Self.railSlot : 32)
@@ -656,7 +656,7 @@ struct PadModeSwitch: View {
                 .accessibilityLabel(mode.title)
                 .accessibilityValue(mode == .review && review > 0 ? ReviewText.count(review) : "")
                 .accessibilityAddTraits(on ? .isSelected : [])
-                .accessibilityShowsLargeContentViewer { Label(mode.title, systemImage: mode.symbol) }
+                .accessibilityShowsLargeContentViewer { Label(mode.title, symbol: mode.symbol) }
             }
         }
         .padding(Self.inset)

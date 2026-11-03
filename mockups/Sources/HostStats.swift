@@ -23,22 +23,6 @@ enum MockStats {
     }()
 }
 
-struct FactRow: View {
-    let label: String
-    let value: String
-    var chevron = false
-    var warning = false
-    var body: some View {
-        HStack {
-            Text(label).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).font(.system(.subheadline, design: .monospaced)).foregroundStyle(warning ? Color.caution : .primary).lineLimit(1)
-            if chevron { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
-        }
-        .padding(.vertical, 7)
-    }
-}
-
 /// The Spaces tree behind the sheet: the host glyph at the trailing edge is the stats button (C); offline hosts
 /// gather under an Offline group at the end with their last-known spaces dimmed.
 struct SpacesTreeMock: View {
@@ -129,72 +113,6 @@ struct SpacesTreeMock: View {
                 }
                 .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 22))
                 .opacity(offline == nil ? 1 : 0.55)
-            }
-        }
-    }
-}
-
-/// W4: Host details with the stats block under the header, before Connection.
-struct HostDetailStatsScreen: View {
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    VStack(spacing: 10) {
-                        Image(systemName: "apple.logo").font(.system(size: 44)).foregroundStyle(hostTint)
-                            .frame(width: 84, height: 84).background(hostTint.opacity(0.15), in: Circle())
-                        Text("mba2").font(.title2.bold()).foregroundStyle(hostTint)
-                        HStack(spacing: 7) {
-                            Circle().fill(Color.stateConnected).frame(width: 8, height: 8)
-                            Text("Connected · mosh · 18 ms").font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Text("macOS 26.1").font(.footnote).foregroundStyle(.tertiary)
-                    }
-                    .padding(.top, 8)
-                    StatStripCard().padding(.horizontal, 12)
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionHeader(title: "Connection").padding(.leading, -16).padding(.top, -8)
-                        VStack(spacing: 0) {
-                            FactRow(label: "Address", value: "mba2.tail3f.ts.net").padding(.horizontal, 16)
-                            Hairline()
-                            FactRow(label: "Port", value: "22").padding(.horizontal, 16)
-                            Hairline()
-                            FactRow(label: "User", value: "alex").padding(.horizontal, 16)
-                            Hairline()
-                            FactRow(label: "Key", value: "ED25519 · Face ID").padding(.horizontal, 16)
-                            Hairline()
-                            FactRow(label: "Multiplexer", value: "herdr 0.9.5", chevron: true).padding(.horizontal, 16)
-                            // The helper's switches (HostHelperRows): Chat and Files & git go with it.
-                            ForEach(["Helper", "Chat", "Files & git"], id: \.self) { title in
-                                Hairline()
-                                Toggle(title, isOn: .constant(true)).tint(Color.stateConnected)
-                                    .padding(.horizontal, 16).padding(.vertical, 8)
-                            }
-                        }
-                        .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    .padding(.horizontal, 12)
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionHeader(title: "Spaces · 2").padding(.leading, -16).padding(.top, -8)
-                        VStack(spacing: 0) {
-                            FactRow(label: "app", value: "dark-mode", chevron: true).padding(.horizontal, 16)
-                            Hairline()
-                            FactRow(label: "e2e", value: "", chevron: true).padding(.horizontal, 16)
-                        }
-                        .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 14))
-                    }
-                    .padding(.horizontal, 12)
-                    Text("Remove host").font(.headline).foregroundStyle(Color.destructive).frame(maxWidth: .infinity).frame(height: 50)
-                        .glassEffect(.regular.interactive(), in: Capsule())
-                        .padding(.horizontal, 12)
-                    Color.clear.frame(height: 40)
-                }
-            }
-            .background(Color.canvas)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { BackPill(count: nil, title: "Spaces") }.sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .topBarTrailing) { Text("Edit").foregroundStyle(Color.dispatchPink).fixedSize().padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule()) }.sharedBackgroundVisibility(.hidden)
             }
         }
     }

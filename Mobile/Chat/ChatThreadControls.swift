@@ -466,6 +466,9 @@ struct ChatFollow: Equatable {
         return true
     }
 
+    /// The thread came into its window: an offset sampled before is no scroll of anyone's to compare with.
+    mutating func attached() { offset = nil }
+
     /// The user's drag began: the thread stops following at once.
     mutating func dragBegan() {
         if !dragging { followedBeforeDrag = following }

@@ -25,7 +25,9 @@ def simulators(document, platform='iOS'):
     or watchOS) in `xcrun simctl list devices available --json`."""
     found = []
     for runtime, devices in (document.get('devices') or {}).items():
-        match = re.search(r'\.' + platform + r'-(\d+)-(\d+)(?:-(\d+))?$', runtime)
+        # A runtime for one device type carries its model after the version: Xcode 27.2's iOS-27-2-iPhone19-4 is
+        # the iPhone Duo's alone.
+        match = re.search(r'\.' + platform + r'-(\d+)-(\d+)(?:-(\d+))?(?:-[A-Za-z][A-Za-z0-9-]*)?$', runtime)
         if not match:
             continue
         version = tuple(int(part or 0) for part in match.groups())

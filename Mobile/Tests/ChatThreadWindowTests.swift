@@ -280,3 +280,24 @@ extension ChatThreadWindowTests {
         XCTAssertTrue(labels.contains { $0.contains("Also cover invoice.paid") }, "the queue in view: \(labels)")
     }
 }
+
+/// A busy phone lays a pushed thread out before it is in the window (`ChatFollower.attached`).
+extension ChatThreadWindowTests {
+    /// A layout moves the thread off its end while it is out of the window (on a phone, the bars' inset arriving on a
+    /// push), and nothing changes once it is in: the thread still shows its end.
+    func testAMoveBeforeTheWindowStillShowsTheEnd() async throws {
+        let (_, _, window) = try await thread()
+        defer { window.isHidden = true }
+        let controller = try XCTUnwrap(window.rootViewController)
+        try await TestSupport.eventually { drawn(window)["Answer 39."] != nil }
+        _ = try await settled(window)
+        try await Task.sleep(for: .milliseconds(800))
+        let scroll = try XCTUnwrap(scrollView(window))
+        XCTAssertTrue(atEnd(scroll))
+        window.rootViewController = nil
+        scroll.contentOffset.y -= 122
+        window.rootViewController = controller
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertTrue(atEnd(scroll), "offset \(scroll.contentOffset.y) + \(scroll.bounds.height) − \(scroll.adjustedContentInset.bottom) of \(scroll.contentSize.height)")
+    }
+}

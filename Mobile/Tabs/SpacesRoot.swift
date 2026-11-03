@@ -327,8 +327,7 @@ final class SpacesNavigator {
         }
     }
 
-    /// P2e: New tab's menu items for the host, read once a space screen or the switcher shows (its agents, with the
-    /// model New chat would start them on).
+    /// P2e: New tab's menu items for the host, read once a space screen or the switcher shows (its agents).
     func loadAgents(host: UUID) async {
         guard let agentLauncher else { return }
         let choices = await agentLauncher.choices(host)

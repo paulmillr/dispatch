@@ -1,4 +1,3 @@
-import CoreText
 import Foundation
 import Metal
 import QuartzCore
@@ -55,8 +54,7 @@ final class TerminalSession: @unchecked Sendable {
     private var state = RenderState()
     /// When the open search last read the terminal (Ghostty's 24 ms search refresh); a frame request is on its way
     /// for a refresh the interval held back (under `lock`).
-    private var searchThrottle = SearchRefreshThrottle()
-    private var searchRefreshScheduled = false
+    private var snapshotCoordinator = SurfaceSnapshotCoordinator()
     private var lastScrollbar: Scrollbar?
     private let host = TerminalSurfaceHost()
 
@@ -100,9 +98,9 @@ final class TerminalSession: @unchecked Sendable {
         config = configuration.config()
         let scale = RenderSize.contentScale(scale)
         self.scale = scale
-        cells = try Self.cells(config, scale)
-        var size = RenderSize(screen: (800, 600), cell: Self.cell(cells))
-        size.pad(Self.padding(config, scale), .off)
+        cells = try SurfaceSessionCore.cells(config, scale)
+        var size = RenderSize(screen: (800, 600), cell: SurfaceSessionCore.cell(cells))
+        size.pad(SurfaceSessionCore.padding(config, scale), .off)
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)
         (o.blocks, o.kitty, o.maxScrollbackBytes, o.kittyImageStorageLimit) = (SharedPageBlocks.shared, .appleInline, config.scrollbackLimitBytes, 0)
         o.maxScrollbackLines = config.scrollbackLimitLines
@@ -195,11 +193,7 @@ final class TerminalSession: @unchecked Sendable {
         var replies: [UInt8] = []
         let changedGrid = locked { () -> TerminalFeedSize? in
             posted = false
-            for _ in 0..<2 {
-                surface.drain(reply: { replies += $0 }, event: { _ in })
-                surface.takeMessages(surface.handle)
-            }
-            surface.reportScrollbar()
+            SurfaceSessionCore.pump(surface, reply: { replies += $0 })
             guard surface.terminal.grid != grid else { return nil }
             grid = surface.terminal.grid
             return currentSize
@@ -220,27 +214,18 @@ final class TerminalSession: @unchecked Sendable {
     /// The terminal's part of a frame, under `lock` (with `drawLock` held): what changed, the search's refresh and
     /// highlights, the rows drawn. Whether a main-queue pump must take the surface's new messages.
     private func snapshot() -> ([(cp: UInt32, wide: Bool)]?, RenderSize, Scrollbar, Bool) {
-        state.update(surface.terminal)
-        // The search thread's refresh (Ghostty's, every 24 ms while output comes, not every frame): a frame that found
-        // the viewport changed lets an open search read it again, at most once per interval; its matches are laid on
-        // the rows (the renderer's updateFrame), and new totals go to the host.
-        let now = DispatchTime.now().uptimeNanoseconds
-        if searchThrottle.frame(at: now, changed: state.dirty != .false) { surface.searchRefresh() }
-        if let due = searchThrottle.due, !searchRefreshScheduled {
-            // The refresh the interval held back: a frame when it is due, so the last output is searched too.
-            searchRefreshScheduled = true
-            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(due &- min(due, now)))) { [weak self] in
+        let snapshot = snapshotCoordinator.capture(surface, cells: &cells, look: look, blinkVisible: blink.visible,
+                                                   state: &state, now: DispatchTime.now().uptimeNanoseconds)
+        if let delay = snapshot.searchRefreshDelay {
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + .nanoseconds(Int(delay))) { [weak self] in
                 guard let self else { return }
-                self.locked { self.searchRefreshScheduled = false }
+                self.locked { self.snapshotCoordinator.searchRefreshFired() }
                 self.frames?.request()
             }
         }
-        if state.highlight(surface.searchHighlights) { surface.searchHighlightsApplied() }
-        cells.snapshot(surface.terminal, look, focused: surface.focused, blinkVisible: blink.visible, preedit: surface.preedit,
-                       links: surface.drawLinks(), state: &state)
         let post = !posted && !surface.stream.handler.surface.isEmpty
         if post { posted = true }
-        return (surface.preedit, surface.size, surface.terminal.scrollbar, post)
+        return (snapshot.preedit, snapshot.size, snapshot.scrollbar, post)
     }
 
     /// A frame into the layer's next drawable (render thread). Only the snapshot of the terminal happens under the
@@ -259,7 +244,7 @@ final class TerminalSession: @unchecked Sendable {
         }
         let c = cells.contents(preedit: preedit, state: &state)
         state.dirty = .false
-        var u = FrameUniforms(size: renderSize, cell: Self.cell(cells), cols: c.cols, rows: c.rows, background: c.background,
+        var u = FrameUniforms(size: renderSize, cell: SurfaceSessionCore.cell(cells), cols: c.cols, rows: c.rows, background: c.background,
                               opacity: look.backgroundOpacity, block: c.block)
         u.minContrast = Float(config.minimumContrast)
         let built = CACurrentMediaTime()
@@ -390,8 +375,7 @@ final class TerminalSession: @unchecked Sendable {
         let next = configuration.config()
         exclusive {
             boldIsBright = configuration.boldIsBright
-            let fonts = next.fontFamily != config.fontFamily || next.fontSize != config.fontSize || next.paddingX != config.paddingX
-                || next.paddingY != config.paddingY || next.adjustCellHeight != config.adjustCellHeight
+            let fonts = SurfaceSessionCore.needsRendererRebuild(from: config, to: next)
             config = next
             if fonts { rebuild() }
             apply()
@@ -402,30 +386,22 @@ final class TerminalSession: @unchecked Sendable {
     /// The config's colours and options (the Mac's Session.apply).
     private func apply() {
         let c = config
-        (look.selectionBackground, look.selectionForeground, look.cursorColor, look.cursorText) = (c.selectionBackground, c.selectionForeground, c.cursorColor, c.cursorText)
+        SurfaceSessionCore.apply(c, to: surface, look: &look)
         // Search matches in the app's amber (the state amber of the working dot), the selected one brighter, both with
         // dark text: the terminal keeps its dark theme in either appearance.
         (look.searchBackground, look.searchForeground) = (.color(Self.searchMatch), .color(RGB(r: 0, g: 0, b: 0)))
         (look.searchSelectedBackground, look.searchSelectedForeground) = (.color(Self.searchSelected), .color(RGB(r: 0, g: 0, b: 0)))
-        surface.config.optionAsAlt = OptionAsAlt(rawValue: (c.optionAsAlt ?? .false).rawValue) ?? .true
-        surface.config.bindings = Bindings(c.keybinds)
-        surface.config.clipboardRead = HandlerOptions.ClipboardAccess(rawValue: c.clipboardRead.rawValue) ?? .ask
-        surface.stream.handler.options.clipboardWrite = HandlerOptions.ClipboardAccess(rawValue: c.clipboardWrite.rawValue) ?? .ask
         host.writes = c.clipboardWrite == .allow
-        surface.terminal.setKittyGraphicsLimit(c.imageStorageLimitBytes)
-        surface.terminal.changeCursorDefaults(style: c.cursorStyle, blink: c.cursorBlink)
         look.bold = boldIsBright ? .bright : nil
-        let cursor: RGB? = if case .color(let rgb)? = c.cursorColor { rgb } else { nil }
-        surface.terminal.changeDefaults(foreground: c.foreground, background: c.background, cursor: cursor, palette: c.palette)
         state.dirty = .full
     }
 
     /// Fonts at the config's size and the current scale, the padding in pixels, a whole frame.
     private func rebuild() {
-        guard let next = try? Self.cells(config, scale) else { return }
+        guard let next = try? SurfaceSessionCore.cells(config, scale) else { return }
         cells = next
         metal.invalidateTextures()
-        surface.setCell(Self.cell(cells), padding: Self.padding(config, scale))
+        surface.setCell(SurfaceSessionCore.cell(cells), padding: SurfaceSessionCore.padding(config, scale))
         state = RenderState()
     }
 
@@ -460,20 +436,6 @@ final class TerminalSession: @unchecked Sendable {
 
     /// The background colour (the view behind the drawable's edges).
     var background: RGB { locked { config.background } }
-
-    static func cells(_ config: Config, _ scale: Double) throws -> CellRenderer {
-        let fonts = try FontCollection(families: config.fontFamily, points: config.fontSize, dpi: Int(72 * scale))
-        let primary = fonts.face(fonts.faces[0][0].entry)
-        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics, cellHeight: config.adjustCellHeight))
-    }
-
-    static func cell(_ cells: CellRenderer) -> (width: Int, height: Int) { (Int(cells.metrics.cellWidth), Int(cells.metrics.cellHeight)) }
-
-    /// window-padding-x/-y in pixels (Ghostty's scaledPadding).
-    static func padding(_ c: Config, _ scale: Double) -> (top: Int, bottom: Int, right: Int, left: Int) {
-        let px = { (points: Int) in RenderSize.pixels(points: points, dpi: Float(72 * scale)) }
-        return (px(c.paddingY.0), px(c.paddingY.1), px(c.paddingX.1), px(c.paddingX.0))
-    }
 }
 
 /// The surface's host: actions become `TerminalSession.Event`s on the main queue. Remote program clipboard reads are
@@ -532,29 +494,4 @@ private final class TerminalSurfaceHost: SurfaceHost, @unchecked Sendable {
     func open(_ kind: SurfaceAction.OpenKind, _ url: [UInt8]) throws { throw CocoaError(.featureUnsupported) }
 
     func exists(_ path: [UInt8]) -> Bool { false }
-}
-
-/// Ghostty's search thread reads the terminal again every 24 ms while output comes; frames come up to 120 times a
-/// second, and a refresh costs about half a millisecond under the session's lock. Frames whose viewport changed refresh
-/// at most once per interval; a change inside the interval waits (`pending`) for a frame at `due`, so the last output
-/// is always searched. Times are nanoseconds on any monotonic clock.
-struct SearchRefreshThrottle: Equatable {
-    static let interval: UInt64 = 24_000_000
-    private(set) var last: UInt64?
-    private(set) var pending = false
-
-    /// A frame at `now` (`changed`: its viewport changed since the last frame): whether it refreshes the search.
-    mutating func frame(at now: UInt64, changed: Bool) -> Bool {
-        guard changed || pending else { return false }
-        if let last, now &- last < Self.interval {
-            pending = true
-            return false
-        }
-        last = now
-        pending = false
-        return true
-    }
-
-    /// When the held-back refresh may run.
-    var due: UInt64? { pending ? last.map { $0 &+ Self.interval } : nil }
 }

@@ -425,16 +425,6 @@ final class WatchModelTests: XCTestCase {
 
     // MARK: Hosts, Open on iPhone, reviews
 
-    /// K6's counts: a host's spaces and tabs, its agents that need you and whether one works.
-    func testAHostCountsItsSpacesTabsAndAgents() {
-        let (model, _) = makeModel(.mockup)
-        XCTAssertEqual(model.counts(host: WatchFixtures.mba2).spaces, 2)
-        XCTAssertEqual(model.counts(host: WatchFixtures.mba2).tabs, 5)
-        XCTAssertEqual(model.activity(host: WatchFixtures.mba2).needsYou, 1)
-        XCTAssertTrue(model.activity(host: WatchFixtures.mba2).working)
-        XCTAssertEqual(model.counts(host: "none").tabs, 0)
-    }
-
     /// K6b's Connect asks the phone to retry that host (`refresh` with it) and shows the lists it answers.
     func testConnectAsksThePhoneToRetryTheHost() async {
         let (model, link) = makeModel(.mockupOffline)

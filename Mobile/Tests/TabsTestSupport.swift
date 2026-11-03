@@ -80,7 +80,7 @@ enum ShellFixtures {
     static func model(_ suite: String = #function) -> MobileTabs {
         let defaults = UserDefaults(suiteName: "tabs-shells-\(suite)")!
         defaults.removePersistentDomain(forName: "tabs-shells-\(suite)")
-        return MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults, deviceState: SpacesDeviceState(url: nil, migrating: defaults))
+        return MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults, deviceState: SpacesDeviceState(url: nil))
     }
 
     /// The tab of a shell, once its presence attached: the scripted shell its feed opened.

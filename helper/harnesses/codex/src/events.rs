@@ -87,8 +87,13 @@ impl Codex {
             return;
         };
         let method = root.get("method").and_then(Value::string).unwrap_or("");
-        // Core C-COMPACT (old PreCompact/PostCompact status, ChatCoordinator.swift:795-796): a
-        // native contextCompaction item runs from its start until it completes.
+        if method == "thread/closed" {
+            self.clear_activity(&binding.session);
+            let state = self.states.borrow().get(&binding.session).cloned().unwrap_or_default();
+            ui.update(Update::State { binding, state });
+            return;
+        }
+        // A native contextCompaction item runs from its start until it completes.
         let item = params.get("item").and_then(|item| item.get("type"));
         if matches!(method, "item/started" | "item/completed")
             && item.and_then(Value::string) == Some("contextCompaction")

@@ -2,9 +2,11 @@
 
 A WatchConnectivity companion of [Dispatch for iPhone](ios.md). The phone keeps every SSH connection and helper; the
 watch shows what the phone has (Agents, approvals, Spaces, host stats) and sends actions back. No Rust and no SSH on
-the watch, and nothing on it knows a host's address, a key, a node id or the helper protocol. watchOS 26+, embedded in
-the phone app (`DispatchMobile.app/Watch`) and sideloaded with it. Sources are in `Watch/`; the phone's side of the
-link is in `Mobile/Watch`. What crosses the link, and the consent model, are in
+the watch; the link carries no host connection settings, SSH credentials, helper node ids or helper protocol frames.
+watchOS 26+, embedded in the phone app (`DispatchMobile.app/Watch`) for local device installs and TestFlight
+([releasing](releasing.md)). Sources are in `Watch/`; the phone's side of the link is in `Mobile/Watch`.
+Mirrored names and conversation text can still contain sensitive information, including
+addresses or credentials a user or agent put in them. What crosses the link, and the consent model, are in
 [security](security.md#dispatch-for-iphone) (Apple Watch).
 
 ## Building and running
@@ -24,7 +26,7 @@ variables for every later launch, UI tests included: shut it down and boot it wi
 
 - **Simulator pair** (`scripts/watch_simulator.py`). The watch is found by name or UDID (booted first, then the newest
   runtime). Its phone is the one it is paired with; otherwise "Dispatch Watch iPhone" is made once (an iPhone 18 Pro
-  on the newest runtime that supports it, iOS 27.0: 27.1 has only the Duo) and paired. An existing phone is never
+  on the newest runtime that supports it, not the Duo's own iOS 27.2) and paired. An existing phone is never
   paired. To undo: `xcrun simctl unpair <pair>`, `xcrun simctl delete <udid>`.
 - Built from an iOS destination, the embedded watch app compiles for arm64 and x86_64 (`ONLY_ACTIVE_ARCH` has no
   watch destination to narrow to): anything arm64-only linked into the watch breaks the phone's simulator build.
@@ -88,8 +90,8 @@ request and hold is logged under subsystem `yachts.dispatch.mobile`, category `W
   skipped when unchanged but for `generated`; pushed at once on scene phase changes, protected-data changes,
   activation, `sessionWatchStateDidChange` and reachability. Plain SSH hosts, Shell spaces and a `sameMachine` host's
   spaces are left out; connection failures are redacted to the host's name (`WatchSnapshotBuilder.redact`, also on
-  every reply's texts). A host that is not connected carries `blocked` (`hostKeyChanged`, `trustHostKey`, `login`,
-  `faceID`: what only the phone can do); `phoneLocked` is reserved and never sent.
+  each reply's reason, failure and notes). A host that is not connected carries `blocked` (`hostKeyChanged`,
+  `trustHostKey`, `login`, `faceID`: what only the phone can do); `phoneLocked` is reserved and never sent.
 - **Serving.** A request hops to the main actor, takes a background task, is served within `WatchLimits.phoneBudget`
   (15 s; the watch waits 20 s; in the background at most `backgroundTimeRemaining` less 1.5 s, since a reply after
   expiry never leaves the suspended app), and is answered with the thread page as it stands. A request that needs a
@@ -171,10 +173,14 @@ naming its mockup) follow it.
   while it works or needs you and one for an idle row's preview. Where an agent's mark shows (a tab row, the thread's
   header, an approval) it is the phone's one monochrome bubble for every agent. Two pushes (hosts and spaces, then a
   space's tabs, then a tab) rather than one indented list. An agent's tab opens its thread; any other tab shows its
-  facts and "Terminal on your iPhone". Under a connected host's Spaces header with a reading, one line: CPU % with a
-  small 15-minute sparkline and memory used of total, red where the phone flags them high, dimmed while the phone's
-  numbers are not current (`HostStatsLine`). A host screen shows the phone's stats strip and 15-minute CPU sparkline,
-  dimmed when the phone marks them stale or the host offline, with Connect (`refresh` with that host) when offline.
+  facts and "Terminal on your iPhone". Each host's Spaces section (no screen of its own) opens with its statistics card
+  (`HostStatsCard`): the phone's strip (CPU %, memory used, disk free, red where the phone flags them high) and the
+  15-minute CPU sparkline with its peak, dimmed when the phone marks the numbers stale, dimmed without the sparkline
+  while the host is offline; then what blocks the host or "Offline since", Connect (`refresh` with that host) while
+  offline, and its spaces. Spaces follows the snapshots and its 30-second clock only while it shows (its page, nothing
+  pushed over it): behind Agents it keeps what it showed when it was left and reads the model afresh when it comes back,
+  so the snapshots working agents bring cost it nothing. The phone sends the same snapshots either way (the Host widget
+  needs them).
 - **Thread.** A page holds the phone's thread rows: the messages, Claude's thinking as an agent bubble of its own,
   notices; no tools (an ended turn's caption counts its steps), and the watch hides those an older phone still sends.
   It opens at the newest turn (the one the user's newest message started, by its turn id: the summary card and what
@@ -244,11 +250,11 @@ naming its mockup) follow it.
   hosts come from the entry). Its entry (`HostWidgetEntry`: every host with a CPU reading, its 60 buckets, the high
   and current flags) is `hosts.json` beside the other, written by `HostWidgetWriter` from the watch app's snapshots
   only when what a face could show changed; its timelines reload at most every 15 minutes for numbers, every 5 when a
-  host is flagged high (or no longer) or goes stale, never more than 40 times in 24 hours (what a skipped reload would
-  show is in the file for the next one or the widget's own 15-minute refresh), and the recommendations are
+  host is flagged high (or no longer) or goes stale, with an in-memory cap of 40 reloads in 24 hours per app run
+  (what a skipped reload would show is in the file for the next one or the widget's own 15-minute refresh), and the recommendations are
   invalidated when the hosts change. Its entry's relevance is high while a current, fresh reading is flagged, so the
   Smart Stack can bring it forward; a tap
-  opens the host's screen (`dispatch-watch://host?host=…`). The phone transfers no Host entry: it follows what the
+  opens Spaces at the host's section (`dispatch-watch://host?host=…`). The phone transfers no Host entry: it follows what the
   watch app receives. Untested: a face carrying either and a real background wake (simctl can configure neither).
 - **Notifications.** Background refresh's notifications reach the watch as iOS forwards any iPhone notification;
   `WatchAppDelegate` registers category `agent` (no actions: a refresh holds no interaction, and an approval belongs
@@ -282,6 +288,9 @@ the thread's route: Queue and Steer now on a working one; `stop` is Stop's confi
 - **Simulator.** A message takes 1 to 3.5 s each way. Not shown by simulators: a locked phone, forwarded
   notifications and their tap, Face ID keys, real SSH hosts, a face with the complication, a device. The watch cannot
   be tapped from `simctl`; the debug hooks and the UI tests stand in.
+- **Clocks in lists.** Never wrap a `List` in a `TimelineView` when a row has one of its own (or is an empty
+  `TimelineView`): the list then lays out continuously, about 75 % of a core with a static snapshot. Each row keeps its
+  own clock (`AgentsScreen`). Check list performance by CPU in the simulator ([benchmarks](benchmarks.md#cpu-of-iphone-and-watch-views-in-the-simulator)).
 - **Refused after Stop.** Stop (`chat.stop`) leaves the interrupted prompt in Claude Code's input, and the next
   `chat.send` is refused as "not ready for input" until it is cleared (in Terminal; the helper does not clear it). A
   message from the watch has no draft on the phone to come back to, so `MobileChatSession.send(text:steer:)` keeps a

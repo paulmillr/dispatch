@@ -5,7 +5,7 @@ struct ChatQuestionForm: View {
     @Bindable var draft: ClaudeQuestionDraft
     /// The asking agent's name as reported (helper launch label or legacy adapter title).
     var agent = "Claude Code"
-    let submit: ([String: String]) -> Void
+    let submit: () -> Void
     let skip: () -> Void
     var openTerminal: (() -> Void)? = nil
     var scrollAnswers = false
@@ -15,7 +15,6 @@ struct ChatQuestionForm: View {
     private var question: ClaudeQuestions.Question { draft.question }
     private var index: Int { draft.index }
     private var questions: ClaudeQuestions { draft.questionnaire }
-    private var answers: [String: String] { draft.answers }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -30,8 +29,8 @@ struct ChatQuestionForm: View {
                 if index + 1 < questions.questions.count {
                     Button("Next", action: draft.next).buttonStyle(ApprovalButtonStyle(primary: true)).disabled(draft.answer(question) == nil).accessibilityIdentifier("claude-question-next")
                 } else {
-                    Button("Send answers") { submit(answers) }.buttonStyle(ApprovalButtonStyle(primary: true))
-                        .disabled(answers.count != questions.questions.count).accessibilityIdentifier("claude-question-submit")
+                    Button("Send answers") { submit() }.buttonStyle(ApprovalButtonStyle(primary: true))
+                        .disabled(!draft.actions.canSubmit).accessibilityIdentifier("claude-question-submit")
                         .keyboardShortcut(formFocused || customFocused ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 }
                 Button("Skip", action: skip).buttonStyle(ApprovalButtonStyle())
@@ -41,7 +40,7 @@ struct ChatQuestionForm: View {
             .focusable().focused($formFocused)
             .onKeyPress(.return, phases: .down) { event in
                 guard event.modifiers.contains(.command) else { return .ignored }
-                if answers.count == questions.questions.count { submit(answers) }
+                if draft.actions.canSubmit { submit() }
                 return .handled
             }
             .onKeyPress(.space, phases: .down) { _ in
@@ -50,8 +49,13 @@ struct ChatQuestionForm: View {
             }
             .onKeyPress(.upArrow, phases: .down) { event in moveChoice(-1, event: event) }
             .onKeyPress(.downArrow, phases: .down) { event in moveChoice(1, event: event) }
-            .task { await Task.yield(); choiceFocused = question.options.first?.label; formFocused = true }
-            .onChange(of: index) { _, _ in choiceFocused = question.options.first?.label; formFocused = true }
+            .task { await Task.yield(); restoreFocus() }
+            .onChange(of: index) { _, _ in restoreFocus() }
+    }
+    private func restoreFocus() {
+        choiceFocused = question.options.first(where: { draft.isSelected($0.label, in: question) })?.label ?? question.options.first?.label
+        customFocused = false
+        formFocused = true
     }
     private func moveChoice(_ delta: Int, event: KeyPress) -> KeyPress.Result {
         guard !customFocused, event.modifiers.isEmpty, !question.options.isEmpty else { return .ignored }
@@ -65,7 +69,7 @@ struct ChatQuestionForm: View {
             Text(question.text).font(theme.typography.body).foregroundStyle(theme.ink).textSelection(.enabled)
             if question.multiple { Text("Choose any that apply").foregroundStyle(theme.muted) }
             ForEach(question.options) { option in
-                let chosen = !draft.usingCustom.contains(question.id) && draft.selected[question.id, default: []].contains(option.label)
+                let chosen = draft.isSelected(option.label, in: question)
                 Button {
                     draft.select(option.label)
                 } label: {

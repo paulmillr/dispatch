@@ -357,8 +357,12 @@ struct ChatTranscriptView: View {
             guard let session, userInitiated || session.earlierError == nil else { return false }
             return coordinator?.loadEarlier(session, preservingBottom: !userInitiated) ?? false
         }
-        if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
-        else if let anchor = session.scrollPosition.saved?.id ?? session.scrollAnchor {
+        if session.atBottom {
+            // A previous view may still be restoring an earlier row. Explicit latest-output intent wins;
+            // otherwise that pending restoration can undo this jump and keep native bottom pinning paused.
+            session.scrollPosition.jumpToLatest()
+            scroll.scrollTo("bottom", anchor: .bottom)
+        } else if let anchor = session.scrollPosition.saved?.id ?? session.scrollAnchor {
             scroll.scrollTo(anchor, anchor: .top)
             session.scrollPosition.restoreOnAppearance()
         }

@@ -77,7 +77,7 @@ final class HelperFilesSource: FilesSource, Sendable {
     // MARK: FilesSource
 
     func list(_ path: String, hidden: Bool) async throws -> FileListing {
-        let listing: Wire.Listing = try await call("files.list", Wire.List(path: path, hidden: hidden), .quick, path: path)
+        let listing: FilesWire.Listing = try await call("files.list", FilesWire.List(path: path, hidden: hidden), .quick, path: path)
         return listing.model
     }
 
@@ -88,9 +88,9 @@ final class HelperFilesSource: FilesSource, Sendable {
 
     func read(_ path: String, offset: UInt64, length: UInt64?, revision: FileRevision?) async throws
         -> (data: Data, revision: FileRevision) {
-        let params = Wire.Read(path: path, offset: offset, length: length, revision: revision.map(Wire.Metadata.init))
+        let params = FilesWire.Read(path: path, offset: offset, length: length, revision: revision)
         // To the end: the file's size is not known here, so the longest bound.
-        let reply: (result: Wire.Metadata, bytes: Data) = try await perform(.bytes(length ?? .max), path: path) { connection in
+        let reply: (result: FilesWire.Metadata, bytes: Data) = try await perform(.bytes(length ?? .max), path: path) { connection in
             try await connection.requestBinary("files.read", params: params)
         }
         return (reply.bytes, reply.result.model)
@@ -100,7 +100,7 @@ final class HelperFilesSource: FilesSource, Sendable {
                replaced: FileIdentity?) async throws -> FileRevision {
         let params = Wire.Write(path: path, bytes: data, mode: mode.map(UInt64.init), replace: replace,
                                 parent: Wire.Identity(parent), replaced: replaced.map(Wire.Identity.init))
-        let metadata: Wire.Metadata = try await call("files.write", params, .bytes(UInt64(data.count)), path: path)
+        let metadata: FilesWire.Metadata = try await call("files.write", params, .bytes(UInt64(data.count)), path: path)
         return metadata.model
     }
 
@@ -137,7 +137,7 @@ final class HelperFilesSource: FilesSource, Sendable {
     }
 
     func git(_ path: String, args: [String], limit: UInt64) async throws -> GitOutput {
-        let answer: Wire.Git = try await call("files.git", Wire.GitRun(path: path, args: args, limit: limit), .git(limit), path: path)
+        let answer: FilesWire.Git = try await call("files.git", FilesWire.GitRun(path: path, args: args, limit: limit), .git(limit), path: path)
         return GitOutput(status: answer.status, output: answer.output, truncated: answer.truncated)
     }
 
@@ -176,68 +176,16 @@ final class HelperFilesSource: FilesSource, Sendable {
         if error is CancellationError { return .cancelled }
         // SSHTimeout's own failure: the request may still complete on the host.
         if let timeout = error as? HerdrFailure { return .other(code: "uncertain", message: timeout.message) }
-        let helper = host.map { "The helper on " + $0 } ?? "This Mac’s helper"
-        // The helper's stream broke: a frame cut short, a chunked reply left open, a reply out of step. The connection
-        // ends the stream on any of these (`HelperConnection.receive`), so they read as the connection dropping.
-        if error is HelperWire.Failure || error is HelperBinary.Failure {
-            return host.map(FilesSourceError.offline) ?? .other(code: "disconnected", message: helper + " stopped answering")
-        }
-        guard let failure = error as? HelperFailure else { return .other(code: "internal", message: error.localizedDescription) }
-        func detail(_ fallback: String) -> String { failure.message.isEmpty ? fallback : failure.message }
-        switch failure.code {
-        case "not_found": return .notFound(path)
-        case "permission_denied": return .permissionDenied(path)
-        case "not_directory": return .notDirectory(path)
-        case "is_directory": return .isDirectory(path)
-        case "changed": return .changed(path)
-        case "exists": return .exists(path)
-        case "limit": return .limit(detail("\(path) is larger than the helper copies at once"))
-        case "busy": return .busy(detail(helper + " is busy with another copy"))
-        case "unsupported": return .unsupported(detail(helper + " can’t do this yet"))
-        case "unavailable", "connection_closed", "invalid_response":
-            if let host { return .offline(host) }
-            let code = failure.code == "invalid_response" ? "disconnected" : failure.code
-            return .other(code: code, message: detail(helper + " is unavailable"))
-        case "cancelled": return .cancelled
-        default: return .other(code: failure.code, message: detail(helper + " failed (\(failure.code))"))
-        }
+        return FilesSourceFailure.map(error, path: path, context: .desktop(host: host))
     }
 }
 
-/// The `files.*` params and results as the helper encodes them. Nanosecond stamps are i128 on the helper and
-/// travel as decimal strings; `Bytes` params are raw `Data`.
+/// Mac-only summary and copy payloads. The read-only wire contract is shared in `FilesWire`.
 private enum Wire {
-    struct List: Encodable, Sendable {
-        let path: String
-        let hidden: Bool
-        /// 0: the helper's own bound (10,000 entries).
-        var limit: UInt64 = 0
-        /// Git marks are reserved for the git tabs; step one never asks for them.
-        var git = false
-    }
-
     struct Bounded: Encodable, Sendable {
         let path: String
         /// 0: the helper's own bound (100,000 entries visited).
         var limit: UInt64 = 0
-    }
-    struct GitRun: Encodable, Sendable {
-        let path: String
-        let args: [String]
-        let limit: UInt64
-    }
-    struct Git: Decodable, Sendable {
-        let status: Int64
-        let output: String
-        let truncated: Bool
-    }
-
-    struct Read: Encodable, Sendable {
-        let path: String
-        let offset: UInt64
-        /// Absent reads to the end.
-        let length: UInt64?
-        let revision: Metadata?
     }
 
     struct Write: Encodable, Sendable {
@@ -293,79 +241,6 @@ private enum Wire {
     struct Close: Encodable, Sendable {
         let transfer: String
         let commit: Bool
-    }
-
-    /// An i128 nanosecond stamp: the helper writes a decimal string; an integer is accepted as well.
-    struct Stamp: Codable, Sendable {
-        let text: String
-
-        init(_ text: String) { self.text = text }
-
-        init(from decoder: any Decoder) throws {
-            let value = try decoder.singleValueContainer()
-            if let text = try? value.decode(String.self) { self.text = text }
-            else if let number = try? value.decode(Int64.self) { text = String(number) }
-            else { text = String(try value.decode(UInt64.self)) }
-        }
-
-        func encode(to encoder: any Encoder) throws {
-            var value = encoder.singleValueContainer()
-            try value.encode(text)
-        }
-    }
-
-    struct Metadata: Codable, Sendable {
-        let kind: String
-        let size: UInt64
-        let device: UInt64
-        let inode: UInt64
-        let modified_ns: Stamp
-        let changed_ns: Stamp
-
-        init(_ revision: FileRevision) {
-            kind = revision.kind.rawValue
-            size = revision.size
-            device = revision.device
-            inode = revision.inode
-            modified_ns = Stamp(revision.modifiedNs)
-            changed_ns = Stamp(revision.changedNs)
-        }
-
-        var model: FileRevision {
-            FileRevision(kind: FileEntryKind(rawValue: kind) ?? .other, size: size, device: device, inode: inode,
-                         modifiedNs: modified_ns.text, changedNs: changed_ns.text)
-        }
-    }
-
-    struct Entry: Decodable, Sendable {
-        let name: String
-        let kind: String
-        let size: UInt64
-        let modified_ns: Stamp
-        let target: String?
-        /// On the wire, never set: the Files list shows nothing of git.
-        let mark: String?
-        let device: UInt64?
-        let inode: UInt64?
-
-        var model: FileEntry {
-            FileEntry(name: name, kind: FileEntryKind(rawValue: kind) ?? .other, size: size,
-                      modified: FileRevision.date(modified_ns.text), targetKind: target.map { FileEntryKind(rawValue: $0) ?? .other },
-                      identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
-        }
-    }
-
-    struct Listing: Decodable, Sendable {
-        let path: String
-        let entries: [Entry]
-        let truncated: Bool
-        let device: UInt64?
-        let inode: UInt64?
-
-        var model: FileListing {
-            FileListing(path: path, entries: entries.map(\.model), truncated: truncated,
-                        identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
-        }
     }
 
     struct Summary: Decodable, Sendable {

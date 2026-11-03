@@ -648,10 +648,7 @@ struct ChatSettingsSheet: View {
         Task {
             defer { applying = false }
             do {
-                let chosen = try await session.select(model: model, effort: effort)
-                // New chats offer the remembered model among the menu's rows, so remember the row the report names.
-                let row = AgentModelMenu.row(for: chosen.model, in: models)?.name ?? chosen.model
-                if let agent = session.agentKey { memory?.remember(agent: agent, model: row, effort: chosen.effort) }
+                try await session.select(model: model, effort: effort)
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }

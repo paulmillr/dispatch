@@ -56,6 +56,7 @@ final class HelperOutputWindowTests: XCTestCase {
         XCTAssertFalse(HelperSession.outputWindow)
         XCTAssertFalse(HelperSession.features.contains(HelperSession.terminalsWindow))
         XCTAssertTrue(HelperSession.features.contains(HelperSession.requestsBacklog))
+        XCTAssertTrue(HelperSession.features.contains(HelperSession.membershipsAppend), "A herdr tab moved to the end lands last")
         HelperSession.outputWindow = true
         defer { HelperSession.outputWindow = false }
         XCTAssertEqual(HelperSession.features.last, HelperSession.terminalsWindow)

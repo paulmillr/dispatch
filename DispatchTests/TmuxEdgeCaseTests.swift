@@ -931,7 +931,7 @@ final class TmuxWalkthrough {
             _ = try self.server(["-f", "/dev/null", "new-session", "-d", "-s", "edge", "-x", "100", "-y", "35", "/bin/sh"])
         }
         runtime.workspace = workspace
-        var preferences = Preferences(); preferences.closeLaunching = ["tmux": autoClose, "herdr": autoClose]
+        var preferences = Preferences(); workspace.closeLaunching = ["tmux": autoClose, "herdr": autoClose]
         preferences.liquidGlass = liquidGlass
         controller.settings.values = preferences
         runtime.start(preferences: preferences)

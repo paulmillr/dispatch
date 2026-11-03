@@ -15,12 +15,15 @@ enum TerminalSchemes {
         /// What makes it hard to use (SchemeAudit), shown as a warning sign after its name.
         var problems: [String] = []
         var id: String { file }
-        /// A dark background (relative luminance under a half).
-        var isDark: Bool { background.luminance < 0.5 }
+        /// nil means the scheme belongs in both sections, as in the Mac's picker.
+        var side: Bool?
+        var isDark: Bool { side != true }
         /// Its section among the dark or the light schemes.
-        var group: SchemeGroup {
+        var group: SchemeGroup { group(light: !isDark) }
+
+        func group(light: Bool) -> SchemeGroup {
             let rgb = { (c: RGB) in (c.red, c.green, c.blue) }
-            return SchemeGroup.of(file, background: rgb(background), accents: accents.map(rgb), light: !isDark)
+            return SchemeGroup.of(file, background: rgb(background), accents: accents.map(rgb), light: light)
         }
     }
 
@@ -28,14 +31,13 @@ enum TerminalSchemes {
         let red: Double, green: Double, blue: Double
         init(_ red: Double, _ green: Double, _ blue: Double) { (self.red, self.green, self.blue) = (red / 255, green / 255, blue / 255) }
 
-        /// `#rrggbb` or `rrggbb`.
-        init?(hex: String) {
-            let digits = hex.trimmingCharacters(in: .whitespaces).drop { $0 == "#" }
-            guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
-            self.init(Double(value >> 16 & 255), Double(value >> 8 & 255), Double(value & 255))
-        }
+        init(_ color: ThemeColor) { self.init(Double(color.r), Double(color.g), Double(color.b)) }
 
-        var luminance: Double { 0.2126 * red + 0.7152 * green + 0.0722 * blue }
+        /// The shared theme parser's short and full hexadecimal forms.
+        init?(hex: String) {
+            guard let color = ThemeColor(hex: hex) else { return nil }
+            self.init(color)
+        }
     }
 
     /// Dispatch's own, first in the list, by their titles (SchemeGroup.titles).
@@ -81,20 +83,11 @@ enum TerminalSchemes {
     /// A Ghostty theme file's colours: `background`, `foreground` and `palette = N=#rrggbb`.
     static func parse(_ text: String, file: String) -> Scheme {
         var scheme = Scheme(file: file, title: title(file))
-        var palette: [Int: RGB] = [:]
-        for line in text.split(whereSeparator: \.isNewline) {
-            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 2 else { continue }
-            switch parts[0] {
-            case "background": if let rgb = RGB(hex: parts[1]) { scheme.background = rgb }
-            case "foreground": if let rgb = RGB(hex: parts[1]) { scheme.foreground = rgb }
-            case "palette":
-                let entry = parts[1].split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                if entry.count == 2, let index = Int(entry[0]), let rgb = RGB(hex: entry[1]) { palette[index] = rgb }
-            default: break
-            }
-        }
-        scheme.accents = (1...6).compactMap { palette[$0] }
+        let parsed = TerminalTheme.parse(text)
+        if parsed.hasBackground { scheme.background = RGB(parsed.theme.background) }
+        if parsed.hasForeground { scheme.foreground = RGB(parsed.theme.foreground) }
+        scheme.side = parsed.side
+        scheme.accents = parsed.theme.palette[1...6].compactMap { $0.map(RGB.init) }
         scheme.problems = SchemeAudit.problems(name: file, theme: text)
         return scheme
     }

@@ -216,7 +216,7 @@ struct ChatChip: View {
 /// chips on the user's side, one question at a time; Submit sends the answers, Skip declines.
 struct ChatQuestionFormView: View {
     let approval: MobileChatSession.Approval
-    let submit: ([String: String]?) -> Void
+    let submit: (_ skip: Bool) -> Void
     /// Send becomes the reply with the answers (`ChatAnswerMorph`).
     @Namespace private var replies
     @ReduceMotion private var reduceMotion
@@ -224,8 +224,8 @@ struct ChatQuestionFormView: View {
     @State private var submitted = 0
     private static let reply = "reply"
 
-    private func finish(_ answers: [String: String]?) {
-        submit(answers)
+    private func finish(skip: Bool) {
+        submit(skip)
         submitted += 1
     }
 
@@ -233,7 +233,7 @@ struct ChatQuestionFormView: View {
         if let draft = approval.pending.questionDraft {
             let question = draft.question
             let answered = draft.answer(question) != nil
-            let last = draft.questionnaire.questions.last?.id == question.id
+            let last = draft.index + 1 == draft.questionnaire.questions.count
             VStack(spacing: 6) {
                 ChatBubble(side: .agent) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -258,20 +258,25 @@ struct ChatQuestionFormView: View {
                 if approval.pending.pending {
                     ChatChipFlow {
                         ForEach(question.options) { option in
-                            ChatChip(title: option.label, selected: draft.answer(question)?.components(separatedBy: ", ").contains(option.label) == true,
+                            ChatChip(title: option.label, selected: draft.isSelected(option.label, in: question),
                                      hint: "Selects this answer") {
                                 draft.select(option.label)
                             }
                         }
                     }
+                    TextField("Or type your own answer", text: Binding(
+                        get: { draft.custom[question.id, default: ""] }, set: { draft.type($0) }), axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .id(question.id)
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
-                        ChatChip(title: "Skip") { finish(nil) }
+                        if draft.actions.canGoBack { ChatChip(title: "Back", action: draft.back) }
+                        ChatChip(title: "Skip") { finish(skip: true) }
                         ChatChip(title: last ? "Send" : "Next", prominent: answered,
                                  morph: last && !reduceMotion ? (AnyHashable(Self.reply), replies) : nil) {
-                            if last { finish(draft.answers) } else { draft.next() }
+                            if last { finish(skip: false) } else { draft.next() }
                         }
-                        .disabled(!answered)
+                        .disabled(last ? !draft.actions.canSubmit : !draft.actions.canGoNext)
                     }
                 } else if let answers = approval.pending.answers {
                     ChatBubble(side: .user) {
@@ -309,7 +314,7 @@ struct ChatSideQuestionView: View {
             if let options = question.question.options, !options.isEmpty {
                 ChatChipFlow {
                     ForEach(options) { option in
-                        ChatChip(title: option.label, selected: question.answer(question.question)?.components(separatedBy: ", ").contains(option.label) == true,
+                        ChatChip(title: option.label, selected: question.isSelected(option.label, in: question.question),
                                  hint: "Selects this answer") {
                             question.select(option.label)
                         }
@@ -329,16 +334,17 @@ struct ChatSideQuestionView: View {
             if let error = question.submissionError { ChatCaption(text: error, trailing: true) }
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                if question.index > 0 { ChatChip(title: "Back") { question.index -= 1 } }
-                ChatChip(title: "Skip") { submit(true) }
+                if question.index > 0 { ChatChip(title: "Back", action: question.back) }
+                ChatChip(title: "Skip") { submit(true) }.disabled(!question.canSubmit(skip: true))
                 if question.index + 1 < question.questions.count {
-                    ChatChip(title: "Next", prominent: question.answer(question.question) != nil) { question.index += 1 }
+                    ChatChip(title: "Next", prominent: question.actions.canGoNext, action: question.next)
+                        .disabled(!question.actions.canGoNext)
                 } else {
-                    ChatChip(title: "Send", prominent: question.complete) { submit(false) }.disabled(!question.complete)
+                    ChatChip(title: "Send", prominent: question.complete) { submit(false) }.disabled(!question.canSubmit(skip: false))
                 }
             }
-            .disabled(question.submitted)
         }
+        .disabled(!question.actions.canEdit)
     }
 }
 

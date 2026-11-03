@@ -44,7 +44,7 @@ final class Workspace {
     @ObservationIgnored var onCloseTabs: ([UUID]) -> Void = { _ in }
     @ObservationIgnored var machineForTab: ((TerminalTab) -> TerminalMachine)?
     @ObservationIgnored var helpers: [HelperWorkspace.Endpoint: HelperWorkspace] = [:]
-    /// Per multiplexer (the helper's name): close the launching tab once its client attaches.
+    /// Tests may retain a multiplexer’s launching shell; production always closes it once the client attaches.
     var closeLaunching: [String: Bool] = [:]
     /// Launching tabs that close once their multiplexer releases them (Herdr): shown until then, already leaving.
     var retiringLaunchers: Set<UUID> = []
@@ -213,7 +213,14 @@ final class Workspace {
 
     /// The helper of the space holding this space, window or tab id.
     func helper(containing id: UUID) -> HelperWorkspace? {
-        helper(spaces.first { $0.id == id || $0.containers.contains { $0.id == id } || $0.tabs.contains { $0.id == id } })
+        helper(spaces.first { $0.id == id || $0.containers.contains { $0.id == id } || $0.tabs.contains { $0.id == id } }
+            ?? helpers.values.compactMap { $0.closingSpace(containing: id) }.first)
+    }
+
+    /// A quitting chat keeps its terminal binding after leaving the visible layout.
+    func space(containingTab id: UUID) -> Space? {
+        spaces.first { $0.tabs.contains { $0.id == id } }
+            ?? helpers.values.compactMap { $0.closingSpace(containing: id) }.first
     }
 
     func newBackendSpace() {

@@ -191,7 +191,9 @@ struct ChatView: View {
                 if !matchingCommands.isEmpty { commands }
                 ChatInputFold(present: queueTipPresented, spacing: 8, reduceMotion: reduceMotion) {
                     HStack(alignment: .top, spacing: 8) {
-                        Text("Queued messages run after this turn. Use ⌥⏎ to steer: interrupt and redirect the current turn.")
+                        Text(coordinator.sendWhileWorking == .steer
+                             ? "Queued messages run after this turn. ⏎ steers: it interrupts and redirects the current turn."
+                             : "Queued messages run after this turn. Use ⌥⏎ to steer: interrupt and redirect the current turn.")
                             .fixedSize(horizontal: false, vertical: true)
                         Button { queueTipPresented = false } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).accessibilityLabel("Dismiss queue tip")
@@ -213,18 +215,18 @@ struct ChatView: View {
                         ChatInputFold(present: attachmentsShown, spacing: 6, reduceMotion: reduceMotion) {
                             ChatComposerAttachments(session: session, coordinator: coordinator)
                         }
-                        ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session) },
-                            interrupt: {
+                        ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session, option: false) },
+                            interrupt: { time in
                                 if session.editingQueuedID != nil { coordinator.cancelQueuedEdit(session); return true }
-                                return coordinator.interrupt(session)
+                                return coordinator.escapeStop(session, at: time)
                             },
                             exitChat: { coordinator.quitFromChat(session) },
                             exitPrompt: {
                                 coordinator.quitCommand(session) == nil ? "Press Ctrl+D again to show Terminal"
-                                    : "Press Ctrl+D again to quit \(session.agentTitle)"
+                                    : "Press Ctrl+D again to close tab and quit \(session.agentTitle)"
                             },
                             pickModel: { coordinator.openModelPicker(session, column: $0, cycle: $1) }, workspace: workspace,
-                            sendNow: { coordinator.sendNow(session) },
+                            sendNow: { coordinator.sendFromComposer(session, option: true) },
                             queueAction: { id, action in
                                 switch action {
                                 case "send": coordinator.sendNow(session, queuedID: id)
@@ -469,6 +471,11 @@ struct ChatView: View {
             ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: showsLabel)
             ChatComposerAgents(session: session)
             ChatComposerShells(session: session)
+            if agentWorking, session.stopArmedAt != nil {
+                // Settings' Esc twice: the first press only arms the stop.
+                Text("⎋ again to stop").font(theme.typography.detail).foregroundStyle(theme.muted)
+                    .accessibilityIdentifier("chat-stop-armed")
+            }
             composerStop
         }
     }
@@ -482,21 +489,22 @@ struct ChatView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.border))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!coordinator.canInterrupt(session))
-                .help(session.interruptionID == nil ? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋ · Draft kept" : "Stopping…")
+                .help(session.interruptionID == nil
+                      ? "\(theme.radioLog ? "All stop" : "Stop agent") · \(coordinator.escapeStop == .twice ? "⎋⎋" : "⎋") · Draft kept" : "Stopping…")
                 .accessibilityLabel(theme.radioLog ? "All stop" : "Stop agent").accessibilityIdentifier("chat-stop")
         }
     }
 
     private var shortcutsControl: some View {
-        ChatComposerShortcuts(session: session, presented: $session.shortcutsPresented)
+        ChatComposerShortcuts(session: session, steers: coordinator.sendWhileWorking == .steer, escapeTwice: coordinator.escapeStop == .twice,
+                              quits: coordinator.controlDExits, presented: $session.shortcutsPresented)
     }
 
     private func replyButton(showsKey: Bool) -> some View {
-        ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy,
+        ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy, steers: coordinator.returnSteers(session),
                         editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
                         command: session.draftIsCommand, showsKey: showsKey) {
-            if optionHeld { coordinator.sendNow(session) }
-            else { coordinator.sendFromComposer(session) }
+            coordinator.sendFromComposer(session, option: optionHeld)
         }
     }
 

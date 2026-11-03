@@ -1,9 +1,10 @@
 import Foundation
 import Observation
 
-/// What New chat (M9a) defaults to: the last agent used, and per agent the last model and effort with the menus seen
-/// for it (choice metadata only; applying a choice still goes through the live conversation's `chat.settings.set`).
-/// A new chat has no terminal yet, so no `chat.models` can be asked before it starts.
+/// What New chat (M9a) remembers: the last agent used, and per agent the model and effort menus seen for it (choice
+/// metadata only; applying a choice still goes through the live conversation's `chat.settings.set`). A new chat has no
+/// terminal yet, so no `chat.models` can be asked before it starts. No model or effort is remembered: a new chat starts
+/// on the agent's own default (Claude's `/model` default), not on the phone's last pick.
 @MainActor @Observable final class ChatModelMemory {
     struct Choice: Codable, Equatable, Identifiable, Sendable {
         let id: String
@@ -21,23 +22,18 @@ import Observation
         }
     }
     struct Agent: Codable, Equatable, Sendable {
-        var model: String?
-        var effort: String?
         var models: [Choice] = []
         var efforts: [String: [Choice]] = [:]
 
-        init(model: String? = nil, effort: String? = nil, models: [Choice] = [], efforts: [String: [Choice]] = [:]) {
-            self.model = model
-            self.effort = effort
+        init(models: [Choice] = [], efforts: [String: [Choice]] = [:]) {
             self.models = models
             self.efforts = efforts
         }
 
-        /// A missing or unreadable key takes its default; the rest of the file stays.
+        /// A missing or unreadable key takes its default; the rest of the file stays (an older file's last model and
+        /// effort go).
         init(from decoder: any Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
-            model = values.lenient(String.self, forKey: .model)
-            effort = values.lenient(String.self, forKey: .effort)
             models = values.lenientArray(Choice.self, forKey: .models)
             efforts = values.lenientDictionary([Lenient<Choice>].self, forKey: .efforts).mapValues { $0.compactMap(\.value) }
         }
@@ -72,12 +68,10 @@ import Observation
     var lastAgent: String? { document.agent }
     func agent(_ key: String) -> Agent { document.agents[key] ?? Agent() }
 
-    /// A chat started or a model chosen.
-    func remember(agent key: String, model: String?, effort: String?) {
+    /// A chat started with this agent.
+    func remember(agent key: String) {
+        guard document.agent != key else { return }
         document.agent = key
-        var agent = agent(key)
-        if let model { agent.model = model; agent.effort = effort }
-        document.agents[key] = agent
         save()
     }
 

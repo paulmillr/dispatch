@@ -175,7 +175,7 @@ final class TabsQueryTests: XCTestCase {
     /// missing one is All, other keys are left.
     func testAMenuOfAnotherShapeKeepsWhatItCanRead() throws {
         XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"other":1}"#.utf8)), TabsQuery())
-        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"chats"}"#.utf8)), TabsQuery(filter: .agents))
+        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"chats"}"#.utf8)), TabsQuery())
         XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"later"}"#.utf8)), TabsQuery())
         XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"needsYou"}"#.utf8)),
                        TabsQuery(filter: .needsYou))

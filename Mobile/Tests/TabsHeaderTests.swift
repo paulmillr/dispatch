@@ -151,8 +151,8 @@ extension TabsHeaderTests {
         XCTAssertEqual(TabModeButton.next(shown: .chat, agent: true, segments: all), .terminal)
         XCTAssertEqual(TabModeButton.next(shown: .files, agent: true, segments: all), .terminal)
         XCTAssertNil(TabModeButton.next(shown: .terminal, agent: false, segments: [.terminal]))
-        XCTAssertEqual(TabModeButton.symbol(shown: .chat, agent: true), "text.bubble")
-        XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: true), "text.bubble")
+        XCTAssertEqual(TabModeButton.symbol(shown: .chat, agent: true), "dispatch.chat")
+        XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: true), "dispatch.chat")
         XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: false), "folder")
         XCTAssertEqual(TabModeButton.symbol(shown: .files, agent: true), "folder")
     }

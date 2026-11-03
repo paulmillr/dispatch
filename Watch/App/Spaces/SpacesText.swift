@@ -6,7 +6,8 @@ struct WatchTabRoute: Hashable, Sendable {
     let tab: String
 }
 
-/// A host's screen (`HostScreen`, K6): its `WatchHost.id`.
+/// A host in Spaces (a Host widget's tap, `WatchRouter.Show.host`): its `WatchHost.id`. Its section there is K6, its
+/// statistics card over its spaces.
 struct WatchHostRoute: Hashable, Sendable {
     let host: String
 }
@@ -40,6 +41,9 @@ enum SpacesText {
     /// What a host says in place of (or above) its spaces, most pressing first: the phone's screen is needed
     /// (`WatchModel.blockedMessage`), then its problem while not connected, with when the phone last reached it. Under
     /// the "Unlock your iPhone" notice, a host blocked only by the lock says nothing more (every host would repeat it).
+    /// Not connected and not connecting: the card dims to its last numbers and Connect shows.
+    static func offline(_ host: WatchHost) -> Bool { host.state == .offline || host.state == .unknown }
+
     static func problem(_ host: WatchHost, now: Date, notice: WatchNotice? = nil) -> (symbol: String, text: String, detail: String?)? {
         if notice == .phoneLocked, host.blocked == .phoneLocked { return nil }
         let last = host.state == .connected ? nil : host.lastConnected.map { "Last connected \(WatchTime.ago($0, now: now))" }
@@ -78,9 +82,9 @@ enum SpacesText {
         return nil
     }
 
-    /// The row's glyph, as the phone's tab rows draw it (`AgentGlyph`): the Chat segment's bubble for a chat tab, the
-    /// terminal for any other.
-    static func symbol(_ tab: WatchTab) -> String { tab.chat ? "text.bubble" : "apple.terminal" }
+    /// The row's glyph, as the phone's tab rows draw it (`AgentGlyph`): the Chat segment's capsule for a chat tab, the
+    /// terminal for any other. Drawn with `Image(symbol:)`.
+    static func symbol(_ tab: WatchTab) -> String { tab.chat ? "dispatch.chat" : "apple.terminal" }
 
     /// Where a tab row leads: an agent's thread when it is bound to one, else the tab's screen.
     enum Destination: Equatable {

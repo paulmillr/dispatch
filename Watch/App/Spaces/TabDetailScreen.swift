@@ -29,7 +29,7 @@ struct TabDetailScreen: View {
     private func content(_ tab: WatchTab, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: SpacesText.symbol(tab)).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+                Image(symbol: SpacesText.symbol(tab)).font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(tab.name).font(.headline).fixedSize(horizontal: false, vertical: true)
             }
             if let host {

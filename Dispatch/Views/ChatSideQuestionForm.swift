@@ -43,25 +43,25 @@ struct ChatSideQuestionForm: View {
                     .accessibilityIdentifier("chat-side-question-error")
             }
             HStack(spacing: 10) {
-                if request.index > 0 { Button("Back") { request.index -= 1 } }
+                if request.index > 0 { Button("Back", action: request.back) }
                 if request.index + 1 < request.questions.count {
-                    Button("Next") { request.index += 1 }.disabled(request.answer(request.question) == nil)
+                    Button("Next", action: request.next).disabled(!request.actions.canGoNext)
                 } else {
-                    Button("Send answers") { submit(false) }.disabled(!request.complete)
+                    Button("Send answers") { submit(false) }.disabled(!request.canSubmit(skip: false))
                         .accessibilityIdentifier("chat-side-question-submit")
                         .keyboardShortcut(formFocused || customFocused ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 }
-                Button("Skip") { submit(true) }
+                Button("Skip") { submit(true) }.disabled(!request.canSubmit(skip: true))
                 if request.submitted { ProgressView().controlSize(.mini) }
             }.buttonStyle(ApprovalButtonStyle())
         }.font(theme.typography.detail).padding(10).chatPanel()
-            .disabled(request.submitted || request.submissionUncertain)
+            .disabled(!request.actions.canEdit)
             .focusable().focused($formFocused)
             .onChange(of: request.index) { _, _ in restoreFocus() }
             .task { await Task.yield(); restoreFocus() }
             .onKeyPress(.return, phases: .down) { event in
                 guard event.modifiers.contains(.command) else { return .ignored }
-                if request.complete && !request.submitted { submit(false) }
+                if request.canSubmit(skip: false) { submit(false) }
                 return .handled
             }
             .onKeyPress(.space, phases: .down) { _ in
@@ -74,7 +74,8 @@ struct ChatSideQuestionForm: View {
     }
 
     private func restoreFocus() {
-        choiceFocused = request.question.options?.first?.label
+        choiceFocused = request.question.options?.first(where: { request.isSelected($0.label, in: request.question) })?.label
+            ?? request.question.options?.first?.label
         customFocused = choiceFocused == nil
         formFocused = choiceFocused != nil
     }
@@ -82,14 +83,12 @@ struct ChatSideQuestionForm: View {
         guard !customFocused, event.modifiers.isEmpty, let options = request.question.options, !options.isEmpty else { return .ignored }
         let index = options.firstIndex { $0.label == choiceFocused } ?? 0
         choiceFocused = options[max(0, min(options.count - 1, index + delta))].label
-        if let choiceFocused { request.select(choiceFocused) }
+        if !request.question.multiple, let choiceFocused { request.select(choiceFocused) }
         return .handled
     }
 
     private func choice(_ option: ChatSideQuestion.Option) -> some View {
-        let chosen = !request.usingCustom.contains(request.question.id)
-            && (request.selections[request.question.id]?.contains(option.label)
-                ?? (request.selected[request.question.id] == option.label))
+        let chosen = request.isSelected(option.label, in: request.question)
         return Button { request.select(option.label) } label: {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: chosen ? "checkmark.circle.fill" : "circle")

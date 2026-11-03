@@ -227,35 +227,20 @@ impl Harness for Pi {
                         .get("state")
                         .ok_or_else(|| bridge::fail("state", "Pi returned no session state."))?;
                     let state = state(value)?;
-                    let interactive = saved
-                        .borrow()
-                        .registrations
-                        .get(&binding.process.pid)
-                        .is_some_and(|record| record.version == "extension-v2");
-                    if interactive {
-                        for interaction in crate::events::interactions(value) {
-                            saved.borrow_mut().pages.push(Update::Interaction {
-                                binding: binding.clone(),
-                                interaction,
-                            });
-                        }
-                        io.timer(io.now());
+                    for interaction in crate::events::interactions(value) {
+                        saved.borrow_mut().pages.push(Update::Interaction {
+                            binding: binding.clone(),
+                            interaction,
+                        });
                     }
+                    io.timer(io.now());
                     saved.borrow_mut().states.insert(session, Rc::new(document));
                     Ok(state)
                 });
-                let events = saved
-                    .borrow()
-                    .registrations
-                    .get(&binding.process.pid)
-                    .is_some_and(|r| r.version == "extension-v2");
-                if result.is_ok() && events {
-                    saved.borrow_mut().legacy.remove(&binding.session);
+                if result.is_ok() {
                     if let Err(error) = bridge::subscribe(&saved, io, &binding, false) {
                         result = Err(error);
                     }
-                } else if result.is_ok() {
-                    crate::legacy::start(&saved, io, &binding);
                 }
                 done(io, result);
             }),
@@ -606,7 +591,6 @@ impl Harness for Pi {
         crate::install::run(&self.runtime, io, enabled, agent, done);
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
-        crate::legacy::tick(&self.runtime, io, ui);
         crate::transcript::event(&self.runtime, io, ui, &event);
         crate::side::event(&self.runtime, io, &event);
         bridge::event(&self.runtime, io, event);

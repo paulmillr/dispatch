@@ -1,4 +1,5 @@
 /tmp/
+/docs/tmp/
 /build/
 /replays/
 /com.apple.DeveloperTools/
@@ -21,8 +22,7 @@ rollout-*.jsonl
 # Capture scrubbing: needles name private values (docs/replay.md uses tmp/review).
 review/
 
-# Agent instructions and local agent state stay local.
-/CLAUDE.md
+# Local agent instructions and state stay local (CLAUDE.md is shared).
 /AGENTS.md
 /.claude/
 

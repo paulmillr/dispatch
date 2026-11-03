@@ -26,7 +26,7 @@ scripts/release-prepare.sh --verify --team TEAMID
 ## Maintainer
 
 `scripts/release-prepare.sh [--stable] [--no-push]` needs a committed checkout and a clean `../dispatch-release`
-(`DISPATCH_RELEASE_REPO` overrides the path). It runs `./run.sh --prod --build-number N` for the Mac app and
+(`DISPATCH_RELEASE_REPO` overrides the path). It runs `./run.sh --prod --just-build --build-number N` for the Mac app and
 `./run.sh --archive … --build-number N` for the iPhone app with its watch app. Xcode signs iOS code only with a team,
 so the archive is built unsigned and then signed ad hoc with `codesign`, each bundle with its target's entitlements
 (the watch's App Group, `group.<prefix>.mobile`), which the signing machine's export keeps. The release folder gets:
@@ -45,7 +45,53 @@ After the signing machine pushed, `git -C ../dispatch-release pull` and
 `scripts/release-prepare.sh --verify [DMG] --team TEAMID` (default: the newest published DMG) checks that the DMG's app is
 the reference build with only signatures and the stapled ticket changed, signed by `TEAMID`, notarized and accepted by
 Gatekeeper. For a Pilot build it prints the publish steps: the GitHub release tagged `X.Y.Z` and the `homebrew-tap`
-cask. Test the download on a disposable Mac before publishing.
+cask. Test the download on a disposable Mac before publishing. The cask's `zap` lists the files of both apps,
+`yachts.dispatch.app` and `yachts.dispatch.pilot.app` (and the old `dev.dispatch.local`): keep it that way when
+either changes what it stores.
+
+## Mac automatic updates
+
+The Mac app has its own updater, using Foundation, CryptoKit, Security and macOS tools; there is no updater dependency.
+Onboarding offers an unchecked **Enable automatic updates** choice, including once for existing installations that
+have not answered it. Settings › General › Updates can change the choice and check manually without enabling it.
+Off (also the default for older settings files), there are no automatic requests. On, Dispatch checks once a day
+while running and downloads newer versions, then offers **Restart and install**. Restart goes through the normal
+running-process confirmation and session cleanup. An ordinary quit never installs a pending update.
+
+The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks/dispatch.rb`: the cask's literal
+`version`, `sha256` and GitHub DMG URL. No Ruby is executed. Publish the GitHub asset first, then update the cask's
+version and checksum; the updater sees a release only after the cask changes. Keep those three fields literal and
+unique. Versions are numeric dot-separated components; equal or older versions are not installed.
+
+Downloads use ephemeral HTTPS sessions to GitHub and its asset hosts, without cookies or stored credentials.
+Dispatch checks the DMG's SHA-256, mounts it read-only, copies the app to a private staging folder beside the installed
+app, and checks its version, minimum macOS, architecture, Developer ID signature (including nested code and all
+architectures) and Gatekeeper assessment. It leaves quarantine intact. A development/ad hoc build, a read-only or
+translocated app, or an app whose directory is not writable cannot update itself; it reports the reason in Settings.
+The installed and staged apps exchange paths atomically after quit cleanup. A small system-shell launcher waits for
+Dispatch to exit, opens the updated app and removes the previous bundle only if `open` succeeds. No elevated helper
+or password prompt is used. If exchange fails, the installed app stays intact; if starting the launcher fails, the
+exchange is reversed. An interrupted relaunch can leave a `.Dispatch-update-*` backup beside the app.
+
+### Changing the Apple signing account
+
+Trust comes from the installed app, not the feed or the DMG's checksum. By default, an update must have the running
+app's team ID **and** bundle ID and a valid Apple Developer ID Application signature. Renewing a certificate within
+the same team needs no change. Before switching teams or bundle IDs, ship a bridge release signed by the old account
+with an entry in `Dispatch/Info.plist`'s `DispatchUpdateTrustedIdentities` array:
+
+```xml
+<dict>
+    <key>team</key><string>NEWTEAM123</string>
+    <key>bundle</key><string>yachts.dispatch.app</string>
+</dict>
+```
+
+Use the actual new team ID; the value above is only an example. Each entry trusts exactly that team/bundle pair.
+Keep the old identity in the new release's list if a transition back is needed. Clients that skip the bridge release
+cannot trust the new identity automatically and must install that release manually; allow time for adoption before
+the switch. A bundle ID change also changes UserDefaults and OS permissions: migrate those separately when making
+that transition. The updater does not silently broaden trust to any notarized app.
 
 ## Signing machine
 
@@ -140,3 +186,17 @@ with `--force-with-lease`, so no older `.ipa` stays in its history. A plain fold
 `DISPATCH_ADHOC_DEPLOY`, a shell command run after the copy, puts it online, for a host that deploys from a folder.
 Without either, serve `adhoc/` at that address yourself. Each run signs again (offline, quick): the files name their addresses, which may have changed. Testers open
 `DISPATCH_ADHOC_URL/pilot/` in Safari on their iPhone and tap Install.
+
+## Builds that are not notarized
+
+A Mac build handed to a tester outside the notarized DMG or the cask (a Debug or development build sent as a file) is
+quarantined. "Open Anyway" in System Settings clears the app's launch, not the helper inside it: every tab execs
+`dispatch-helper` through `login`, where Gatekeeper judges that unsigned binary on its own and may refuse or hold it, so
+new tabs hang after "Last login" (or never get that far). Testers run `xattr -dr com.apple.quarantine
+/Applications/Dispatch.app` after "Open Anyway"; users get a notarized release. There is deliberately no code
+workaround (such as running an unquarantined copy of the helper).
+
+Diagnosing a tab stuck there on someone else's Mac: ask for the process tree under the app (`ps -ax -o
+pid,ppid,stat,command`) while it is stuck and `xattr -l` of the app's helper. A wait of about 10 s before the first
+prompt instead is zsh waiting for a stale `~/.zhistory.LOCK` ([integrations](integrations.md), Quit and local shells):
+`ls -la ~/.zhistory.LOCK` shows it, and `setopt HIST_FCNTL_LOCK` avoids it.

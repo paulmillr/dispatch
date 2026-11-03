@@ -90,21 +90,8 @@ struct HostStatisticsSnapshot: Codable, Sendable {
     /// samples at most `hold` apart, takes the later one, as its CPU is that interval's average: the background
     /// 15 s cadence drifts past a bar now and then.
     func historyBars(memory: Bool, at now: Date, count: Int = 60, hold: TimeInterval = 20) -> [Double?] {
-        let span = Self.historyWindow / Double(count)
-        func slot(_ date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate / span).rounded(.down)) }
-        let first = slot(now) - (count - 1)
-        var bars = [Double?](repeating: nil, count: count), held = bars
-        var previous: Date?
-        for point in history where point.date <= now {
-            defer { previous = point.date }
-            guard let raw = memory ? point.memoryPercent : point.cpu, raw.isFinite else { continue }
-            let value = min(100, max(0, raw)), own = slot(point.date) - first
-            if bars.indices.contains(own) { bars[own] = max(bars[own] ?? 0, value) }
-            guard let previous, point.date > previous, point.date.timeIntervalSince(previous) <= hold else { continue }
-            let gap = max(0, slot(previous) + 1 - first), end = min(count, own)
-            if gap < end { for index in gap..<end { held[index] = max(held[index] ?? 0, value) } }
-        }
-        return zip(bars, held).map { $0 ?? $1 }
+        StatisticsHistory.bars(history, at: now, window: Self.historyWindow, count: count, hold: hold,
+                               date: { $0.date }, value: { memory ? $0.memoryPercent : $0.cpu })
     }
 
     static func gib(_ bytes: UInt64?) -> String {

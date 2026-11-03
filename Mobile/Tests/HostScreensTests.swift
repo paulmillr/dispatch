@@ -322,7 +322,7 @@ final class HostScreensTests: XCTestCase {
     }
 
     func testHintNamesBothMultiplexers() {
-        XCTAssertTrue(MultiplexerHint.herdr.allSatisfy { $0.text.contains("herdrdev/herdr/releases/download/v0.9.3") })
+        XCTAssertTrue(MultiplexerHint.herdr.allSatisfy { $0.text.contains("herdrdev/herdr/releases/download/v0.9.5") })
         XCTAssertEqual(MultiplexerHint.tmux.map(\.text).first, "brew install tmux")
         XCTAssertTrue(String(NewHostSheet.helperStatement.characters).contains("~/.dispatch"))
         XCTAssertNotNil(NewHostSheet.helperStatement.runs.compactMap(\.link).first { $0.absoluteString.hasSuffix("docs/security.md#ssh-integration") })

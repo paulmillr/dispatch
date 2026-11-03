@@ -1,112 +1,5 @@
 import SwiftUI
 
-/// K6: a host as a watch card, pushed from its Spaces header. Its mark, multiplexer chip, the state dot with the helper's
-/// latency; the phone's Stocks-style strip (CPU %, memory used, disk free; red when the phone flags it), the 15-minute
-/// CPU sparkline with its peak; its spaces and tabs, how many of its agents need you and whether one works.
-/// K6b, not connected: the strip as last known, dimmed, "Offline since 2:02 PM" and Connect (the phone retries it), or
-/// what only the phone can do when the host is blocked.
-struct HostScreen: View {
-    let model: WatchModel
-    let route: WatchHostRoute
-
-    var body: some View {
-        Group {
-            if let host = model.host(route.host) {
-                TimelineView(.everyMinute) { context in
-                    content(host, now: context.date)
-                }
-                .navigationTitle(host.name)
-            } else {
-                Text("This host isn't on your iPhone any more.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-        }
-    }
-
-    private func content(_ host: WatchHost, now: Date) -> some View {
-        // Connecting is not offline: the strip stays as it is, with "Connecting…" in place of Connect.
-        let offline = host.state == .offline || host.state == .unknown
-        let counts = model.counts(host: host.id), activity = model.activity(host: host.id)
-        return ScrollView {
-            VStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    WatchHostMark(host: host, size: 24).saturation(offline ? 0 : 1)
-                    if let multiplexer = host.multiplexer {
-                        Text(multiplexer)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.quaternary, in: Capsule())
-                    }
-                    Spacer(minLength: 0)
-                    Circle().fill(SpacesText.stateColor(host)).frame(width: 6, height: 6).accessibilityHidden(true)
-                    Text(HostStatsText.state(host)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-                .accessibilityElement(children: .combine)
-                HostStatsCard(stats: host.stats, tint: Color(watchHex: host.tint), live: !offline)
-                if offline {
-                    offlineFooter(host, now: now)
-                } else {
-                    if host.state == .connecting { connectingLine }
-                    HStack(spacing: 4) {
-                        Text(HostStatsText.counts(spaces: counts.spaces, tabs: counts.tabs)).foregroundStyle(.secondary)
-                        Spacer(minLength: 2)
-                        if activity.needsYou > 0 {
-                            Text("\(activity.needsYou)").foregroundStyle(WatchDots.needsYou)
-                                .accessibilityLabel("\(activity.needsYou) need you")
-                        }
-                        if activity.working {
-                            Circle().fill(WatchDots.working).frame(width: 6, height: 6).accessibilityLabel("Working")
-                        }
-                    }
-                    .font(.caption2)
-                    .padding(.horizontal, 4)
-                }
-            }
-            .padding(.horizontal, 2)
-        }
-    }
-
-    private var connectingLine: some View {
-        HStack(spacing: 6) {
-            ProgressView().frame(width: 18, height: 18)
-            Text("Connecting…").font(.footnote).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 44)
-    }
-
-    @ViewBuilder private func offlineFooter(_ host: WatchHost, now: Date) -> some View {
-        if let since = HostStatsText.offlineSince(host, now: now) {
-            Label(since, systemImage: "wifi.slash")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
-        }
-        if let blocked = WatchModel.blockedMessage(host) {
-            Label {
-                Text(blocked).font(.footnote)
-            } icon: {
-                Image(systemName: "iphone").foregroundStyle(AgentsColor.working)
-            }
-            .foregroundStyle(.secondary)
-        } else if model.connecting.contains(host.id) {
-            connectingLine
-        } else {
-            Button {
-                Task { await model.connect(host: host.id) }
-            } label: {
-                CapsuleLabel(title: "Connect", symbol: "bolt.fill", style: .accent)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Connect")
-            .accessibilityHint("Asks your iPhone to connect \(host.name)")
-        }
-    }
-}
-
 /// The strip and the sparkline in one grouped card; dimmed and without the line when the host is not connected, dimmed
 /// with the line while the phone's numbers are not current (`stale`: the phone in the background, a new connection's
 /// first sample not in yet).
@@ -138,6 +31,8 @@ struct HostStatsCard: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .padding(.horizontal, 10)
                 .padding(.top, 4)
                 .padding(.bottom, 8)
@@ -168,7 +63,7 @@ struct HostStatsCard: View {
     }
 }
 
-/// The host screen's words, pure for the tests.
+/// The words of a host's card and lines in Spaces, pure for the tests.
 enum HostStatsText {
     /// "34" "%"; "—" without a reading.
     static func cpu(_ stats: WatchHostStats?) -> (value: String, unit: String) {

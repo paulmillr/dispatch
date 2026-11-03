@@ -8,7 +8,7 @@ import os
 /// calibration measures it (`scripts/measure-chat-fonts.swift`), read from the glyphs' bounds rather than rendered.
 /// Shared with the iPhone app; both register the bundled fonts before a terminal opens.
 enum TerminalFontScale {
-    static let reference = "Source Code Pro"
+    static let reference = TerminalFontCatalog.defaultFamily
     private static let cache = OSAllocatedUnfairLock(initialState: [String: Double]())
 
     /// The size a terminal draws `size` points of `family` at; Source Code Pro, and a family that can't be found, keep it.

@@ -18,11 +18,15 @@ final class LiquidGlassStore {
 /// The system's sidebar glass, as Finder and Mail have it. AppKit draws that material only for a split view's sidebar
 /// item, so this holds a split view controller with that item alone, filling the view; the system picks the material
 /// (and on each macOS its look). It is a background: it takes no clicks and has nothing for accessibility.
+/// On macOS 27 that material is an `NSGlassEffectView` of a private variant: a flush, full-height column with no inset,
+/// radius or refraction highlight, unlike the public `.regular` glass (which refracts and has edge highlights), so it
+/// cannot be imitated with public glass. Check its look against a capture from the test host (`PresentationTestSupport`).
 @available(macOS 26, *)
 struct SystemSidebarGlass: NSViewRepresentable {
     func makeNSView(context: Context) -> SystemSidebarGlassView { SystemSidebarGlassView() }
     func updateNSView(_ view: SystemSidebarGlassView, context: Context) {}
-    /// All the room offered: the split view's own constraints would size it to its sidebar's minimum.
+    /// All the room offered: the split view's own constraints would size it to its sidebar's minimum (about 10 points,
+    /// which shows as a lighter band mid-column).
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SystemSidebarGlassView, context: Context) -> CGSize? {
         proposal.replacingUnspecifiedDimensions()
     }

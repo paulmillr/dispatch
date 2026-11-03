@@ -1,5 +1,6 @@
 import Foundation
 import QuartzCore
+@preconcurrency import TermApple
 
 /// A session's frames, paced by the display (Frames.swift on the Mac, with `CADisplayLink` in place of
 /// `NSView.displayLink`): the link runs on the session's own render thread and draws only after a change
@@ -10,9 +11,7 @@ final class TerminalFrames: NSObject, @unchecked Sendable {
     /// The render thread's run loop and the link (used on the render thread only).
     private var loop: CFRunLoop?
     private var link: CADisplayLink?
-    /// Under `lock`: a change waits for a frame; the link is paused; frames are shown.
-    private let lock = NSLock()
-    private var changed = true, paused = false, shown = true
+    private let demand = FrameDemand()
 
     init(draw: @escaping @Sendable () -> Void) {
         self.draw = draw
@@ -48,18 +47,12 @@ final class TerminalFrames: NSObject, @unchecked Sendable {
 
     /// Something changed: the next refresh draws it (the render thread is woken only from a pause).
     func request() {
-        lock.lock()
-        changed = true
-        let wake = paused && shown
-        if wake { paused = false }
-        lock.unlock()
-        if wake { perform { self.link?.isPaused = false } }
+        if demand.request() { perform { self.link?.isPaused = false } }
     }
 
     /// Hidden: no frames (the link pauses at its next refresh); shown: a frame at the next refresh.
     func show(_ visible: Bool) {
-        lock.lock(); shown = visible; lock.unlock()
-        if visible { request() }
+        if demand.show(visible) { perform { self.link?.isPaused = false } }
     }
 
     /// Ends the pacing and the render thread, without waiting.
@@ -72,10 +65,6 @@ final class TerminalFrames: NSObject, @unchecked Sendable {
     }
 
     @objc private func refresh(_ link: CADisplayLink) {
-        lock.lock()
-        let now = changed && shown
-        if now { changed = false } else { paused = true }
-        lock.unlock()
-        if now { draw() } else { link.isPaused = true }
+        if demand.frame() { draw() } else { link.isPaused = true }
     }
 }

@@ -3,18 +3,26 @@ import SwiftUI
 /// The redesign's shared pieces (mockups/Watch): the agent's glyph, the glass and accent capsules that replace platter
 /// buttons and a platter-less list row. The host's CPU sparkline is in `Watch/Complication` (the Host widget draws it).
 
-/// The agent's mark as the phone's tab rows draw it (`AgentGlyph`): one monochrome speech bubble for every agent, the
+/// The agent's mark as the phone's tab rows draw it (`AgentGlyph`): one monochrome chat capsule for every agent, the
 /// terminal for none, secondary, in a fixed-width column.
 struct AgentGlyph: View {
     let agent: String?
     var size: CGFloat = 13
 
     var body: some View {
-        Image(systemName: AgentsGlyph.symbol(agent))
+        Image(symbol: AgentsGlyph.symbol(agent))
             .font(.system(size: size))
             .foregroundStyle(.secondary)
             .frame(width: size + 4)
             .accessibilityHidden(true)
+    }
+}
+
+/// The app's own symbols, SF Symbol templates in the asset catalog named `dispatch.*` (Chat's capsule, the phone's), else
+/// the system's.
+extension Image {
+    init(symbol name: String) {
+        self = name.hasPrefix("dispatch.") ? Image(name) : Image(systemName: name)
     }
 }
 

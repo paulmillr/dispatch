@@ -64,7 +64,7 @@ final class WatchLiveTests: XCTestCase {
     // MARK: Scripted
 
     /// Agents → the approval's thread → Allow; the question's form → an option → Send; a finished thread → Reply → the
-    /// confirm screen → Send, then Open on iPhone; Spaces → a host's screen, a space → a tab.
+    /// confirm screen → Send, then Open on iPhone; Spaces with a host's statistics, a space → a tab.
     func testScriptedTapsThroughAgentsAndSpaces() throws {
         let app = launch(["-DispatchWatchScripted", "1"])
 
@@ -117,26 +117,18 @@ final class WatchLiveTests: XCTestCase {
 
         // Spaces is the second vertical page: the Digital Crown scrolls Agents to its end, and a swipe there pages on
         // (the simulated crown stops at the list's end).
-        let space = element(app, labelStarting: "dispatch")
-        if !reveal(space, in: app, swipes: 4) {
-            for _ in 0..<4 where !space.exists {
+        // Spaces opens on studio's statistics card, its section's first row, over its spaces (K6): no screen of its own.
+        let card = element(app, labelContaining: "CPU 34 percent")
+        if !reveal(card, in: app, swipes: 4) {
+            for _ in 0..<4 where !card.exists {
                 app.swipeUp(velocity: .fast)
-                _ = space.waitForExistence(timeout: 1)
+                _ = card.waitForExistence(timeout: 1)
             }
         }
-        XCTAssertTrue(space.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(card.waitForExistence(timeout: 5), app.debugDescription)
         shot("spaces")
-        // The host's header opens its screen (K6): the statistics strip and its counts.
-        let header = app.buttons.matching(NSPredicate(format: "label == 'studio'")).firstMatch
-        if !header.isHittable { XCUIDevice.shared.rotateDigitalCrown(delta: -1) }
-        XCTAssertTrue(header.waitForExistence(timeout: 5), app.debugDescription)
-        header.tap()
-        XCTAssertTrue(element(app, labelContaining: "CPU 34 percent").waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(element(app, labelStarting: "2 spaces").waitForExistence(timeout: 5) || element(app, labelContaining: "spaces ·").exists,
-                      app.debugDescription)
-        shot("host")
-        back(app)
-        XCTAssertTrue(space.waitForExistence(timeout: 5), app.debugDescription)
+        let space = element(app, labelStarting: "dispatch")
+        XCTAssertTrue(reveal(space, in: app), app.debugDescription)
         space.tap()
         let tab = element(app, labelStarting: "zsh")
         XCTAssertTrue(tab.waitForExistence(timeout: 10), app.debugDescription)

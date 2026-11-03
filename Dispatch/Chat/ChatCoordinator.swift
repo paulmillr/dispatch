@@ -46,6 +46,18 @@ final class ChatCoordinator {
     /// All coordinators install into shared profiles; teardown joins the same queue.
     var integrationChanges: Task<Void, Never>? { Self.integrationTail }
     static var integrationTail: Task<Void, Never>?
+    /// Settings › Chat mode's choice for Return while the agent works (`returnSteers`).
+    var sendWhileWorking = ChatSendWhileWorking.queue
+    /// Settings › Chat mode: a tab whose terminal starts an agent shows Chat, or stays on its terminal.
+    var agentStart = ChatAgentStart.chat
+    /// Settings › Chat mode: Esc stops the running turn at once or only when pressed twice (`escapeStop(_:at:)`).
+    var escapeStop = ChatEscapeStop.once
+    /// Settings › Chat mode: double Ctrl+D in an empty draft closes the tab and quits the agent (`quitFromChat`).
+    var controlDExits = true
+    /// Settings › Chat mode: how tool groups show until opened or closed; every chat takes it.
+    var toolSteps = ChatToolGroupDisclosure.current {
+        didSet { for session in sessions.values where session.toolSteps != toolSteps { session.toolSteps = toolSteps } }
+    }
     /// The first queued message showed its steering tip (once, ever).
     var queueTipShown: Bool { didSet { defaults?.set(queueTipShown, forKey: "chatQueueSteerTipShown") } }
     @ObservationIgnored private var owners: [String: UUID] = [:]
@@ -92,6 +104,7 @@ final class ChatCoordinator {
             return session
         }
         let session = ChatSession(id: id, draftRepository: draftRepository)
+        session.toolSteps = toolSteps
         sessions[id] = session
         connectHelper(session)
         return session
@@ -197,17 +210,45 @@ final class ChatCoordinator {
         session.command?.cancel(); session.command = nil; session.nativePrompt = nil
         session.relinquish(); DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
     }
-    /// Double Ctrl+D quits the agent, as it does in Terminal. An agent without
-    /// a quit command, or one that is not idle, only switches to Terminal.
+    /// Double Ctrl+D closes the tab immediately, then quits the agent before closing its terminal.
+    /// An agent without a quit command, or one that is not idle, only switches to Terminal.
     func quitCommand(_ session: ChatSession) -> String? {
-        guard session.helperCommands.contains("/quit"), session.draft.isEmpty, session.queuedMessages.isEmpty,
+        guard session.helperCommands.contains("/quit"), session.draft.isEmpty,
+              session.drafts.current.attachments.isEmpty, session.draftUploads.isEmpty,
+              session.queuedMessages.isEmpty,
               inputReady(session) else { return nil }
         return "/quit"
     }
     func quitFromChat(_ session: ChatSession) {
         guard let command = quitCommand(session) else { return chooseChat(false, session: session) }
+        let workspace = TerminalRuntime.shared.workspace
+        let terminal = workspace?.space(containingTab: session.id)?.tabs.first { $0.id == session.id }?.terminal
+        let owner = workspace?.helper(containing: session.id)
+        let helper = session.helper, binding = session.binding
         session.draft = command
         submit(session)
+        guard session.exitRequested, let submission = session.helperTask, let terminal, let owner else { return }
+        owner.close(terminal, policy: .prompt) { [weak session] in
+            await submission.value
+            guard let session else { throw CancellationError() }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+            while true {
+                try Task.checkCancellation()
+                // The same process: a quit right after launch can meet Codex naming its first conversation, which
+                // changes the binding's session but not its agent (as `receiveHelper` tells a new agent apart).
+                guard session.helper === helper, session.binding?.pid == binding?.pid,
+                      session.binding?.start == binding?.start else {
+                    throw HerdrFailure("The agent changed while quitting. Check the restored tab before closing it again.")
+                }
+                if session.agentExited { return }
+                guard session.active, session.submissionFailure == nil, session.terminalAttention == nil,
+                      ContinuousClock.now < deadline else {
+                    throw HerdrFailure(session.submissionFailure ?? session.terminalAttention
+                        ?? "The agent has not confirmed its exit. Check the restored tab before closing it again.")
+                }
+                try await Task.sleep(for: .milliseconds(40))
+            }
+        }
     }
     func setChatVisible(_ value: Bool, session: ChatSession, reason: String = "discovery") {
         if !value { session.drafts.persist(flush: true) }
@@ -414,6 +455,18 @@ final class ChatCoordinator {
                     && !session.waitingForAnswer && !session.loadingHistory && session.activityCheck == nil)
                     || session.draft.trimmingCharacters(in: .whitespacesAndNewlines) == "/terminal") { submit(session) }
         else { queue(session) }
+    }
+
+    /// Return (and Send) steers the draft into the running turn instead of queueing it: Settings chose Steer, the agent
+    /// works, and the draft is a message rather than a command or a queued message's edit. ⌥⏎ then queues.
+    func returnSteers(_ session: ChatSession) -> Bool {
+        sendWhileWorking == .steer && session.busy && session.editingQueuedID == nil && !session.draftIsCommand
+    }
+
+    /// The composer's Return (`option`: ⌥⏎ or Send with ⌥ held): the draft's usual way, or the other one, steering
+    /// (`sendNow`) or queueing as Settings' `sendWhileWorking` and the draft say (`returnSteers`).
+    func sendFromComposer(_ session: ChatSession, option: Bool) {
+        if option != returnSteers(session) { sendNow(session) } else { sendFromComposer(session) }
     }
 
     private func directSubmissionReady(_ session: ChatSession) -> Bool {
@@ -668,7 +721,22 @@ final class ChatCoordinator {
     @discardableResult
     func interrupt(_ session: ChatSession) -> Bool {
         guard session.helper != nil else { return false }
+        session.stopArmedAt = nil
         return interruptHelper(session)
+    }
+
+    /// Esc in the composer (`time`: the key event's timestamp). With Settings' Pressed twice, the first press only
+    /// arms the stop, which the composer shows, and a second within `ChatEscapeStop.window` stops; false when nothing
+    /// can be stopped (Esc then goes on as usual).
+    func escapeStop(_ session: ChatSession, at time: TimeInterval) -> Bool {
+        guard canInterrupt(session) else { session.stopArmedAt = nil; return false }
+        guard escapeStop == .twice else { return interrupt(session) }
+        if let armed = session.stopArmedAt, time >= armed, time - armed <= ChatEscapeStop.window { return interrupt(session) }
+        session.stopArmedAt = time
+        DispatchQueue.main.asyncAfter(deadline: .now() + ChatEscapeStop.window) { [weak session] in
+            if session?.stopArmedAt == time { session?.stopArmedAt = nil }
+        }
+        return true
     }
 
     func canPickModel(_ session: ChatSession) -> Bool {

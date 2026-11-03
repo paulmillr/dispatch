@@ -563,7 +563,7 @@ extension ChatDemo {
         memory.remember(agent: "claude", efforts: ["low", "medium", "high"].enumerated().map {
             AgentModelMenu.Choice(number: $0.offset + 1, name: $0.element, detail: $0.element, current: false, isDefault: false)
         }, for: "fable-5.1")
-        memory.remember(agent: "claude", model: "fable-5.1", effort: "high")
+        memory.remember(agent: "claude")
         return memory
     }()
 }
@@ -601,7 +601,7 @@ struct ChatDemoHeader: View {
             Spacer()
             // The mode button on Chat (`TabModeButton`), the waveform in its place in conversation mode.
             ChatHeaderControls(session: session, menuInDisc: true) {
-                Image(systemName: "text.bubble.fill")
+                Image(symbol: TabSegment.chat.symbol + ".fill")
                     .foregroundStyle(Color.dispatchPink)
                     .frame(width: 44, height: 44)
                     .glassEffect(.regular, in: Circle())

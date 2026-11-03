@@ -28,8 +28,8 @@ final class DictationTests: XCTestCase {
         XCTAssertFalse(decoded.dictationEnabled)
         XCTAssertEqual(decoded.dictationKey, .rightOption)
         let switchedOff = #"{"dictationRightCommand": false}"#
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(switchedOff.utf8)).dictationKey, .off,
-                       "the right ⌘ switch saved off before the key could be chosen stays off")
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(switchedOff.utf8)).dictationKey, .rightCommand,
+                       "the removed right ⌘ switch is ignored")
         XCTAssertFalse(decoded.dictationNavigation)
         XCTAssertFalse(decoded.dictationReadReplies)
         XCTAssertEqual(decoded.dictationWakeWords, ["jarvis"])

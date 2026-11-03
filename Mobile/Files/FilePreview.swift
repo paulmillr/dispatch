@@ -57,8 +57,8 @@ final class FilePreview {
     static let imageLimit: UInt64 = 32 * 1024 * 1024
     /// Share reads a binary file whole up to this.
     static let shareLimit: UInt64 = 64 * 1024 * 1024
-    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "tif", "tiff", "bmp"]
-    static let markdownExtensions: Set<String> = ["md", "markdown"]
+    static let imageExtensions = FilePreviewContent.imageExtensions
+    static let markdownExtensions = FilePreviewContent.markdownExtensions
 
     init(path: String, host: String, source: @escaping @MainActor () -> (any MobileFilesSource)?) {
         self.path = path
@@ -98,22 +98,17 @@ final class FilePreview {
     }
 
     static func decide(name: String, size: UInt64, head: Data) -> Kind {
-        let ext = (name as NSString).pathExtension.lowercased()
-        if imageExtensions.contains(ext) { return size <= imageLimit ? .image : .binary }
-        if head.contains(0) { return .binary }
-        if decode(head, partial: UInt64(head.count) < size) == nil { return .binary }
-        if markdownExtensions.contains(ext) { return .markdown }
-        return .text(language: CodeSyntax.language(name))
+        switch FilePreviewContent.kind(name: name, size: size, head: head, imageLimit: imageLimit) {
+        case .image: return .image
+        case .binary: return .binary
+        case .markdown: return .markdown
+        case .text: return .text(language: CodeSyntax.language(name))
+        }
     }
 
-    /// `data` as UTF-8; `partial` (a window of a longer file) lets up to three bytes of a character cut at its end go.
+    /// A window may end midway through a valid scalar; malformed bytes still fail.
     static func decode(_ data: Data, partial: Bool) -> String? {
-        if let text = String(data: data, encoding: .utf8) { return text }
-        guard partial else { return nil }
-        for cut in 1...3 where data.count > cut {
-            if let text = String(data: data.dropLast(cut), encoding: .utf8) { return text }
-        }
-        return nil
+        FilePreviewContent.text(data, allowingIncompleteSuffix: partial)
     }
 
     /// Reads the file (once: a loaded preview stays as it is).
@@ -278,11 +273,7 @@ final class FilePreview {
 
 /// Find in file: the query's occurrences, in order, one of them current.
 struct FileFind: Equatable {
-    struct Match: Equatable {
-        let line: Int
-        /// Which occurrence on its line.
-        let occurrence: Int
-    }
+    typealias Match = TextOccurrences.Match
 
     var query = ""
     private(set) var matches: [Match] = []
@@ -290,19 +281,9 @@ struct FileFind: Equatable {
 
     /// Every occurrence of the query in `lines`, any case.
     mutating func search(_ lines: [AttributedString]) {
-        matches = []
         current = 0
-        guard !query.isEmpty else { return }
-        for (index, line) in lines.enumerated() {
-            let text = String(line.characters)
-            var from = text.startIndex, occurrence = 0
-            while let found = text.range(of: query, options: [.caseInsensitive], range: from..<text.endIndex) {
-                matches.append(Match(line: index, occurrence: occurrence))
-                occurrence += 1
-                from = found.upperBound
-                if found.isEmpty { break }
-            }
-        }
+        // The phone searches all loaded lines (at most wholeLimit bytes); the Mac separately caps its results.
+        matches = TextOccurrences.scan(of: query, in: lines.lazy.map { String($0.characters) }, limit: .max)
     }
 
     mutating func next() { if !matches.isEmpty { current = (current + 1) % matches.count } }
@@ -352,17 +333,13 @@ enum FilesImage {
 
     /// The pixel size the header names; nil when `data` holds no image ImageIO reads.
     nonisolated static func pixelSize(_ data: Data) -> CGSize? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
-              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue else { return nil }
-        return CGSize(width: width, height: height)
+        FilePreviewImage.pixelSize(data)
     }
 
     /// What to draw for `data`: nil when it is no image.
     nonisolated static func shown(_ data: Data, cap: Int = pixelCap, edge: Int = thumbnailEdge) -> Shown? {
         guard let size = pixelSize(data), size.width > 0, size.height > 0 else { return nil }
-        guard Int(size.width) <= dimensionLimit, Int(size.height) <= dimensionLimit else { return .tooLarge }
+        guard FilePreviewImage.isSafeSize(size, dimensionLimit: dimensionLimit) else { return .tooLarge }
         guard Int(size.width) * Int(size.height) > cap else { return .image(data, smaller: false) }
         guard let image = thumbnail(data, edge: edge),
               let jpeg = UIImage(cgImage: image).jpegData(compressionQuality: 0.85) else { return .tooLarge }
@@ -371,11 +348,6 @@ enum FilesImage {
 
     /// A copy at most `edge` pixels on its longest side, its orientation applied.
     nonisolated static func thumbnail(_ data: Data, edge: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                        kCGImageSourceCreateThumbnailWithTransform: true,
-                                        kCGImageSourceShouldCacheImmediately: true,
-                                        kCGImageSourceThumbnailMaxPixelSize: edge]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        FilePreviewImage.thumbnail(data, maxPixels: edge, dimensionLimit: thumbnailEdge)
     }
 }

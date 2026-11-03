@@ -1,0 +1,20 @@
+{
+  "kind": "rerecord",
+  "why": "Codex now installs and consumes only PermissionRequest, SubagentStart and SubagentStop. These fourteen helper captures fail at installation writes or audit replies containing the old twelve-event hooks.json; each mismatch was inspected. The other 460 helper captures pass, including the terminal-only reconnect case after preserving its cached question state. Old installations are not migrated: these recordings must exercise the new three-event configuration on their next live run.",
+  "tests": [
+    "AppDefaultsTests/testAppStoresLeaveTheUserDefaultsAlone",
+    "AttentionTests/testAttentionAndSettingsPresentation",
+    "ChatEndToEndTests/testOfflineDemoResumePublishesHistoryThroughInstalledCodexLauncher",
+    "ChatSideConversationTests/testRealCodexForkKeepsSideReplyOutOfMainThread",
+    "ChatSideCustomConfigTests/testClaudeSideApiKeyHelperReadsTheParentsVariable",
+    "ChatSideCustomConfigTests/testCodexSideRunsOnTheParentsOverriddenProviderModelAndCredential",
+    "ChatTests/testChatSwitchInstallsAgentHooksAndReportsRestartForOlderAgents",
+    "ChatTests/testHookMergePreservesExistingHandlersAndIsIdempotent",
+    "ChatTests/testInstallAndDisableInTemporaryHome",
+    "ChatTests/testLocalAgentsAnswerInstallsFoundAgentsOrTurnsHooksOff",
+    "ChatTests/testOlderOptInAuditsInstalledAndAppendsSubagentEvents",
+    "CodexMainThreadTests/testMainQuestionsInNativeTmux",
+    "FileTransferCaseTests/testCaseVariantsAgreeOnBothPathsOnALinuxHost",
+    "TmuxIntegrationTests/testSpaceNameWithSpecialCharactersSurvivesReattach"
+  ]
+}

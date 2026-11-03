@@ -385,7 +385,8 @@ final class ChatRedesignTests: XCTestCase {
         state["goal"] = ["objective": "All webhook routes idempotent", "status": "active", "tokensUsed": 48_210,
                          "timeUsedSeconds": 754, "tokenBudget": 200_000]
         state["usage"] = ["info": ["last_token_usage": ["total_tokens": 158_000], "model_context_window": 250_000]]
-        state["agents"] = ["explorer", "worker"]
+        state["agents"] = [["id": "goal-explorer", "kind": "explorer"],
+                           ["id": "goal-worker", "kind": "worker"]]
         // `/goal edit` answers once Codex's editor is done, after its question.
         let helper = helper { request in
             request.method == "chat.command" && request.params["text"] as? String == "/goal edit" ? .open : nil

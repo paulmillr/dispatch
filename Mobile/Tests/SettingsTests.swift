@@ -32,6 +32,34 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(MobileSettings(defaults: store).autoApproveUnsafePastes)
     }
 
+    func testSendWhileWorkingQueuesUntilSteerIsChosen() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.chatSendWhileWorking, .queue, "send queues while the agent works, as before")
+        settings.chatSendWhileWorking = .steer
+        XCTAssertEqual(store.string(forKey: MobileSettings.chatSendWhileWorkingKey), "steer", "the key the composer reads")
+        XCTAssertEqual(MobileSettings(defaults: store).chatSendWhileWorking, .steer)
+        XCTAssertEqual(CodeComposer.sendOptions(queues: true, steers: true), [.sendNow, .queue],
+                       "the long press offers both ways, Send now first")
+    }
+
+    func testAgentStartAndEscapeStopKeepTodaysBehaviourUntilChosen() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        defer { TabSegment.agentStart = .chat }
+        XCTAssertEqual(settings.chatAgentStart, .chat)
+        XCTAssertEqual(settings.chatEscapeStop, .once)
+        settings.chatAgentStart = .terminal
+        settings.chatEscapeStop = .twice
+        XCTAssertEqual(TabSegment.agentStart, .terminal, "agent tabs now open on their terminal")
+        XCTAssertEqual(store.string(forKey: MobileSettings.chatEscapeStopKey), "twice", "the key the composer reads")
+        TabSegment.agentStart = .chat
+        let reopened = MobileSettings(defaults: store)
+        XCTAssertEqual(reopened.chatAgentStart, .terminal)
+        XCTAssertEqual(TabSegment.agentStart, .terminal, "a launch applies the saved choice")
+        XCTAssertEqual(reopened.chatEscapeStop, .twice)
+    }
+
     func testDictationDefaultsToAppleAndRemembersWhisper() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
@@ -201,7 +229,7 @@ final class SettingsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         let modelsFile = folder.appendingPathComponent("chat-models.json"), spacesFile = folder.appendingPathComponent("spaces.json")
         let memory = ChatModelMemory(url: modelsFile)
-        memory.remember(agent: "claude", model: "opus", effort: "high")
+        memory.remember(agent: "claude")
         let defaults = UserDefaults(suiteName: "remove-all-\(UUID().uuidString)")!
         defaults.set("light", forKey: "appearance")
         defaults.set(["stale"], forKey: "tabs.collapsed")
@@ -358,12 +386,12 @@ extension SettingsTests {
 
     @MainActor private final class Count { var value = 0 }
 
-    /// The old contrast switch moves to the key the page shows.
-    func testTheOldContrastSwitchMovesToTheNewKey() {
+    /// The old contrast switch is ignored and does not write a current setting.
+    func testTheOldContrastSwitchDoesNotWriteTheNewKey() {
         let store = defaults()
-        store.set(true, forKey: MobileSettings.terminalContrastKey)
-        XCTAssertEqual(MobileSettings(defaults: store).textContrast, .always)
-        XCTAssertEqual(store.string(forKey: MobileSettings.textContrastKey), "always")
+        store.set(true, forKey: "terminal.contrast")
+        XCTAssertEqual(MobileSettings(defaults: store).textContrast, .lightThemes)
+        XCTAssertNil(store.string(forKey: MobileSettings.textContrastKey))
     }
 }
 

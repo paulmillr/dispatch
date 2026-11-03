@@ -1,6 +1,7 @@
 import Dictation
+import Foundation
 
-/// The iPhone app's chat dictation (Packages/Dictation): one model store in the app's support folder (Whisper/ and
+/// The app's chat dictation (Packages/Dictation): one model store in Dispatch's support folder (Whisper/ and
 /// Parakeet/), and one dictation at a time for every composer.
 extension DictationModelStore {
     static let shared = DictationModelStore(whisper: Home.support.appendingPathComponent("Whisper"),

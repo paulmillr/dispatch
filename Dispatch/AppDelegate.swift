@@ -6,6 +6,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     let workspace: Workspace = Workspace()
     let settings: SettingsStore
+    let updater = AppUpdater()
+    private var updateOnQuit = false
     let windowState: WindowState = WindowState()
     var window: NSWindow! {
         // Read the traffic lights once, outside SwiftUI rendering: querying AppKit frames from a body forces reentrant layout.
@@ -74,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         super.init()
         HelperSession.outputWindow = settings.values.outputWindow
         settings.onSave = { [weak self] preferences in
+            self?.updater.setAutomaticUpdates(preferences.automaticUpdates == true)
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
             HelperSession.outputWindow = preferences.outputWindow
             self?.applyKeyGroups(preferences.keyGroups)
@@ -194,7 +197,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { runtime.focusActive() }
         let window = window!
-        Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
+        updater.onReady = { [weak self] in self?.offerUpdate() }
+        updater.onRestart = { [weak self] in
+            self?.updateOnQuit = true
+            NSApp.terminate(nil)
+        }
+        Task {
+            await LocalAgentsConsent.start(over: window, chat: runtime.chat)
+            await AppUpdater.onboard(over: window, settings: settings)
+            updater.setAutomaticUpdates(settings.values.automaticUpdates == true)
+        }
     }
 
     /// What the voice key shortcut dictates into: the main window's active pane's chat while it shows, else
@@ -263,7 +275,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
-        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { removalOnQuit = nil; return .terminateCancel }
+        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else {
+            removalOnQuit = nil; updateOnQuit = false
+            return .terminateCancel
+        }
         saveHostSession()
         // Unmount terminal views before stopping the runtime, then keep AppKit
         // alive until private SSH masters and their mailbox paths are released.
@@ -273,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         // Quit waits for the cleanup, not forever: a release that never finishes must not keep the
         // app open in AppKit's terminate loop (a test host stayed there).
         let (finished, finish) = AsyncStream<Void>.makeStream()
+        var cleanupCompleted = false
         let deadline = Task {
             try? await Task.sleep(for: .seconds(10))
             guard !Task.isCancelled else { return }
@@ -280,9 +296,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             FileHandle.standardError.write(Data("Quit: runtime cleanup still running after 10 s (\(part))\n".utf8))
             finish.finish()
         }
-        Task { await cleanup.value; deadline.cancel(); finish.finish() }
+        Task { await cleanup.value; cleanupCompleted = true; deadline.cancel(); finish.finish() }
         termination = Task {
             for await _ in finished {}
+            if updateOnQuit, removalOnQuit == nil {
+                do {
+                    guard cleanupCompleted else { throw UpdateFailure("Terminal cleanup did not finish in time to install the update.") }
+                    try await updater.installOnQuit()
+                }
+                catch {
+                    let alert = NSAlert()
+                    alert.messageText = "The update could not be installed"
+                    alert.informativeText = error.localizedDescription + "\n\nDispatch will quit. Open it again to retry the update."
+                    alert.runModal()
+                }
+            }
+            await updater.stop()
             // Dispatch's helpers here have stopped, so the removal is not refused or undone.
             if let data = removalOnQuit { await DispatchRemoval.finishLocal(data: data) }
             reply(true)
@@ -543,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.backgroundColor = NSColor(settings.values.resolvedSidebarTheme.palette.window)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: settings.values.resolvedSidebarTheme.isDark ? .darkAqua : .aqua)
-        window.contentView = NSHostingView(rootView: SettingsView(store: settings, workspace: workspace,
+        window.contentView = NSHostingView(rootView: SettingsView(store: settings, workspace: workspace, updater: updater,
             resetSSHState: { [weak self] in try await self?.resetSSHState() }, fitInitialHeight: { [weak window] difference in
             guard let window, let available = (window.screen ?? screen)?.visibleFrame else { return }
             var frame = window.frame
@@ -560,6 +589,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return event
         }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func offerUpdate() {
+        guard termination == nil, let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Dispatch \(updater.release?.version ?? "") is ready"
+        alert.informativeText = "Restart Dispatch to install the update. You can also do this later in Settings › General › Updates."
+        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "Restart and install")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertSecondButtonReturn { self?.updater.restart() }
+        }
     }
 
     /// Typing the Nautical code anywhere in Settings, fields included, unlocks the theme; Settings then switches to it.

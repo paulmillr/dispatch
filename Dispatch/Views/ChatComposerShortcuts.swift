@@ -3,6 +3,12 @@ import SwiftUI
 struct ChatComposerShortcuts: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
+    /// Settings' Return steers while the agent works (⌥⏎ queues).
+    var steers = false
+    /// Settings' Esc stops the agent when pressed twice.
+    var escapeTwice = false
+    /// Settings' double ⌃D closes the tab.
+    var quits = true
     @Binding var presented: Bool
 
     var body: some View {
@@ -25,26 +31,30 @@ struct ChatComposerShortcuts: View {
     private var composer: [ShortcutRow] {
         let multiline = session.drafts.shape.multiline
         return (multiline ? [.init("⏎", "newline · insert a new line")] : []) + [
-            .init(multiline ? "⌘⏎" : "⏎", session.busy ? "queue · runs after the current turn" : "send · start a new turn"),
-            .init("⌥⏎", "steer · interrupts and redirects the current turn"),
+            .init(multiline ? "⌘⏎" : "⏎", !session.busy ? "send · start a new turn" : steers ? steer : queue),
+            .init("⌥⏎", steers ? queue : steer),
             .init("⌘E", multiline ? "editor · return to single-line mode" : "editor · Return inserts a newline"),
             .init("⌘S", "save draft"),
             .init("/", "commands · type / to browse agent commands"),
-            multiline ? .init("⎋", "exit editor · keep your draft") : .init("⎋", "stop · end the current turn, keeping your draft"),
+            multiline ? .init("⎋", "exit editor · keep your draft")
+                : .init(escapeTwice ? "⎋ twice" : "⎋", "stop · end the current turn, keeping your draft"),
         ] + (DictationStore.shared.shortcut.map { key in [
             .init("hold \(key.name)", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
             .init("tap \(key.name)", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
         ] } ?? [])
     }
 
+    private var queue: String { "queue · runs after the current turn" }
+    private var steer: String { "steer · interrupts and redirects the current turn" }
+
     /// Only where the conversation's helper keeps attachments (the paperclip shows then too).
     private var attachmentRows: [ShortcutRow] {
         session.acceptsAttachments ? [.init("⇧⌘A", "attach files or images · or drop or paste them")] : []
     }
 
-    private let moreComposer: [ShortcutRow] = [
+    private var moreComposer: [ShortcutRow] { [
         .init("⌘⏎ / ⌃⏎", "send or queue from either editor mode"),
-        .init("⇧⏎", "insert a newline and enter editor mode"),
+        .init("⇧⏎", "insert a newline · ⏎ still sends"),
         .init("⏎", "jump to new messages · empty single-line draft"),
         .init("⇧⌘M", "choose model · in single-line mode"),
         .init("⇧⌘E", "choose effort · in single-line mode"),
@@ -57,8 +67,7 @@ struct ChatComposerShortcuts: View {
         .init("⌥⏎", "send the selected or hovered queued message now"),
         .init("⌘⌫", "remove the selected or hovered queued message"),
         .init("⎋", "clear queue selection or cancel a queued edit first"),
-        .init("⌃D twice", "quit agent, or show Terminal if busy · empty single-line draft only"),
-    ]
+    ] + (quits ? [.init("⌃D twice", "close tab and quit agent, or show Terminal if busy · empty single-line draft only")] : []) }
 }
 
 /// The agent's running subagents beside its activity, while they run (they can outlive their turn): their

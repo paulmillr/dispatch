@@ -2273,3 +2273,16 @@ extension HelperAppTests {
         await HelperApp.shared.forget(link)
     }
 }
+
+extension HelperAppTests {
+    @MainActor
+    func testSubagentsRequireStructuredIdentities() throws {
+        let decoder = JSONDecoder()
+        let data = Data(#"[{"id":"a1","kind":"Explore"},{"id":"a2","kind":"Explore","name":"Review files","tokens":120}]"#.utf8)
+        let agents = try decoder.decode([HelperChat.Agent].self, from: data)
+        XCTAssertEqual(agents.map(\.id), ["a1", "a2"], "The same kind can have distinct running agents")
+        XCTAssertEqual(agents[1].name, "Review files")
+        XCTAssertEqual(agents[1].tokens, 120)
+        XCTAssertThrowsError(try decoder.decode([HelperChat.Agent].self, from: Data(#"["Explore"]"#.utf8)))
+    }
+}

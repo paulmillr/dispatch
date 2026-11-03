@@ -334,7 +334,7 @@ final class HelperChat {
     var started_ms: UInt64? = nil
   }
 
-  /// One running subagent. An older helper sends only its type, which stands for its id too.
+  /// One running subagent, identified by the helper's stable id.
   struct Agent: Decodable, Sendable, Equatable {
     let id: String
     let kind: String
@@ -352,10 +352,6 @@ final class HelperChat {
     }
 
     init(from decoder: any Decoder) throws {
-      if let kind = try? decoder.singleValueContainer().decode(String.self) {
-        self.init(id: kind, kind: kind)
-        return
-      }
       let fields = try decoder.container(keyedBy: CodingKeys.self)
       self.init(id: try fields.decode(String.self, forKey: .id), kind: try fields.decode(String.self, forKey: .kind),
                 name: try? fields.decodeIfPresent(String.self, forKey: .name),
@@ -505,7 +501,7 @@ final class HelperChat {
 
 
   /// Live records, or with `replace` the newest history page.
-  private struct Records: Decodable {
+  struct Records: Decodable {
     let terminal: UInt64
     let session: String
     let records: [Record]
@@ -513,7 +509,7 @@ final class HelperChat {
     let earlier: String?
   }
 
-  private struct Items: Decodable {
+  struct Items: Decodable {
     let terminal: UInt64
     let session: String
     let items: [Queued]
@@ -521,13 +517,13 @@ final class HelperChat {
     let error: HelperFailure?
   }
 
-  private struct Status: Decodable {
+  struct Status: Decodable {
     let terminal: UInt64
     let session: String
     let state: State
   }
 
-  private struct Opened: Decodable {
+  struct Opened: Decodable {
     let terminal: UInt64
     let session: String
     let interaction: Interaction
@@ -732,49 +728,27 @@ final class HelperChat {
     }
   }
 
-  private func accepts(_ terminal: UInt64, session: String) -> Bool {
-    guard terminal == route.terminal, route.session == nil || route.session == session else {
-      return false
-    }
-    route.session = session
-    return true
-  }
-
   private func notify(_ method: String, data: HelperBinary.Value) {
     do {
-      switch method {
-      case "chat.history":
-        let value = try HelperBinary.decode(History.self, from: data)
-        if selector == nil, value.terminal == route.terminal, route.session != value.session {
-          if route.session?.isEmpty == false { generation = System.uuid() }
-          route.session = value.session
-        }
-        if accepts(value.terminal, session: value.session) { receive?(.history(value)) }
-      case "chat.archive":
-        receive?(.archive(try HelperBinary.decode(Page.self, from: data)))
-      case "chat.records":
-        let value = try HelperBinary.decode(Records.self, from: data)
-        if accepts(value.terminal, session: value.session) {
-          receive?(
-            value.replace == true
-              ? .replacement(Page(records: value.records, earlier: value.earlier, state: nil, snapshot: nil))
-              : .records(value.records))
-        }
-      case "chat.queue":
-        let value = try HelperBinary.decode(Items.self, from: data)
-        if accepts(value.terminal, session: value.session) { receive?(.queue(value.items, value.error)) }
-      case "chat.state":
-        let value = try HelperBinary.decode(Status.self, from: data)
-        if accepts(value.terminal, session: value.session) { receive?(.state(value.state)) }
-      case "interaction.opened":
-        let value = try HelperBinary.decode(Opened.self, from: data)
-        if accepts(value.terminal, session: value.session) {
-          receive?(.interaction(value.interaction))
-        }
-      case "terminal.exit":
-        let value = try HelperBinary.decode(HelperClient.Exit.self, from: data)
-        if value.terminal == route.terminal { receive?(.exit) }
-      default: break
+      guard let notification = try Notification.decode(method, from: data) else { return }
+      if case .history(let value) = notification,
+         selector == nil, value.terminal == route.terminal, route.session != value.session {
+        if route.session?.isEmpty == false { generation = System.uuid() }
+        route.session = value.session
+      }
+      guard notification.matches(route) else { return }
+      if let session = notification.address?.session { route.session = session }
+      switch notification {
+      case .history(let value): receive?(.history(value))
+      case .archive(let value): receive?(.archive(value))
+      case .records(let value):
+        receive?(value.replace == true
+          ? .replacement(Page(records: value.records, earlier: value.earlier, state: nil, snapshot: nil))
+          : .records(value.records))
+      case .queue(let value): receive?(.queue(value.items, value.error))
+      case .state(let value): receive?(.state(value.state))
+      case .interaction(let value): receive?(.interaction(value.interaction))
+      case .exit: receive?(.exit)
       }
     } catch { failed?(error) }
   }

@@ -4,17 +4,9 @@ use dispatch_helper_core::{
     json::{Json, Value},
 };
 
+/// The events without a native App Server or process-observation replacement.
 pub const EVENTS: &[&str] = &[
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
     "PermissionRequest",
-    "PreCompact",
-    "PostCompact",
-    "Stop",
-    "Interrupt",
     "SubagentStart",
     "SubagentStop",
 ];
@@ -40,9 +32,7 @@ pub fn read(message: &Json) -> Result<Hook, Error> {
     let session = value.get("session_id").and_then(Value::string);
     match (event, session) {
         (Some(event), Some(session)) if EVENTS.contains(&event) && uuid(session) => {
-            let interactive = event == "PermissionRequest"
-                || event == "PreToolUse"
-                    && value.get("tool_name").and_then(Value::string) == Some("AskUserQuestion");
+            let interactive = event == "PermissionRequest";
             Ok(Hook {
                 fallback: match interactive {
                     true => UNDECIDED.to_vec(),

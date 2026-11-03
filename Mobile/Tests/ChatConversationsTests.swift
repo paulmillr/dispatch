@@ -211,7 +211,8 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertEqual(ChatMarkers(store: store).document.seen["h:c"], 1_700_000_000_000)
     }
 
-    /// An older `chat-models.json` (no last agent, an agent without menus, a choice without a label) keeps its models.
+    /// An older `chat-models.json` (no last agent, an agent without menus, a choice without a label, a last model and
+    /// effort) keeps its menus; the last model goes (a new chat starts on the agent's own default).
     func testModelMemoryOfAnOlderShapeKeepsItsChoices() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("models-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -221,7 +222,6 @@ final class ChatConversationsTests: XCTestCase {
             .write(to: url)
         let memory = ChatModelMemory(url: url)
         XCTAssertNil(memory.lastAgent)
-        XCTAssertEqual(memory.agent("claude").model, "opus")
         XCTAssertEqual(memory.agent("claude").efforts["opus"], [.init(id: "high", label: "high")])
         XCTAssertEqual(memory.agent("codex").models, [.init(id: "gpt", label: "gpt")], "the choice without an id alone goes")
     }
@@ -297,3 +297,4 @@ final class ChatConversationsTests: XCTestCase {
                        "Intraword underscores are not emphasis")
     }
 }
+

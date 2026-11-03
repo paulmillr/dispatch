@@ -417,7 +417,7 @@ final class TmuxIntegrationTests: XCTestCase {
         let runtime = TerminalRuntime.shared, controller = AppDelegate()
         let workspace = controller.workspace
         runtime.workspace = workspace
-        var preferences = Preferences(); preferences.closeLaunching = ["tmux": false, "herdr": false]
+        let preferences = Preferences(); workspace.closeLaunching = ["tmux": false, "herdr": false]
         runtime.start(preferences: preferences)
         XCTAssertNil(runtime.error)
         workspace.onCloseTabs = { runtime.close($0) }

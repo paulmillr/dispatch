@@ -56,9 +56,9 @@ enum AgentsGlyph {
         return agent
     }
 
-    /// `text.bubble` for any agent, `apple.terminal` for none (the phone's `TabSegment` symbols).
+    /// `dispatch.chat` for any agent, `apple.terminal` for none (the phone's `TabSegment` symbols).
     static func symbol(_ agent: String?) -> String {
-        key(agent) == nil ? "apple.terminal" : "text.bubble"
+        key(agent) == nil ? "apple.terminal" : "dispatch.chat"
     }
 
     /// The agent's short name for "Codex wants to run": "Claude", "Codex", "Pi", else the label as it is.

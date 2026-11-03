@@ -50,8 +50,6 @@ struct GitQueries: Sendable {
     static let statusLimit: UInt64 = 8 << 20
     /// How many folders above a symlinked one are asked which repository holds them (`repository(of:)`).
     static let linkDepth = 16
-    /// git's own binary test: a NUL in the first 8,000 bytes.
-    static let binaryProbe = 8_000
 
     // MARK: Repository
 
@@ -190,22 +188,7 @@ struct GitQueries: Sendable {
             throw GitError.failed("\(path.dropLast()) is a folder git does not track yet: its files show in the Files tab")
         }
         let (data, revision) = try await read(path, length: Self.readBound)
-        let size = revision.size
-        if Self.isBinary(data) {
-            return GitDiff(path: path, text: "", binary: true, oldSize: nil, newSize: size)
-        }
-        let truncated = UInt64(data.count) < size
-        var text = String(decoding: truncated ? Self.wholeLines(data) : data, as: UTF8.self)
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let endsInNewline = lines.last == ""
-        if endsInNewline { lines.removeLast() }
-        text = "diff --git a/\(path) b/\(path)\nnew file mode 100644\n--- /dev/null\n+++ b/\(path)\n"
-        if !lines.isEmpty {
-            text += "@@ -0,0 +1\(lines.count == 1 ? "" : ",\(lines.count)") @@\n"
-            text += lines.map { "+" + $0 + "\n" }.joined()
-            if !endsInNewline, !truncated { text += "\\ No newline at end of file\n" }
-        }
-        return GitDiff(path: path, text: text, oldSize: nil, newSize: size, truncated: truncated)
+        return GitContent.untracked(path: path, data: data, size: revision.size)
     }
 
     /// An untracked file's line count (its additions in the Changes list), reading at most `limit` bytes: no lines for
@@ -224,33 +207,7 @@ struct GitQueries: Sendable {
     /// whose message or author holds `match` (literally, ignoring case).
     func log(scope: GitLogScope, match: GitLogMatch = .everything, skip: Int, count: Int,
              from tip: String? = nil) async throws(GitError) -> GitLogPage {
-        var checkedTip: String?
-        if scope == .branch, let tip { checkedTip = try Self.checked(tip) }
-        let args = GitCommands.log(scope: scope, match: match, skip: skip, count: count, tip: checkedTip)
-        // Which of them are signed, the author date's offset and the committer: the same range in the raw format, whose
-        // headers name a signature without checking it, read beside the page. A page without it shows less rather than
-        // failing.
-        let rawArgs = GitCommands.raw(args)
-        async let raw = try? self.output(rawArgs)
-        let output: GitOutput
-        do throws(GitError) {
-            output = try await self.output(args)
-        } catch .failed(let message) where message.contains("does not have any commits") || message.contains("bad default revision") {
-            // A repository before its first commit has an empty log.
-            return GitLogPage(commits: [], exhausted: true)
-        }
-        var commits = GitParsers.log(output.output)
-        if let raw = await raw {
-            let headers = GitParsers.rawHeaders(raw.output)
-            for index in commits.indices {
-                guard let read = headers[commits[index].hash] else { continue }
-                commits[index].signature = read.signature
-                commits[index].zone = read.author?.zone
-                commits[index].committer = read.committer
-            }
-        }
-        // A page the bound cut is short without being the end; one the bound cut to nothing can never advance.
-        return GitLogPage(commits: commits, exhausted: output.truncated ? commits.isEmpty : commits.count < count)
+        try await commits.log(scope: scope, match: match, skip: skip, count: count, tip: tip)
     }
 
     /// The commit's signature checked with the user's own keys and allowed signers (`verify-commit --raw`, with the
@@ -264,73 +221,33 @@ struct GitQueries: Sendable {
     /// HEAD's commit (`rev-parse --verify HEAD`), nil before the first commit. With the refs it tells a moved HEAD,
     /// detached or not, from one that stayed.
     func head() async throws(GitError) -> String? {
-        do throws(GitError) {
-            let hash = try await run(GitCommands.head).trimmingCharacters(in: .whitespacesAndNewlines)
-            return GitParsers.isObjectName(hash) ? hash : nil
-        } catch .failed {
-            // "Needed a single revision": nothing is committed yet.
-            return nil
-        }
+        try await commits.head()
     }
 
     func refs() async throws(GitError) -> [GitRefRecord] {
-        GitParsers.refs(try await run(GitCommands.refs))
+        try await commits.refs()
     }
 
     /// The commit, its files' counts and their letters (A, D, M, R, C, T). git prints `--numstat` or `--name-status`,
     /// never both, so the two run side by side. A merge's letters come from `diff` against its first parent, which is
     /// what its counts describe: `show` names only the files a merge changed against every parent.
     func commit(_ hash: String) async throws(GitError) -> GitCommitDetail {
-        let hash = try Self.checked(hash)
-        async let shown = result(GitCommands.show(hash, numstat: false))
-        let output = try await run(GitCommands.show(hash, numstat: true))
-        guard let counted = GitParsers.commitDetail(output) else { throw GitError.failed("git described no commit \(hash)") }
-        let letters: [GitNameStatus]
-        if let parent = counted.commit.parents.first, counted.commit.parents.count > 1 {
-            letters = GitParsers.nameStatus(try await run(GitCommands.mergeLetters(parent: try Self.checked(parent), hash: hash)))
-        } else {
-            letters = GitParsers.commitNameStatus(try await shown.get())
-        }
-        return GitParsers.commitDetail(output, letters: letters) ?? counted
+        try await commits.commit(hash, requireLetters: true, rawHeaders: false)
     }
 
     /// One file's diff in a commit (`show --format= -U3 <hash> -- path`). A merge's is against its first parent
     /// (`diff -U3 <parent> <hash> -- path`), which is what its file counts describe: `show` prints a merge's combined
     /// diff only for files both sides changed.
     func commitDiff(_ commit: GitCommit, path: String, oldPath: String?) async throws(GitError) -> GitDiff {
-        guard GitChange.representable(path), oldPath.map(GitChange.representable) ?? true else {
-            throw GitError.failed(GitChange.unrepresentable)
-        }
-        let hash = try Self.checked(commit.hash)
-        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
-        let (args, stat) = GitCommands.fileDiff(hash, mergeParent: parent, paths: Self.paths(path, old: oldPath))
-        let output = try await output(args)
-        var diff = GitParsers.diffs(output.output, truncated: output.truncated).last
-            ?? GitDiff(path: path, oldPath: oldPath, text: "", truncated: output.truncated)
-        if diff.binary, let sizes = try? await self.stat(stat) {
-            diff.oldSize = sizes.old
-            diff.newSize = sizes.new
-        }
-        return diff
+        try await commits.diff(commit, path: path, oldPath: oldPath)
     }
 
     /// The file as `commit` left it, for the Commits tab's Source: `files.git` reads no `<rev>:<path>`, so this is the
     /// commit's diff of the file with the whole file as context (one hunk), its new side. Over `sourceLimit`, a binary
     /// file or a commit that changed only the file's mode answers why instead.
     func commitSource(_ commit: GitCommit, path: String, oldPath: String?) async throws(GitError) -> String {
-        guard GitChange.representable(path), oldPath.map(GitChange.representable) ?? true else {
-            throw GitError.failed(GitChange.unrepresentable)
-        }
-        let hash = try Self.checked(commit.hash)
-        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
-        let args = GitCommands.fileSource(hash, mergeParent: parent, paths: Self.paths(path, old: oldPath),
-                                          limit: GitChangesText.sourceLimit)
-        let output = try await output(args, limit: GitChangesText.sourceLimit * 2)
-        if output.truncated { throw GitError.failed("Over 2 MB · the terminal shows the rest") }
-        guard let text = GitParsers.newSide(output.output) else {
-            throw GitError.failed("git shows no lines of this file in the commit")
-        }
-        return text
+        try await commits.source(commit, path: path, oldPath: oldPath, limit: GitChangesText.sourceLimit,
+                                 tooLarge: "Over 2 MB · the terminal shows the rest")
     }
 
     // MARK: Running
@@ -340,9 +257,14 @@ struct GitQueries: Sendable {
         try await output(args, limit: limit).output
     }
 
-    /// `run` with its failure as a value, for an `async let` (whose errors are untyped).
-    private func result(_ args: [String]) async -> Result<String, GitError> {
-        do throws(GitError) { return .success(try await run(args)) } catch { return .failure(error) }
+    private var commits: GitCommitReads<GitError> {
+        GitCommitReads(execute: { args, limit in
+            do throws(GitError) { return .success(try await output(args, limit: limit)) }
+            catch { return .failure(error) }
+        }, failed: { .failed($0) }, failedMessage: { error in
+            if case .failed(let message) = error { return message }
+            return nil
+        })
     }
 
     func output(_ args: [String], limit: UInt64 = 0) async throws(GitError) -> GitOutput {
@@ -406,18 +328,8 @@ struct GitQueries: Sendable {
         return hash
     }
 
-    static func isBinary(_ data: Data) -> Bool { data.prefix(binaryProbe).contains(0) }
-
-    static func lineCount(_ data: Data) -> Int {
-        let newlines = data.reduce(0) { $1 == 0x0a ? $0 + 1 : $0 }
-        return newlines + (data.last.map { $0 == 0x0a ? 0 : 1 } ?? 0)
-    }
-
-    /// The data up to its last newline: a cut file shows whole lines only.
-    static func wholeLines(_ data: Data) -> Data {
-        guard let last = data.lastIndex(of: 0x0a) else { return Data() }
-        return data[...last]
-    }
+    static func isBinary(_ data: Data) -> Bool { GitContent.isBinary(data) }
+    static func lineCount(_ data: Data) -> Int { GitContent.lineCount(data) }
 }
 
 extension GitLogPages {

@@ -78,32 +78,51 @@ struct TerminalTheme: Equatable, Sendable {
 
     /// Parses theme text; nil when it names no background or foreground (not a color scheme).
     init?(text: String) {
-        var sawColor = false
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let parsed = Self.parse(text)
+        guard parsed.hasBackground || parsed.hasForeground else { return nil }
+        self = parsed.theme
+    }
+
+    /// The same parser serves scheme swatches and editable themes. Presence is separate from the editable defaults:
+    /// a file without a background belongs on either side of the picker, even though the editor needs a color.
+    struct Parsed: Sendable {
+        var theme = TerminalTheme()
+        var hasBackground = false
+        var hasForeground = false
+
+        var side: Bool? {
+            guard hasBackground else { return nil }
+            return TerminalTheme.side(background: theme.background, foreground: hasForeground ? theme.foreground : nil)
+        }
+    }
+
+    static func parse(_ text: String) -> Parsed {
+        var parsed = Parsed()
+        for raw in text.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
-            if line.hasPrefix(Self.displayP3Prefix) { wide(line); continue }
-            guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { extra.append(line); continue }
+            if line.hasPrefix(Self.displayP3Prefix) { parsed.theme.wide(line); continue }
+            guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { parsed.theme.extra.append(line); continue }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces)
             var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
             if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") { value = String(value.dropFirst().dropLast()) }
             let color = ThemeColor(hex: value)
             switch key {
-            case "background": if let color { background = color; sawColor = true } else { extra.append(line) }
-            case "foreground": if let color { foreground = color; sawColor = true } else { extra.append(line) }
-            case "cursor-color": if let color { cursor = color } else { extra.append(line) }
-            case "cursor-text": if let color { cursorText = color } else { extra.append(line) }
-            case "selection-background": if let color { selectionBackground = color } else { extra.append(line) }
-            case "selection-foreground": if let color { selectionForeground = color } else { extra.append(line) }
+            case "background": if let color { parsed.theme.background = color; parsed.hasBackground = true } else { parsed.theme.extra.append(line) }
+            case "foreground": if let color { parsed.theme.foreground = color; parsed.hasForeground = true } else { parsed.theme.extra.append(line) }
+            case "cursor-color": if let color { parsed.theme.cursor = color } else { parsed.theme.extra.append(line) }
+            case "cursor-text": if let color { parsed.theme.cursorText = color } else { parsed.theme.extra.append(line) }
+            case "selection-background": if let color { parsed.theme.selectionBackground = color } else { parsed.theme.extra.append(line) }
+            case "selection-foreground": if let color { parsed.theme.selectionForeground = color } else { parsed.theme.extra.append(line) }
             case "palette":
                 let parts = value.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
                 if parts.count == 2, let index = Int(parts[0]), (0..<16).contains(index), let color = ThemeColor(hex: parts[1]) {
-                    palette[index] = color
-                } else { extra.append(line) }
-            default: extra.append(line)
+                    parsed.theme.palette[index] = color
+                } else { parsed.theme.extra.append(line) }
+            default: parsed.theme.extra.append(line)
             }
         }
-        guard sawColor else { return nil }
+        return parsed
     }
 
     /// The theme file's text. A Display P3 color is its sRGB stand-in's line, then the same line in P3 as a comment

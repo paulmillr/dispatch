@@ -29,7 +29,7 @@ import XCTest
 
     func testKeepSwitchEditRenameDeleteAndStickyMultiline() throws {
         let drafts = collection()
-        drafts.edit(text: "\nFirst 🧑🏽‍💻\nsecond", selection: NSRange(location: 2, length: 2))
+        drafts.edit(text: "\nFirst 🧑🏽‍💻\nsecond", multiline: true, selection: NSRange(location: 2, length: 2))
         XCTAssertTrue(drafts.current.multiline)
         drafts.keep()
         XCTAssertFalse(drafts.current.multiline); XCTAssertTrue(drafts.current.isEmpty)
@@ -74,7 +74,7 @@ import XCTest
         XCTAssertNil(repository.buckets[original])
         let first = collection(store)
         first.bind(host: "ssh:stable-host", agent: "pi", conversation: "conversation")
-        first.edit(text: "reconnect\ntext"); first.persist(flush: true)
+        first.edit(text: "reconnect\ntext", multiline: true); first.persist(flush: true)
         let reopened = collection(store)
         reopened.bind(host: "ssh:stable-host", agent: "pi", conversation: "conversation")
         XCTAssertEqual(reopened.current.text, "reconnect\ntext"); XCTAssertTrue(reopened.current.multiline)
@@ -577,5 +577,23 @@ extension ChatDraftTests {
         drafts.finish(again, success: true)
         XCTAssertTrue(drafts.current.isEmpty)
         XCTAssertTrue(drafts.saved.isEmpty)
+    }
+}
+
+extension ChatDraftTests {
+    func testTypedLinesKeepTheModeAndTheDefaultStartsNewDrafts() {
+        let drafts = collection()
+        drafts.edit(text: "first\nsecond")
+        XCTAssertFalse(drafts.current.multiline, "a second line alone is no editor mode")
+        drafts.edit(multiline: true); drafts.edit(text: "one line")
+        XCTAssertTrue(drafts.current.multiline, "editor mode stays until it is left")
+        XCTAssertTrue(ChatDraftShape(ChatDraft(text: "/compact", multiline: true), hasSaved: false).command)
+        XCTAssertFalse(ChatDraftShape(ChatDraft(text: "/compact\nnow"), hasSaved: false).command, "more than one line is text")
+
+        ChatDraft.editorByDefault = true
+        defer { ChatDraft.editorByDefault = false }
+        drafts.keep()
+        XCTAssertTrue(drafts.current.isEmpty)
+        XCTAssertTrue(drafts.current.multiline, "Editor mode by default starts new drafts in it")
     }
 }

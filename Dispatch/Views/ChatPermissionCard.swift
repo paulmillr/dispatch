@@ -23,7 +23,7 @@ struct ChatPermissionCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 if pending {
                     if let draft = approval.questionDraft {
-                        ChatQuestionForm(draft: draft, agent: agent, submit: approval.answer,
+                        ChatQuestionForm(draft: draft, agent: agent, submit: approval.answerDraft,
                                          skip: { approval.resolve(.deny) }, openTerminal: openTerminal)
                     } else {
                     if theme.radioLog {

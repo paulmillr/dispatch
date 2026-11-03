@@ -448,7 +448,7 @@ struct SpaceScreen: View {
 }
 
 /// The agent's mark at the row's leading edge: Claude's sparkle, Codex's angle brackets, Pi's π, a terminal glyph for a shell.
-/// The style comes from `agentIconStyle` (AgentIcons.swift); today's by default.
+/// The style comes from `agentIconStyle` (AgentIcons.swift); Y5's by default.
 struct AgentGlyph: View {
     let kind: String
     @Environment(\.agentIconStyle) private var style

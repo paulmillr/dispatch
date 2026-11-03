@@ -650,9 +650,9 @@ final class WorkspaceTests: XCTestCase {
         let previous = Data(#"{"fontFamily":"Menlo","fontSize":15,"theme":"Catppuccin Mocha","optionAsAlt":false}"#.utf8)
         let decoded = try JSONDecoder().decode(Preferences.self, from: previous)
         XCTAssertEqual(decoded.theme, "Catppuccin Mocha")
-        XCTAssertEqual(decoded.lightTheme, "Catppuccin Mocha")
+        XCTAssertEqual(decoded.lightTheme, "Default")
         XCTAssertEqual(decoded.fontSize, 15)
-        XCTAssertEqual(decoded.optionAsAlt, .off)
+        XCTAssertEqual(decoded.optionAsAlt, .both)
         let previousDefault = try JSONDecoder().decode(Preferences.self, from: Data(#"{"theme":"Default"}"#.utf8))
         XCTAssertEqual(previousDefault.theme, "Default")
         XCTAssertEqual(previousDefault.resolvedTheme(systemIsDark: true), "dispatch-black")
@@ -667,7 +667,7 @@ final class WorkspaceTests: XCTestCase {
         let prefixes = try [#"{}"#, #"{"backendPrefixKeys":false}"#, #"{"prefixKeys":"herdr","backendPrefixKeys":false}"#].map {
             try JSONDecoder().decode(Preferences.self, from: Data($0.utf8)).prefixKeys
         }
-        XCTAssertEqual(prefixes, [.multiplexers, .off, .all])
+        XCTAssertEqual(prefixes, [.multiplexers, .multiplexers, .multiplexers])
     }
 
     func testHostNewSpacePrefersCurrentThenExistingBackendOtherwiseNative() throws {

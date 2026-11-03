@@ -3,7 +3,6 @@ pub mod events;
 pub mod harness;
 pub mod history;
 pub mod install;
-mod legacy;
 pub mod presentation;
 pub mod records;
 pub mod registration;

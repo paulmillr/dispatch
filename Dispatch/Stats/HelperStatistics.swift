@@ -2,70 +2,10 @@ import Foundation
 
 /// The app schedules samples and renders normalized values from its common connection.
 enum HelperStatistics {
-  struct Sample: Decodable, Sendable {
-    let boot: String?
-    let cpu: Double?
-    let cores: [Double]
-    let load: [Double]
-    let memory: [UInt64]?
-    let swap: [UInt64]?
-    let received: Double?
-    let sent: Double?
-    let uptime: Double
-
-    enum CodingKeys: String, CodingKey {
-      case boot, cpu, cores, load, memory, swap, uptime
-      case received = "received_per_second"
-      case sent = "sent_per_second"
-    }
-
-    var host: HostSample {
-      var result = HostSample()
-      result.cpuAvailable = cpu != nil
-      result.cpu = cpu ?? 0
-      result.cores = cores
-      result.load = load
-      result.memoryAvailable = memory != nil
-      result.memoryTotal = memory?.first ?? 0
-      result.memoryUsed = memory?.last ?? 0
-      result.swapAvailable = swap != nil
-      result.swapUsed = swap?.last ?? 0
-      result.networkAvailable = received != nil && sent != nil
-      result.receivedPerSecond = received ?? 0
-      result.sentPerSecond = sent ?? 0
-      result.uptime = uptime
-      return result
-    }
-  }
-
-  struct Row: Decodable, Sendable {
-    let pid: UInt32
-    let name: String
-    let cpu: Double?
-    let rss: UInt64?
-
-    var host: HostProcess {
-      HostProcess(id: Int(pid), name: name, cpu: cpu, memory: rss ?? 0)
-    }
-  }
-
-  struct Processes: Decodable, Sendable {
-    let rows: [Row]
-    let partial: Bool
-
-    init(from decoder: any Decoder) throws {
-      var values = try decoder.unkeyedContainer()
-      rows = try values.decode([Row].self)
-      partial = try values.decode(Bool.self)
-    }
-  }
-
-  struct Disk: Decodable, Sendable {
-    let identity: UInt64
-    let paths: [String]
-    let total: UInt64
-    let available: UInt64
-  }
+  typealias Sample = HostStatsWire.CompleteSample
+  typealias Row = HostStatsWire.Row
+  typealias Processes = HostStatsWire.Processes
+  typealias Disk = HostStatsWire.IdentifiedDisk
 
   struct Reset: Encodable {
     let plugin = "stats"
@@ -167,4 +107,30 @@ final class HelperStatisticsProvider: SSHStatisticsSampling {
       SSHStatisticsDisk(paths: $0.paths, identity: String($0.identity), total: $0.total, free: $0.available)
     }
   }
+}
+
+extension HostStatsWire.CompleteSample {
+    var host: HostSample {
+        var result = HostSample()
+        result.cpuAvailable = cpu != nil
+        result.cpu = cpu ?? 0
+        result.cores = cores
+        result.load = load
+        result.memoryAvailable = memory != nil
+        result.memoryTotal = memory?.first ?? 0
+        result.memoryUsed = memory?.last ?? 0
+        result.swapAvailable = swap != nil
+        result.swapUsed = swap?.last ?? 0
+        result.networkAvailable = received != nil && sent != nil
+        result.receivedPerSecond = received ?? 0
+        result.sentPerSecond = sent ?? 0
+        result.uptime = uptime
+        return result
+    }
+}
+
+extension HostStatsWire.Row {
+    var host: HostProcess {
+        HostProcess(id: Int(pid), name: name, cpu: cpu, memory: rss ?? 0)
+    }
 }

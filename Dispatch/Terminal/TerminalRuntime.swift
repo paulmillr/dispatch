@@ -33,7 +33,6 @@ final class TerminalRuntime {
         didSet {
             for helper in helpers.values { helper.bind(workspace) }
             workspace?.helpers = helpers
-            workspace?.closeLaunching = preferences.closeLaunching
             workspace?.tabsOnly = preferences.tabsOnly
             workspace?.machineForTab = { [weak self] in self?.machine(for: $0) ?? $0.machine }
             workspace?.owningMachineForTab = { [weak self] in self?.owningMachine(for: $0) ?? $0.machine }
@@ -85,8 +84,13 @@ final class TerminalRuntime {
         defer { if !started { stop() } }
         AppFont.register()
         self.preferences = preferences
-        workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
+        chat.sendWhileWorking = preferences.chatSendWhileWorking
+        ChatDraft.editorByDefault = preferences.chatEditorByDefault
+        chat.agentStart = preferences.chatAgentStart
+        chat.escapeStop = preferences.chatEscapeStop
+        chat.toolSteps = preferences.chatToolSteps
+        chat.controlDExits = preferences.chatControlDExits
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         if !System.testing {
@@ -162,8 +166,13 @@ final class TerminalRuntime {
         // Files views drop or resolve their repositories now rather than on the next tick.
         if gitChanged { for id in files.sessions.keys { files.refresh(id) } }
         if !preferences.filesEnabled { files.leaveFiles() }
-        workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
+        chat.sendWhileWorking = preferences.chatSendWhileWorking
+        ChatDraft.editorByDefault = preferences.chatEditorByDefault
+        chat.agentStart = preferences.chatAgentStart
+        chat.escapeStop = preferences.chatEscapeStop
+        chat.toolSteps = preferences.chatToolSteps
+        chat.controlDExits = preferences.chatControlDExits
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }

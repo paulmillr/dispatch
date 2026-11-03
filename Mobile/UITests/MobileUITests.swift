@@ -3,6 +3,10 @@ import XCTest
 /// Taps the app running scripted demo hosts (`DISPATCH_MOBILE_SCRIPTED`): no network, no saved state.
 @MainActor
 final class MobileUITests: XCTestCase {
+    // The test target shares the app's configured Pilot/stable prefix and signing suffix.
+    static let targetBundleIdentifier = Bundle(for: MobileUITests.self).bundleIdentifier!
+        .replacingOccurrences(of: ".mobile.uitests", with: ".mobile")
+
     override func setUp() {
         continueAfterFailure = false
     }

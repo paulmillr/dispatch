@@ -5,7 +5,9 @@ struct ChatDraft: Codable, Identifiable, Equatable {
     var id = System.uuid()
     var title: String?
     var text = ""
-    var multiline = false
+    /// Editor mode: Return inserts a newline and ⌘⏎ sends. On by ⌘E, a multi-line paste, or for every new draft with
+    /// Settings' Editor mode by default (`editorByDefault`); a newline typed with ⇧⏎ leaves it as it is.
+    var multiline = ChatDraft.editorByDefault
     var selection = NSRange(location: 0, length: 0)
     var modified = Date()
     // A restored copy may need a new UI identity, but retains this version ID.
@@ -17,6 +19,9 @@ struct ChatDraft: Codable, Identifiable, Equatable {
             ?? attachments.first?.name.prefix(36) ?? "Draft")
     }
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty }
+    /// Settings › Chat mode (Mac) or Chat (iPhone), Editor mode by default: new drafts start in editor mode. Set on the
+    /// main actor as the setting loads and changes.
+    nonisolated(unsafe) static var editorByDefault = false
 }
 
 extension ChatDraft {
@@ -279,7 +284,7 @@ struct ChatDraftDelivery {
         defer { editorEditing = false }
         var record = current
         if let text, record.text != text {
-            record.text = text; record.multiline = record.multiline || text.contains("\n") || text.contains("\r")
+            record.text = text
             record.modified = Date(); record.revision = System.uuid()
         }
         if let multiline { record.multiline = multiline }
@@ -485,7 +490,8 @@ struct ChatDraftShape: Equatable {
         isEmpty = text.isEmpty && !hasAttachments
         hasText = text.contains { !$0.isWhitespace }
         multiline = draft.multiline
-        command = AgentInput.isCommand(text, multiline: multiline)
+        // A command is one line, in editor mode or not.
+        command = AgentInput.isCommand(text, multiline: text.contains(where: \.isNewline))
         commandAllowsBusy = command && ChatCommand(text)?.allowsBusy == true
         commandPrefix = command && text.hasPrefix("/") && !text.contains(where: \.isWhitespace) ? text : nil
         self.hasSaved = hasSaved

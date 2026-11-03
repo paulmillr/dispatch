@@ -31,7 +31,6 @@ pub struct Runtime {
     pub subscribing: BTreeSet<String>,
     pub pages: Vec<Update>,
     pub persisted: BTreeSet<(u32, [u64; 2], String)>,
-    pub legacy: BTreeMap<String, crate::legacy::Poll>,
     watches: BTreeMap<u64, Binding>,
     pub transcripts: BTreeMap<u64, Binding>,
     pub refreshing: BTreeMap<String, bool>,
@@ -79,7 +78,6 @@ impl Default for Runtime {
             subscribing: BTreeSet::new(),
             pages: Vec::new(),
             persisted: BTreeSet::new(),
-            legacy: BTreeMap::new(),
             watches: BTreeMap::new(),
             transcripts: BTreeMap::new(),
             refreshing: BTreeMap::new(),
@@ -91,6 +89,11 @@ pub fn fail(code: &'static str, message: impl Into<String>) -> Error {
         code,
         message: message.into(),
     }
+}
+fn require_events(version: &str, method: &str) -> Result<(), Error> {
+    // Discovery may probe an older extension so Chat can show the update instruction.
+    if method == "probe" || version == "extension-v2" { return Ok(()); }
+    Err(fail("unavailable", "Update the Pi chat extension in Dispatch Settings, then run /reload in Pi."))
 }
 pub fn home(runtime: &Shared, value: &Data<'_>) -> Result<String, Error> {
     // Environment values are bytes; the agent directory is composed as text. One that is not UTF-8 is refused: the
@@ -262,6 +265,10 @@ pub fn call(
                     return;
                 }
             };
+            if let Err(error) = require_events(&record.version, &method) {
+                done(io, Err(error));
+                return;
+            }
             let next = saved.clone();
             let socket = record.socket.clone();
             native(
@@ -816,10 +823,6 @@ pub fn event(runtime: &Shared, io: &mut dyn Io, event: Event) {
                 .persisted
                 .retain(|(process, _, _)| *process != pid);
             let record = runtime.borrow_mut().registrations.remove(&pid);
-            runtime
-                .borrow_mut()
-                .legacy
-                .retain(|_, poll| poll.binding.process.pid != pid);
             if let Some(record) = record {
                 let mut runtime = runtime.borrow_mut();
                 runtime.live.remove(&record.session);

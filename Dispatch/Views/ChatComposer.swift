@@ -7,7 +7,8 @@ struct ChatComposer: NSViewRepresentable {
     let session: ChatSession
     let focused: Bool
     let submit: () -> Void
-    var interrupt: (() -> Bool)?
+    /// Esc stops the agent (`ChatCoordinator.escapeStop`), given the key's timestamp; true when it took the key.
+    var interrupt: ((TimeInterval) -> Bool)?
     var exitChat: (() -> Void)?
     var exitPrompt: (() -> String)?
     var pickModel: ((ChatModelPicker.Column, Bool) -> Void)?
@@ -171,7 +172,7 @@ struct ChatComposer: NSViewRepresentable {
     class ComposerTextView: ChatEditorTextView {
         weak var session: ChatSession?
         var editorGeneration: UUID?
-        var interrupt: (() -> Bool)?
+        var interrupt: ((TimeInterval) -> Bool)?
         var exitChat: (() -> Void)?
         var exitPrompt: (() -> String)?
         private var exitArmedAt: TimeInterval?
@@ -202,7 +203,10 @@ struct ChatComposer: NSViewRepresentable {
                 let sources = ChatAttachmentSource.read(pboard)
                 if !sources.isEmpty { attach(sources); return true }
             }
-            return super.readSelection(from: pboard, type: type)
+            guard super.readSelection(from: pboard, type: type) else { return false }
+            // A multi-line paste or drop of text is meant as written: editor mode, where Return adds lines.
+            if pboard.string(forType: .string)?.contains(where: \.isNewline) == true { multiline = true }
+            return true
         }
         override var multiline: Bool {
             get { session?.drafts.current.multiline ?? false }
@@ -225,12 +229,12 @@ struct ChatComposer: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             // Chat tabs answer the same prefix keys as their terminal; ⌃B twice keeps the editor's ⌃B.
             if let session, !hasMarkedText(), TerminalRuntime.shared.workspace?.prefixKeys.handle(event, surface: session.id) == true { return }
-            if latestMessagesShortcut(event) { return }
+            if latestMessagesShortcut(event) || commandReturnShortcut(event) { return }
             if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event)
                 || attachShortcut(event) { return }
             if event.keyCode == 53, !hasMarkedText(), !multiline,
                event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-               interrupt?() == true { return }
+               interrupt?(event.timestamp) == true { return }
             if modelShortcut(event) { return }
             super.keyDown(with: event)
         }
@@ -262,6 +266,14 @@ struct ChatComposer: NSViewRepresentable {
             session.revealLatestMessages()
             return true
         }
+        /// Editor mode's Return still sends a one-line command ("/compact"), as out of it: a newline would make it text.
+        private func commandReturnShortcut(_ event: NSEvent) -> Bool {
+            guard multiline, !hasMarkedText(), event.keyCode == 36 || event.keyCode == 76,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                  session?.draftIsCommand == true else { return false }
+            submit?()
+            return true
+        }
         override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
             // While dictation writes the draft, typing would be overwritten by its next words.
             if let session, ChatDictation.shared.blocksTyping(session.id) { return false }
@@ -278,7 +290,7 @@ struct ChatComposer: NSViewRepresentable {
         }
         private func exitShortcut(_ event: NSEvent) -> Bool {
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard event.keyCode == 2, flags == .control, string.isEmpty,
+            guard event.keyCode == 2, flags == .control, string.isEmpty, TerminalRuntime.shared.chat.controlDExits,
                   session?.drafts.current.multiline != true, !hasMarkedText(), let exitChat else {
                 resetExitShortcut(); return false
             }

@@ -53,7 +53,7 @@ final class AttentionTests: XCTestCase {
         XCTAssertTrue(old.autoApproveUnsafePastes, "Existing settings retain automatic paste approval")
         XCTAssertFalse(old.showGitBranches)
         let large = try JSONDecoder().decode(Preferences.self, from: Data(#"{"largeSidebarItems":true}"#.utf8))
-        XCTAssertTrue(large.showGitBranches, "Large sidebar items used to show branches")
+        XCTAssertFalse(large.showGitBranches, "The removed sidebar switch is ignored")
         var separate = large; separate.showGitBranches = false
         XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(separate)).showGitBranches)
         XCTAssertEqual(old.newHostPolicy, .ask, "Existing settings keep asking")

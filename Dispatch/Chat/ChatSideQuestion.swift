@@ -52,25 +52,21 @@ final class ChatSideQuestion: Identifiable {
     }
 
     func select(_ label: String) {
-        guard !submitted, question.options?.contains(where: { $0.label == label }) == true else { return }
-        if interaction.questions.first(where: { $0.id == question.id })?.multiple == true {
-            if selections[question.id, default: []].contains(label) {
-                selections[question.id]?.remove(label)
-            } else { selections[question.id, default: []].insert(label) }
+        guard actions.canEdit, question.options?.contains(where: { $0.label == label }) == true else { return }
+        if question.multiple {
+            selections[question.id] = ChatQuestionPolicy.selecting(label, in: selections[question.id, default: []], multiple: true)
             usingCustom.remove(question.id)
             return
         }
         selected[question.id] = label; usingCustom.remove(question.id)
     }
     func type(_ text: String) {
-        guard !submitted, question.allowsCustom else { return }
+        guard actions.canEdit, question.allowsCustom else { return }
         custom[question.id] = text; usingCustom.insert(question.id)
     }
     func answer(_ question: Question) -> String? {
         if usingCustom.contains(question.id), question.allowsCustom {
-            guard let text = custom[question.id], !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  text.utf8.count <= 16_384 else { return nil }
-            return text
+            return ChatQuestionPolicy.customAnswer(custom[question.id], byteLimit: 16_384)
         }
         if let labels = selections[question.id], !labels.isEmpty {
             return (question.options ?? []).filter { labels.contains($0.label) }.map(\.label).joined(separator: ", ")
@@ -81,8 +77,9 @@ final class ChatSideQuestion: Identifiable {
     var answers: [String: HelperChat.Answer]? {
         var result: [String: HelperChat.Answer] = [:]
         for question in interaction.questions {
-            if usingCustom.contains(question.id), let form = questions.first(where: { $0.id == question.id }),
-               let text = answer(form) {
+            if usingCustom.contains(question.id) {
+                guard let form = questions.first(where: { $0.id == question.id }), form.allowsCustom,
+                      let text = answer(form) else { return nil }
                 result[question.id] = .text(text)
             } else {
                 let labels = selections[question.id] ?? selected[question.id].map { Set([$0]) } ?? []
@@ -95,6 +92,20 @@ final class ChatSideQuestion: Identifiable {
     }
     var complete: Bool {
         answers != nil
+    }
+    var actions: ChatQuestionPolicy.Actions {
+        .init(index: index, count: questions.count, answered: answer(question) != nil, complete: complete,
+              submitted: submitted, uncertain: submissionUncertain)
+    }
+    func back() { if actions.canGoBack { index -= 1 } }
+    func next() { if actions.canGoNext { index += 1 } }
+    func isSelected(_ label: String, in question: Question) -> Bool {
+        let labels = selections[question.id] ?? selected[question.id].map { Set([$0]) } ?? []
+        return ChatQuestionPolicy.isSelected(label, selected: labels, usingCustom: usingCustom.contains(question.id))
+    }
+    /// An unanswered delivery must be resolved by the helper before the same request can be sent again.
+    func canSubmit(skip: Bool) -> Bool {
+        skip ? actions.canSkip : actions.canSubmit
     }
     func summary(skip: Bool) -> String {
         questions.map { question in

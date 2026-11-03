@@ -164,7 +164,7 @@ final class ChatEndToEndTests: XCTestCase {
         try await eventually { ["Press enter to view hooks", "enter details"].contains { self.screen(terminal).contains($0) } }
         try await eventually {
             let config = try? String(decoding: try System.read(state.appendingPathComponent("codex-home/config.toml")), as: UTF8.self)
-            return (config?.components(separatedBy: "trusted_hash").count ?? 0) == 11
+            return (config?.components(separatedBy: "trusted_hash").count ?? 0) == 4  // codex_fixture.py EVENTS: three hooks
         }
         key(53, "\u{1b}", terminal)
         // Hook trust applies to the next CLI launch; do not bypass or synthesize it.

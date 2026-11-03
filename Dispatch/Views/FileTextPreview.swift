@@ -157,17 +157,7 @@ import SwiftUI
     }
 
     static func occurrences(of query: String, in lines: [String]) -> [Int] {
-        guard !query.isEmpty else { return [] }
-        var result: [Int] = []
-        for (index, line) in lines.enumerated() {
-            var start = line.startIndex
-            while start < line.endIndex, let range = line.range(of: query, options: .caseInsensitive, range: start..<line.endIndex) {
-                result.append(index)
-                if result.count == occurrencesLimit { return result }
-                start = range.upperBound
-            }
-        }
-        return result
+        TextOccurrences.scan(of: query, in: lines, limit: occurrencesLimit).map(\.line)
     }
 
     /// A classic hex dump of `data`, 16 bytes a row: offset, two groups of eight, and the printable characters.

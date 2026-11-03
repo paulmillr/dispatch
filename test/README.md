@@ -113,6 +113,13 @@ checks; exhaustive also retains the original detailed live matrix and 20-cycle
 reconnect stress repetition. Security, reattachment, host-isolation and platform
 regressions remain full. The case-level selections are recorded in [suites.json](suites.json).
 
+A case belongs in fast only if it needs no desktop focus, live agent or SSH host, and also does none of these:
+reaches `SSHRustTestResources.protocolBinary()` or `localHelper()` (the debug Rust helper is built by the portable
+preflight, which fast runs skip); creates `UserDefaults(suiteName:)` (it writes a plist into the real
+`~/Library/Preferences`; the default stores are safe, since `DISPATCH_TESTING=1` makes `UserDefaults.app` nil and
+`Home.url` a temporary folder); proves that something did *not* happen with a fixed sleep, or asserts inside a real
+wall-clock window; calls `TerminalRuntime.shared.start()`. Local python3 fixture peers over pipes are fine.
+
 Accepts short class/case names, fully qualified identifiers, repeatable `--skip`,
 and `--recheck`. `--list` prints the selected suite, count, cases, and exclusions
 without starting dependencies or tests. Explicit selectors and `--failed` cannot
@@ -122,7 +129,7 @@ be combined with `--suite`.
 bash test/run.sh                    # Fast checks only
 bash test/run.sh --suite full
 bash test/run.sh --suite exhaustive --list
-bash test/run.sh ChatTests TmuxProtocolTests
+bash test/run.sh ChatTests TmuxIntegrationTests
 bash test/run.sh ChatTests/testOptimisticFailureResetAndCommands --recheck
 bash test/run.sh --skip DispatchTests/SSHLinuxIntegrationTests
 ```
@@ -156,6 +163,25 @@ different Linux distribution; the defaults remain `ubuntu` and `Ubuntu 26.04`.
 For a user-level herdr installation, set `herdr` to its absolute executable path.
 Report runs with these overrides separately from the Ubuntu VM coverage.
 
+A profile for the Lima test VM (docs/vm_testing.md), reached through Lima's forwarded
+port with Lima's own key, so nothing in the VM changes (the two files can be the same; Lima
+names the guest account after yours):
+
+```json
+{"destination": "<your account>@dispatch-linux-test-server",
+ "options": ["-F", "/dev/null", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes",
+             "-o", "UserKnownHostsFile=<checkout>/build/linux-ssh/known_hosts", "-i", "<home>/.lima/_config/user",
+             "-p", "<sshLocalPort from limactl list --json>", "-o", "HostName=127.0.0.1",
+             "-o", "HostKeyAlias=dispatch-linux-test-server", "-o", "ConnectTimeout=5"],
+ "codex": "/usr/local/bin/codex", "claude": "/usr/local/bin/claude", "pi": "/usr/local/bin/pi",
+ "supportedTmux": "/opt/dispatch-test-tools/tmux/bin/tmux"}
+```
+
+`build/linux-ssh/known_hosts` holds `dispatch-linux-test-server` followed by the VM's
+`/etc/ssh/ssh_host_ed25519_key.pub`. Paths must be absolute. While a profile exists,
+`test/scrub.py` also derives needles from that VM; delete the profiles when done (the
+`replays/` pre-push hook reads them too, so keep them current while pushing).
+
 ### `xcode.py`
 
 Lower-level runner for an already prepared project. Reuses a build only when input
@@ -176,31 +202,31 @@ python3 test/xcode.py ChatFormattingTests --recheck
 python3 test/xcode.py --skip DispatchTests/HostLinuxIntegrationTests
 ```
 
-### Focused shell wrappers
+### Focused selections
 
-These forward extra arguments to `run.sh`. `--recheck` forces a build check, and
-additional selectors add tests to the wrapper's built-in selection.
-
-- `chat-discovery.sh`: discovery, routing, end-to-end chat, and presentation.
-- `chat-history.sh`: history, performance, tool grouping, discovery, and end-to-end chat.
-- `chat-formatting.sh`: formatting, tool grouping, performance, and end-to-end chat.
-- `tmux.sh`: protocol, output filtering, sessions, edge cases, chat, and integration.
+Pass class names to the shared runner. Add `--list` to inspect the selection without
+building or `--recheck` to force a build check. For the dedicated desktop VM, pass
+the same class names after `python3 test/vm.py test`.
 
 ```sh
-bash test/chat-discovery.sh
-bash test/chat-history.sh --recheck
-bash test/chat-formatting.sh ChatPresentationTests
-bash test/tmux.sh --recheck
-```
+# Chat discovery, routing and presentation
+bash test/run.sh ChatDiscoveryTests ChatRoutingIntegrationTests \
+  ChatEndToEndTests ChatPresentationTests
 
-### `ui-motion.sh`
+# Chat history
+bash test/run.sh ChatHistoryTests ChatPerformanceTests ChatToolGroupingTests \
+  ChatDiscoveryTests ChatEndToEndTests
 
-Runs its fixed motion, mockup, terminal, chat presentation/performance/history selection
-directly through a Debug Xcode build. It does not forward arguments or use `xcode.py`'s
-build-reuse logic.
+# Chat formatting
+bash test/run.sh ChatFormattingTests ChatToolGroupingTests \
+  ChatPerformanceTests ChatEndToEndTests
 
-```sh
-bash test/ui-motion.sh
+# tmux protocol, sessions and integration
+bash test/run.sh TmuxEdgeCaseTests TmuxChatIntegrationTests TmuxIntegrationTests
+
+# Motion, layout and presentation
+bash test/run.sh InterfaceMotionTests MainMockupPresentationTests TerminalIntegrationTests \
+  ChatEndToEndTests ChatPresentationTests ChatPerformanceTests ChatHistoryTests ChatToolGroupingTests
 ```
 
 ### `release.py`
@@ -301,18 +327,6 @@ is needed; a Metal device is required. The algorithm and cache are documented in
 
 ```sh
 xcrun swift test/contrast.swift
-```
-
-### `ssh-herdr-stream.py`
-
-Standalone framed-controller regression probe. Run on the dedicated test machine;
-requires existing herdr and already-built Rust `herdr-stream` example binaries.
-`--herdr` and at least one `--controller` are required; repeat `--controller` for
-additional runnable architectures. It does not accept unittest selectors.
-
-```sh
-python3 test/ssh-herdr-stream.py --herdr /absolute/path/to/herdr \
-  --controller /absolute/path/to/examples/herdr-stream
 ```
 
 ## Agent chat fixtures
@@ -492,6 +506,76 @@ PYTHONPATH=test python3 -c 'from selection import failed_tests; print(failed_tes
 
 The second example requires an existing summary with failures; a passing or invalid
 summary raises an error rather than selecting the entire suite.
+
+## Writing tests
+
+Replay rules (I/O through `System`, waits, ids, teardown) are in
+[docs/replay.md](../docs/replay.md#writing-tests-that-replay). Besides those:
+
+- **Test data is fictional.** No real names, emails, hosts, keys or GPG fingerprints, not even in comments: use
+  "Sam Example <sam@example.com>", "Robin Example", `0123456789ABCDEF…`. Captures are scrubbed by needle, so a
+  real value in a fixture is also a needle collision waiting to happen.
+- **tmux always gets its own socket.** Shells started from an agent or a terminal inherit the user's `$TMUX`, and a
+  tmux client uses the socket named there unless `-S`/`-L` is given: `TMUX_TMPDIR` is no isolation while `$TMUX` is
+  set. Fixtures run `env -u TMUX tmux -S <private socket> …`. Never run a bare `tmux kill-server`, and never
+  `pkill`/`killall` tmux, herdr, ssh or sshd: end only the pids the fixture started and recorded. The helper already
+  strips `TMUX` and passes `-S` (`helper/multiplexers/tmux/src/backend.rs`).
+- **Typing into an agent over SSH.** A command and its Return sent as one burst arrive as a paste, and agents do not
+  submit a paste. Type the command, wait until the screen echoes it, then press Return.
+- **Accessibility ids inside a chat bubble.** On the Mac a bubble's `chat-message-<row>` identifier is what every
+  element inside it reports; an inner control's own identifier never shows in `accessibilityFrames`. Look controls up
+  by the bubble id plus their label (`accessibilityFrames("chat-message-" + id, label: …, in:)`). A SwiftUI Button
+  inside another Button's label merges into the outer one: put it beside.
+- **Removed setting values.** When a setting loses a case (a font, a theme), don't add its old name to a migration
+  test list: the decoder falls back to the default for any unknown value, so one made-up value ("Removed Font") covers
+  it, and a list of real removed names reads as if they were still supported. Name an old value only when it maps to
+  something other than the default.
+
+## Worktrees
+
+A second checkout (`git worktree add`) builds and tests like the main one once it has the main tree's tools.
+Link or `cp -cR` `build/{rust,rust-downloads,cargo,tools,test-tools,downloads}` from the main tree, and copy
+`build/mobile-ssh` (the XCFramework *and* its `target`; `Mobile/Transport/Frameworks` links there, and without
+`target` the next simulator build recreates the framework with one slice). Keep worktrees outside `/tmp`: a
+`/tmp` vs `/private/tmp` executable path fails SSH consent's origin check in every SSH-login test. A worktree has
+no `replays/`, so it runs everything live and the build's corpus check only warns.
+
+`test/xcode.py` always uses `/tmp/dt-journal` and points its `checkout` link at the tree that ran last, so two
+checkouts running tests at once break each other ("…/dt-journal/checkout/… couldn't be opened"). Run one at a
+time (for example `until mkdir /tmp/dispatch-main.lock 2>/dev/null; do sleep 15; done; …; rmdir /tmp/dispatch-main.lock`).
+`test/vm.py` syncs the tree it runs from, uncommitted edits included, so hold the same lock around VM runs when
+several checkouts share the VMs, and check another session's work from a worktree of HEAD plus only your files (its
+uncommitted SSH changes fail SSH replays with `open.command lifetime` mismatches).
+
+Baselines ("did this fail before my change?") are built in a worktree of the commit in question, never by reverting
+files in a shared tree for a while: a commit made meanwhile would capture the reverted state. In scripts that set up a
+scratch tree, `cd <tree> || exit 1` on its own line and use absolute paths for `rm`, `cp` and `mv`: a failed
+`git worktree add` or `cd` otherwise retargets every relative path at the main tree (that once deleted `replays/`).
+
+`git worktree remove` deletes the worktree's ignored `build/` too: copy screenshots and reports out first. Agents in parallel trees share the simulators' recording service, so `pkill -f recordVideo` from one cuts another's recording; stop only the pid you started.
+
+Merging branches made in parallel worktrees: `Dispatch.xcodeproj/project.pbxproj` conflicts every time (take either
+side, then `python3 scripts/generate-project.py`); `test/suites.json` conflicts on neighbouring additions (union the
+`cases`, keeping the base order); two branches that each added the next replay migration need one renumbered (the
+ledger keeps the first). A patch carried from a tree whose build appended to `helper/core/src/wire/registry.txt` must
+include the regenerated `Dispatch/Helper/HelperBinary.swift`, or the other tree's build stops with "HelperBinary.swift
+updated from the helper build".
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Build fails only at `CodeSign Dispatch.app`: "bundle format unrecognized … In subcomponent: …/PlugIns/DispatchTests.xctest" | An interrupted test run left an empty `DispatchTests.xctest` skeleton in the Debug app. Remove that folder (it holds no files) and build again. The full log is under `build/logs/`; it has no `error:` line. |
+| Helper build reports missing items that `grep` finds in the source | Cargo fingerprints by mtime, and a tool restored old mtimes on the edited files. `git diff --name-only -- helper/ \| xargs touch`. |
+| An OCR wait fails with `Fixture wait … checks=1` | One expensive check, not a stuck UI: a missed read runs a dozen Vision passes (~6 s), longer than the 5 s wait, and a capture taken right after a change can hold the previous frame. |
+| Every UI case fails with `CancellationError`, or SCK error -3811 | Another test host is running (another session's run). `pgrep -fl "xcodebuild\|Dispatch.app/Contents/MacOS/Dispatch"`, then rerun. Keep screenshots in a uniquely named folder. |
+| Focus asserts (`isKeyWindow`, full screen) time out on the host | Another app is frontmost and a background-launched test host cannot take focus. Run in the VM, or with someone at the desktop. Unattended, a loop beside the run can hand it focus: every 1.5 s find the test host by its derived-data path (`pgrep -f "<derived data>/Build/Products/Debug/Dispatch.app/Contents/MacOS/Dispatch"`, never a user's own Dispatch) and `osascript -e 'tell application "System Events" to set frontmost of (first process whose unix id is <pid>) to true'`; stop it afterwards (it steals focus). Wrap unattended host runs in `caffeinate -d -i`: a locked desktop skips walkthrough cases. |
+| `--capture` prints "stored N new captures" but exits 1 | `build/captures` held an earlier capture, and that is what was stored. Move it away first; trust a capture only with exit 0 and the case listed as passed. |
+| Exhaustive `--capture` runs out of ptys | `sudo sysctl kern.tty.ptmx_max=999`. |
+| Codex fixtures exit at once (IsADirectoryError) | `TEST_RUNNER_DISPATCH_TEST_FIXTURES` names a ledger *file* the fixtures append to, not a folder. Leave it to `xcode.py`. |
+| iPhone keyboard assertions fail while `app.keyboards.firstMatch` exists | An earlier `typeKey` made the simulator minimize the software keyboard (its frame sits below the window). `xcrun simctl spawn <udid> defaults write com.apple.keyboard.preferences AutomaticMinimizationEnabled -bool NO`, then shut down and boot the simulator. |
+| iPhone UI test starts from earlier choices | The app's settings persist in the simulator: terminate the app, then `xcrun simctl spawn <udid> defaults delete <data container>/Library/Preferences/yachts.dispatch.mobile <key>` (a full path without `.plist`). |
+| `xcodebuild test` of `DispatchMobileUITests` never returns after the result | It hangs archiving logs: bound it (`perl -e 'alarm 595; exec @ARGV' xcodebuild …`); the test's own result line counts. The xcresult's attachments (`xcrun xcresulttool export attachments`) include a screen recording, more reliable than hierarchy dumps, which list views hidden under a sheet. |
 
 ## Capture and replay runs
 

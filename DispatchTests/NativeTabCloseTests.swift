@@ -4,6 +4,82 @@ import XCTest
 
 @MainActor
 final class NativeTabCloseTests: XCTestCase {
+    func testPreparedNativeCloseRestoresOnDisconnect() async throws {
+        let app = try TmuxWalkthrough(server: false); defer { app.close() }
+        try await app.wait { app.workspace.activeTab?.terminal != nil }
+        app.workspace.newTab()
+        try await app.wait { app.workspace.currentTabs.count == 2 && app.workspace.currentTabs.allSatisfy { $0.terminal != nil } }
+        let tab = try XCTUnwrap(app.workspace.activeTab)
+        let helper = try XCTUnwrap(app.workspace.helper(containing: tab.id))
+        var finish: CheckedContinuation<Void, Never>?
+        let task = helper.close(try XCTUnwrap(tab.terminal), policy: .prompt) {
+            await withCheckedContinuation { finish = $0 }
+        }
+        let neighbor = app.workspace.activeSurfaceID
+        XCTAssertFalse(app.workspace.allTabIDs.contains(tab.id))
+        XCTAssertTrue(ScreenPublication.targets(of: tab.id, workspace: app.workspace, helpers: [helper])
+            .contains { $0.terminal == tab.terminal }, "A hidden native chat still publishes the screen its quit checks")
+        try await TestSupport.eventually { finish != nil }
+        helper.stop(retaining: true)
+        XCTAssertTrue(app.workspace.allTabIDs.contains(tab.id), "An unconfirmed quit must remain recoverable offline")
+        XCTAssertEqual(app.workspace.activeSurfaceID, neighbor)
+        XCTAssertNil(helper.closingSpace(containing: tab.id))
+        finish?.resume()
+        await task.value
+        XCTAssertTrue(app.workspace.allTabIDs.contains(tab.id))
+    }
+
+    func testPreparedCloseHidesImmediatelyAndRestoresAfterFailure() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
+        try await app.attach(); try await app.ready()
+        let tab = try XCTUnwrap(app.workspace.activeTab)
+        let helper = try XCTUnwrap(app.workspace.helper(containing: tab.id))
+        let node = try XCTUnwrap(tab.terminal)
+        var finish: CheckedContinuation<Void, any Error>?
+        let task = helper.close(node, policy: .prompt) {
+            try await withCheckedThrowingContinuation { finish = $0 }
+        }
+        XCTAssertFalse(app.workspace.allTabIDs.contains(tab.id), "The close publishes before any async work")
+        let neighbor = try XCTUnwrap(app.workspace.activeTab?.id)
+        XCTAssertNotEqual(neighbor, tab.id)
+        XCTAssertNotNil(app.runtime.views[tab.id], "The quitting agent must keep its terminal")
+        XCTAssertEqual(app.workspace.space(containingTab: tab.id)?.tabs.first { $0.id == tab.id }?.terminal, node)
+        try await TestSupport.eventually { finish != nil }
+        // Another topology must not flash the closing tab back into the strip.
+        _ = try app.server(["new-window", "-d", "-n", "topology-during-quit", "/bin/sh"])
+        try await app.wait { app.workspace.current?.windows.contains { $0.name == "topology-during-quit" } == true }
+        XCTAssertFalse(app.workspace.allTabIDs.contains(tab.id))
+        finish?.resume(throwing: HerdrFailure("Quit refused"))
+        await task.value
+        XCTAssertTrue(app.workspace.allTabIDs.contains(tab.id))
+        XCTAssertEqual(app.workspace.activeTab?.id, neighbor, "Recovery must not steal focus")
+        XCTAssertEqual(helper.error, "Quit refused")
+        XCTAssertNil(helper.closingSpace(containing: tab.id))
+        XCTAssertNotNil(app.runtime.views[tab.id])
+    }
+
+    func testPreparedCloseWaitsBeforeEndingTerminalAndReleasesItAfterward() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
+        try await app.attach(); try await app.ready()
+        let tab = try XCTUnwrap(app.workspace.activeTab)
+        let pane = try XCTUnwrap(app.target(tab))
+        let helper = try XCTUnwrap(app.workspace.helper(containing: tab.id))
+        var finish: CheckedContinuation<Void, Never>?
+        let task = helper.close(try XCTUnwrap(tab.terminal), policy: .prompt) {
+            await withCheckedContinuation { finish = $0 }
+        }
+        XCTAssertFalse(app.workspace.allTabIDs.contains(tab.id))
+        try await TestSupport.eventually { finish != nil }
+        XCTAssertTrue(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]).split(separator: "\n").contains(Substring(pane)))
+        finish?.resume()
+        await task.value
+        XCTAssertNil(app.runtime.views[tab.id])
+        XCTAssertFalse(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]).split(separator: "\n").contains(Substring(pane)))
+        XCTAssertNil(helper.error)
+    }
+
     func testCommandWTerminatesIdleTmuxWindowAndAllItsPanes() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
         _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])

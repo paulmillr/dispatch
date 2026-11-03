@@ -30,6 +30,7 @@ impl Tmux {
         count: usize,
         done: Done<()>,
     ) {
+        self.steer(loc, true);
         self.request_count(
             io,
             loc,
@@ -38,15 +39,21 @@ impl Tmux {
             // Done follows the read that publishes the change (core: a mutation completes only
             // after its topology went to ui.update). The command already succeeded; a failed
             // read (e.g. the kill ended the session) is that later topology, not this result.
-            Box::new(move |mux, io, result| match result {
-                Err(error) => finish(io, done, Err(error)),
-                Ok(_) => mux.refresh(
-                    io,
-                    loc,
-                    Some(Box::new(move |_, io, _| finish(io, done, Ok(())))),
-                ),
+            Box::new(move |mux, io, result| {
+                mux.steer(loc, false);
+                match result {
+                    Err(error) => finish(io, done, Err(error)),
+                    Ok(_) => mux.refresh(io, loc, Some(Box::new(move |_, io, _| finish(io, done, Ok(()))))),
+                }
             }),
         );
+    }
+
+    /// Counts the client's own mutations in flight (`Client::steering`).
+    fn steer(&mut self, loc: Location, sent: bool) {
+        if let Some(client) = self.backends.get_mut(&loc.backend).and_then(|backend| backend.clients.get_mut(loc.client)) {
+            client.steering = if sent { client.steering + 1 } else { client.steering.saturating_sub(1) };
+        }
     }
 
     pub(crate) fn split(&mut self, io: &mut dyn Io, node: Id, ratio: f64, done: Done<()>) {
@@ -72,7 +79,8 @@ impl Tmux {
                 .snapshot
                 .as_ref()
                 .unwrap();
-            let commands = match target.as_bytes()[0] {
+            let (commands, chosen) = match target.as_bytes()[0] {
+                // The pane is this client's now, whatever other clients select later (Client::chosen).
                 b'%' => {
                     let pane = crate::snapshot::id(&target, '%')? as u32;
                     let window = snapshot
@@ -80,25 +88,29 @@ impl Tmux {
                         .iter()
                         .find(|window| window.layout.pane(pane).is_some())
                         .ok_or_else(|| gone("Tmux pane closed"))?;
-                    vec![
+                    let commands = vec![
                         format!("select-window -t @{}", window.id),
                         format!("select-pane -t {target}"),
-                    ]
+                    ];
+                    (commands, Some((window.id, pane)))
                 }
-                b'@' => vec![format!("select-window -t {target}")],
+                b'@' => (vec![format!("select-window -t {target}")], None),
                 _ => {
                     let window = snapshot
                         .windows
                         .iter()
                         .find(|window| Some(window.id) == self.selected(loc, node))
                         .ok_or_else(|| gone("Tmux window closed"))?;
-                    vec![format!("select-window -t @{}", window.id)]
+                    (vec![format!("select-window -t @{}", window.id)], None)
                 }
             };
-            Ok((loc, commands))
+            Ok((loc, commands, chosen))
         });
         match commands {
-            Ok((loc, commands)) => {
+            Ok((loc, commands, chosen)) => {
+                if let Some((window, pane)) = chosen {
+                    self.backends.get_mut(&loc.backend).unwrap().clients[loc.client].chosen.insert(window, pane);
+                }
                 let count = commands.len();
                 self.mutate(io, loc, commands, count, done);
             }

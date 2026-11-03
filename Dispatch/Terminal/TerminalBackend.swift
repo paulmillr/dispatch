@@ -256,7 +256,7 @@ struct ScreenPublication {
     /// SSH login in it (a remote send waits for that screen).
     @MainActor static func targets(of tab: UUID, workspace: Workspace?, helpers: some Sequence<HelperWorkspace>) -> [Target] {
         var targets: [Target] = []
-        if let workspace, let terminal = workspace.spaces.flatMap(\.tabs).first(where: { $0.id == tab })?.terminal,
+        if let workspace, let terminal = workspace.space(containingTab: tab)?.tabs.first(where: { $0.id == tab })?.terminal,
            let helper = workspace.helper(containing: tab), helper.publishes(tab) {
             targets.append(.init(helper: helper, terminal: terminal, observed: false))
         }

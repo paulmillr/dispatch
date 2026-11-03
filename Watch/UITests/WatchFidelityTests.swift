@@ -91,7 +91,8 @@ final class WatchFidelityTests: XCTestCase {
     func testK6bHostOffline() throws {
         let app = launch(["-DispatchWatchScripted", "mockup-offline", "-DispatchWatchShow", "host:\(mba2)"])
         XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout: 15), app.debugDescription)
-        XCTAssertTrue(element(app, labelContaining: "Offline since").exists)
+        // Its section: the card as last known, then what the phone says about the host.
+        XCTAssertTrue(element(app, labelContaining: "isn't reachable").exists, app.debugDescription)
         try save("K6b")
         // Connect brings the scripted host back: the strip comes alive with its sparkline's peak.
         app.buttons["Connect"].tap()

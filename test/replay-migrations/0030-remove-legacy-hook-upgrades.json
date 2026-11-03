@@ -1,0 +1,9 @@
+{
+  "kind": "rerecord",
+  "why": "Pre-release compatibility removal: Claude installation audits require the complete current hook set. Approval-only installations now report installed=false, and launch discovery no longer upgrades old installations automatically. Replaying the corpus passed 474 helper captures and failed these three at the changed audit result (unconsumed harness/0 executable after the app rejected the old installed=true expectation). Their tests now require an explicit installation and preserve unrelated handlers. The first and third tests were renamed to describe the new behavior; these old recordings are retained outside the active corpus.",
+  "tests": [
+    "ClaudeHookTests/testLaunchUpgradesOlderOptInAndLeavesCompleteInstallations",
+    "ClaudeHookTests/testLifecycleUpgradePreservesDecisionAndUnrelatedConfiguration",
+    "ClaudeHookTests/testPreviousApprovalOptInSurvivesQuestionHookUpgrade"
+  ]
+}

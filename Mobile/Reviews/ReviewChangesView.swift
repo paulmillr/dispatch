@@ -89,7 +89,7 @@ private struct ReviewChangesList: View {
         switch failure {
         case .notRepository: "Not a repository"
         case .unavailable: "Git isn’t available"
-        case .failed, .source: "Couldn’t read the changes"
+        case .failed, .source, .notFound, .notDirectory: "Couldn’t read the changes"
         }
     }
 

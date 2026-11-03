@@ -69,14 +69,15 @@ Dispatch is a normal terminal. If you've used terminals, it should be intuitive.
 1. Locally it can be used as-is. For SSH: use standard command e.g. `ssh host`
     - SSH-ing somewhere presents a popup, which asks to upload optional dispatch-helper
 2. Try **Native Tabs**: run `tmux -CC` / `tmux -CC attach` or `herdr` locally / remotely
+    - Recommended: tmux 3.8 or herdr 0.9.5 (tmux 3.7 or newer works)
 3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat.
     - It uses hooks, local usage needs pre setup, remote usage is easier
     - For local usage: Settings => Hosts => This Mac => Install (next to codex, claude etc)
     - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
-    - All sent messages are queued - not steered
-    - There is a separate key combo to steer; also it's possible to steer queued message
-    - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
-    - Requires codex-cli 0.164.0, claude 2.1.311 or pi 1.4.0
+    - While the agent works, sent messages are queued - not steered (Settings => Features => Chat mode can make ⏎ steer instead)
+    - There is a separate key combo (⌥⏎) for the other way; also it's possible to steer queued message
+    - shift+enter adds a line; editor mode (Return adds lines, cmd+enter sends) turns on with cmd+E or a multi-line paste, or by default in Settings. It highlights markdown code brackets
+    - Recommended: codex-cli 0.166.0, claude 2.1.316 or pi 1.5.0
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 ## License

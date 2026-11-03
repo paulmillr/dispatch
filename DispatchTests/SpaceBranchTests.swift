@@ -218,10 +218,10 @@ final class SpaceBranchTests: XCTestCase {
         let file = try fixture().appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)
         for large in [false, true] {
-            let data = Data("{\"largeSidebarItems\":\(large),\"fontSize\":16}".utf8)
+            let data = Data("{\"sidebarStyle\":\"\(large ? "icons" : "compact")\",\"fontSize\":16}".utf8)
             let preferences = try JSONDecoder().decode(Preferences.self, from: data)
             XCTAssertEqual(preferences.fontSize, 16)
-            XCTAssertEqual(preferences.sidebarRowHeight, large ? 36 : 24, "On takes the default, the icons rows; off stays compact")
+            XCTAssertEqual(preferences.sidebarRowHeight, large ? 36 : 24, "Icons and compact have their own row heights")
             try store.save(preferences)
             XCTAssertEqual(SettingsStore(file: file).values.largeSidebarItems, large)
         }

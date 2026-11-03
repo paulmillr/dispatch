@@ -1,0 +1,9 @@
+{
+  "kind": "rerecord",
+  "why": "Closing a side conversation (/btw, /side) on the Mac now sends chat.side.close with the fork's own session, as the iPhone does. It sent the parent's session before, which the helper refuses (`invalid session`: it keeps forks by terminal and fork session), so the fork's process outlived its sheet. The helper's answer and what it does next (ending the fork) changed, which a rewrite of the app's inputs cannot express: the three tests that close a fork through a real helper are recorded again. The others close a fork that never reached a helper and record nothing new.",
+  "tests": [
+    "ChatSideConversationTests/testRealCodexForkKeepsSideReplyOutOfMainThread",
+    "ChatSideCustomConfigTests/testClaudeSideApiKeyHelperReadsTheParentsVariable",
+    "ChatSideCustomConfigTests/testCodexSideRunsOnTheParentsOverriddenProviderModelAndCredential"
+  ]
+}

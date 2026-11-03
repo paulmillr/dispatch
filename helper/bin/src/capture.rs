@@ -2586,10 +2586,15 @@ fn hex(bytes: &[u8]) -> Vec<u8> {
     hash.finish().iter().flat_map(|byte| format!("{byte:02x}").into_bytes()).collect()
 }
 
+/// How long one capture's replay may take before it counts as hung (`--timeout` overrides it for `replay`). A hang
+/// detector, not a budget: the largest recording (HerdrTests/testLargeSession…, 4.7 MB) replays in 20-23 s of CPU,
+/// and `prune`, `store` and `replace` judge by the same replay as the build's corpus check (scripts/build-ssh-helper.py).
+const REPLAY_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// The helper replays of every helper capture under `directory`, written to `output`.
 fn replays(directory: &str, output: &str) -> io::Result<Vec<batch::Replayed>> {
     let directory = std::fs::canonicalize(directory)?;
-    batch::replay(&directory, &batch::helpers(&directory)?, Path::new(output), Duration::from_secs(20), true)
+    batch::replay(&directory, &batch::helpers(&directory)?, Path::new(output), REPLAY_TIMEOUT, true)
 }
 
 /// How many masks `value` has: letters and digits keep their kind (KINDS), other bytes stay.
@@ -3071,7 +3076,7 @@ fn store(stage: &Path, replays: &Path, failed: bool) -> io::Result<bool> {
             if !passed {
                 return Ok((0, Checked { different: false, unlinked: Vec::new() }, keys));
             }
-            let rows = batch::replay(&stage, &helpers, &results.join(&name), Duration::from_secs(20), true)?;
+            let rows = batch::replay(&stage, &helpers, &results.join(&name), REPLAY_TIMEOUT, true)?;
             let failed = rows.iter().filter(|row| row.status != "pass").count();
             Ok((failed, check(&files, &mut io::sink())?, keys))
         })();
@@ -3128,8 +3133,13 @@ fn prune(replays: &Path, dry: bool) -> io::Result<()> {
     }
     let output = replays.join(format!(".prune-{}", std::process::id()));
     let paths = batch::helpers(&replays)?;
-    let rows = batch::replay(&replays, &paths, &output, Duration::from_secs(20), true)?;
-    let dropped: Vec<_> = rows.iter().filter(|row| row.status != "pass").collect();
+    let rows = batch::replay(&replays, &paths, &output, REPLAY_TIMEOUT, true)?;
+    // Only a capture that replays differently is stale. A timeout is a hang to look at, and a capture with nothing to
+    // replay (skip) is no evidence either way: both are listed and kept.
+    for row in rows.iter().filter(|row| row.status == "timeout" || row.status == "skip") {
+        println!("keep {}: {} {}", row.capture.display(), row.status, row.diagnostic.lines().next().unwrap_or(""));
+    }
+    let dropped: Vec<_> = rows.iter().filter(|row| row.status == "fail").collect();
     for row in &dropped {
         println!("{} {}: {} {}", if dry { "would drop" } else { "drop" }, row.capture.display(), row.status, row.diagnostic.lines().next().unwrap_or(""));
         if !dry {
@@ -3220,7 +3230,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
     match command.as_str() {
         "replay" => {
             let output = option(&mut args, "--output")?;
-            let timeout = number("--timeout", option(&mut args, "--timeout")?)?.unwrap_or(20);
+            let timeout = number("--timeout", option(&mut args, "--timeout")?)?.unwrap_or(REPLAY_TIMEOUT.as_secs());
             let completion = match option(&mut args, "--completion")? {
                 Some(value) if value == "required" => true,
                 Some(_) => return Err(usage()),
