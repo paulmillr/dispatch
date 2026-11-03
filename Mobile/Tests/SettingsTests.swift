@@ -248,6 +248,8 @@ final class SettingsTests: XCTestCase {
         let key = try hosts.keys.generateED25519(label: "phone")
         try vault.set(Data("words".utf8), for: KeyStore.passphraseAccount(key.id), protection: .none)
         try vault.set(Data("orphan".utf8), for: KeyStore.privateAccount(UUID()), protection: .none)
+        // A move out of Face ID cut short: the copy can be the key's only one, so it stays.
+        try vault.set(Data("copy".utf8), for: KeyStore.movingPrefix + KeyStore.privateAccount(key.id), protection: .none)
         known.trust(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1]))
         let app = ResilienceFixture.composition(hosts)
 
@@ -255,7 +257,8 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(hosts.store.hosts.isEmpty)
         XCTAssertTrue(known.entries.isEmpty)
         XCTAssertEqual(hosts.keys.keys.map(\.id), [key.id], "the key stays")
-        XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(key.id), KeyStore.passphraseAccount(key.id)],
+        XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(key.id), KeyStore.passphraseAccount(key.id),
+                                        KeyStore.movingPrefix + KeyStore.privateAccount(key.id)],
                        "only the kept key's secrets: the host password and a secret of no key go")
         XCTAssertNotNil(try vault.secret(for: KeyStore.privateAccount(key.id), reason: ""))
     }

@@ -132,13 +132,25 @@ public final class MetalRenderer {
     /// The kitty images of the next frame (set under the terminal lock, see Images.update).
     public let images: Images
 
+    /// What every renderer on a device and pixel format shares (Ghostty's shared device state): the shader library
+    /// and the pipelines, immutable once made. Made by the first renderer, kept for the process.
+    struct Pipelines {
+        let bgColor: MTLRenderPipelineState, cellBg: MTLRenderPipelineState, cellText: MTLRenderPipelineState
+        let image: MTLRenderPipelineState, glow: MTLRenderPipelineState
+    }
+    private static let pipelinesLock = NSLock()
+    nonisolated(unsafe) private static var pipelines: [String: Pipelines] = [:]
+    /// Shader libraries compiled so far (once per device and pixel format; checks).
+    @_spi(Test) public private(set) nonisolated(unsafe) static var librariesMade = 0
+
     /// Pipelines like metal/shaders.zig: premultiplied alpha blending (not for the background color).
-    public init(device: MTLDevice, pixelFormat: MTLPixelFormat = .bgra8Unorm) throws {
-        (self.device, self.pixelFormat) = (device, pixelFormat)
-        images = Images(lock: stateLock)
-        guard let queue = device.makeCommandQueue() else { throw Failure.commandQueueUnavailable }
-        self.queue = queue
+    static func pipelines(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) throws -> Pipelines {
+        pipelinesLock.lock()
+        defer { pipelinesLock.unlock() }
+        let key = "\(device.registryID):\(pixelFormat.rawValue)"
+        if let shared = pipelines[key] { return shared }
         let library = try device.makeLibrary(source: ghosttyShaders + glowShaders, options: nil)
+        librariesMade += 1
         func pipeline(_ vertex: String, _ fragment: String, blend: Bool, instances: MTLVertexDescriptor? = nil) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             (d.vertexFunction, d.fragmentFunction, d.vertexDescriptor) = (library.makeFunction(name: vertex), library.makeFunction(name: fragment), instances)
@@ -154,17 +166,55 @@ public final class MetalRenderer {
             (text.attributes[i].format, text.attributes[i].offset, text.attributes[i].bufferIndex) = (format, offset, 0)
         }
         (text.layouts[0].stride, text.layouts[0].stepFunction) = (32, .perInstance)
-        bgColor = try pipeline("full_screen_vertex", "bg_color_fragment", blend: false)
-        cellBg = try pipeline("full_screen_vertex", "cell_bg_fragment", blend: true)
-        cellText = try pipeline("cell_text_vertex", "cell_text_fragment", blend: true, instances: text)
         // ImageVertexIn (metal/shaders.zig Image): grid position, cell offset, source rect, size.
         let quad = MTLVertexDescriptor()
         for (i, (format, offset)) in [(MTLVertexFormat.float2, 0), (.float2, 8), (.float4, 16), (.float2, 32)].enumerated() {
             (quad.attributes[i].format, quad.attributes[i].offset, quad.attributes[i].bufferIndex) = (format, offset, 0)
         }
         (quad.layouts[0].stride, quad.layouts[0].stepFunction) = (40, .perInstance)
-        image = try pipeline("image_vertex", "image_fragment", blend: true, instances: quad)
-        glow = try pipeline("full_screen_vertex", "glow_fragment", blend: false)
+        let made = Pipelines(bgColor: try pipeline("full_screen_vertex", "bg_color_fragment", blend: false),
+                             cellBg: try pipeline("full_screen_vertex", "cell_bg_fragment", blend: true),
+                             cellText: try pipeline("cell_text_vertex", "cell_text_fragment", blend: true, instances: text),
+                             image: try pipeline("image_vertex", "image_fragment", blend: true, instances: quad),
+                             glow: try pipeline("full_screen_vertex", "glow_fragment", blend: false))
+        pipelines[key] = made
+        return made
+    }
+
+    /// A renderer with its own command queue, frames and caches; the pipelines are the device's shared ones.
+    public init(device: MTLDevice, pixelFormat: MTLPixelFormat = .bgra8Unorm) throws {
+        (self.device, self.pixelFormat) = (device, pixelFormat)
+        images = Images(lock: stateLock)
+        guard let queue = device.makeCommandQueue() else { throw Failure.commandQueueUnavailable }
+        self.queue = queue
+        let shared = try Self.pipelines(device, pixelFormat)
+        (bgColor, cellBg, cellText, image, glow) = (shared.bgColor, shared.cellBg, shared.cellText, shared.image, shared.glow)
+    }
+
+    /// Gives back the GPU memory this renderer holds between frames (a hidden terminal's): the frames' buffers, the
+    /// atlas textures and contrast caches, the glow frame, the kitty images' textures. The next frame makes them
+    /// again (atlases and images uploaded again from the CPU copies). Frames still in flight keep what they encoded
+    /// (Metal retains it until they complete).
+    public func releaseResources() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        frames = [Frame](repeating: Frame(), count: frames.count)
+        glowFrame = nil
+        images.textures.removeAll()
+    }
+
+    /// Bytes of the GPU memory releaseResources gives back (buffer lengths, texture sizes: the simulator reports no
+    /// allocated sizes).
+    public var heldBytes: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        func size(_ t: MTLTexture?) -> Int { t.map { max($0.allocatedSize, $0.width * $0.height * ($0.pixelFormat == .r8Unorm ? 1 : 4)) } ?? 0 }
+        var total = size(glowFrame)
+        for f in frames {
+            total += [f.uniforms, f.cells, f.text, f.contrast].reduce(0) { $0 + ($1?.length ?? 0) }
+            total += f.textures.values.reduce(0) { $0 + size($1.texture) }
+        }
+        return images.textures.values.reduce(total) { $0 + size($1.texture) }
     }
 
     /// The offscreen frame for a Glow at the target's size, made again when that changes.

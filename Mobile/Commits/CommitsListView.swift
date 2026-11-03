@@ -48,6 +48,33 @@ enum CommitsText {
                                                    timeZone: calendar.timeZone))
         return day + ", " + time
     }
+
+    /// A date in full, in the zone the commit was made in, with that zone's offset: "Friday, October 31, 2026 at
+    /// 6:55:12 PM +0100". Without one (the raw headers not read yet) in this phone's zone, with its offset. The Mac
+    /// shows git's ISO form in the same zone (`GitCommitsText.fullTime`).
+    static func fullTime(_ date: Date, zone: String?, local: TimeZone = .current, locale: Locale = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .full
+        formatter.timeStyle = .medium
+        let own = zone.flatMap(offset).flatMap(TimeZone.init(secondsFromGMT:))
+        formatter.timeZone = own ?? local
+        let offset: String
+        if let zone, own != nil {
+            offset = zone
+        } else {
+            let seconds = local.secondsFromGMT(for: date)
+            offset = String(format: "%@%02d%02d", seconds < 0 ? "-" : "+", abs(seconds) / 3600, abs(seconds) % 3600 / 60)
+        }
+        return formatter.string(from: date) + " " + offset
+    }
+
+    /// "+0530" as seconds east of UTC.
+    private static func offset(_ zone: String) -> Int? {
+        guard zone.count == 5, let sign = zone.first, sign == "+" || sign == "-",
+              let hours = Int(zone.dropFirst().prefix(2)), let minutes = Int(zone.suffix(2)) else { return nil }
+        return (sign == "-" ? -1 : 1) * (hours * 3600 + minutes * 60)
+    }
 }
 
 /// H3: the log under the capsule. A hollow "Uncommitted changes" row on top (it opens Review), then one line per

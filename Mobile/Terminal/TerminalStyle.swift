@@ -9,34 +9,38 @@ enum TerminalCursorStyle: String, CaseIterable, Identifiable, Sendable {
     var title: String { rawValue.capitalized }
 }
 
-/// A terminal font Settings offers (G2): the monospaced fonts the app bundles (the Mac's, in the app's `TermFonts`
-/// folder beside TermApple's JetBrains Mono) and the system's Menlo. Source Code Pro by default, as the Mac's.
-/// Ioskeley Mono, the one Mac font left out, would add 0.9 MB to the bundle.
+/// A terminal font Settings offers (G2): the Mac's list in the Mac's order (`SettingsView.fontMenuChoices`): Source Code
+/// Pro, the default, first; then the system's monospaced font (Menlo, where the Mac lists the fonts installed on it);
+/// then, after a separator, every font Dispatch bundles, by name (the app's `TermFonts` folder, beside TermApple's
+/// JetBrains Mono). Ligatures are Settings' switch (`TerminalStyle.ligatures`), as on the Mac.
 struct TerminalFont: Identifiable, Equatable, Sendable {
     /// The name the list shows, which is also the font's family name.
     let name: String
     /// What `font-family` names: nil for JetBrains Mono, TermApple's embedded face that every terminal falls back to.
     let family: String?
-    /// The font has code ligatures (contextual alternates), which the terminal's shaper draws.
-    var ligatures = false
     /// Comes with iOS rather than the app.
     var system = false
 
     var id: String { name }
 
-    static let jetBrainsMono = TerminalFont(name: "JetBrains Mono", family: nil, ligatures: true)
+    static let jetBrainsMono = TerminalFont(name: "JetBrains Mono", family: nil)
     /// The default, as the Mac's (`Settings.fontFamily`).
     static let sourceCodePro = TerminalFont(name: "Source Code Pro", family: "Source Code Pro")
+    static let menlo = TerminalFont(name: "Menlo", family: "Menlo", system: true)
 
-    /// The list's order: the default first, the system's last.
-    static let all: [TerminalFont] = [
-        sourceCodePro,
-        jetBrainsMono,
-        TerminalFont(name: "Fira Code", family: "Fira Code", ligatures: true),
-        TerminalFont(name: "0xProto", family: "0xProto", ligatures: true),
-        TerminalFont(name: "Departure Mono", family: "Departure Mono"),
-        TerminalFont(name: "Menlo", family: "Menlo", system: true),
-    ]
+    /// The list's first part, before the Mac's separator: the default and the system's.
+    static let leading: [TerminalFont] = [sourceCodePro, menlo]
+
+    /// Dispatch's own fonts after the separator, by name as the Mac sorts them (`localizedStandardCompare`): the
+    /// Mac's bundled monospaced families and its `moreBundledFontFamilies`.
+    static let bundled: [TerminalFont] = ([jetBrainsMono] + [
+        "0xProto", "Cascadia Code", "CommitMono", "Departure Mono", "Fira Code", "Geist Mono", "Hack", "Hasklig",
+        "IBM Plex Mono", "Inconsolata", "Intel One Mono", "Ioskeley Mono Term", "Latin Modern Mono", "Maple Mono",
+        "Rec Mono Casual", "Victor Mono",
+    ].map { TerminalFont(name: $0, family: $0) }).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+    /// The whole list, in order.
+    static let all: [TerminalFont] = leading + bundled
 
     /// A saved name; one no longer offered falls back to Source Code Pro.
     static func named(_ name: String?) -> TerminalFont { all.first { $0.name == name } ?? sourceCodePro }
@@ -59,6 +63,8 @@ struct TerminalStyle: Equatable, Sendable {
     var cursor = TerminalCursorStyle.block
     var cursorBlink = true
     var lineSpacing = LineSpacing.normal
+    /// The font's code ligatures (contextual alternates), on by default as the Mac's `fontLigatures`.
+    var ligatures = true
 
     init() {}
 
@@ -73,6 +79,7 @@ struct TerminalStyle: Equatable, Sendable {
         cursor = defaults.string(forKey: MobileSettings.cursorKey).flatMap(TerminalCursorStyle.init(rawValue:)) ?? .block
         cursorBlink = defaults.object(forKey: MobileSettings.cursorBlinkKey) as? Bool ?? true
         lineSpacing = defaults.string(forKey: MobileSettings.lineSpacingKey).flatMap(LineSpacing.init(rawValue:)) ?? .normal
+        ligatures = defaults.object(forKey: MobileSettings.ligaturesKey) as? Bool ?? true
     }
 
     /// `configuration` drawn with this style; its size and pasteboard access stay.
@@ -85,6 +92,7 @@ struct TerminalStyle: Equatable, Sendable {
         next.cursor = cursor
         next.cursorBlink = cursorBlink
         next.lineSpacing = lineSpacing
+        next.ligatures = ligatures
         return next
     }
 }

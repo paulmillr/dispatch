@@ -6,6 +6,61 @@ use crate::{
 use dispatch_helper_core::api::*;
 use std::process::Command;
 
+/// Whether an ordinary new pane (create_shell) starts the server's own command, as `tmux new-window`
+/// would: always with a `default-command`, else when `default-shell` is not the prepared `program`.
+pub(crate) fn server_default(program: &std::ffi::OsStr, default_shell: &str, default_command: &str) -> bool {
+    !default_command.is_empty() || program.to_str() != Some(default_shell)
+}
+
+/// A prepared variable that is right whatever shell the server's own command starts: not one that
+/// names or drives the prepared shell (SHELL; bash's ENV launch, history and Ghostty injection, which
+/// only the prepared `--posix` start consumes and which a later `sh` would read). zsh's ZDOTDIR wrapper,
+/// fish's XDG_DATA_DIRS and exported bash functions are read only by the shell they are for.
+pub(crate) fn shell_neutral(name: &str) -> bool {
+    !matches!(name, "SHELL" | "ENV" | "BASH_ENV" | "HISTFILE")
+        && !name.starts_with("GHOSTTY_BASH_")
+        && !name.starts_with("DISPATCH_SSH_BASH_")
+}
+
+/// What follows a creation's own options for `command`: its environment as `-e` pairs, then
+/// `-- env -u <removed>… <program> <args>…`. `replaced` (the server's default command starts):
+/// only the variables `shell_neutral` keeps, and the removals as empty values (tmux cannot unset a
+/// pane variable), with no command. Each word: (text, quoted for tmux).
+pub(crate) fn launch(command: &Command, replaced: bool) -> Result<Vec<(String, bool)>, Error> {
+    let text = |value: &std::ffi::OsStr, what: &str| {
+        value
+            .to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| error(&format!("Invalid tmux launch {what}")))
+    };
+    let mut request = Vec::new();
+    let envs = || command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME);
+    for (name, value) in envs() {
+        let name = text(name, "environment")?;
+        match value {
+            Some(value) if !replaced || shell_neutral(&name) => request.extend([
+                ("-e".into(), false),
+                (format!("{name}={}", text(value, "environment")?), true),
+            ]),
+            None if replaced => request.extend([("-e".into(), false), (format!("{name}="), true)]),
+            _ => {}
+        }
+    }
+    if replaced {
+        return Ok(request);
+    }
+    request.extend([("--".into(), false), ("env".into(), false)]);
+    for (name, value) in envs() {
+        if value.is_none() {
+            request.extend([("-u".into(), false), (text(name, "environment")?, true)]);
+        }
+    }
+    for arg in std::iter::once(command.get_program()).chain(command.get_args()) {
+        request.push((text(arg, "argument")?, true));
+    }
+    Ok(request)
+}
+
 pub(crate) struct Pending {
     pub parent: Id,
     pub hidden: bool,
@@ -29,7 +84,31 @@ impl Tmux {
             io,
             backend,
             false,
-            Box::new(move |mux, io, ()| mux.start(io, parent, beside, command, done)),
+            Box::new(move |mux, io, ()| mux.start(io, parent, beside, command, false, done)),
+        );
+    }
+    /// An ordinary new terminal (Multiplexer::create_shell): like `tmux new-window`, the server's
+    /// `default-command`, else a login `default-shell`, runs in it. Only when that is the shell the
+    /// helper prepared does the pane start the prepared command (its integration may need
+    /// arguments: bash's ENV launch, fish's `-C`); otherwise the command gives its environment
+    /// alone (`-e`), which carries Dispatch's integration (zsh's ZDOTDIR wrapper files, the Mac
+    /// app's wrappers), and the server's own command starts.
+    pub(crate) fn create_shell(
+        &mut self,
+        io: &mut dyn Io,
+        parent: Id,
+        beside: Option<Id>,
+        command: Command,
+        done: Done<Id>,
+    ) {
+        let backend = Some(parent)
+            .filter(|parent| self.backends.contains_key(parent))
+            .or_else(|| self.target(parent).ok().map(|(loc, _)| loc.backend));
+        self.ordered(
+            io,
+            backend,
+            false,
+            Box::new(move |mux, io, ()| mux.start(io, parent, beside, Some(command), true, done)),
         );
     }
     fn start(
@@ -38,6 +117,7 @@ impl Tmux {
         parent: Id,
         beside: Option<Id>,
         command: Option<Command>,
+        shell: bool,
         done: Done<Id>,
     ) {
         let prepared = (|| {
@@ -153,18 +233,36 @@ impl Tmux {
                 done: None,
             },
         );
-        let query = format!(
+        let mut queries = vec![format!(
             "display-message -p -t %{} \"#{{pane_current_path}}\"",
             loc.pane
-        );
+        )];
+        if shell {
+            for option in ["default-shell", "default-command"] {
+                queries.push(format!(
+                    "display-message -p -t %{} \"#{{{option}}}\"",
+                    loc.pane
+                ));
+            }
+        }
         self.request(
             io,
             loc,
-            vec![query],
+            queries,
             Box::new(move |mux, io, result| {
                 let request = (|| {
                     let rows = result?;
                     let current = String::from_utf8(rows[0].text().to_vec()).map_err(error)?;
+                    // The server's own command replaces the prepared shell unless it is that shell.
+                    let replaced = shell && {
+                        let text = |row: &crate::control::Lines| {
+                            String::from_utf8_lossy(row.text()).trim().to_owned()
+                        };
+                        let (default_shell, default_command) = (text(&rows[1]), text(&rows[2]));
+                        command.as_ref().is_some_and(|command| {
+                            server_default(command.get_program(), &default_shell, &default_command)
+                        })
+                    };
                     let cwd = command
                         .as_ref()
                         .and_then(|c| c.get_current_dir())
@@ -208,45 +306,7 @@ impl Tmux {
                         (format!("DISPATCH_TMUX_CREATION={creation}"), true),
                     ]);
                     if let Some(command) = &command {
-                        for (name, value) in command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME) {
-                            if let Some(value) = value {
-                                let name = name
-                                    .to_str()
-                                    .ok_or_else(|| error("Invalid tmux launch environment"))?;
-                                let value = value
-                                    .to_str()
-                                    .ok_or_else(|| error("Invalid tmux launch environment"))?;
-                                request.extend([
-                                    ("-e".into(), false),
-                                    (format!("{name}={value}"), true),
-                                ]);
-                            }
-                        }
-                        request.extend([("--".into(), false), ("env".into(), false)]);
-                        for (name, value) in command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME) {
-                            if value.is_none() {
-                                request.extend([
-                                    ("-u".into(), false),
-                                    (
-                                        name.to_str()
-                                            .ok_or_else(|| {
-                                                error("Invalid tmux launch environment")
-                                            })?
-                                            .into(),
-                                        true,
-                                    ),
-                                ]);
-                            }
-                        }
-                        for arg in std::iter::once(command.get_program()).chain(command.get_args())
-                        {
-                            request.push((
-                                arg.to_str()
-                                    .ok_or_else(|| error("Invalid tmux launch argument"))?
-                                    .into(),
-                                true,
-                            ));
-                        }
+                        request.extend(launch(command, replaced)?);
                     }
                     Ok(request)
                 })();
@@ -791,3 +851,7 @@ impl Tmux {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "create.test.rs"]
+mod tests;

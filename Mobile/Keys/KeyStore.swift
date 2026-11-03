@@ -13,9 +13,12 @@ enum KeyMaterial: @unchecked Sendable {
 }
 
 /// The keys and login secrets on this phone (plan 3.6). Key records are in `keys.json`; every secret is in the
-/// Keychain (`SecretVault`): private keys `WhenUnlockedThisDeviceOnly` behind Face ID (`keyProtection`), so never
-/// used unattended; passwords, passphrases and Secure Enclave handles `AfterFirstUnlockThisDeviceOnly`, so a watch
-/// request or background refresh can log in with a password while the phone is locked. Nothing syncs.
+/// Keychain (`SecretVault`), `AfterFirstUnlockThisDeviceOnly` and never synced: software private keys (ED25519 and
+/// imported files), their passphrases, passwords and Secure Enclave handles, so connecting, reconnecting, a watch
+/// request or background refresh logs in without a prompt, also while the phone is locked. Face ID guards only Secure
+/// Enclave P-256 keys, where the enclave enforces it at each signature (`keyProtection`), so they never sign
+/// unattended. Software keys older builds kept behind Face ID (`biometryCurrentSet`) move once, at their first use in
+/// the foreground, with one Face ID prompt for all of them (`moveFaceIDKeys`).
 @MainActor @Observable
 final class KeyStore {
     private struct Document: Codable {
@@ -31,13 +34,15 @@ final class KeyStore {
     private(set) var unsaved: Set<UUID> = []
     @ObservationIgnored let url: URL?
     @ObservationIgnored let vault: any SecretVault
+    /// Whether a new Secure Enclave key asks Face ID at each signature (`.biometry`; `.none` in tests). Software keys
+    /// are stored without it whatever this says.
     @ObservationIgnored let keyProtection: KeyProtection
     @ObservationIgnored let parser: any OpenSSHPrivateKeyParsing
     /// The simulator and some devices have none; New key then offers ED25519 only.
     @ObservationIgnored let secureEnclaveAvailable: Bool
 
     /// `keyProtection` is `.none` in tests: biometry can't be exercised on a simulator (docs/ios.md lists the
-    /// device checks). `parser` is the Citadel one once the transport integration lands.
+    /// device checks).
     init(url: URL? = MobileFiles.keys, vault: any SecretVault = KeychainVault(), keyProtection: KeyProtection = .biometry,
          parser: any OpenSSHPrivateKeyParsing = BuiltInOpenSSHKeyParser(),
          secureEnclaveAvailable: Bool = SecureEnclave.isAvailable) {
@@ -51,12 +56,12 @@ final class KeyStore {
 
     func key(_ id: UUID) -> KeyRecord? { keys.first { $0.id == id } }
 
-    /// A new ED25519 key; its seed goes to the Keychain behind Face ID.
+    /// A new ED25519 key; its seed goes to the Keychain after first unlock, so it signs without a prompt.
     @discardableResult
     func generateED25519(label: String) throws -> KeyRecord {
         let key = Curve25519.Signing.PrivateKey()
         let record = KeyRecord(label: label, kind: .ed25519, blob: SSHKeyEncoding.ed25519Blob(key.publicKey))
-        try vault.set(key.rawRepresentation, for: Self.privateAccount(record.id), protection: keyProtection)
+        try vault.set(key.rawRepresentation, for: Self.privateAccount(record.id), protection: .none)
         return add(record)
     }
 
@@ -88,10 +93,10 @@ final class KeyStore {
         let record: KeyRecord
         if let seed = parsed.ed25519Seed {
             record = KeyRecord(label: label, kind: .ed25519, blob: parsed.publicKeyBlob)
-            try vault.set(seed, for: Self.privateAccount(record.id), protection: keyProtection)
+            try vault.set(seed, for: Self.privateAccount(record.id), protection: .none)
         } else {
             record = KeyRecord(label: label, kind: .imported(parsed.algorithm), blob: parsed.publicKeyBlob)
-            try vault.set(file, for: Self.privateAccount(record.id), protection: keyProtection)
+            try vault.set(file, for: Self.privateAccount(record.id), protection: .none)
             if parsed.encrypted, let passphrase {
                 try vault.set(Data(passphrase.utf8), for: Self.passphraseAccount(record.id), protection: .none)
             }
@@ -109,18 +114,31 @@ final class KeyStore {
     func delete(_ id: UUID) {
         try? vault.remove(Self.privateAccount(id))
         try? vault.remove(Self.passphraseAccount(id))
+        // A copy left by a move out of Face ID that was cut short: it would bring the key back at the next move.
+        try? vault.remove(Self.movingPrefix + Self.privateAccount(id))
         guard keys.contains(where: { $0.id == id }) else { return }
         keys.removeAll { $0.id == id }
         unsaved.remove(id)
         save()
     }
 
-    /// The private key for signing: Face ID prompts here on a device. Reads the Keychain off the main actor. Not
-    /// `interactive` (background refresh): a key behind Face ID fails at once (`SecretVaultError.interactionNotAllowed`).
+    /// The private key for signing, read from the Keychain off the main actor without a prompt; a Secure Enclave key
+    /// asks Face ID at its signature. A software key an older build kept behind Face ID is moved first, in the
+    /// foreground (`moveFaceIDKeys`: one prompt for all such keys, the last one they ever ask). Not `interactive`
+    /// (background refresh): a key behind Face ID fails at once (`SecretVaultError.interactionNotAllowed`).
     func material(for id: UUID, interactive: Bool = true) async throws -> KeyMaterial? {
         guard let record = key(id) else { return nil }
         let vault = vault, label = record.label
         let reason = "Unlock the key “\(label)” to connect."
+        if interactive, record.kind != .secureEnclaveP256 {
+            do { try await moveFaceIDKeys(reason: reason) } catch let error as SecretVaultError where error.endsTheAttempt {
+                // The one prompt this connect gets was dismissed or cannot succeed: no second one for the read.
+                throw error
+            } catch {
+                // The key is read as it is stored; a key still behind Face ID asks for it there.
+                Self.log.error("Keychain: moving keys out of Face ID failed: \(error.localizedDescription)")
+            }
+        }
         return try await Task.detached {
             // The Keychain's buffer is copied into one the app wipes, and released here.
             guard let secret = try vault.secret(for: Self.privateAccount(id), reason: reason, interactive: interactive)
@@ -185,7 +203,63 @@ final class KeyStore {
         }.value
     }
 
+    /// Software keys still behind Face ID were looked for and none is left (once a launch).
+    @ObservationIgnored private var faceIDKeysMoved = false
+    /// The move under way: hosts connecting at the same moment wait for it, so there is one prompt, not one each.
+    @ObservationIgnored private var movingFaceIDKeys: Task<Int, Error>?
+
+    /// Moves the software keys older builds kept behind Face ID (`KeyProtection.biometry`: ED25519 and imported keys)
+    /// to after first unlock, keeping their secrets: one Face ID prompt (`reason`) for all of them, then every later
+    /// connect and reconnect reads them without one. Each is copied to `moving:<account>` before it is rewritten, and the
+    /// copy removed after, so a move cut short loses nothing: the next run puts a missing key back from its copy. Secure
+    /// Enclave handles are never touched (the enclave asks Face ID itself). Runs once a launch until nothing is left;
+    /// throws `SecretVaultError.canceled` when the prompt is dismissed.
+    func moveFaceIDKeys(reason: String) async throws {
+        guard !faceIDKeysMoved else { return }
+        if let movingFaceIDKeys {
+            _ = try await movingFaceIDKeys.value
+            return
+        }
+        let vault = vault
+        let software = Set(keys.filter { $0.kind != .secureEnclaveP256 }.map { Self.privateAccount($0.id) })
+        let task = Task.detached { try await Self.moveFaceIDKeys(vault, software: software, reason: reason) }
+        movingFaceIDKeys = task
+        defer { movingFaceIDKeys = nil }
+        let moved = try await task.value
+        if moved > 0 { Self.log.notice("Keychain: \(moved) keys moved out of Face ID") }
+        faceIDKeysMoved = true
+    }
+
+    /// `moveFaceIDKeys`' work in `vault`: the number of keys moved.
+    nonisolated static func moveFaceIDKeys(_ vault: any SecretVault, software: Set<String>, reason: String) async throws -> Int {
+        let listing = try vault.listing()
+        // A move cut short: a key whose rewrite did not land comes back from its copy (after first unlock, no prompt);
+        // the copy of a key no longer listed is dropped.
+        for (account, _) in listing where account.hasPrefix(movingPrefix) {
+            let original = String(account.dropFirst(movingPrefix.count))
+            if software.contains(original), listing[original] == nil,
+               let copy = try vault.secret(for: account, reason: reason, interactive: false) {
+                try vault.set(copy, for: original, protection: .none)
+            }
+            try vault.remove(account)
+        }
+        let behind = listing.filter { software.contains($0.key) && $0.value == .whenUnlocked }.map(\.key).sorted()
+        guard !behind.isEmpty else { return 0 }
+        let unlocked = try await vault.authenticated(reason: reason)
+        var moved = 0
+        for account in behind {
+            guard let secret = try unlocked.secret(for: account, reason: reason, interactive: true) else { continue }
+            try vault.set(secret, for: movingPrefix + account, protection: .none)
+            try vault.set(secret, for: account, protection: .none)
+            try vault.remove(movingPrefix + account)
+            moved += 1
+        }
+        return moved
+    }
+
     private nonisolated static let log = Logger(subsystem: "yachts.dispatch.mobile", category: "Keys")
+    /// A key's copy while it moves out of Face ID (`moveFaceIDKeys`).
+    nonisolated static let movingPrefix = "moving:"
     private nonisolated static let passwordPrefix = "password:"
     private nonisolated static let passphrasePrefix = "passphrase:"
 

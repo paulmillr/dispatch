@@ -35,11 +35,13 @@ struct ShellCommandWrapper: Equatable, Sendable {
     var bashFunction: String { "() { \(body) }" }
 
     func definition(fish: Bool = false) -> String {
-        let definition = fish
-            ? "function \(name)\n command $\(variable) \(argument) $argv\nend\n"
-            : "function \(name) { \(body) }\n"
-        return Self.preservingUserCommand(name, definition: definition, fish: fish)
+        Self.preservingUserCommand(name, definition: fish ? fishFunction : "function \(name) { \(body) }\n", fish: fish)
     }
+
+    /// fish's function as an autoload file (`vendor_functions.d/<name>.fish`): fish reads it only when the name is
+    /// still undefined at its first use, after config.fish and plugins set up `fish_function_path`, so a function the
+    /// user defines, or autoloads from a folder they add, wins.
+    var fishFunction: String { "function \(name)\n command $\(variable) \(argument) $argv\nend\n" }
 
     static func preservingUserCommand(_ name: String, definition: String, fish: Bool) -> String {
         if fish { return "if not functions -q \(name)\n\(definition)end\n" }

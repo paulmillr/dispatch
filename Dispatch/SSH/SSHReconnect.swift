@@ -370,8 +370,7 @@ enum SSHReconnectLogin {
         guard let window = window ?? NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow else {
             throw HerdrFailure("Open a Dispatch window to authenticate this connection.")
         }
-        let arguments = ["-o", "ControlMaster=yes", "-o", "ControlPersist=yes", "-S", master.controlPath,
-                         "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration) + ["--", shell.destination]
+        let arguments = interactiveArguments(shell: shell, master: master, configuration: configuration)
         let command = ([shell.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
         // Authentication owns this short-lived helper, not a workspace terminal. Keeping its
         // topology private avoids importing password prompts into the user's tabs; its existing
@@ -399,7 +398,8 @@ enum SSHReconnectLogin {
         var iterator = opened.makeAsyncIterator()
         guard let parent = try await iterator.next() else { throw HerdrFailure("The native terminal backend closed.") }
         let environment = System.testing ? ["HOME=" + System.home.path, "GHOSTTY_ZSH_ZDOTDIR=/var/empty", "DISPATCH_TESTING=1"] : []
-        let node = try await client.create(.init(parent: parent, beside: nil, cwd: System.home.path, launch: nil,
+        // ssh runs where the connection was typed (`SSHShell.directory`): its relative paths resolve as they did.
+        let node = try await client.create(.init(parent: parent, beside: nil, cwd: shell.workingDirectory ?? System.home.path, launch: nil,
                                                  command: command, environment: environment))
         let id = try AppReplay.identity(kind: "ssh.authentication", value: UUID())
         let directory = TerminalRuntime.shared.herdrLaunch.directory.appendingPathComponent("auth-" + id.uuidString.prefix(8))
@@ -495,7 +495,7 @@ enum SSHReconnectLogin {
     static func authenticateSilently(shell: SSHShell, master: SSHMaster, configuration: String? = nil) async throws {
         let arguments = silentArguments(shell: shell, master: master, configuration: configuration)
         let result: SSHCommand.Result
-        do { result = try await SSHCommand.run(executable: shell.executable, arguments: arguments, timeout: 30, errors: true) }
+        do { result = try await SSHCommand.run(executable: shell.executable, arguments: arguments, timeout: 30, errors: true, directory: shell.workingDirectory) }
         catch {
             try Task.checkCancellation()
             throw SSHAutomaticFailure.unreachable(error.localizedDescription)
@@ -516,6 +516,11 @@ enum SSHReconnectLogin {
             try await System.sleep(for: .milliseconds(100), "master")
         }
         throw SSHAutomaticFailure.unreachable("SSH logged in, but its connection did not become ready.")
+    }
+    /// The login sheet's master: the connection's own options, which prompt as they did in its terminal.
+    nonisolated static func interactiveArguments(shell: SSHShell, master: SSHMaster, configuration: String?) -> [String] {
+        ["-o", "ControlMaster=yes", "-o", "ControlPersist=yes", "-S", master.controlPath,
+         "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration) + ["--", shell.destination]
     }
     /// The first value given for an option wins, so BatchMode and the rest hold over the connection's own options; the
     /// keepalive comes after them, so the connection's own keepalive holds over it.

@@ -37,12 +37,20 @@ struct ChatThreadView: View {
     @FocusState private var focused: Bool
     @FocusState private var searchFocused: Bool
     /// The thread shows its end (C6): new rows keep it there; scrolled up, they count into the jump pill.
-    @State private var atBottom = true
-    /// Rows that arrived at the end while the thread was scrolled up (C6's count).
-    @State private var unseen = 0
+    /// Whether the thread follows its end and what came while it did not (C6, `ChatFollow`), kept outside SwiftUI's
+    /// state: it changes with every scrolled frame, which draws nothing. `followShown` is the part that draws.
+    @State private var follower = ChatFollower()
+    @State private var followShown: ChatFollow.Shown?
+    /// Counts requests to show the thread's end (a send).
+    @State private var pinned = 0
     /// The last row, to tell rows added at the end from an earlier page added above.
     @State private var lastRow: String?
     @State private var visible = false
+    /// Counts the ends of `settling` moments, to draw again when one is over.
+    @State private var settled = 0
+    /// The moment the corners' times are told against ("Yesterday 10:17"): set again at midnight, when the clock or time
+    /// zone changes and on returning to the app, so the thread redraws for it then rather than on a timer per bubble.
+    @State private var today = Date()
     @State private var voice = MobileVoiceConversation.shared
     @Environment(\.chatShowTerminal) private var showTerminal
     @Environment(\.scenePhase) private var scenePhase
@@ -50,6 +58,9 @@ struct ChatThreadView: View {
     @State private var floatingKeyboard = false
     @Environment(\.tabsSplitDetail) private var splitDetail
     @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// How long the thread rides out the moment after the agent stops or its turn ends (`settling`).
+    @Environment(\.chatSettle) private var settle
 
     /// Whether the composer takes focus when the thread appears: when asked (a new chat, M3b), or when the tab opens in
     /// the split's detail column while a hardware keyboard is attached, so typing goes straight to the agent as on the
@@ -80,10 +91,11 @@ struct ChatThreadView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
-                    .padding(.bottom, session.working ? 4 : 12)
+                    .padding(.bottom, showsWorkingRow ? 4 : 12)
+                    .background(ChatKeyboardDragDismissal { updateFollow { $0.draggedKeyboardDown() } })
                     .environment(\.chatSearchMarks, session.search.active
                                  ? ChatSearchMarks(query: session.search.query.trimmingCharacters(in: .whitespacesAndNewlines)) : nil)
-                    if session.working {
+                    if showsWorkingRow {
                         ChatWorkingRow(session: session, directory: directory, expanded: $workingExpanded) { step = $0 }
                     }
                     if session.phase == .verified, !session.queueRows.isEmpty {
@@ -97,21 +109,37 @@ struct ChatThreadView: View {
                 // put (C6), and an earlier page loading above keeps the rows in place too.
                 .defaultScrollAnchor(startsAtTop ? .top : .bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
-                .defaultScrollAnchor(atBottom && !startsAtTop ? .bottom : .top, for: .sizeChanges)
+                .defaultScrollAnchor(shownFollow.following ? .bottom : .top, for: .sizeChanges)
                 .scrollDismissesKeyboard(.interactively)
-                .onScrollGeometryChange(for: Bool.self, of: { geometry in
-                    geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom
-                        >= geometry.contentSize.height - 40
-                }) { _, bottom in
-                    atBottom = bottom
-                    if bottom { unseen = 0 }
+                .onScrollPhaseChange { old, phase in
+                    switch phase {
+                    case .interacting: updateFollow { $0.dragBegan() }
+                    case .idle:
+                        if updateFollow({ $0.dragEnded(atEnd: follower.atEnd) }) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
+                        if old == .animating { updateFollow { $0.settled() } }
+                    default: break
+                    }
                 }
+                .onScrollGeometryChange(for: ChatScrollSample.self, of: { geometry in
+                    ChatScrollSample(offset: geometry.contentOffset.y,
+                                     atEnd: geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom
+                                        >= geometry.contentSize.height - 40)
+                }) { _, sample in
+                    follower.atEnd = sample.atEnd
+                    // A row, the keyboard or the composer changing height takes the end out of view for a moment:
+                    // the thread goes back rather than counting what comes meanwhile (`ChatFollow.moved`).
+                    if updateFollow({ $0.moved(offset: sample.offset, atEnd: sample.atEnd) }) {
+                        scroll.scrollTo(Self.bottom, anchor: .bottom)
+                    }
+                }
+                .onChange(of: pinned) { _, _ in scroll.scrollTo(Self.bottom, anchor: .bottom) }
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
                 .environment(\.chatColumnWidth, column)
                 .environment(\.chatMeasure, measure)
                 .overlay(alignment: .bottom) {
-                    if !atBottom, unseen > 0 {
-                        ChatJumpPill(count: unseen) {
+                    if shownFollow.showsJump {
+                        ChatJumpPill(count: shownFollow.unseen) {
+                            updateFollow { $0.follow(scrolling: true) }
                             withAnimation(.snappy) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
                         }
                         .padding(.bottom, 12)
@@ -124,6 +152,7 @@ struct ChatThreadView: View {
                 }
                 .onChange(of: session.search.navigation) { _, _ in
                     guard let match = session.search.current else { return }
+                    updateFollow { $0.leave() }
                     withAnimation(.snappy) { scroll.scrollTo(match.row, anchor: .center) }
                 }
             }
@@ -170,6 +199,12 @@ struct ChatThreadView: View {
             if !working { workingExpanded = false }
             voice.check()
         }
+        .task(id: [session.stoppedWorking, session.turnEnded]) {
+            // Draws once more when the moment after a stop or a turn's end is over (`settling`).
+            guard let last = [session.stoppedWorking, session.turnEnded].compactMap({ $0 }).max() else { return }
+            try? await Task.sleep(for: .seconds(max(0, last.timeIntervalSinceNow + settle) + 0.05))
+            if !Task.isCancelled { settled += 1 }
+        }
         .onChange(of: session.search.query) { _, _ in session.search.update(rows: session.transcript.rows) }
         .onChange(of: session.search.visible) { _, open in
             if open { focused = false; searchFocused = true }
@@ -177,6 +212,14 @@ struct ChatThreadView: View {
         .onChange(of: scenePhase) { _, phase in
             // The microphone stops in the background: conversation mode ends rather than half-listen.
             if phase == .background, voice.active(for: session) { voice.stop() }
+            if phase == .active { today = Date() }
+        }
+        // A new day, or the clock or time zone changed: the corners' times are told again against the current calendar.
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            today = Date()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            today = Date()
         }
         .task(id: SearchHistory(query: session.search.active ? session.search.query : "", conversation: session.conversation)) {
             await searchEarlier()
@@ -213,10 +256,75 @@ struct ChatThreadView: View {
 
     private static let bottom = "thread-bottom"
 
+    /// `date` is within the last `settle` seconds (`chatSettle`): state and records arrive apart, so for that long
+    /// after the agent stops the corner keeps its progress until the turn's end comes, and after the turn ends the
+    /// working row stays away until the busy state clears, rather than either flashing between the two.
+    private func settling(_ date: Date?) -> Bool {
+        _ = settled
+        return date.map { Date().timeIntervalSince($0) < settle } ?? false
+    }
+
+    /// The working row (M5a): while the agent works and the turn has no agent text yet, or while its step list is
+    /// unfolded (M5f stays readable). Once a bubble carries the progress in its corner (S6e) the row stays away, also
+    /// in the moment after the turn ends while the busy state that ran through it is still on its way out; a prompt
+    /// sent here or work that began after the end (another device's prompt) shows it at once.
+    private var showsWorkingRow: Bool {
+        guard session.working else { return false }
+        if workingExpanded { return true }
+        guard session.transcript.progressRow == nil else { return false }
+        let stale = settling(session.turnEnded) && session.submittedAt == nil
+            && session.workingSince.map { since in session.turnEnded.map { since <= $0 } ?? false } == true
+        return !stale
+    }
+
+    /// The corner of an agent bubble: the open turn's progress on its newest bubble (S6e), while the agent works or
+    /// waits for the user and in the moment after it stops before the turn's end arrives; else the ended turn's
+    /// summary (S6d). The text's room is the same for the whole open turn, so the bubble moves only when the corner
+    /// settles into the summary, in the same update as the turn's end.
+    private func corner(_ row: ChatThreadRow, summary: ChatTurnSummary?) -> ChatCorner? {
+        let metrics = ChatCornerMetrics(column: column, measure: measure, size: typeSize)
+        if row.id == session.transcript.progressRow, let turn = session.transcript.openTurn {
+            let steps = ChatStep.steps(turn, directory: directory, reasoning: true).filter { $0.kind != .think }.count
+            let waiting = ChatWorkingRow.waiting(session)
+            // A turn left open by an agent that stopped (an interrupted one) keeps the room, without a spinner or a
+            // VoiceOver element.
+            let live = session.working || waiting != nil || settling(session.stoppedWorking)
+            let since = ChatWorkingRow.started(session)
+            // The room holds the progress and the summary the turn would have if it ended now, so the corner settles
+            // into it without moving the bubble.
+            var provisional = ChatTurnSummary(turn)
+            provisional.ended = Date()
+            let ending = provisional.corner(now: today, calendar: .autoupdatingCurrent, fits: metrics.fits)
+            let room = ending.map { metrics.wider(ChatTurnProgressCorner.room(steps: steps), $0) } ?? ChatTurnProgressCorner.room(steps: steps)
+            return ChatCorner(room: room, fits: metrics.fits(room), view: { wrapped in
+                live ? AnyView(ChatTurnProgressCorner(steps: steps, since: since, waiting: waiting, wrapped: wrapped)) : AnyView(EmptyView())
+            }, spoken: live ? ChatTurnProgressCorner.spoken(steps: steps, waiting: waiting) : nil, hint: "Shows the steps")
+        }
+        guard let summary, let text = summary.corner(now: today, calendar: .autoupdatingCurrent, fits: metrics.fits) else { return nil }
+        // At least the progress's room, which the turn's last bubble kept while it ran.
+        let room = metrics.wider(text, ChatTurnProgressCorner.room(steps: summary.steps.count))
+        return ChatCorner(room: room, fits: metrics.fits(room), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+                          spoken: summary.spokenCorner(now: today, calendar: .autoupdatingCurrent), hint: "Shows the steps")
+    }
+
     /// Rows added after the last one while scrolled up count into the jump pill (C6).
     private func countUnseen(_ rows: [ChatThreadRow]) {
         defer { lastRow = rows.last?.id }
-        if !atBottom { unseen += Self.appended(rows, after: lastRow) }
+        let added = Self.appended(rows, after: lastRow)
+        if added > 0 { updateFollow { $0.appended(added) } }
+    }
+
+    /// What the pill and the size-change anchor read.
+    private var shownFollow: ChatFollow.Shown { followShown ?? ChatFollow(following: !startsAtTop).shown }
+
+    /// Changes the follow state; draws again only when what it shows changed.
+    @discardableResult
+    private func updateFollow<Result>(_ change: (inout ChatFollow) -> Result) -> Result {
+        var next = follower.model ?? ChatFollow(following: !startsAtTop)
+        let result = change(&next)
+        follower.model = next
+        if next.shown != shownFollow { followShown = next.shown }
+        return result
     }
 
     /// How many rows follow `last` (the last row before a change): rows added at the end. A first load (no `last`), an
@@ -258,11 +366,16 @@ struct ChatThreadView: View {
                 if session.goal != nil, !session.goalStatus.isEmpty {
                     ChatGoalStatusLine(parts: session.goalStatus)
                 }
+                let routes = composerRoutes
                 CodeComposer(text: draft, placeholder: placeholder, working: session.working && session.phase == .verified,
                              stopping: session.stopping, focus: $focused,
                              send: send,
-                             steer: session.working ? { session.send(steer: true) } : nil,
+                             steer: routes.steer == .steer ? {
+                                 session.send(steer: true)
+                                 followAfterSending()
+                             } : nil,
                              stop: { session.stop() },
+                             sendOptions: sendOptions(routes),
                              attachments: attachments,
                              dictationOwner: ObjectIdentifier(session), multiline: multiline,
                              converse: session.phase == .verified ? { voice.start(session) } : nil)
@@ -276,9 +389,35 @@ struct ChatThreadView: View {
     /// The composer's send, its button and Return (`MobileChatSession.sendFromComposer`): the slash list's lit row,
     /// "/terminal", or the draft.
     private func send() {
-        if case .completed = session.sendFromComposer(showTerminal: showTerminal.map { terminal in { terminal.show() } }) {
-            focused = true
+        switch session.sendFromComposer(showTerminal: showTerminal.map { terminal in { terminal.show() } }) {
+        case .completed: focused = true
+        case .sent: followAfterSending()
+        case .terminal: break
         }
+    }
+
+    /// Where the draft goes on a tap of send, and on its long press's Send now (`MobileChatSession.route`): a command
+    /// routes as one and never steers.
+    private var composerRoutes: (tap: MobileChatSession.Route, steer: MobileChatSession.Route) {
+        let text = session.drafts.current.text
+        let command = AgentInput.isCommand(text, multiline: text.contains("\n"))
+        return (session.route(steer: false, command: command), session.route(steer: true, command: command))
+    }
+
+    /// What send's long press offers: what the tap would do with the draft as it is. The slash list's lit row completes
+    /// into the draft and "/terminal" opens Terminal (`MobileChatSession.sendFromComposer`), each the one item; else the
+    /// routes' ways (`CodeComposer.sendOptions`).
+    private func sendOptions(_ routes: (tap: MobileChatSession.Route, steer: MobileChatSession.Route)) -> [CodeComposer.SendOption] {
+        let text = session.drafts.current.text
+        if let first = session.slashCommands.first, first.name != text { return [.complete(first.name)] }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines) == "/terminal", showTerminal != nil { return [.terminal] }
+        return CodeComposer.sendOptions(queues: routes.tap == .queue || routes.tap == .outbox, steers: routes.steer == .steer)
+    }
+
+    /// A message sent from here shows at the thread's end, and the thread follows it (no "Jump to latest").
+    private func followAfterSending() {
+        updateFollow { $0.follow() }
+        pinned += 1
     }
 
     /// Reads a stored attachment from this conversation's host (`attachments.read`).
@@ -366,39 +505,14 @@ struct ChatThreadView: View {
                 .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .agent(let summary):
             VStack(spacing: 5) {
-                ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text) }
-                    .environment(\.openURL, MobileChatMarkdown.openURL)
-                    .onTapGesture { details = row }
-                    .contextMenu {
-                        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }
-                        Button("Reply", systemImage: "arrowshape.turn.up.left") {
-                            let quote = row.item.text.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n")
-                            session.drafts.edit(text: quote + "\n\n" + session.drafts.current.text)
-                            focused = true
-                        }
-                    }
-                if let summary, summary.footnote != nil {
-                    ChatTurnFootnote(summary: summary)
-                        // A 44 point target for the 13 point line; the outer padding gives the room back.
-                        .padding(.vertical, 14)
-                        .contentShape(Rectangle())
-                        .onTapGesture { details = row }
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityHint("Shows the steps")
-                        .padding(.vertical, -14)
-                }
+                agentBubble(row, summary: summary)
                 if let reading = voice.reading, reading.row == row.id, voice.active(for: session) {
                     ChatReadingFootnote(since: reading.since)
                 }
             }
         case .thinking:
-            // Claude's thinking, inline and muted as the Mac shows it (not a bubble, never collapsed).
-            MobileChatMarkdownView(text: row.item.text, muted: true)
-                .font(.footnote)
-                .padding(.horizontal, 14)
-                .frame(maxWidth: measure, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
+            // Claude's thinking: an agent bubble of its own, in the same colours and font as its messages.
+            agentBubble(row, summary: nil)
         case .notice:
             notice(row.item.text, row: row.id)
                 .font(.caption)
@@ -406,6 +520,24 @@ struct ChatThreadView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
+    }
+
+    /// An agent's message or thinking: the bubble with the turn's summary in its corner on the last one (S6d; the bubble
+    /// tapped opens the message's details, M5b), and the long press's Copy, Reply and Info.
+    private func agentBubble(_ row: ChatThreadRow, summary: ChatTurnSummary?) -> some View {
+        let corner = corner(row, summary: summary)
+        return ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text, corner: corner) }
+            .environment(\.openURL, MobileChatMarkdown.openURL)
+            .onTapGesture { details = row }
+            .contextMenu {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }
+                Button("Reply", systemImage: "arrowshape.turn.up.left") {
+                    let quote = row.item.text.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n")
+                    session.drafts.edit(text: quote + "\n\n" + session.drafts.current.text)
+                    focused = true
+                }
+                Button("Info", systemImage: "info.circle") { details = row }
+            }
     }
 
     /// A notice row's text, with the search's marks.
@@ -545,4 +677,23 @@ struct ChatIntro: View {
         .frame(maxWidth: .infinity)
         .padding(.bottom, 18)
     }
+}
+
+extension EnvironmentValues {
+    /// How long a thread rides out the moment after the agent stops or its turn ends (`ChatThreadView.settling`);
+    /// tests set it to take the clock out of their checks.
+    @Entry var chatSettle: TimeInterval = 3
+}
+
+/// `ChatThreadView`'s follow state, outside SwiftUI's state (it changes with every scrolled frame).
+@MainActor final class ChatFollower {
+    var model: ChatFollow?
+    /// The thread's end is in view (within 40 points).
+    var atEnd = true
+}
+
+/// What the thread's scroll geometry reports to `ChatFollow`: the offset and whether the end is in view.
+struct ChatScrollSample: Equatable {
+    var offset: CGFloat
+    var atEnd: Bool
 }

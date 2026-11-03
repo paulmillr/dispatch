@@ -33,11 +33,11 @@ final class FidelityUITests: XCTestCase {
             Screen(id: "M2b", arguments: sample + ["-DispatchTabsCollapse", "ai"]),
             appearance["M2c"]!,
             demo("M3a"), demo("M4a"), demo("M3b"), demo("M4b"), demo("M4c"),
-            appearance["M4d"]!,
             demo("M5a"), demo("M5f"), demo("M5b"), demo("M5c"),
             // The mockup's patch (CodeDemo); AppearanceUITests reaches the viewer through M5b's fixture instead.
             Screen(id: "M5d", environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5d"]),
-            demo("M5e"),
+            // The mockup draws the code keys, which show once picked under "+" (the app's default is off).
+            Screen(id: "M5e", environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5e"], arguments: ["-composer.codeKeys", "YES"]),
             // The sample's dev tab on its Terminal segment, showing the M6a fixture; a tap raises the keyboard and the
             // key capsule.
             Screen(id: "M6a", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2"], then: { app in

@@ -39,6 +39,8 @@ public enum Action {
     case tabSet, tabClearCurrent, tabClearAll, tabReset
     case protectedModeOff, protectedModeIso, protectedModeDec
     case activeStatusDisplay(StatusDisplay)
+    /// DECRQCRA and XTCHECKSUM (Ghostty 1.4's request_xt_checksum, xt_checksum_extension).
+    case requestChecksum(ChecksumRequest), checksumExtension(ChecksumFlags)
     case setAttribute(Attribute)
     /// DCS payload in runs (Ghostty's dcs_put is one byte; its parser drops DEL, here the handler does).
     case dcsHook(DCS), dcsPut(UnsafeBufferPointer<UInt8>), dcsUnhook

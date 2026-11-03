@@ -120,8 +120,8 @@ private struct CommitMenu: View {
     }
 }
 
-/// The commit's body (C2): the card with subject, message, ref chips and the signature's verdict; Author, Committer
-/// (when someone else committed it, or later), Date and the parents (each opens its commit); CHANGED FILES with the
+/// The commit's body (C2): the card with subject, message and ref chips; Author (with the signature's badge), Date and
+/// the parents (each opens its commit), Author and Date opening popovers with the whole story; CHANGED FILES with the
 /// counts and a row per file that opens its diff.
 struct CommitDetailBody: View {
     let log: CommitsLog
@@ -133,11 +133,11 @@ struct CommitDetailBody: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let commit {
-                    CommitCard(commit: commit, check: log.checks[commit.hash],
-                               checkAgain: log.unanswered.contains(commit.hash) ? { log.checkAgain(commit.hash) } : nil)
+                    CommitCard(commit: commit)
                         .padding(.horizontal, 12)
                         .padding(.top, 8)
-                    CommitFacts(commit: commit, tab: tab)
+                    CommitFacts(commit: commit, tab: tab, check: log.checks[commit.hash],
+                                checkAgain: log.unanswered.contains(commit.hash) ? { log.checkAgain(commit.hash) } : nil)
                         .padding(.horizontal, 12)
                         .padding(.top, 12)
                 }
@@ -216,13 +216,9 @@ struct CommitDetailBody: View {
     }
 }
 
-/// The top card: subject, message, refs and the signature's verdict.
+/// The top card: subject, message and refs (the signature is the Author row's badge).
 private struct CommitCard: View {
     let commit: GitCommit
-    let check: GitSignatureCheck?
-    /// The check got no answer: Check again.
-    var checkAgain: (() -> Void)? = nil
-    @State private var signer = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -238,39 +234,15 @@ private struct CommitCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-            CommitChips(refs: commit.refs) {
-                CommitSignatureChip(kind: commit.signature, check: check, expanded: $signer)
-            }
-            if signer, let kind = commit.signature {
-                Text(CommitSignatureText.detail(check, kind: kind))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            if let checkAgain {
-                Button("Check the signature again", action: checkAgain)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.dispatchPink)
-                    .buttonStyle(.plain)
+            if !commit.refs.isEmpty {
+                CommitFlow(spacing: 6) {
+                    ForEach(CommitRefChip.ordered(commit.refs), id: \.self) { CommitRefChip(ref: $0) }
+                }
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-/// The refs in the Mac's order (the checked-out branch first, then branches, remotes, tags) and the signature last,
-/// wrapping onto further lines.
-private struct CommitChips<Signature: View>: View {
-    let refs: [GitRef]
-    @ViewBuilder var signature: Signature
-
-    var body: some View {
-        CommitFlow(spacing: 6) {
-            ForEach(CommitRefChip.ordered(refs), id: \.self) { CommitRefChip(ref: $0) }
-            signature
-        }
     }
 }
 
@@ -351,39 +323,30 @@ struct CommitRefChip: View {
     }
 }
 
-/// The signature's verdict, in the Mac's words (`GitSignatureText`): "Signed · SSH key" green when a trusted key
-/// signed it; uncertified, unknown, expired, revoked and bad signatures in their colours; a commit without one says so.
-/// A tap shows the signer and the key.
-struct CommitSignatureChip: View {
-    let kind: GitSignatureKind?
+/// The signature's verdict as a badge after the author's name: the verdict's seal in its colour (green when a trusted
+/// key signed it; uncertified, unknown, expired, revoked and bad signatures in theirs), a spinner while it is checked.
+/// The Author popover says the verdict in the Mac's words (`CommitSignatureText`).
+struct CommitSignatureBadge: View {
+    let kind: GitSignatureKind
     let check: GitSignatureCheck?
-    @Binding var expanded: Bool
 
     var body: some View {
         let look = CommitSignatureText.look(kind: kind, check: check)
-        Button {
-            expanded.toggle()
-        } label: {
-            HStack(spacing: 3) {
-                if kind != nil, check == nil {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: look.symbol)
-                }
-                Text(look.text)
+        Group {
+            if check == nil {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: look.symbol)
             }
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(look.tone.color)
-            .frame(minHeight: 18)
         }
-        .buttonStyle(.plain)
-        .disabled(kind == nil)
-        .accessibilityLabel(kind.map { CommitSignatureText.detail(check, kind: $0) } ?? "Not signed")
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(look.tone.color)
+        .accessibilityLabel(look.text)
         .accessibilityIdentifier("commit-signature")
     }
 }
 
-/// The signature chip's words and look, apart from the view so the tests read them.
+/// The signature's words and look, apart from the views so the tests read them.
 enum CommitSignatureText {
     enum Tone: Equatable {
         case good, plain, warning, bad, faint
@@ -445,10 +408,16 @@ enum CommitSignatureText {
     }
 }
 
-/// Author, Committer and Committed when they differ from the author's, Date, and the parents, each opening its commit.
+/// Author with the signature's badge, Date, and the parents, each opening its commit. Author opens a popover with the
+/// author's name and email, the committer when someone else committed it, and the signature; Date one with the author
+/// date in its own time zone and the commit date when it differs.
 struct CommitFacts: View {
     let commit: GitCommit
     let tab: TabRef
+    var check: GitSignatureCheck? = nil
+    /// The signature check got no answer: Check again (in the Author popover).
+    var checkAgain: (() -> Void)? = nil
+    @State private var shown: Row.Popover?
 
     var body: some View {
         let rows = Self.rows(commit, now: Date())
@@ -459,6 +428,20 @@ struct CommitFacts: View {
                         CommitFactRow(label: row.label, value: row.value, mono: row.mono, link: true)
                     }
                     .buttonStyle(.plain)
+                } else if let popover = row.popover {
+                    Button { shown = popover } label: {
+                        CommitFactRow(label: row.label, value: row.value, mono: row.mono, link: false) {
+                            if popover == .author, let kind = commit.signature {
+                                CommitSignatureBadge(kind: kind, check: check)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(popover == .author ? "Shows the author, committer and signature" : "Shows the full dates")
+                    .popover(isPresented: Binding(get: { shown == popover }, set: { if !$0 { shown = nil } })) {
+                        CommitFactPopover(commit: commit, popover: popover, check: check, checkAgain: checkAgain)
+                            .presentationCompactAdaptation(.popover)
+                    }
                 } else {
                     CommitFactRow(label: row.label, value: row.value, mono: row.mono, link: false)
                 }
@@ -469,24 +452,20 @@ struct CommitFacts: View {
     }
 
     struct Row: Equatable {
+        /// What a tap on the row shows.
+        enum Popover: Hashable { case author, date }
+
         var label: String
         var value: String
         var mono = false
         /// A parent: the row opens it.
         var commit: String? = nil
+        var popover: Popover? = nil
     }
 
     static func rows(_ commit: GitCommit, now: Date) -> [Row] {
-        var rows = [Row(label: "Author", value: commit.author)]
-        if let committer = commit.distinctCommitter {
-            if committer.name != commit.author || committer.email != commit.email {
-                rows.append(Row(label: "Committer", value: committer.name))
-            }
-        }
-        rows.append(Row(label: "Date", value: CommitsText.date(commit.date, now: now)))
-        if let committer = commit.distinctCommitter, committer.date != commit.date {
-            rows.append(Row(label: "Committed", value: CommitsText.date(committer.date, now: now)))
-        }
+        var rows = [Row(label: "Author", value: commit.author, popover: .author),
+                    Row(label: "Date", value: CommitsText.date(commit.date, now: now), popover: .date)]
         switch commit.parents.count {
         case 0: rows.append(Row(label: "Parent", value: "None, the first commit"))
         case 1: rows.append(Row(label: "Parent", value: String(commit.parents[0].prefix(7)), mono: true, commit: commit.parents[0]))
@@ -498,13 +477,91 @@ struct CommitFacts: View {
         }
         return rows
     }
+
+    /// A popover's lines: a title and the text under it.
+    struct Fact: Equatable {
+        var title: String
+        var text: String
+    }
+
+    /// Author's popover: "Sam Example <sam@example.com>", the committer when another person committed it, the
+    /// signature's verdict and details. Date's: the author date in its own zone, and the commit date when it differs.
+    static func facts(_ popover: Row.Popover, commit: GitCommit, check: GitSignatureCheck?) -> [Fact] {
+        switch popover {
+        case .author:
+            var facts = [Fact(title: "Author", text: person(commit.author, commit.email))]
+            if let committer = commit.distinctCommitter, committer.name != commit.author || committer.email != commit.email {
+                facts.append(Fact(title: "Committer", text: person(committer.name, committer.email)))
+            }
+            if let kind = commit.signature {
+                facts.append(Fact(title: CommitSignatureText.look(kind: kind, check: check).text,
+                                  text: CommitSignatureText.detail(check, kind: kind)))
+            } else {
+                facts.append(Fact(title: "Not signed", text: ""))
+            }
+            return facts
+        case .date:
+            var facts = [Fact(title: "Authored", text: CommitsText.fullTime(commit.date, zone: commit.zone))]
+            if let committer = commit.distinctCommitter, committer.date != commit.date {
+                facts.append(Fact(title: "Committed", text: CommitsText.fullTime(committer.date, zone: committer.zone)))
+            }
+            return facts
+        }
+    }
+
+    private static func person(_ name: String, _ email: String) -> String { email.isEmpty ? name : "\(name) <\(email)>" }
 }
 
-private struct CommitFactRow: View {
+/// What a tap on Author or Date shows (`CommitFacts.facts`), selectable; the signature's line in its colour, with
+/// Check again when the check got no answer.
+private struct CommitFactPopover: View {
+    let commit: GitCommit
+    let popover: CommitFacts.Row.Popover
+    let check: GitSignatureCheck?
+    let checkAgain: (() -> Void)?
+
+    var body: some View {
+        let facts = CommitFacts.facts(popover, commit: commit, check: check)
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(facts.enumerated()), id: \.offset) { index, fact in
+                let signature = popover == .author && index == facts.count - 1
+                VStack(alignment: .leading, spacing: 3) {
+                    if signature {
+                        let look = CommitSignatureText.look(kind: commit.signature, check: check)
+                        Label(fact.title, systemImage: look.symbol)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(look.tone.color)
+                    } else {
+                        Text(fact.title).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if !fact.text.isEmpty {
+                        Text(fact.text)
+                            .font(signature ? .footnote : .subheadline)
+                            .foregroundStyle(signature ? .secondary : .primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            if popover == .author, commit.signature != nil, let checkAgain {
+                Button("Check the signature again", action: checkAgain)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.dispatchPink)
+                    .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 240, maxWidth: 340, alignment: .leading)
+    }
+}
+
+private struct CommitFactRow<Badge: View>: View {
     let label: String
     let value: String
     let mono: Bool
     let link: Bool
+    @ViewBuilder var badge: Badge
 
     var body: some View {
         HStack(spacing: 8) {
@@ -515,6 +572,7 @@ private struct CommitFactRow: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            badge
             if link {
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
@@ -528,5 +586,11 @@ private struct CommitFactRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(link ? .isButton : [])
+    }
+}
+
+extension CommitFactRow where Badge == EmptyView {
+    init(label: String, value: String, mono: Bool, link: Bool) {
+        self.init(label: label, value: value, mono: mono, link: link) { EmptyView() }
     }
 }

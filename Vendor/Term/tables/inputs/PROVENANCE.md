@@ -1,7 +1,16 @@
 # Inputs of tables/gen.py
 
 Written by `tables/extract.py <ghostty checkout> <ghostty-oracle --tables output> inputs` (do not edit).
-Ghostty: 31bdcd5a79639bbac97c1a94e0f41d0f5ff84ca2 (MIT, see Resources/ghostty/LICENSE); its Unicode data: uucode 0.2.0 (Unicode 17.0.0).
+Ghostty: 31bdcd5a79639bbac97c1a94e0f41d0f5ff84ca2 (MIT, see Resources/ghostty/LICENSE).
+Unicode data (props, emoji_presentation, symbol, break): tables/unicode.py on uucode ea62149739404a73c202b48a33bf6dd2af4bd9b0
+(Unicode 18.0.0; Ghostty v1.4.0 commit 9cdbf798), not the oracle.
+Those kinds of oracle-tables.txt are now unicode.py's output, not the Zig oracle's: unicode.py was validated byte for byte
+against the oracle on the old data only, so for them TermTablesTests checks self-consistency (Tables.swift and Term's
+break table against these inputs), not agreement with a Ghostty build.
+unicode.py ports uucode's build components with Ghostty's uucode_config.zig and uucode's grapheme break rules; on
+uucode 2826a37 (Ghostty 31bdcd5's, Unicode 17.0.0) `unicode.py <ucd> --old` prints the oracle's lines byte for byte,
+and its break rules agree with each version's GraphemeBreakTest.txt (controls excluded, uucode's emoji-modifier
+tailoring applied). The ucd/ directory is in https://deps.files.ghostty.org/uucode-ea62149739404a73c202b48a33bf6dd2af4bd9b0.tar.gz.
 The device-status entries additionally backport `cursor_position_extended` (DECXCPR) from
 Ghostty v1.4.0, commit fbda61b8. The hashes below identify the original baseline files;
 `device_status.zig`'s kept entries include that additional row. Preserve it if extracting
@@ -20,4 +29,4 @@ gives the same tree), built with `zig build -Dapp-runtime=none -Demit-bench=true
 | src/input/key_encode.zig | 3fea157f46eb7e53406ea6a72dcc55ed6047c543ad50633aecb1eafb10d2b2bb |
 | src/input/paste.zig | 81cc2943b84787062afcc72547471252dde929038eb32b3c61be235309198bc4 |
 | src/config/Config.zig | b025a65a53c44b46cc1b7a260bff142c930e08de8afa0ba5d81805bae37e32c9 |
-| ghostty-oracle --tables (kinds above) | 5e6e2dda03ea6e8a7e8387d39a669e4f16a9be4afb4c1573b99e0cbf61316a13 |
+| ghostty-oracle --tables (kinds above, Unicode kinds from unicode.py) | 68017e81c64ee65e242d6e7542a984dc665c90fd2574ed2bd99f811bbad9dc9c |

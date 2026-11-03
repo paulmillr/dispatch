@@ -12,14 +12,14 @@ enum MobileSection: Hashable, CaseIterable, Identifiable {
     var symbol: String {
         switch self { case .spaces: "square.on.square"; case .agents: "bubble.left.and.bubble.right" }
     }
-    /// What New makes here (M2a: a terminal tab in the most recent space; M9a: a chat).
-    var sheet: MobileSheet {
-        switch self { case .spaces: .newTab; case .agents: .newChat }
+    /// What New makes here: a space (its New space form, as the Mac's New space), a chat (M9a).
+    var newTitle: String {
+        switch self { case .spaces: "New space"; case .agents: MobileSheet.newChat.title }
     }
-    /// The New button's glyph follows the selected section: a tab with a plus (M2a), a compose glyph (M3a).
+    /// The New button's glyph follows the selected section: a space with a plus, a compose glyph (M3a).
     var newImage: Image {
         switch self {
-        case .spaces: Image(systemName: "plus.rectangle")
+        case .spaces: Image(systemName: "plus.square.on.square")
         case .agents: Image(systemName: "square.and.pencil")
         }
     }
@@ -36,9 +36,9 @@ enum MobileSheet: Hashable, Identifiable {
 
 /// The app's root: the Liquid Glass tab bar with Spaces and Agents, and New as the separate trailing glass circle
 /// (M2a). New is a tab with the role the system draws apart from the others (`newRole`); it is never selected:
-/// choosing it acts for the current section and the selection stays where it was. In Spaces, New opens a terminal tab
-/// in the most recent space (the space picker when there is none); with no host yet, its glyph is a display with a
-/// plus and it opens New host (M1d). In Agents it opens New chat (M9a).
+/// choosing it acts for the current section and the selection stays where it was. In Spaces, New opens New space
+/// (always a new space with one shell tab, never a tab in an existing one; New Tab is ⌘T and each space's capsule);
+/// with no host yet, its glyph is a display with a plus and it opens New host (M1d). In Agents it opens New chat (M9a).
 ///
 /// One navigation stack holds the tab bar: pushed screens (a tab, a space, space details, host detail, message
 /// details) cover the whole screen and the tab bar leaves with the root as UIKit pushes it, frame for frame, as the
@@ -90,12 +90,12 @@ struct MobileRoot: View {
 
     private var noHosts: Bool { tabs.workspaces.isEmpty }
 
-    /// New: in Spaces a terminal tab (or New host while there is no host), in Agents New chat.
+    /// New: in Spaces New space (or New host while there is no host), in Agents New chat.
     private func new() {
         switch section {
         case .spaces where noHosts: sheet = .newHost
-        case .spaces: navigator.newTabFromBar()
-        case .agents: sheet = section.sheet
+        case .spaces: navigator.newSpaceFromBar()
+        case .agents: sheet = .newChat
         }
     }
 
@@ -113,7 +113,7 @@ struct MobileRoot: View {
     }
 
     private var newTitle: String {
-        section == .spaces && noHosts ? MobileSheet.newHost.title : section.sheet.title
+        section == .spaces && noHosts ? MobileSheet.newHost.title : section.newTitle
     }
 
     var body: some View {
@@ -160,8 +160,8 @@ struct MobileRoot: View {
         .onChange(of: section) { navigator.showSidebar() }
         .spacesPresentations(navigator, hostViews: composition.hostViews)
         .environment(\.hostSpaceOpening, navigator)
-        // A tab's host disc opens the space switcher (P3) over the stack.
-        .environment(\.tabsSwitcher, navigator)
+        // A tab's menu (its host disc) acts through the Tabs actions and opens the host's stats over the stack.
+        .environment(\.tabsNavigator, navigator)
         // The menu bar and ⌘ chords (MobileCommands).
         .mobileCommands(composition, section: $section, sheet: $sheet)
         #if DEBUG

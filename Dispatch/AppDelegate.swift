@@ -93,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         workspace.onForgetHost = { [weak self] in self?.persistHostSession() }
         workspace.prefixKeys.table = { [weak self] in self?.prefixTable(for: $0) }
         workspace.prefixKeys.perform = { [weak self] in self?.performPrefix($0, surface: $1) }
+        workspace.prefixKeys.reject = { [weak self] in self?.rejectPrefix($0, surface: $1) }
+        workspace.prefixKeys.finished = { [weak self] in self?.refreshPrefixTable($0) }
     }
 
     func updateMinimumContentSize(_ size: NSSize) {

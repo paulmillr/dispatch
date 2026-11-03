@@ -239,8 +239,11 @@ final class BackgroundRefreshTests: XCTestCase {
     /// The background session reads the Keychain without interaction: a key behind Face ID fails at once (no prompt is
     /// attempted) and the host is skipped; the app's own session reads it as before.
     func testABackgroundSessionNeverPromptsForAFaceIDKey() async throws {
-        let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .biometry, secureEnclaveAvailable: false)
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
         let key = try keys.generateED25519(label: "phone")
+        // As an older build stored software keys (new ones read without Face ID, `testABackgroundSessionReadsANewKey`).
+        vault.protect(KeyStore.privateAccount(key.id), .biometry)
         var record = studio
         record.auth = .key(key.id)
         /// Reads the host's key through the context it is given and reports the outcome as the link.
@@ -360,4 +363,40 @@ final class RecordingScheduler: RefreshScheduling, @unchecked Sendable {
 /// `XCTUnwrap` for an async expression's value.
 func XCTUnwrapAsync<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T {
     try XCTUnwrap(value, file: file, line: line)
+}
+
+/// Extra 1 (Face ID): a software key reads after first unlock, so the background session logs in with it.
+extension BackgroundRefreshTests {
+    func testABackgroundSessionReadsANewKey() async throws {
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let key = try keys.generateED25519(label: "phone")
+        var record = ResilienceFixture.host("studio")
+        record.auth = .key(key.id)
+        struct KeyReader: HostSessionDriver {
+            func run(_ host: HostRecord, context: HostSessionContext) -> AsyncStream<HostSessionEvent> {
+                AsyncStream { continuation in
+                    Task {
+                        do {
+                            let material = try await context.key()
+                            continuation.yield(.link(.failed(material == nil ? "none" : "read")))
+                        } catch {
+                            continuation.yield(.link(.failed(error.localizedDescription)))
+                        }
+                        continuation.finish()
+                    }
+                }
+            }
+        }
+        let hosts = HostSessions(store: HostStore(url: nil, hosts: [record]), keys: keys, knownHosts: KnownHostStore(url: nil),
+                                 driver: KeyReader())
+        let background = hosts.backgroundSession(record)
+        background.connect()
+        try await TestSupport.eventually { background.link == .failed("read") }
+        XCTAssertEqual(vault.prompts, 0, "no Face ID")
+        vault.locked = true
+        let locked = hosts.backgroundSession(record)
+        locked.connect()
+        try await TestSupport.eventually { locked.link == .failed("read") }
+    }
 }

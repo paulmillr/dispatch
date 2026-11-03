@@ -2,8 +2,8 @@ import UIKit
 import XCTest
 
 /// The Spaces redesign (P1–P3, W0) on the mockup's sample (`-DispatchSpacesMockup`): the filter chips, the OFFLINE
-/// group folding and its held menu, the Detached list, the space screen's menu, swipe, held New tab and Edit tabs, and
-/// the switcher from a tab's host disc. `testFidelity` writes each mockup state, light and dark, to
+/// group folding and its held menu, the Detached list, the space screen's menu, swipe, held New tab and Edit, and
+/// a tab's menu from its host disc (X9b). `testFidelity` writes each mockup state, light and dark, to
 /// `build/mockup-review/<ID>-<scheme>.png` (`TEST_RUNNER_DISPATCH_MOCKUP_DIR` names another folder).
 @MainActor
 final class SpacesUITests: XCTestCase {
@@ -88,18 +88,20 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Restore all"].exists)
     }
 
-    /// P2: the space's menu (P2c), a row's swipe (P2b), New tab held (P2e) and Edit tabs (P2d).
+    /// P2: the space's menu (P2c), a row's swipe (P2b), New tab held (P2e) and Edit (P2d) with its name fields.
     func testSpaceScreen() {
         let app = launch(Self.sample + ["-DispatchTabsShow", "space:herdr:app"])
         let zsh = Self.row(app, "space-tab", "zsh")
         wait(zsh)
         app.buttons["space-menu"].tap()
-        wait(app.buttons["Rename…"])
-        XCTAssertTrue(app.buttons["Edit tabs"].exists)
+        wait(app.buttons["Edit"])
+        XCTAssertFalse(app.buttons["Rename…"].exists, "renaming is Edit's")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Detach'")).firstMatch.exists)
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Terminate…'")).firstMatch.exists)
-        app.buttons["Edit tabs"].tap()
+        app.buttons["Edit"].tap()
         wait(app.buttons["Done"], "edit mode")
+        XCTAssertTrue(app.textFields["space-name-field"].exists, "the space's name field")
+        XCTAssertTrue(app.textFields["Rename zsh"].exists, "each tab's name field")
         XCTAssertFalse(app.buttons["space-new-tab"].exists, "no New tab while editing")
         app.buttons["Done"].tap()
         wait(app.buttons["space-new-tab"])
@@ -114,19 +116,28 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["In another space…"].exists)
     }
 
-    /// P3: a tab's host disc opens the switcher; a tab row switches the screen to that tab and closes it.
-    func testSwitcher() {
-        let app = launch(Self.sample + ["-DispatchTabsShow", "tab:herdr:app:2"])
-        let disc = app.buttons["space-switcher"]
+    /// X9b: a tab's host disc is its menu: the conversation's items on Chat, the tab's (Rename… opens the rename
+    /// dialog), the host's Stats. No space switcher on the phone: Back returns to the space.
+    func testTabMenu() {
+        let app = launch(Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1"])
+        let disc = app.buttons["tab-menu"]
         wait(disc)
+        XCTAssertFalse(app.buttons["space-switcher"].exists, "no switcher on a phone's tab")
         disc.tap()
-        let zsh = app.buttons.matching(NSPredicate(format: "label == 'zsh'")).firstMatch
-        wait(zsh, "the space's tabs")
-        XCTAssertTrue(app.buttons["Close space"].exists)
-        XCTAssertTrue(app.buttons["switcher-host"].exists)
-        zsh.tap()
-        XCTAssertTrue(app.buttons["Close space"].waitForNonExistence(timeout: 3), "closed")
-        wait(app.staticTexts["zsh"], "the zsh tab's screen")
+        wait(app.buttons["Search"], "the conversation's items")
+        XCTAssertTrue(app.buttons["Conversation Mode"].exists)
+        XCTAssertTrue(app.buttons["Rename…"].exists)
+        XCTAssertTrue(app.buttons["Detach"].exists)
+        XCTAssertTrue(app.buttons["Terminate…"].exists)
+        XCTAssertTrue(app.buttons["Stats"].exists)
+        app.buttons["Rename…"].tap()
+        wait(app.alerts["Rename tab"], "the rename dialog")
+        app.alerts["Rename tab"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.alerts["Rename tab"].waitForNonExistence(timeout: 3))
+        app.otherElements["tab-segments"].buttons["Terminal"].tap()
+        disc.tap()
+        wait(app.buttons["Rename…"], "Terminal's menu")
+        XCTAssertFalse(app.buttons["Search"].exists, "the conversation's items only on Chat")
     }
 
     // MARK: Fidelity
@@ -150,7 +161,10 @@ final class SpacesUITests: XCTestCase {
         Screen(id: "P2e", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"], then: { app in
             app.buttons["space-new-tab"].press(forDuration: 1.2)
         }),
-        Screen(id: "P3", arguments: sample + ["-DispatchTabsShow", "switcher:herdr:app:2"]),
+        Screen(id: "X9b", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1"]),
+        Screen(id: "X9b-menu", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1"], then: { app in
+            app.buttons["tab-menu"].tap()
+        }),
     ]
 
     static var output: URL {

@@ -151,6 +151,8 @@ struct ChatComposerActivity: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: ChatSession
     var active = true
+    /// Without it, a tight footer shows the orbit and time only; the label stays in the help and details.
+    var showsLabel = true
     @State private var appeared = Date()
     @State private var details = false
     @State private var visible = false
@@ -165,21 +167,24 @@ struct ChatComposerActivity: View {
                     if theme.radioLog {
                         // Nautical: the vessel's status, as the radar plots it.
                         Text("◆").foregroundStyle(state.waiting ? theme.yellow : theme.accent)
-                        Text(state.waiting ? "calling" : "under way").foregroundStyle(theme.ink)
+                        if showsLabel || state.waiting {
+                            Text(state.waiting ? "calling" : "under way").foregroundStyle(theme.ink)
+                        }
                     } else {
                         ChatComposerOrbit(moving: moving)
-                        ChatComposerStatus(label: state.label, moving: moving)
+                        // Waiting has no time beside it, so its label stays.
+                        if showsLabel || state.waiting { ChatComposerStatus(label: state.label, moving: moving) }
                     }
                     if !state.waiting {
                         TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
-                            Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
-                                                                       reduceMotion: reduceMotion))
+                            Text((showsLabel ? "· " : "") + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
+                                                                                         reduceMotion: reduceMotion))
                                 .monospacedDigit().fixedSize()
                         }
                     }
                 }.foregroundStyle(theme.muted).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("chat-activity-details")
-                .help("Show activity details")
+                .help(showsLabel ? "Show activity details" : "\(state.label) · show activity details")
                 .accessibilityElement(children: .contain)
                 .font(theme.typography.detail).accessibilityIdentifier("chat-working")
                 .onAppear { appeared = .now; visible = true }

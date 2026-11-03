@@ -21,9 +21,12 @@ final class ChatIPadUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    private func launch(_ arguments: [String] = [], keyboard: Bool, environment: [String: String] = [:]) -> XCUIApplication {
+    private func launch(_ arguments: [String] = [], keyboard: Bool, environment: [String: String] = [:],
+                        codeKeys: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = arguments + ["-DispatchHardwareKeyboard", keyboard ? "YES" : "NO"]
+        // The code keys show only once picked under "+"; the cases about them launch with the choice made.
+        if codeKeys { app.launchArguments += ["-composer.codeKeys", "YES"] }
         app.launchEnvironment = environment.merging(["DISPATCH_MOBILE_STORE": "memory"]) { new, _ in new }
         app.launch()
         return app
@@ -66,9 +69,10 @@ final class ChatIPadUITests: XCTestCase {
         return condition()
     }
 
-    /// The thread in the detail column, with the composer focused (a hardware keyboard).
+    /// The thread in the detail column, with the composer focused (a hardware keyboard), the code keys picked: they
+    /// still stay away, the keyboard has them.
     private func openChat() -> (XCUIApplication, XCUIElement) {
-        let app = launch(Self.chatTab, keyboard: true)
+        let app = launch(Self.chatTab, keyboard: true, codeKeys: true)
         let field = composer(app)
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         XCTAssertTrue(eventually { focused(field) }, "the composer takes focus as the tab opens")
@@ -117,11 +121,11 @@ final class ChatIPadUITests: XCTestCase {
     }
 
     /// On a touch iPad the docked software keyboard raises the composer above it, in both orientations, with the
-    /// key row riding on it.
+    /// code keys (picked under "+") riding on it.
     func testTheSoftwareKeyboardNeverCoversTheComposer() {
         for orientation in [UIDeviceOrientation.portrait, .landscapeLeft] {
             XCUIDevice.shared.orientation = orientation
-            let app = launch(Self.chatTab, keyboard: false)
+            let app = launch(Self.chatTab, keyboard: false, codeKeys: true)
             let field = composer(app)
             XCTAssertTrue(field.waitForExistence(timeout: 10))
             field.tap()
@@ -131,6 +135,7 @@ final class ChatIPadUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 1.5)
             XCTAssertLessThanOrEqual(field.frame.maxY, keyboard.frame.minY + 0.5, "\(orientation.rawValue)")
             XCTAssertTrue(app.buttons["Backtick"].exists, "the key row shows on a touch iPad")
+            XCTAssertLessThanOrEqual(app.buttons["Backtick"].frame.maxY, field.frame.minY, "above the field")
             shot("software-keyboard-" + (orientation == .portrait ? "portrait" : "landscape"))
             app.terminate()
         }
@@ -156,7 +161,7 @@ final class ChatIPadUITests: XCTestCase {
     /// terminal's capsule stays: SwiftUI's inset for it had lifted the composer part of the way, under the keyboard.
     /// Docked again, the keyboard raises it.
     func testAFloatingKeyboardLeavesTheComposerAtTheBottom() {
-        let app = launch(Self.chatTab, keyboard: false)
+        let app = launch(Self.chatTab, keyboard: false, codeKeys: true)
         let field = composer(app)
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         Thread.sleep(forTimeInterval: 1)
@@ -166,11 +171,11 @@ final class ChatIPadUITests: XCTestCase {
         addTeardownBlock { @MainActor [self] in if app.state == .runningForeground { setFloating(false, app) } }
         Thread.sleep(forTimeInterval: 1)
         shot("floating-keyboard")
-        // The key row shows under the field while it edits (it rides on a docked keyboard): the two end where the
-        // composer rests.
+        // The code keys show above the field while it edits (picked under "+"): the field stays where the composer
+        // rests, the row over it.
         let keys = app.buttons["Backtick"].frame
-        XCTAssertEqual(keys.maxY, resting.maxY, accuracy: 2, "the key row at the bottom under a floating keyboard")
-        XCTAssertEqual(field.frame.maxY, keys.minY - 8, accuracy: 12, "the field just above it")
+        XCTAssertEqual(field.frame.maxY, resting.maxY, accuracy: 2, "the field at the bottom under a floating keyboard")
+        XCTAssertEqual(keys.maxY, field.frame.minY - 8, accuracy: 12, "the key row just above it")
         setFloating(false, app)
         Thread.sleep(forTimeInterval: 1)
         XCTAssertLessThanOrEqual(field.frame.maxY, app.keyboards.firstMatch.frame.minY + 0.5, "raised by the docked one")

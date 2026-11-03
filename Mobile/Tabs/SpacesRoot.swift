@@ -25,9 +25,15 @@ struct TabsContent {
     var chat: @MainActor (MobileTab, MobilePane) -> AnyView
     /// The Terminal segment's subtitle after the host ("~/src/app · zsh", M6a); nil: the topology's folder and program.
     var terminalSubtitle: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
-    /// The Chat segment's header controls around the host disc (Chat's ⋯ menu and conversation mode's disc), given
-    /// the disc (`keepsDisc`: it is the Duo header's switch, which stays); nil: the disc alone.
+    /// The Terminal segment's folder as the shell reports it (OSC 7), for the phone's "host · folder · shell" (X9b);
+    /// nil: the topology's.
+    var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
+    /// The Chat segment's header controls around the host disc (conversation mode's disc; beside the Duo's switch,
+    /// Chat's ⋯ menu), given the disc (`keepsDisc`: it is the Duo header's switch, which stays; else the tab's menu,
+    /// with `chatMenu` in it); nil: the disc alone.
     var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView, _ keepsDisc: Bool) -> AnyView)? = nil
+    /// The conversation's items in the phone's tab menu (`ChatThreadMenuItems`, X9b).
+    var chatMenu: (@MainActor (MobileTab, MobilePane) -> AnyView)? = nil
     var files = FilesModeContent()
     /// The tabs' repositories and branches (`SpaceGitFacts`); nil reads none.
     var gitFacts: SpaceGitFacts? = nil
@@ -84,7 +90,7 @@ final class SpacesNavigator {
     var newSpace: NewSpaceRequest?
     /// The host whose stats sheet shows (a host disc in the tree, the switcher's host row): `hostStatsSheet(host:)`.
     var statsHost: UUID?
-    /// P3: the space switcher over this tab's screen (its host disc).
+    /// P3: the space switcher over this tab (the iPad strip's space capsule).
     var switcher: TabRef?
     /// What the switcher asked for once it is gone (Rename's and Terminate's dialogs show over the stack, not the sheet).
     @ObservationIgnored var afterSwitcher: (() -> Void)?
@@ -163,7 +169,13 @@ final class SpacesNavigator {
     /// The space whose tab the split's detail column shows (the sidebar marks it).
     var shownSplitSpace: SpaceRef? { splitPath.tab.flatMap { model.tab($0)?.space } }
 
-    /// The tab bar's New in Spaces: a terminal tab in the most recent space, else the space picker.
+    /// The tab bar's New in Spaces: New space, on the host of the most recent space (the form picks the host and the
+    /// multiplexer; Create makes a new space with one shell tab and opens it).
+    func newSpaceFromBar() {
+        newSpace = NewSpaceRequest(host: model.recentSpace?.ref.host)
+    }
+
+    /// ⌘T away from a space: a terminal tab in the most recent space, else the space picker.
     func newTabFromBar() {
         if let space = model.recentSpace { newTab(in: space) } else { picking = true }
     }
@@ -191,11 +203,11 @@ final class SpacesNavigator {
     }
 
     /// The quick menu's entry (holding New space): a space with New space's defaults on that host and multiplexer,
-    /// without the form; its first tab opens in Terminal, as Create's does.
+    /// without the form; it opens as Create's does (`openNewSpace`).
     func quickSpace(_ destination: NewSpaceDestination) {
         guard !creatingSpace.contains(destination.host) else { return }
         Task {
-            do { open(try await makeSpace(destination), terminal: true) } catch {
+            do { openNewSpace(try await makeSpace(destination)) } catch {
                 actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
@@ -210,6 +222,15 @@ final class SpacesNavigator {
         }
         defer { creatingSpace.remove(destination.host) }
         return try await model.createSpace(on: destination.host, name: "", directory: "~", multiplexer: destination.multiplexer)
+    }
+
+    /// A space New space made (the form's Create, the quick menu): the space opens with its one shell tab on top, in
+    /// Terminal, so Back shows the new space's tabs; in the split the tab shows beside the sidebar, which marks the space.
+    func openNewSpace(_ tab: MobileTab) {
+        guard !split else { return open(tab, terminal: true) }
+        model.visited(tab.space)
+        model.segments[tab.ref] = .terminal
+        path.append(contentsOf: [.space(tab.space), .tab(tab.ref)])
     }
 
     /// Pushes a tab's screen; New tab and Create open theirs in Terminal.
@@ -352,7 +373,7 @@ final class SpacesNavigator {
     }
 
     #if DEBUG
-    /// Screenshot launches (`-DispatchTabsSample YES`): `-DispatchTabsShow space:<key>|space-edit:<key>|switcher:<tab key>|tab:<key>|
+    /// Screenshot launches (`-DispatchTabsSample YES`): `-DispatchTabsShow space:<key>|space-edit:<key>|tab:<key>|
     /// detached:<host name>|new-space|pick|edit` opens that screen of the sample; `-DispatchTabsFilter needsYou|agents`,
     /// `-DispatchTabsCollapse <host name>` and `-DispatchTabsOfflineFolded YES` set the tree.
     func screenshotState() {
@@ -377,12 +398,6 @@ final class SpacesNavigator {
             if let id = host(key) {
                 editingSpace = SpaceRef(host: id, key: key)
                 path = [.space(SpaceRef(host: id, key: key))]
-            }
-        case ("switcher", let key?):
-            if let id = host(key) {
-                let ref = TabRef(host: id, key: key)
-                path = [.tab(ref)]
-                switcher = ref
             }
         case ("detached", let name?):
             if let id = model.workspaces.first(where: { $0.host.name == name })?.id { path = [.detached(id)] }
@@ -436,7 +451,6 @@ final class SpacesNavigator {
                 case "filter": model.query.filter = TabsQuery.Filter(rawValue: key) ?? .all
                 case "collapse": if let host { model.toggle(host) }
                 case "space": if let host { path.append(.space(SpaceRef(host: host, key: key))) }
-                case "switcher": if let host { switcher = TabRef(host: host, key: key) }
                 case "tab": if let host { path.append(.tab(TabRef(host: host, key: key))) }
                 case "chat": if let host { openChat(TabRef(host: host, key: key)) }
                 case "pop": if !path.isEmpty { path.removeLast() }
@@ -449,7 +463,7 @@ final class SpacesNavigator {
     }
 
     @ObservationIgnored private var screenshotStateApplied = false
-    /// `-DispatchTabsShow space-edit:<key>`: that space's screen opens in Edit tabs (P2d).
+    /// `-DispatchTabsShow space-edit:<key>`: that space's screen opens in Edit (P2d).
     @ObservationIgnored var editingSpace: SpaceRef?
 
     /// Set by the shell for scripts that switch tabs.
@@ -520,7 +534,7 @@ private struct SpacesPresentations: ViewModifier {
             .sheet(item: $navigator.newSpace) { request in
                 NewSpaceSheet(model: navigator.model, host: request.host, hostViews: hostViews) { tab in
                     navigator.newSpace = nil
-                    navigator.open(tab, terminal: true)
+                    navigator.openNewSpace(tab)
                 }
                 .tint(.dispatchPink)
             }
@@ -919,8 +933,8 @@ struct SpacesHostChip: View {
     }
 }
 
-/// A host's glyph on a 34-point glass disc with its connection dot (green connected, amber on its way, grey offline,
-/// the glyph dimmed): the host's stats (W0). The iPad stream finds it by `spaces-host-<name>`.
+/// A host's glyph on a 34-point glass disc, dimmed while offline, without a connection dot (as the chat bar's host
+/// avatar): the host's stats (W0). The iPad stream finds it by `spaces-host-<name>`.
 struct SpacesHostDisc: View {
     let host: TabsHost
     let action: () -> Void
@@ -940,13 +954,6 @@ struct SpacesHostDisc: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
-        .overlay(alignment: .bottomTrailing) {
-            Circle()
-                .fill(dot)
-                .frame(width: 7, height: 7)
-                .overlay(Circle().stroke(Color.canvas, lineWidth: 1.5))
-                .accessibilityHidden(true)
-        }
         .contentShape(.hoverEffect, Circle())
         .hoverEffect(.highlight)
         .accessibilityLabel("\(host.name) stats")
@@ -958,13 +965,6 @@ struct SpacesHostDisc: View {
         }
     }
 
-    private var dot: Color {
-        switch host.state {
-        case .connected: .stateConnected
-        case .connecting: .stateWorking
-        case .offline: Color.secondary.opacity(0.5)
-        }
-    }
 }
 
 /// A host's section header (P1, M1e): the name, the multiplexer its spaces come from (`SpacesHostChip`) and, folded,

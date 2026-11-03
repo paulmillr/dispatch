@@ -17,6 +17,10 @@ public struct Launch {
     public var argv: [String], env: [String: String]
     /// The command argv execs, with what shell integration added to it (bash's --posix, nu's flags).
     public var command: String
+    /// Ghostty's shell integration was injected (its ZDOTDIR, ENV or XDG_DATA_DIRS entry is in `env`): the shell reads
+    /// the user's startup files through it. False where Ghostty leaves the shell alone (Apple's /bin/bash, an unknown
+    /// shell, `-c`), so whoever starts it keeps its own startup handling.
+    public var integrated: Bool
     /// nil: the caller's working directory.
     public var directory: String?
 
@@ -100,10 +104,12 @@ public struct Launch {
         let named: [(String, Bool)] = [("cursor:blink", s.cursor), ("path", s.path), ("ssh-env", s.sshEnv), ("ssh-terminfo", s.sshTerminfo), ("sudo", s.sudo), ("title", s.title)]
         let features = named.filter(\.1).map(\.0).joined(separator: ",")
         if !features.isEmpty { env["GHOSTTY_SHELL_FEATURES"] = features }
-        let run = try resources.flatMap { try Self.integrate(shell ?? "sh", $0, &env) } ?? shell ?? "sh"
+        let integration = try resources.flatMap { try Self.integrate(shell ?? "sh", $0, &env) }
+        let run = integration ?? shell ?? "sh"
 
         for (k, v) in overrides { env[k] = v }
         self.command = run
+        integrated = integration != nil
         argv = Self.exec(run, pw, home: overrides.last { $0.0 == "HOME" }?.1)
         self.directory = cwd
         if let cwd { env["PWD"] = cwd }
@@ -181,7 +187,7 @@ public struct Launch {
 
     /// The command with the detected shell's integration set up in `env`; nil: no integration.
     static func integrate(_ command: String, _ resources: String, _ env: inout [String: String]) throws -> String? {
-        let args = words(command)
+        let spans = Self.spans(command), args = spans.map(\.word)
         guard let arg0 = args.first else { return nil }
         let integration = resources + "/shell-integration"
         let xdg = { (env: inout [String: String]) -> Bool in
@@ -196,18 +202,19 @@ public struct Launch {
             #if os(macOS)
             if arg0 == "/bin/bash" { return nil }   // Apple's bash 3.2 ignores ENV in POSIX mode
             #endif
-            var out = [arg0, "--posix"], inject = "1", rcfile: String?, rest = args.dropFirst()
-            while let arg = rest.popFirst() {
+            var out = [spans[0].source, "--posix"], inject = "1", rcfile: String?, rest = spans.dropFirst()
+            while let span = rest.popFirst() {
+                let (arg, source) = span
                 if arg == "--posix" { return nil }
                 if arg == "--norc" || arg == "--noprofile" {
                     inject += " " + arg
                     guard inject.utf8.count <= 32 else { throw Failure() }
                     continue
                 }
-                if arg == "--rcfile" || arg == "--init-file" { rcfile = rest.popFirst(); continue }
+                if arg == "--rcfile" || arg == "--init-file" { rcfile = rest.popFirst()?.word; continue }
                 if short(arg), arg.utf8.contains(0x63) { return nil }   // -c: not interactive
-                out.append(arg)
-                if arg == "-" || arg == "--" { out += rest; break }
+                out.append(source)
+                if arg == "-" || arg == "--" { out += rest.map(\.source); break }
             }
             if let old = env["ENV"] { env["GHOSTTY_BASH_ENV"] = old }
             let script = integration + "/bash/ghostty.bash"
@@ -225,12 +232,13 @@ public struct Launch {
             return command
         case "nu":
             guard xdg(&env) else { return nil }
-            var out = [arg0, "--execute 'use ghostty *'"], rest = args.dropFirst()
-            while let arg = rest.popFirst() {
+            var out = [spans[0].source, "--execute 'use ghostty *'"], rest = spans.dropFirst()
+            while let span = rest.popFirst() {
+                let (arg, source) = span
                 if arg == "--command" || arg == "--lsp" { return nil }
                 if short(arg), arg.utf8.contains(0x63) { return nil }
-                out.append(arg)
-                if arg == "-" || arg == "--" { out += rest; break }
+                out.append(source)
+                if arg == "-" || arg == "--" { out += rest.map(\.source); break }
             }
             return join(out)
         case "elvish", "fish": return xdg(&env) ? command : nil
@@ -241,19 +249,25 @@ public struct Launch {
     /// A short option (or a bundle of them): `-x`, not `-` or `--x`.
     static func short(_ arg: String) -> Bool { arg.utf8.count > 1 && arg.hasPrefix("-") && !arg.hasPrefix("--") }
 
-    /// ShellCommandBuilder: non-empty arguments joined by spaces, unquoted.
+    /// ShellCommandBuilder: non-empty arguments joined by spaces. Each is the text it had in the command (Ghostty
+    /// joins the parsed words), so a quoted word such as `"/some dir/bash"` stays one word for the shell that runs the
+    /// command (`exec`'s bash or sh `-c`) and plain words keep their `$VAR`, `~` and globs, as Ghostty's do.
     static func join(_ args: [String]) -> String { args.filter { !$0.isEmpty }.joined(separator: " ") }
 
     /// Command.argIterator for a shell command: zig's IteratorGeneral(.{}): blanks split, double
     /// quotes group, backslashes are literal except before a quote (2n: n and the quote toggles;
     /// 2n+1: n and a literal quote); a NUL ends the line.
-    static func words(_ line: String) -> [String] {
+    public static func words(_ line: String) -> [String] { spans(line).map(\.word) }
+
+    /// `words` with the text each word had in the line.
+    static func spans(_ line: String) -> [(word: String, source: String)] {
         let b = Array(line.utf8.prefix { $0 != 0 })
         let blank = { (c: UInt8) in c == 0x20 || c == 0x09 || c == 0x0D || c == 0x0A }
-        var out: [String] = [], i = 0
+        var out: [(word: String, source: String)] = [], i = 0
         while true {
             while i < b.count, blank(b[i]) { i += 1 }
             guard i < b.count else { return out }
+            let start = i
             var word: [UInt8] = [], slashes = 0, quoted = false
             while i < b.count, quoted || !blank(b[i]) {
                 let c = b[i]
@@ -264,7 +278,7 @@ public struct Launch {
                 slashes = 0
             }
             word += repeatElement(0x5C, count: slashes)
-            out.append(String(decoding: word, as: UTF8.self))
+            out.append((String(decoding: word, as: UTF8.self), String(decoding: b[start..<i], as: UTF8.self)))
         }
     }
 

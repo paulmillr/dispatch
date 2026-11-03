@@ -44,12 +44,31 @@ final class ChatRedesignTests: XCTestCase {
         return chat
     }
 
-    // MARK: S6 footnote
+    // MARK: S6d corner
 
-    func testTheFootnoteSumsTheTurnsStepsTimeAndChangedFiles() async throws {
+    /// A calendar with fixed zone and locale (no wall clock, no device settings).
+    private static func calendar(_ locale: String) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.locale = Locale(identifier: locale)
+        return calendar
+    }
+
+    /// 2026-10-29 (a Thursday) at `hour`:`minute` UTC, `days` later.
+    private static func date(days: Int = 0, hour: Int, minute: Int, year: Int = 2026, month: Int = 10, day: Int = 29) -> Date {
+        calendar("en_GB").date(from: DateComponents(year: year, month: month, day: day + days, hour: hour, minute: minute))!
+    }
+
+    func testTheCornerSaysWhatTheTurnChangedAndWhenItEnded() async throws {
         let chat = try await opened(helper(), records: ChatFixture.records("claude-thread"))
         let summaries = chat.transcript.rows.compactMap(\.kind.summary)
-        XCTAssertEqual(summaries.compactMap(\.footnote), ["5 steps in 1m 26s · 1 file +2 −1", "4 steps in 52s · 2 files +4 −4"])
+        let gb = Self.calendar("en_GB")
+        // The fixture's turns end on 2000-01-01 at 09:31:26 and 09:32:52 UTC.
+        let now = gb.date(from: DateComponents(year: 2000, month: 1, day: 1, hour: 18))!
+        XCTAssertEqual(summaries.map { $0.corner(now: now, calendar: gb) }, ["idempotent.ts +2 −1 · 09:31", "2 files +4 −4 · 09:32"],
+                       "One file by its name, several by their count")
+        XCTAssertEqual(summaries.map { $0.spokenCorner(now: now, calendar: gb) },
+                       ["idempotent.ts, 2 added, 1 removed, 09:31", "2 files, 4 added, 4 removed, 09:32"])
         XCTAssertEqual(summaries.last?.files, ["/work/app/src/lib/idempotent.ts", "/work/app/src/routes/invoices.ts"],
                        "Distinct paths, in the order first touched")
         XCTAssertEqual(summaries.last?.additions, 4)
@@ -58,12 +77,57 @@ final class ChatRedesignTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.caption), ["5 steps · 1m 26s", "4 steps · 52s"], "Message details keep their heading")
     }
 
-    func testTheFootnoteSaysWhatItKnows() {
-        XCTAssertEqual(ChatTurnSummary(steps: [], duration: 3).footnote, "3s")
-        XCTAssertNil(ChatTurnSummary(steps: [], duration: nil).footnote)
+    func testTheCornerSaysWhatItKnows() {
+        let gb = Self.calendar("en_GB"), now = Self.date(hour: 15, minute: 0), ended = Self.date(hour: 10, minute: 17)
         let tool = ChatItem(id: "t", kind: .tool, text: "{}", title: "Bash")
-        XCTAssertEqual(ChatTurnSummary(steps: [tool], duration: nil).footnote, "1 step")
-        XCTAssertEqual(ChatTurnSummary(steps: [tool, tool], duration: 52).footnote, "2 steps in 52s")
+        XCTAssertNil(ChatTurnSummary(steps: [], duration: 3, ended: ended).corner(now: now, calendar: gb), "a plain answer")
+        XCTAssertNil(ChatTurnSummary(steps: [tool, tool], duration: 52, ended: ended).corner(now: now, calendar: gb),
+                     "two steps that changed nothing are still a plain answer")
+        XCTAssertEqual(ChatTurnSummary(steps: [tool, tool, tool], duration: 52, ended: ended).corner(now: now, calendar: gb),
+                       "3 steps · 10:17")
+        XCTAssertEqual(ChatTurnSummary(steps: Array(repeating: tool, count: 40), duration: nil, ended: ended).corner(now: now, calendar: gb),
+                       "40 steps · 10:17", "the duration leaves the thread")
+        XCTAssertEqual(ChatTurnSummary(steps: [tool, tool, tool], duration: nil).corner(now: now, calendar: gb), "3 steps",
+                       "no end time: no time")
+
+        var many = ChatTurnSummary(steps: [tool], duration: 300, ended: ended)
+        many.files = (1...14).map { "/work/app/src/file\($0).ts" }
+        many.additions = 1_204
+        many.deletions = 380
+        XCTAssertEqual(many.corner(now: now, calendar: gb), "14 files +1,204 −380 · 10:17", "grouped digits")
+        XCTAssertEqual(many.spokenCorner(now: now, calendar: gb), "14 files, 1,204 added, 380 removed, 10:17")
+        var one = ChatTurnSummary(steps: [tool], duration: 300)
+        one.files = ["/work/app/src/lib/idempotent.ts"]
+        one.additions = 38
+        one.deletions = 4
+        XCTAssertEqual(one.corner(now: now, calendar: gb), "idempotent.ts +38 −4", "a single step that changed a file counts")
+    }
+
+    func testTheCornersTimeIsTheDayAsAMessengerSaysIt() {
+        let gb = Self.calendar("en_GB"), us = Self.calendar("en_US"), now = Self.date(hour: 15, minute: 0)
+        let tool = ChatItem(id: "t", kind: .tool, text: "{}", title: "Bash")
+        func corner(_ ended: Date, _ calendar: Calendar) -> String? {
+            ChatTurnSummary(steps: [tool, tool, tool], duration: nil, ended: ended).corner(now: now, calendar: calendar)
+        }
+        XCTAssertEqual(corner(Self.date(hour: 10, minute: 17), gb), "3 steps · 10:17", "today: the time alone")
+        let twelveHour = corner(Self.date(hour: 10, minute: 17), us)
+        XCTAssertTrue(twelveHour?.hasPrefix("3 steps · 10:17") == true && twelveHour?.hasSuffix("AM") == true,
+                      "the locale's short time: \(twelveHour ?? "nil")")
+        XCTAssertEqual(corner(Self.date(hour: 0, minute: 5), gb), "3 steps · 00:05", "just after midnight is today")
+        XCTAssertEqual(corner(Self.date(days: -1, hour: 23, minute: 59), gb), "3 steps · Yesterday 23:59")
+        XCTAssertEqual(corner(Self.date(days: -1, hour: 10, minute: 17), gb), "3 steps · Yesterday 10:17")
+        XCTAssertEqual(corner(Self.date(days: -2, hour: 10, minute: 17), gb), "3 steps · Tue 10:17", "within a week: the weekday")
+        XCTAssertEqual(corner(Self.date(days: -6, hour: 10, minute: 17), gb), "3 steps · Fri 10:17")
+        XCTAssertEqual(corner(Self.date(days: -7, hour: 10, minute: 17), us), "3 steps · Oct 22", "older: the date")
+        XCTAssertEqual(corner(Self.date(hour: 10, minute: 17, year: 2025, month: 10, day: 12), us), "3 steps · Oct 12, 2025",
+                       "another year names it")
+        XCTAssertEqual(corner(Self.date(days: 1, hour: 10, minute: 17), us), "3 steps · Oct 30",
+                       "a clock a day ahead of the phone's: the date, never a negative day")
+        let late = Self.date(hour: 23, minute: 58)
+        let ahead = ChatTurnSummary(steps: [tool, tool, tool], duration: nil, ended: Self.date(days: 1, hour: 0, minute: 3))
+        XCTAssertEqual(ahead.corner(now: late, calendar: gb), "3 steps · 00:03", "a host's clock minutes ahead past midnight: today")
+        let german = corner(Self.date(days: -1, hour: 10, minute: 17), Self.calendar("de_DE"))
+        XCTAssertEqual(german?.lowercased(), "3 steps · gestern 10:17", "the locale's word for yesterday")
     }
 
     func testATurnThatOnlyReadSaysWhatItRead() throws {
@@ -76,7 +140,28 @@ final class ChatRedesignTests: XCTestCase {
         } + [ChatFixture.record("a", "assistant", turn: "s1", text: "The route handler runs first.", time: 13_000),
              ChatFixture.record("e", "turn_ended", turn: "s1", time: 13_000)]
         transcript.apply(try records.map(Self.record), historical: true)
-        XCTAssertEqual(transcript.rows.last?.kind.summary?.footnote, "Read 3 files · 12s")
+        let gb = Self.calendar("en_GB")
+        let now = gb.date(from: DateComponents(year: 1970, month: 1, day: 1, hour: 12))!
+        XCTAssertEqual(transcript.rows.last?.kind.summary?.corner(now: now, calendar: gb), "Read 3 files · 00:00")
+        XCTAssertEqual(transcript.rows.last?.kind.summary?.caption, "3 steps · 12s")
+    }
+
+    func testATurnReadWithoutTimesHasACornerWithoutTime() throws {
+        var transcript = MobileTranscript()
+        let tools = try ChatFixture.records("claude-thread").filter { ["tool-c1", "tool-d1", "tool-d2"].contains($0["id"] as? String) }
+            .map { record in
+                var record = record
+                record["turn"] = "t1"
+                record["time_ms"] = NSNull()
+                return record
+            }
+        transcript.apply(try ([ChatFixture.record("s", "turn_started", turn: "t1"),
+                               ChatFixture.record("u", "user", turn: "t1", text: "hi")] + tools
+                              + [ChatFixture.record("a", "assistant", turn: "t1", text: "hello"),
+                                 ChatFixture.record("e", "turn_ended", turn: "t1")]).map(Self.record), historical: true)
+        let summary = try XCTUnwrap(transcript.rows.last?.kind.summary)
+        XCTAssertNil(summary.ended, "the epoch a timeless record reads as is no end time")
+        XCTAssertEqual(summary.corner(now: Self.date(hour: 15, minute: 0), calendar: Self.calendar("en_GB")), "Read 3 files")
     }
 
     private static func record(_ value: [String: Any]) throws -> HelperChat.Record {
@@ -557,4 +642,413 @@ final class ChatRedesignTests: XCTestCase {
     func speak(_ text: String, finished: @escaping @MainActor () -> Void) { spoken.append(text); self.finished = finished }
     func stop() { finish() }
     func finish() { let finished = finished; self.finished = nil; finished?() }
+}
+
+/// S6d: the turn's summary sits in its last bubble's corner, where messengers put a message's time, and the text keeps
+/// its room; Claude's thinking is an agent bubble of its own.
+extension ChatRedesignTests {
+    func testTheSummarySitsInTheReplysCornerAndThinkingIsABubble() async throws {
+        var records = try ChatFixture.records("claude-thread")
+        let question = try XCTUnwrap(records.firstIndex { $0["kind"] as? String == "user" })
+        let thought = "Checking how retries reach the handler."
+        var thinking = ChatFixture.record("claude-thinking-1", "reasoning", turn: try XCTUnwrap(records[question]["turn"] as? String),
+                                          text: thought, time: (records[question]["time_ms"] as? Int64).map { $0 + 1 })
+        thinking["inline_reasoning"] = true
+        records.insert(thinking, at: question + 1)
+        let chat = try await opened(helper(), records: records)
+        XCTAssertTrue(chat.transcript.rows.contains { $0.kind == .thinking && $0.item.text == thought })
+        let summary = try XCTUnwrap(chat.transcript.rows.compactMap(\.kind.summary).first)
+        let spoken = try XCTUnwrap(summary.spokenCorner(now: Date(), calendar: .autoupdatingCurrent))
+
+        AccessibilityLabelTests.enableAccessibility()
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 2600)
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            ChatThreadView(session: chat, space: "app", directory: "/work/app", startsAtTop: true)
+        }.environment(\.colorScheme, .dark))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        var elements: [NSObject] = []
+        try await TestSupport.eventually(diagnostic: "\(elements.compactMap(\.accessibilityLabel))") {
+            elements = AccessibilityLabelTests.elements(in: window)
+            return elements.contains { $0.accessibilityLabel?.hasPrefix("Stripe retries the same event") == true && $0.accessibilityValue == spoken }
+                && elements.contains { $0.accessibilityLabel == thought }
+        }
+        let reply = try XCTUnwrap(elements.first { $0.accessibilityLabel?.hasPrefix("Stripe retries the same event") == true })
+        let label = try XCTUnwrap(reply.accessibilityLabel)
+        XCTAssertFalse(label.contains("idempotent") || label.contains("\u{2060}") || label.hasSuffix(" "),
+                       "the text alone, the corner's room is not read: \(label)")
+        XCTAssertEqual(reply.accessibilityValue, spoken, "the corner is the reply's value")
+        XCTAssertEqual(reply.accessibilityHint, "Shows the steps")
+        XCTAssertFalse(elements.contains { $0.accessibilityLabel?.contains("+2 −1") == true }, "no element of its own")
+        XCTAssertFalse(elements.contains { $0.accessibilityLabel == thought && $0.accessibilityValue?.isEmpty == false },
+                       "thinking has no corner")
+
+        // The thinking's text sits on an agent bubble: the bubble's grey shows in its padding, left of the text.
+        let text = try XCTUnwrap(elements.first { $0.accessibilityLabel == thought }).accessibilityFrame
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let probe = CGPoint(x: text.minX - 7, y: text.midY)
+        let canvas = UIColor(Color.canvas).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        XCTAssertNotEqual(Self.pixel(image, at: probe), Self.rgb(canvas), "a bubble behind the thinking, not the canvas")
+    }
+
+    /// The 0...255 channels of `image` at `point`.
+    private static func pixel(_ image: UIImage, at point: CGPoint) -> [Int] {
+        let cg = image.cgImage!
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(cg, in: CGRect(x: -point.x * image.scale, y: -(CGFloat(cg.height) - point.y * image.scale),
+                                    width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        return pixel.prefix(3).map(Int.init)
+    }
+
+    private static func rgb(_ color: UIColor) -> [Int] {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return [red, green, blue].map { Int(($0 * 255).rounded()) }
+    }
+}
+
+/// S6d's layout: the corner shares the last line when it leaves room, else takes a short line of its own; after code,
+/// a table, a rule or a cut preview, beside text running the other way, or when it is too wide for a line, it takes
+/// trailing lines of its own. The search never sees the room.
+extension ChatRedesignTests {
+    /// A summary corner as the thread builds it, at `size` in a `width` point column.
+    static func summaryCorner(_ text: String, width: CGFloat = 370, size: DynamicTypeSize = .large) -> ChatCorner {
+        let metrics = ChatCornerMetrics(column: width, measure: ChatMeasure.standard, size: size)
+        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+                          spoken: text)
+    }
+
+    /// The agent bubble's size in a `width` point column, with `corner` in its corner.
+    static func bubbleSize(_ text: String, corner: String?, width: CGFloat = 370, size: DynamicTypeSize = .large,
+                           direction: LayoutDirection = .leftToRight) -> CGSize {
+        let bubble = ChatBubble(side: .agent) {
+            MobileChatMarkdownView(text: text, corner: corner.map { summaryCorner($0, width: width, size: size) })
+        }
+        .environment(\.chatColumnWidth, width)
+        .environment(\.dynamicTypeSize, size)
+        .environment(\.layoutDirection, direction)
+        let host = UIHostingController(rootView: bubble)
+        return host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
+    }
+
+    func testTheCornerSharesTheLastLineOrTakesAShortLineOfItsOwn() {
+        let corner = "3 files +127 −22 · 10:17"
+        let short = "Done, tests pass."
+        let line = Self.bubbleSize(short, corner: nil).height
+        XCTAssertEqual(Self.bubbleSize(short, corner: corner).height, line, accuracy: 0.5, "one line, the corner on it")
+
+        let twoLines = "Right, the invoice.paid path has its own handler and bypasses the guard. Both routes get it."
+        let two = Self.bubbleSize(twoLines, corner: nil).height
+        XCTAssertGreaterThan(two, line + 10)
+        XCTAssertEqual(Self.bubbleSize(twoLines, corner: corner).height, two, accuracy: 0.5, "a short last line keeps the corner")
+
+        // The longest text that still fits one line: the corner cannot share it.
+        var full = "Moving"
+        for word in String(repeating: "the check into shared middleware ", count: 4).split(separator: " ") {
+            let longer = full + " " + word
+            if Self.bubbleSize(longer, corner: nil).height > line + 0.5 { break }
+            full = longer
+        }
+        let wrapped = Self.bubbleSize(full, corner: corner).height
+        XCTAssertGreaterThan(wrapped, line + 5, "a full last line: the corner wraps to a line of its own")
+        XCTAssertLessThan(wrapped, two, "a short line, the corner's height, not a line of text")
+    }
+
+    func testAfterCodeATableOrARuleTheCornerTakesALineOfItsOwn() {
+        let corner = "3 files +127 −22 · 10:17"
+        for text in ["Run this:\n\n```sh\npnpm test billing\n```", "| file | lines |\n|---|---|\n| a.ts | 3 |", "Done.\n\n---"] {
+            let plain = Self.bubbleSize(text, corner: nil).height
+            let after = Self.bubbleSize(text, corner: corner).height
+            XCTAssertGreaterThan(after, plain + 5, "a line of its own after: \(text)")
+            XCTAssertLessThan(after, plain + 30, text)
+        }
+        let fits = Self.summaryCorner(corner)
+        var marker = ChatSearchMarker(query: "", current: nil)
+        let blocks = MobileChatMarkdownView.contents("Done.", marker: &marker).blocks
+        XCTAssertTrue(MobileChatMarkdownView.sharesLine(fits, blocks: blocks, truncated: false, layout: .leftToRight))
+        XCTAssertFalse(MobileChatMarkdownView.sharesLine(fits, blocks: blocks, truncated: true, layout: .leftToRight),
+                       "after a cut preview's note")
+    }
+
+    func testALongFileNameIsShortenedAndALargeTextCornerWrapsInsideTheBubble() {
+        let tool = ChatItem(id: "t", kind: .tool, text: "{}", title: "Bash")
+        var summary = ChatTurnSummary(steps: [tool], duration: 300, ended: Self.date(days: -1, hour: 10, minute: 17))
+        summary.files = ["/work/app/src/routes/PaymentWebhookIdempotencyMiddleware.test.ts"]
+        summary.additions = 38
+        summary.deletions = 4
+        let gb = Self.calendar("en_GB"), now = Self.date(hour: 15, minute: 0)
+        XCTAssertEqual(summary.corner(now: now, calendar: gb), "PaymentWebhookIdempotencyMiddleware.test.ts +38 −4 · Yesterday 10:17")
+        let metrics = ChatCornerMetrics(column: 370, measure: ChatMeasure.standard, size: .large)
+        let short = try? XCTUnwrap(summary.corner(now: now, calendar: gb, fits: metrics.fits))
+        XCTAssertTrue(short?.contains("…") == true && short?.hasSuffix(".ts +38 −4 · Yesterday 10:17") == true
+                      && short?.hasPrefix("Payment") == true, "the name's middle goes, counts and time stay: \(short ?? "")")
+        XCTAssertTrue(metrics.fits(short ?? ""))
+        let drawn = UIHostingController(rootView: ChatTurnCorner(text: short ?? "")).sizeThatFits(in: CGSize(width: 1000, height: 100)).width
+        XCTAssertLessThanOrEqual(drawn, metrics.column, "never wider than the bubble's text")
+
+        // The largest text size: no name to shorten, too wide for a line; it wraps on lines of its own inside the bubble.
+        let many = "14 files +1,204 −380 · Yesterday 10:17"
+        XCTAssertFalse(Self.summaryCorner(many, size: .accessibility5).fits)
+        let plain = Self.bubbleSize("Done.", corner: nil, size: .accessibility5)
+        let wrapped = Self.bubbleSize("Done.", corner: many, size: .accessibility5)
+        XCTAssertLessThanOrEqual(wrapped.width, 370)
+        XCTAssertGreaterThan(wrapped.height, plain.height * 2, "the corner's own lines under the text: \(plain) \(wrapped)")
+    }
+
+    func testTextRunningAgainstTheLayoutGivesTheCornerALineOfItsOwn() {
+        XCTAssertEqual(MobileChatMarkdownView.direction(of: "שלום, הבדיקה עברה."), .rightToLeft)
+        XCTAssertEqual(MobileChatMarkdownView.direction(of: "42 — تم."), .rightToLeft, "digits and dashes are not letters")
+        XCTAssertEqual(MobileChatMarkdownView.direction(of: "Done, שלום."), .leftToRight)
+        XCTAssertNil(MobileChatMarkdownView.direction(of: "42 + 7"))
+        let corner = "3 files +127 −22 · 10:17"
+        let hebrew = "הבדיקה עברה."
+        let line = Self.bubbleSize(hebrew, corner: nil).height
+        XCTAssertGreaterThan(Self.bubbleSize(hebrew, corner: corner).height, line + 5,
+                             "a right-to-left reply in a left-to-right thread: the corner never overdraws its end")
+        XCTAssertEqual(Self.bubbleSize(hebrew, corner: corner, direction: .rightToLeft).height,
+                       Self.bubbleSize(hebrew, corner: nil, direction: .rightToLeft).height, accuracy: 0.5,
+                       "running the layout's way it shares the line")
+        let english = "Done, tests pass."
+        XCTAssertGreaterThan(Self.bubbleSize(english, corner: corner, direction: .rightToLeft).height,
+                             Self.bubbleSize(english, corner: nil, direction: .rightToLeft).height + 5, "and the mirror case")
+    }
+
+    func testTheSearchNeverMarksTheCornersRoom() throws {
+        var marker = ChatSearchMarker(query: "files", current: 0)
+        let blocks = MobileChatMarkdownView.contents("Checked 3 files.", marker: &marker).blocks
+        XCTAssertEqual(marker.count, 1)
+        guard case .text(_, let text)? = blocks.last else { return XCTFail("a paragraph") }
+        let joined = MobileChatMarkdownView.joined(text, room: "3 files +2 −1 · 10:17")
+        let marked = joined.runs.filter { $0.backgroundColor != nil }.map { String(joined[$0.range].characters) }
+        XCTAssertEqual(marked, ["files"], "the text's match only, not the room's")
+        let room = try XCTUnwrap(joined.runs.last)
+        XCTAssertNil(room.backgroundColor)
+        XCTAssertEqual(room.foregroundColor, .clear)
+        XCTAssertTrue(String(joined.characters).hasPrefix("Checked 3 files."))
+    }
+}
+
+/// S6e: while the turn runs and has agent text, its newest bubble's corner carries the spinner, step and time and the
+/// working row stays away; at the turn's end the corner settles into the summary in the same update, the bubble where
+/// it was. State and records arrive apart, in either order: no state in between shows (a blank corner, the working
+/// row back), checked at every turn of the main loop. The hold that rides that out (`chatSettle`) is set per test, so
+/// no check depends on the wall clock.
+extension ChatRedesignTests {
+    /// The thread in a window, the fixture's second turn still open: its steps in, `answered` with its answer.
+    private func openTurnThread(answered: Bool, busy: Bool = true, hold: TimeInterval = 600, expandSteps: Bool = false)
+        async throws -> (MobileChatSession, ScriptedHelper, UInt64, UIWindow) {
+        let helper = helper()
+        let records = try ChatFixture.records("claude-thread").filter {
+            $0["id"] as? String != "f2:ended" && (answered || $0["id"] as? String != "claude-f2-0")
+        }
+        let chat = try await opened(helper, records: records, state: ChatFixture.state(busy: busy))
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        try await TestSupport.eventually { chat.working == busy && chat.transcript.openTurn != nil }
+        AccessibilityLabelTests.enableAccessibility()
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 1400)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            ChatThreadView(session: chat, space: "app", directory: "/work/app", expandSteps: expandSteps)
+        }.environment(\.chatSettle, hold))
+        window.isHidden = false
+        return (chat, helper, id, window)
+    }
+
+    /// What the thread shows of the open turn: the answer's corner as VoiceOver reads it, its frame, the working row.
+    private struct Shown: Equatable {
+        var corner: String?
+        var frame: CGRect?
+        var workingRow: Bool
+        var hint: String? = nil
+    }
+
+    private func shown(_ window: UIWindow) -> Shown {
+        let elements = AccessibilityLabelTests.elements(in: window)
+        let reply = elements.first { $0.accessibilityLabel?.hasPrefix("Right, the invoice.paid path") == true }
+        return Shown(corner: reply?.accessibilityValue, frame: reply?.accessibilityFrame,
+                     workingRow: elements.contains { $0.accessibilityLabel?.contains(" is thinking") == true },
+                     hint: reply?.accessibilityHint)
+    }
+
+    /// Samples the thread at every turn of the main loop until `done`, returning each state seen.
+    private func sample(_ window: UIWindow, until done: (Shown) -> Bool) async throws -> [Shown] {
+        var seen: [Shown] = []
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            let now = shown(window)
+            if seen.last != now { seen.append(now) }
+            if done(now) { return seen }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTFail("never settled: \(seen)")
+        return seen
+    }
+
+    /// The states seen over `duration`, sampled at every turn of the main loop.
+    private func sample(_ window: UIWindow, for duration: Duration) async throws -> [Shown] {
+        var seen: [Shown] = []
+        let clock = ContinuousClock(), end = clock.now + duration
+        while clock.now < end {
+            let now = shown(window)
+            if seen.last != now { seen.append(now) }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        return seen
+    }
+
+    private func end(_ helper: ScriptedHelper, _ id: UInt64) {
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
+            ChatFixture.record("f2:ended", "turn_ended", turn: "p2", time: 946_719_172_000)]])
+    }
+
+    private func state(_ helper: ScriptedHelper, _ id: UInt64, busy: Bool) {
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: busy)])
+    }
+
+    func testTheWorkingRowGivesWayToTheBubblesCornerWhichSettlesIntoTheSummary() async throws {
+        let (chat, helper, id, window) = try await openTurnThread(answered: false)
+        defer { window.isHidden = true }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
+
+        // The answer arrives: the row goes and the corner takes the work, at once.
+        let answer = try XCTUnwrap(ChatFixture.records("claude-thread").first { $0["id"] as? String == "claude-f2-0" })
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [answer]])
+        let working = "working, step 4"
+        var seen = try await sample(window) { $0.corner == working }
+        XCTAssertFalse(seen.contains { $0.corner != nil && $0.workingRow }, "the row and the corner never both: \(seen)")
+        let frame = try XCTUnwrap(seen.last?.frame)
+        XCTAssertEqual(seen.last?.hint, "Shows the steps")
+        XCTAssertNotNil(chat.transcript.progressRow)
+
+        // The state says idle before the turn's end comes: the corner keeps its progress all through the hold.
+        state(helper, id, busy: false)
+        try await TestSupport.eventually { !chat.working }
+        seen = try await sample(window, for: .milliseconds(1_000))
+        XCTAssertEqual(Set(seen.map(\.corner)), [working], "no blank corner while the end is on its way: \(seen)")
+        XCTAssertFalse(seen.contains { $0.workingRow || $0.frame != frame }, "\(seen)")
+
+        end(helper, id)
+        seen = try await sample(window) { $0.corner != working }
+        let summary = try XCTUnwrap(chat.transcript.rows.compactMap(\.kind.summary).last?.spokenCorner(now: Date(), calendar: .autoupdatingCurrent))
+        XCTAssertEqual(seen.map(\.corner), [working, summary], "straight from the progress to the summary")
+        XCTAssertFalse(seen.contains { $0.workingRow })
+        let settled = try XCTUnwrap(seen.last?.frame)
+        XCTAssertEqual(settled, frame, "the bubble stays where it was, its height too: the room held the summary already")
+    }
+
+    func testATurnsEndBeforeTheIdleStateNeverBringsTheWorkingRowBack() async throws {
+        let (chat, helper, id, window) = try await openTurnThread(answered: true)
+        defer { window.isHidden = true }
+        let working = "working, step 4"
+        _ = try await sample(window) { $0.corner == working }
+        end(helper, id)
+        try await TestSupport.eventually { chat.transcript.openTurn == nil }
+        XCTAssertTrue(chat.working, "the state still says busy")
+        let seen = try await sample(window, for: .milliseconds(1_000))
+        XCTAssertFalse(seen.contains { $0.workingRow }, "the working row stays away while the idle state is on its way: \(seen)")
+        state(helper, id, busy: false)
+        try await TestSupport.eventually { !chat.working }
+        XCTAssertFalse(shown(window).workingRow)
+    }
+
+    func testTheHeldWorkingRowReturnsWhenTheHoldEndsOrNewWorkStarts() async throws {
+        // A short hold: the busy state that ran through the turn's end outlives it (a subagent still working).
+        let (chat, helper, id, window) = try await openTurnThread(answered: true, hold: 0.3)
+        defer { window.isHidden = true }
+        _ = try await sample(window) { $0.corner == "working, step 4" }
+        end(helper, id)
+        try await TestSupport.eventually { chat.transcript.openTurn == nil }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
+
+        // A long hold: another device's prompt makes the agent busy again before its turn starts; the row shows at once.
+        let (other, otherHelper, otherID, otherWindow) = try await openTurnThread(answered: true)
+        defer { otherWindow.isHidden = true }
+        _ = try await sample(otherWindow) { $0.corner == "working, step 4" }
+        end(otherHelper, otherID)
+        state(otherHelper, otherID, busy: false)
+        try await TestSupport.eventually { !other.working && other.transcript.openTurn == nil }
+        XCTAssertFalse(shown(otherWindow).workingRow)
+        state(otherHelper, otherID, busy: true)
+        try await TestSupport.eventually { other.working }
+        try await TestSupport.eventually(diagnostic: "\(shown(otherWindow))") { self.shown(otherWindow).workingRow }
+    }
+
+    func testAnUnfoldedStepListStaysAndWaitingSaysForWhat() async throws {
+        let (chat, helper, id, window) = try await openTurnThread(answered: false, expandSteps: true)
+        defer { window.isHidden = true }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).workingRow }
+        let answer = try XCTUnwrap(ChatFixture.records("claude-thread").first { $0["id"] as? String == "claude-f2-0" })
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [answer]])
+        let seen = try await sample(window) { $0.corner == "working, step 4" }
+        XCTAssertTrue(seen.last?.workingRow == true, "the unfolded step list (M5f) stays readable beside the corner")
+
+        helper.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval()])
+        try await TestSupport.eventually { chat.waitingForUser }
+        let waiting = try await sample(window) { $0.corner?.hasPrefix("waiting for your") == true }
+        XCTAssertTrue(waiting.last?.corner?.hasSuffix(", step 4") == true, "\(waiting)")
+        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: ChatTurnProgressCorner.word("waiting for your approval")),
+                       "step 4 · approve")
+        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: ChatTurnProgressCorner.word("waiting for your answer")),
+                       "step 4 · answer")
+        XCTAssertEqual(ChatTurnProgressCorner.spoken(steps: 4, waiting: "waiting for your answer"), "waiting for your answer, step 4")
+    }
+
+    func testAnOpenTurnWhoseAgentStoppedKeepsItsRoomButSaysNothing() async throws {
+        // A turn left open (interrupted, its end never written) by an agent that is idle.
+        let (_, _, _, window) = try await openTurnThread(answered: true, busy: false)
+        defer { window.isHidden = true }
+        try await TestSupport.eventually(diagnostic: "\(shown(window))") { self.shown(window).frame != nil }
+        let seen = try await sample(window, for: .milliseconds(300))
+        XCTAssertEqual(seen.last?.corner ?? "", "", "no value: \(seen)")
+        XCTAssertEqual(seen.last?.hint ?? "", "", "no hint without a corner")
+        XCTAssertFalse(seen.contains { $0.workingRow })
+    }
+
+    func testTheProgressRoomHoldsTheWidestCornerOfTheFirstHourAndTheSummary() {
+        func width<V: View>(_ view: V) -> CGFloat {
+            UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 1000, height: 100)).width
+        }
+        let room = width(Text(ChatTurnCorner.room(ChatTurnProgressCorner.room(steps: 4))).fixedSize())
+        let gap = width(Text(ChatTurnCorner.room("x")).fixedSize()) - width(ChatTurnCorner(text: "x"))
+        let widest = width(ChatTurnProgressCorner(steps: 999, since: Date().addingTimeInterval(-3_599)))
+        XCTAssertGreaterThanOrEqual(room - gap, widest, "room \(room), gap \(gap), corner \(widest)")
+        XCTAssertEqual(ChatTurnProgressCorner.room(steps: 4), ChatTurnProgressCorner.room(steps: 120), "three digits held from the start")
+        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 4, elapsed: "38s"), "step 4 · 38s")
+        XCTAssertEqual(ChatTurnProgressCorner.label(steps: 0, elapsed: "3s"), "3s", "the time alone before the first step")
+        XCTAssertEqual(ChatTurnProgressCorner.spoken(steps: 4, waiting: nil), "working, step 4")
+        let metrics = ChatCornerMetrics(column: 370, measure: ChatMeasure.standard, size: .large)
+        let summary = "PaymentWebhook.ts +1,204 −380 · 10:17"
+        XCTAssertEqual(metrics.wider(ChatTurnProgressCorner.room(steps: 4), summary), summary, "a wider summary sets the room")
+        XCTAssertEqual(metrics.wider("Read 3 files · 1:04", ChatTurnProgressCorner.room(steps: 4)), ChatTurnProgressCorner.room(steps: 4),
+                       "a narrower summary keeps the progress's room")
+    }
+
+    func testWithReduceMotionTheSpinnerIsAStillDiamond() throws {
+        func image(_ reduceMotion: Bool) -> UIImage? {
+            let renderer = ImageRenderer(content: ChatTurnProgressCorner(steps: 4, since: Date())
+                .environment(\.reduceMotionOverride, reduceMotion).padding(4).background(Color.white))
+            renderer.scale = 2
+            return renderer.uiImage
+        }
+        func pink(_ image: UIImage?) -> Bool {
+            guard let cg = image?.cgImage else { return false }
+            var bytes = [UInt8](repeating: 0, count: cg.width * cg.height * 4)
+            let context = CGContext(data: &bytes, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: cg.width * 4,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+            return stride(from: 0, to: bytes.count, by: 4).contains { p in
+                Int(bytes[p]) > 150 && Int(bytes[p + 2]) > 120 && Int(bytes[p + 1]) < Int(bytes[p]) - 50
+            }
+        }
+        XCTAssertTrue(pink(image(true)), "the app's diamond, standing still")
+        XCTAssertFalse(pink(image(false)), "the system spinner otherwise")
+    }
 }

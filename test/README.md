@@ -23,9 +23,33 @@ python3 test/benchmark.py             # Fast benchmark-runner regression tests
 python3 test/vm-runner.py             # Fast test-runner/cache regression tests
 python3 test/model-fixtures.py        # Local endpoint/shell barrier regressions
 python3 test/terminal-shell.py        # Shell integration directory-name injection regressions
+python3 test/shell-config-audit.py -v # Custom shell startup configurations (real Bash, Zsh, Fish)
+python3 test/tmux-config-audit.py -v # Custom tmux configuration and prefix audit
 python3 test/vm.py test ChatTests     # XCTest in the dedicated macOS VM
 bash test/run.sh ChatTests           # XCTest on the current desktop
 ```
+
+`shell-config-audit.py` compiles the production Swift wrapper/launch generators and
+Rust startup generator, then runs real shells with temporary homes and dummy
+commands. It needs macOS, `swiftc`, and `rustc`; set `AUDIT_BASH` and `AUDIT_FISH` to
+additional shell binaries, and `RUSTC` if the compiler is not on PATH. It does not
+download tools. The audit's findings are ordinary regressions now (`AUDIT_STRICT=1`
+only matters for a case marked `known_bug`): Apple Bash profiles read once, Fish
+wrappers as autoload files and XDG path lists, Zsh startup quoting/aliases and unset
+variables, and quoted custom Bash executable paths. It tests shell startup in
+interactive mode with piped input; it does not exercise the app UI or live SSH.
+
+`tmux-config-audit.py` builds the production Rust tmux multiplexer and Swift prefix
+logic, and uses private tmux sockets for local and relayed control streams. Set
+`AUDIT_TMUX` to choose a tmux version. It covers the session's own prefix table reaching
+the app's key handler, refused bindings, server window indices, and new panes running
+`default-command`/`default-shell`.
+The default temporary build cache is `/private/tmp/dispatch-tmux-audit-build`
+(`AUDIT_TMUX_BUILD` overrides it). macOS must permit Unix sockets and Swift compiler
+macros. No desktop focus or existing tmux server is needed. The Swift fixture
+uses model stubs and copies the actual app table-selection and index-selection
+methods and the `backends.prefix` reply type verbatim, fed with the real helper's reply;
+it does not launch the app UI (`TmuxPrefixTableTests` does).
 
 ## XCTest on the current Mac
 
@@ -298,6 +322,7 @@ Fixtures run the real installed agent CLIs against a deterministic loopback mode
 ```sh
 python3 test/codex-chat.py --keep /tmp/new-results          # empty dir; --codex PATH for another CLI
 python3 scripts/codex_fixture.py serve --no-hooks --state /tmp/demo   # manual; run the printed launch command
+#   launch --codex-arg=-c --codex-arg='model="m"' ...   passes options on to the Codex TUI
 python3 scripts/seed-codex-history.py --state /tmp/demo --turns 60   # then serve + launch --resume SESSION_ID
 ```
 
@@ -309,11 +334,11 @@ python3 scripts/seed-codex-history.py --state /tmp/demo --turns 60   # then serv
 
 ```sh
 python3 scripts/claude_fixture.py serve                # state /tmp/dispatch-claude-demo; --port, --delay
-python3 scripts/claude_fixture.py launch [--integration] [--hooks] [--resume UUID]
+python3 scripts/claude_fixture.py launch [--integration] [--hooks] [--api-key-helper] [--resume UUID]
 python3 scripts/pi_fixture.py [--session ID] [--pi PATH]
 ```
 
-Prompt keywords combine: `thinking`, `tool`, `permission tool`, `question`/`multiple questions`, `formatting`/`long`; anything else echoes. Claude runs with an isolated `CLAUDE_CONFIG_DIR`, and Pi with `STATE/pi-home` and only `bash`. Focused checks: `test/claude-chat.py [--endpoint-only]`, `test/pi-chat.py`, `test/pi-bridge.py`, each with a fresh `--keep tmp/profiling/...`. Pi RPC waits for `agent_settled`, not `agent_end`.
+Prompt keywords combine: `thinking`, `tool`, `permission tool`, `question`/`multiple questions`, `formatting`/`long`; anything else echoes. Claude runs with an isolated `CLAUDE_CONFIG_DIR` (with `--api-key-helper`, its settings' `apiKeyHelper` prints the dummy key from `FIXTURE_CLAUDE_KEY` instead of `ANTHROPIC_API_KEY`, and `requests.jsonl` marks such requests `"auth": "helper"`), and Pi with `STATE/pi-home` and only `bash`. Focused checks: `test/claude-chat.py [--endpoint-only]`, `test/pi-chat.py`, `test/pi-bridge.py`, each with a fresh `--keep tmp/profiling/...`. Pi RPC waits for `agent_settled`, not `agent_end`.
 
 ### Native Chat validation
 

@@ -46,6 +46,8 @@ public struct HandlerOptions {
     /// This machine's name: OSC 7 accepts file URLs only for it (or localhost).
     public var hostname: [UInt8] = []
     public var version = ""
+    /// vt-xt-checksum-report: DECRQCRA answers and XTCHECKSUM applies (off: both ignored; see Checksum.swift).
+    public var checksumReports = false
     public init() {}
 }
 
@@ -209,6 +211,11 @@ public struct StreamHandler: Handler {
             case .csi21t: surface.append(.reportTitle(.csi21t))
             }
         case .xtversion: termio.append(.write(ascii("\u{1B}P>|ghostty \(options.version)\u{1B}\\")))
+        case .requestChecksum(let r):
+            guard options.checksumReports else { return }
+            let hex = String(t.checksum(r), radix: 16, uppercase: true)
+            termio.append(.write(ascii("\u{1B}P\(r.id)!~" + String(repeating: "0", count: 4 - hex.count) + hex + "\u{1B}\\")))
+        case .checksumExtension(let f): if options.checksumReports { t.flags.checksum = f }
         case .deviceAttributes(let d):
             switch d {
             case .primary: reply(options.clipboardWrite != .deny ? "\u{1B}[?62;22;52c" : "\u{1B}[?62;22c")
@@ -250,7 +257,7 @@ public struct StreamHandler: Handler {
         case .dcsUnhook: dcsUnhook()
         case .kittyClipboard(let k): kittyClipboard(k)
         // Feature detection is the only reply: records are never sent back.
-        case .programStatus(.query(let end)): termio.append(.write(ascii("\u{1B}]7501;?") + terminator(end)))
+        case .programStatus(.query(let end)): termio.append(.write(ascii("\u{1B}]7501;" + ProgramStatusCommand.queryReply) + terminator(end)))
         case .programStatus(let c): if programs.apply(c) { surface.append(.programStatus(programs.all)) }
         case .apcStart: apc.start(kitty: t.kittyGraphicsEnabled)
         case .apcPut(let b): apc.feed(CollectionOfOne(b))

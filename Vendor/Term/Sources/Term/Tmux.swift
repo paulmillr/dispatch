@@ -142,7 +142,7 @@ extension UnsafeBufferPointer<UInt8> {
         var i = i
         while i + 16 <= count {
             let m = stop(Lanes(baseAddress! + i))
-            if m != Lanes.V() { return i + Lanes.bits(m).trailingZeroBitCount }
+            if Lanes.any(m) { return i + Lanes.bits(m).trailingZeroBitCount }
             i += 16
         }
         while i < count, Lanes.bits(stop(Lanes(Lanes.V(repeating: self[i])))) == 0 { i += 1 }

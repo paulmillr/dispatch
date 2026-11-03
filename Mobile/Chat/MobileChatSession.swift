@@ -123,6 +123,10 @@ final class MobileChatSession: Identifiable {
     private(set) var workingSince: Date?
     /// When this phone sent the prompt the agent is working on.
     private(set) var submittedAt: Date?
+    /// When the agent last stopped working, and when the live turn last ended: the thread rides out the moment until
+    /// the other half of that change arrives (`ChatThreadView.settle`), since state and records come apart.
+    private(set) var stoppedWorking: Date?
+    private(set) var turnEnded: Date?
 
     // Requests from the agent.
     private(set) var approvals: [Approval] = []
@@ -473,10 +477,12 @@ final class MobileChatSession: Identifiable {
         for change in applied {
             switch change {
             case .started:
+                turnEnded = nil
                 if awaitingAck { starting = true }
                 awaitingAck = false
             case .ended(let turn):
                 if turn == transcript.activeTurnID {
+                    turnEnded = Date()
                     starting = false; awaitingAck = false; submittedAt = nil
                 }
             case .item(let item, _):
@@ -530,7 +536,10 @@ final class MobileChatSession: Identifiable {
     }
 
     private func updateWorkingSince() {
-        if !working { workingSince = nil } else if workingSince == nil { workingSince = Date() }
+        if !working {
+            if workingSince != nil { stoppedWorking = Date() }
+            workingSince = nil
+        } else if workingSince == nil { workingSince = Date(); stoppedWorking = nil }
     }
 
     private func receive(interaction: HelperChat.Interaction, generation: UUID) {

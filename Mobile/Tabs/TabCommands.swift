@@ -290,12 +290,16 @@ extension MobileWorkspace {
     /// `backends.create` for it (its server starts when none runs), a first terminal under that backend as the new
     /// herdr workspace or tmux space, then, when `name` is not empty, `entities.rename` once the topology shows it.
     /// Without a name the server names it as the Mac's new spaces are named (`NewSpaceName`): after its folder, following
-    /// it until renamed. Returns its first tab, which Create opens. The host shows one multiplexer's spaces at a time: on
-    /// another one, `follow` switches the host to it (its saved preference) once its server runs, so the new space shows
-    /// up.
+    /// it until renamed. Returns its first tab, which Create opens, only once it sits in a space that was not there
+    /// before: a space with the same folder or name is never reused, and a window left in an existing space (a refused
+    /// or lost placement) is closed again rather than opened as the new space. The host shows one multiplexer's spaces
+    /// at a time: on another one, `follow` switches the host to it (its saved preference) once its server runs, so the
+    /// new space shows up.
     func createSpace(name: String, directory: String?, on multiplexer: MultiplexerChoice? = nil,
                      follow: @MainActor (String) -> Void = { _ in }, timeout: Duration = .seconds(10)) async throws -> MobileTab {
         let commands = try commands(nodes: false)
+        /// The spaces before: the new one is none of them. After a switch the target's own arrive later, and join it.
+        var before = Set(spaces.map(\.ref.key))
         guard let target = multiplexer ?? choice else { throw TabsFailure.noMultiplexer }
         // The backend's id whether its server already runs or starts now; the host session's open of the same route
         // brings the new space's topology.
@@ -319,19 +323,38 @@ extension MobileWorkspace {
             // after. After a switch its spaces arrive with the first snapshot of the newly followed multiplexer.
             if switching { await waitForSpaces(on: backend, timeout: timeout) }
             guard host.live, let anchor = spaces.first(where: { $0.backend == backend }) else { throw failure }
+            // Every space there now is "before", the anchor first among them, whichever backend it came with.
+            before.formUnion(spaces.map(\.ref.key))
             terminal = try await commands.createTerminal(parent: anchor.node, cwd: cwd)
-            let label = trimmed.isEmpty ? NewSpaceName.automatic(directory, host: host) ?? "space" : trimmed
-            try await commands.place(terminal: terminal, space: label, in: self, timeout: timeout)
             placedFrom = anchor.ref
+            let label = trimmed.isEmpty ? NewSpaceName.automatic(directory, host: host) ?? "space" : trimmed
+            do {
+                try await commands.place(terminal: terminal, space: label, in: self, timeout: timeout)
+            } catch {
+                // Refused, or never shown: the window would stay a stray tab in the anchor's space. Closed again
+                // (a fresh shell is idle, so it ends).
+                _ = try? await commands.close(terminal, .close)
+                throw error
+            }
         }
-        guard let tab = await tab(for: terminal, timeout: timeout), space(of: tab) != nil else {
+        guard let tab = await tab(for: terminal, timeout: timeout) else {
+            throw TabsFailure(message: "The space was created, but the host has not shown it yet.")
+        }
+        // In a space of its own: a placed window moves a snapshot or more after it showed in its anchor's space (by key:
+        // the move may land later), and nothing but a new space counts.
+        let fresh = { (tab: MobileTab) in !before.contains(tab.space.key) && tab.space != placedFrom }
+        await waitUntil(timeout: timeout) { fresh(tab) && space(of: tab) != nil }
+        guard let space = space(of: tab), fresh(tab) else {
+            if placedFrom != nil, self.tab(tab.ref.key) != nil {
+                // Still in the space it was made in: not a new space, so not left there as a stray tab.
+                _ = try? await close(tab: tab, .close)
+            }
             throw TabsFailure(message: "The space was created, but the host has not shown it yet.")
         }
         guard !trimmed.isEmpty else { return tab }
-        // A placed window's space is renamed once the topology shows it moved (by key: the move may land a snapshot
-        // later), even when its label already reads the same: the rename is what stops it following the folder.
-        if let placedFrom { await waitUntil(timeout: timeout) { tab.space != placedFrom } }
-        if let space = space(of: tab), space.ref != placedFrom, placedFrom != nil || trimmed != space.name {
+        // A placed window's space is renamed even when its label already reads the same: the rename is what stops it
+        // following the folder.
+        if placedFrom != nil || trimmed != space.name {
             try await commands.rename(space.node, to: trimmed)
         }
         return tab

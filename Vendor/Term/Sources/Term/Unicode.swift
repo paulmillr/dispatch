@@ -35,27 +35,41 @@ public enum Unicode {
 }
 
 /// uucode's GraphemeBreakNoControl (the values of Props.graphemeBreak) and grapheme.BreakState.
+/// Unicode 18 splits InCB=Linker by Grapheme_Cluster_Break: Extend (viramas) or Other (U+1CF5, U+1CF6, U+11A3A).
 private enum BreakClass: UInt8, CaseIterable {
     case other, prepend, regionalIndicator, spacingMark, l, v, t, lv, lvt, zwj, zwnj, extendedPictographic, emojiModifierBase, emojiModifier,
-         icbExtend, icbLinker, icbConsonant
+         icbExtend, icbLinkerExtend, icbLinkerOther, icbConsonant
     static var count: Int { Int(icbConsonant.rawValue) + 1 }
     func `in`(_ set: BreakClass...) -> Bool { set.contains(self) }
-    var extend: Bool { self.in(.zwnj, .icbExtend, .icbLinker) }
+    var extend: Bool { self.in(.zwnj, .icbExtend, .icbLinkerExtend) }
     var icbExtend: Bool { self.in(.icbExtend, .zwj) }
+    var icbLinker: Bool { self.in(.icbLinkerExtend, .icbLinkerOther) }
     var pictographic: Bool { self.in(.extendedPictographic, .emojiModifierBase) }
 }
-private enum BreakState: UInt8, CaseIterable { case none, regionalIndicator, extendedPictographic, icbConsonant, icbLinker }
+
+/// uucode's BreakState: a base sequence state plus whether an InCB linker (and InCB extends) precede, as GB9c
+/// can overlap GB11. Its index (the value callers keep) is base * 2 + afterLinker; regional indicator with
+/// afterLinker never occurs, so 5 states.
+private struct BreakState: Equatable {
+    enum Base: UInt8 { case none, extendedPictographic, regionalIndicator }
+    var afterLinker = false
+    var base = Base.none
+    init(afterLinker: Bool = false, base: Base = .none) { (self.afterLinker, self.base) = (afterLinker, base) }
+    init(index: UInt8) { self.init(afterLinker: index & 1 != 0, base: Base(rawValue: index >> 1)!) }
+    var index: UInt8 { base.rawValue << 1 | (afterLinker ? 1 : 0) }
+    static let all = (UInt8(0)..<5).map(BreakState.init(index:))
+}
 
 /// uucode's computeGraphemeBreakNoControl (UAX #29 without controls, which Ghostty handles first).
 private func breaks(_ gb1: BreakClass, _ gb2: BreakClass, _ state: inout BreakState) -> Bool {
-    switch state {
-    case .regionalIndicator: if gb1 != .regionalIndicator || gb2 != .regionalIndicator { state = .none }
+    // GB9c's linker flag depends only on the input.
+    let afterLinker = gb1.icbLinker || (state.afterLinker && gb1.icbExtend)
+    state.afterLinker = afterLinker && gb2.icbExtend
+    switch state.base {
+    case .regionalIndicator: if gb1 != .regionalIndicator || gb2 != .regionalIndicator { state.base = .none }
     case .extendedPictographic:
-        let keep = { (g: BreakClass) in g.in(.icbExtend, .icbLinker, .zwnj, .zwj, .extendedPictographic, .emojiModifierBase, .emojiModifier) }
-        if !keep(gb1) || !keep(gb2) { state = .none }
-    case .icbConsonant, .icbLinker:
-        let keep = { (g: BreakClass) in g.in(.icbConsonant, .icbLinker, .icbExtend, .zwj) }
-        if !keep(gb1) || !keep(gb2) { state = .none }
+        let keep = { (g: BreakClass) in g.in(.icbExtend, .icbLinkerExtend, .zwnj, .zwj, .extendedPictographic, .emojiModifierBase, .emojiModifier) }
+        if !keep(gb1) || !keep(gb2) { state.base = .none }
     case .none: break
     }
     // Hangul syllables, spacing marks, prepend.
@@ -63,31 +77,20 @@ private func breaks(_ gb1: BreakClass, _ gb2: BreakClass, _ state: inout BreakSt
     if gb1.in(.lv, .v), gb2.in(.v, .t) { return false }
     if gb1.in(.lvt, .t), gb2 == .t { return false }
     if gb2 == .spacingMark || gb1 == .prepend { return false }
-    // Indic conjuncts.
-    if gb1 == .icbConsonant {
-        if gb2.icbExtend { state = .icbConsonant; return false }
-        if gb2 == .icbLinker { state = .icbLinker; return false }
-    } else if state == .icbConsonant {
-        if gb2 == .icbLinker { state = .icbLinker; return false }
-        if gb2.icbExtend { return false }
-        state = .none
-    } else if state == .icbLinker {
-        if gb2 == .icbLinker || gb2.icbExtend { return false }
-        state = .none
-        if gb2 == .icbConsonant { return false }
-    }
+    // Indic conjuncts: InCB=Linker InCB=Extend* x InCB=Consonant.
+    if afterLinker, gb2 == .icbConsonant { state.base = .none; return false }
     // Emoji ZWJ sequences and modifiers.
     if gb1.pictographic {
-        if gb2.extend || gb2 == .zwj || (gb1 == .emojiModifierBase && gb2 == .emojiModifier) { state = .extendedPictographic; return false }
-    } else if state == .extendedPictographic {
+        if gb2.extend || gb2 == .zwj || (gb1 == .emojiModifierBase && gb2 == .emojiModifier) { state.base = .extendedPictographic; return false }
+    } else if state.base == .extendedPictographic {
         if (gb1.extend || gb1 == .emojiModifier) && (gb2.extend || gb2 == .zwj) { return false }
-        state = .none
+        state.base = .none
         if gb1 == .zwj, gb2.pictographic { return false }
     }
     // Regional indicator pairs.
     if gb1 == .regionalIndicator, gb2 == .regionalIndicator {
-        state = state == .none ? .regionalIndicator : .none
-        return state == .none
+        state.base = state.base == .none ? .regionalIndicator : .none
+        return state.base == .none
     }
     return !(gb2.extend || gb2 == .zwj)
 }
@@ -96,13 +99,13 @@ private func breaks(_ gb1: BreakClass, _ gb2: BreakClass, _ state: inout BreakSt
 /// classes + gb2 -> break bit | new state << 1. Built at first use (thread-safe, read-only after), never freed.
 @usableFromInline nonisolated(unsafe) let graphemeBreaks: UnsafePointer<UInt8> = {
     let n = BreakClass.count
-    let table = UnsafeMutablePointer<UInt8>.allocate(capacity: BreakState.allCases.count * n * n)
-    for s in BreakState.allCases {
+    let table = UnsafeMutablePointer<UInt8>.allocate(capacity: BreakState.all.count * n * n)
+    for s in BreakState.all {
         for a in BreakClass.allCases {
             for b in BreakClass.allCases {
                 var state = s
                 let broken = breaks(a, b, &state)
-                table[(Int(s.rawValue) * n + Int(a.rawValue)) * n + Int(b.rawValue)] = (broken ? 1 : 0) | state.rawValue << 1
+                table[(Int(s.index) * n + Int(a.rawValue)) * n + Int(b.rawValue)] = (broken ? 1 : 0) | state.index << 1
             }
         }
     }

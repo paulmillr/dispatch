@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// P3: the space switcher a tab's host disc opens (detents 560 points and large). Its title is the space with its
-/// branch and the host's path; then the space's tabs (the one on screen checked on the lens), New tab (held, P2e's
-/// menu), the host's row with its numbers (to its stats sheet), and Rename and Close space (Detach or Terminate…).
+/// P3: the space switcher the iPad strip's space capsule opens (detents 560 points and large); a phone's tab has its
+/// menu and Back instead (X9b, `TabHeaderMenu`). Its title is the space with its branch and the host's path; then the
+/// space's tabs (the one on screen checked on the lens), New tab (held, P2e's menu), the host's row with its numbers
+/// (to its stats sheet), and Rename and Close space (Detach or Terminate…).
 struct SpaceSwitcherSheet: View {
     let navigator: SpacesNavigator
     /// The tab whose screen opened it.

@@ -4,8 +4,9 @@
 use crate::mux::{Tmux, error, finish};
 use dispatch_helper_core::api::*;
 
-/// Commands whose single reply is certain (df8e2fe PrefixKeys.swift forwardable).
-const FORWARDABLE: [&str; 22] = [
+/// Commands whose single reply is certain (df8e2fe PrefixKeys.swift forwardable). send-prefix
+/// sends the session's prefix to the client's pane, as a `bind a send-prefix` binding does.
+const FORWARDABLE: [&str; 23] = [
     "select-pane",
     "selectp",
     "last-pane",
@@ -28,6 +29,7 @@ const FORWARDABLE: [&str; 22] = [
     "rotatew",
     "swap-window",
     "swapw",
+    "send-prefix",
 ];
 
 /// One `list-keys` line as the old parser read it: `bind-key [-r] [-T table] key command`.
@@ -59,35 +61,44 @@ fn binding(line: &str) -> Option<PrefixBinding> {
     })
 }
 
+/// The node's session's effective options (a `set-option -t` override, else the global value), as
+/// formats resolve them (`show-options -g` read only the global ones), then the prefix table.
+fn queries(target: &str) -> Vec<String> {
+    vec![
+        format!("display-message -p -t {target} \"#{{prefix}}\""),
+        format!("display-message -p -t {target} \"#{{prefix2}}\""),
+        format!("display-message -p -t {target} \"#{{repeat-time}}\""),
+        "list-keys -T prefix".to_owned(),
+    ]
+}
+
+/// The replies to `queries`; prefix2 `None` (tmux's unset) is None.
+fn table(rows: &[crate::control::Lines]) -> Prefix {
+    let text = |row: &crate::control::Lines| String::from_utf8_lossy(row.text()).trim().to_owned();
+    let key = |row: &crate::control::Lines| Some(text(row)).filter(|key| !key.is_empty() && key != "None");
+    Prefix {
+        key: Some(text(&rows[0])).filter(|key| !key.is_empty()),
+        repeat_ms: text(&rows[2]).parse().ok(),
+        bindings: rows[3]
+            .iter()
+            .filter_map(|line| binding(&String::from_utf8_lossy(line)))
+            .collect(),
+        prefix2: key(&rows[1]),
+    }
+}
+
 impl Tmux {
     pub(crate) fn prefix(&mut self, io: &mut dyn Io, node: Id, done: Done<Prefix>) {
-        let loc = match self.target(node).map(|(loc, _)| loc) {
-            Ok(loc) => loc,
+        let (loc, target) = match self.target(node) {
+            Ok(found) => found,
             Err(e) => return finish(io, done, Err(e)),
         };
-        let commands = [
-            "show-options -gv prefix",
-            "show-options -gv repeat-time",
-            "list-keys -T prefix",
-        ];
         self.request(
             io,
             loc,
-            commands.map(str::to_owned).to_vec(),
+            queries(&target),
             Box::new(move |_, io, result| {
-                let table = result.map(|rows| {
-                    let text = |row: &crate::control::Lines| {
-                        String::from_utf8_lossy(row.text()).trim().to_owned()
-                    };
-                    Prefix {
-                        key: Some(text(&rows[0])).filter(|key| !key.is_empty()),
-                        repeat_ms: text(&rows[1]).parse().ok(),
-                        bindings: rows[2]
-                            .iter()
-                            .filter_map(|line| binding(&String::from_utf8_lossy(line)))
-                            .collect(),
-                    }
-                });
+                let table = result.map(|rows| table(&rows));
                 finish(io, done, table);
             }),
         );
@@ -113,3 +124,7 @@ impl Tmux {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prefix.test.rs"]
+mod tests;

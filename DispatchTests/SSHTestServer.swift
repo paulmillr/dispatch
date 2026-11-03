@@ -52,7 +52,8 @@ final class SSHTestServer {
     private let privileged: Bool
     private static var permissionsByRoot: [String: Set<SSHIntegrationScope>] = [:]
 
-    init(grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), transportOnly: Bool = false) async throws {
+    /// `accepting`: variables sshd takes from a client's `SendEnv` (`AcceptEnv`); none by default.
+    init(grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), transportOnly: Bool = false, accepting: [String] = []) async throws {
         self.transportOnly = transportOnly
         privileged = !transportOnly && System.environment("DISPATCH_UNPRIVILEGED_SSHD") != "1"
         struct Created: Codable { let root: URL; let port: UInt16; let options: [String] }
@@ -64,8 +65,9 @@ final class SSHTestServer {
         let environment = ["DISPATCH_TEST_ROOT"].compactMap { name in
             System.environment(name).map { name + "=" + $0 }
         }
-        let created = try AppReplay.decode(Created.self, await AppReplay.run(kind: "fixture.ssh.start",
-            input: AppReplay.value(["privileged": String(privileged), "tools": TestSupport.tools, "environment": environment.joined(separator: "\n")])) {
+        var input = ["privileged": String(privileged), "tools": TestSupport.tools, "environment": environment.joined(separator: "\n")]
+        if !accepting.isEmpty { input["accept"] = accepting.joined(separator: " ") }
+        let created = try AppReplay.decode(Created.self, await AppReplay.run(kind: "fixture.ssh.start", input: AppReplay.value(input)) {
             let root = URL(fileURLWithPath: "/tmp/hs-\(System.uuid().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                    attributes: [.posixPermissions: 0o700])
@@ -95,7 +97,7 @@ final class SSHTestServer {
             PubkeyAuthentication yes
             SetEnv \(([path, "TZ=UTC"] + homes + environment).map(HerdrLaunch.quote).joined(separator: " "))
             LogLevel ERROR
-            """.write(to: config, atomically: true, encoding: .utf8)
+            """.appending(accepting.isEmpty ? "" : "\nAcceptEnv " + accepting.joined(separator: " ")).write(to: config, atomically: true, encoding: .utf8)
             let knownHosts = root.appendingPathComponent("known_hosts")
             let publicKey = try String(contentsOfFile: key + ".pub", encoding: .utf8)
             try ("[127.0.0.1]:\(port) " + publicKey).write(to: knownHosts, atomically: true, encoding: .utf8)
@@ -133,17 +135,19 @@ final class SSHTestServer {
     /// configuration, including its ephemeral key/known-hosts files and port.
     /// Production's ordinary-SSH default and consent presenter remain untouched.
     @discardableResult
+    /// `directory`: where the test types ssh, for an invocation with relative paths (`SSHShell.directory`).
     func authorize(_ grant: SSHIntegrationGrant = .init(profile: .full, hooks: true),
-                   arguments: [String]? = nil) async throws -> SSHIntegrationScope {
-        try await Self.authorize(arguments: arguments ?? options + [destination], grant: grant)
+                   arguments: [String]? = nil, directory: String? = nil) async throws -> SSHIntegrationScope {
+        try await Self.authorize(arguments: arguments ?? options + [destination], grant: grant, directory: directory)
     }
 
     @discardableResult
     static func authorize(arguments: [String], executable: String = "/usr/bin/ssh",
-                          grant: SSHIntegrationGrant = .init(profile: .full, hooks: true)) async throws -> SSHIntegrationScope {
+                          grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), directory: String? = nil) async throws -> SSHIntegrationScope {
         let invocation = try XCTUnwrap(SSHInvocation.parse(arguments, isTerminal: true), "The test must use an enhanced SSH invocation")
         let result = try await SSHCommand.run(executable: executable,
-            arguments: ["-G", "-o", "ClearAllForwardings=no"] + invocation.options + ["--", invocation.destination] + (invocation.command.map { [$0] } ?? []))
+            arguments: ["-G", "-o", "ClearAllForwardings=no"] + invocation.options + ["--", invocation.destination] + (invocation.command.map { [$0] } ?? []),
+            directory: directory)
         XCTAssertEqual(result.status, 0)
         let configuration = String(decoding: result.output, as: UTF8.self)
         let scope = try XCTUnwrap(SSHIntegrationScope(executable: executable, destination: invocation.destination, configuration: configuration))

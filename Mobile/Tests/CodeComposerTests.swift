@@ -276,3 +276,15 @@ final class CodeComposerTests: XCTestCase {
                                                                                   create: true))).isEmpty)
     }
 }
+
+/// Send's long press (`CodeComposer.sendOptions`): the ways the draft can go, never sending by itself.
+extension CodeComposerTests {
+    func testTheSendMenuOffersTheWaysTheDraftCanGo() {
+        XCTAssertEqual(CodeComposer.sendOptions(queues: false, steers: false), [.send], "nothing queues: Send alone")
+        XCTAssertEqual(CodeComposer.sendOptions(queues: false, steers: true), [.send])
+        XCTAssertEqual(CodeComposer.sendOptions(queues: true, steers: true), [.sendNow, .queue], "the agent works")
+        XCTAssertEqual(CodeComposer.sendOptions(queues: true, steers: false), [.queue], "it cannot take it into its turn")
+        XCTAssertEqual([CodeComposer.SendOption.send, .sendNow, .queue, .complete("/model"), .terminal].map(\.title),
+                       ["Send", "Send now", "Queue", "Complete /model", "Open Terminal"])
+    }
+}

@@ -85,12 +85,12 @@ struct WatchSnapshotBuilder {
         return nil
     }
 
-    /// The host logs in with a key that cannot be used without a prompt: a Secure Enclave key, or a key stored behind
-    /// biometry (`KeyStore.keyProtection`).
+    /// The host logs in with a key that cannot be used without a prompt: a Secure Enclave key. Software keys read
+    /// after first unlock (`KeyStore`); one an older build left behind Face ID shows as a quiet attempt's refusal.
     func needsFaceID(_ record: HostRecord) -> Bool {
         guard case .key(let id) = record.auth, let key = composition.hosts.keys.key(id) else { return false }
         if case .secureEnclaveP256 = key.kind { return true }
-        return composition.hosts.keys.keyProtection == .biometry
+        return false
     }
 
     /// `HostSummary.tint` of a host that is not offline, as the phone draws it in the dark appearance

@@ -28,7 +28,7 @@ final class TerminalController {
     var hardwareKeyboard = HardwareKeyboard.shared
     /// The user brought the capsule's keys back while a hardware keyboard was attached (remembered).
     private(set) var keysShown: Bool
-    /// The capsule's form: the six keys, or the small button that brings them back.
+    /// The capsule's form: the seven keys, or the small button that brings them back.
     var capsuleForm: TerminalAdaptation.CapsuleForm {
         TerminalAdaptation.capsuleForm(idiom: idiom, hardwareKeyboard: hardwareKeyboard.attached, shown: keysShown)
     }
@@ -135,12 +135,12 @@ final class TerminalController {
 
     /// The keyboard layout guide's frame in the window (`TerminalHostView.keyboardTracker`): judged in the window, which
     /// in Split View or Stage Manager is not the screen.
-    private func keyboardChanged(_ frame: CGRect?) {
+    func keyboardChanged(_ frame: CGRect?) {
         let next = hostView.window.map { TerminalAdaptation.keyboard(frame: frame, window: $0.bounds) } ?? .hidden
         if next != keyboard { keyboard = next }
     }
 
-    /// The collapsed capsule's button: the six keys again, remembered while a hardware keyboard stays attached.
+    /// The collapsed capsule's button: the seven keys again, remembered while a hardware keyboard stays attached.
     func showKeys() {
         keysShown = true
         UserDefaults.standard.set(true, forKey: Self.keysShownKey)
@@ -208,12 +208,20 @@ final class TerminalController {
 
     // MARK: the key bar's menu (T2)
 
-    /// What the capsule's last key is: the keyboard key (a tap shows the software keyboard, a long press opens the
-    /// menu), the menu itself while the software keyboard is up (a tap opens it: typing has the keyboard already), or
-    /// on an iPad with a hardware keyboard the key that folds the capsule (a long press opens the menu).
-    var menuKey: TerminalMenuKeyRole {
+    /// What the capsule's last key is: the keyboard key, which shows the software keyboard while it is down and hides
+    /// it while it is up, or on an iPad with a hardware keyboard the key that folds the capsule. The menu has a key of
+    /// its own beside it (`TerminalMenuKey`).
+    var keyboardKey: TerminalKeyboardKey {
         if keysCanHide { return .hideKeys }
-        return keyboardVisible ? .menu : .keyboard
+        return keyboardVisible ? .hideKeyboard : .showKeyboard
+    }
+
+    /// The keyboard key tapped.
+    func pressKeyboardKey() {
+        switch keyboardKey {
+        case .showKeyboard, .hideKeyboard: toggleKeyboard()
+        case .hideKeys: hideKeys()
+        }
     }
 
     /// A menu item chosen.
@@ -224,7 +232,6 @@ final class TerminalController {
         case .selectAll: selectAll()
         case .clearScreen: clearScreen()
         case .resetTerminal: resetTerminal()
-        case .hideKeyboard: if keyboardVisible { toggleKeyboard() }
         }
     }
 
@@ -319,36 +326,36 @@ enum TerminalSubtitle {
     }
 }
 
-/// The capsule's last key (T2): what a tap does, and its glyph and label.
-enum TerminalMenuKeyRole: Equatable {
-    /// The software keyboard is down: a tap brings it, a long press opens the menu.
-    case keyboard
-    /// The software keyboard is up: the key is the menu's ellipsis, a tap opens it.
-    case menu
-    /// An iPad with a hardware keyboard: a tap folds the capsule, a long press opens the menu.
+/// The capsule's last key: what a tap does, and its glyph and label. It never opens the menu (the "…" key does).
+enum TerminalKeyboardKey: Equatable {
+    /// The software keyboard is down: a tap brings it.
+    case showKeyboard
+    /// The software keyboard is up: a tap hides it (the terminal keeps the focus, so hardware keys and the capsule
+    /// keep working).
+    case hideKeyboard
+    /// An iPad with a hardware keyboard: a tap folds the capsule.
     case hideKeys
 
-    var opensOnTap: Bool { self == .menu }
-
-    /// The glyph; the ellipsis while the menu shows, whatever opened it.
-    func symbol(menuOpen: Bool) -> String {
-        if menuOpen || self == .menu { return "ellipsis.circle" }
-        return self == .hideKeys ? "chevron.down" : "keyboard"
+    var symbol: String {
+        switch self {
+        case .showKeyboard: "keyboard"
+        case .hideKeyboard: "keyboard.chevron.compact.down"
+        case .hideKeys: "chevron.down"
+        }
     }
 
     var label: String {
         switch self {
-        case .keyboard: "Show keyboard"
-        case .menu: "Terminal menu"
+        case .showKeyboard: "Show keyboard"
+        case .hideKeyboard: "Hide keyboard"
         case .hideKeys: "Hide terminal keys"
         }
     }
 }
 
-/// The key bar's menu (T2): Search, Paste, Select all; Clear screen and Reset terminal; Hide keyboard while the
-/// software keyboard is up (its key is the menu then).
+/// The key bar's menu (T2), behind the capsule's "…" key: Search, Paste, Select all; Clear screen and Reset terminal.
 enum TerminalMenuItem: CaseIterable {
-    case search, paste, selectAll, clearScreen, resetTerminal, hideKeyboard
+    case search, paste, selectAll, clearScreen, resetTerminal
 
     var title: String {
         switch self {
@@ -357,7 +364,6 @@ enum TerminalMenuItem: CaseIterable {
         case .selectAll: "Select all"
         case .clearScreen: "Clear screen"
         case .resetTerminal: "Reset terminal"
-        case .hideKeyboard: "Hide keyboard"
         }
     }
 
@@ -368,7 +374,6 @@ enum TerminalMenuItem: CaseIterable {
         case .selectAll: "selection.pin.in.out"
         case .clearScreen: "clear"
         case .resetTerminal: "arrow.counterclockwise"
-        case .hideKeyboard: "keyboard.chevron.compact.down"
         }
     }
 
@@ -385,9 +390,5 @@ enum TerminalMenuItem: CaseIterable {
     func enabled(chatSending: Bool) -> Bool { !(self == .resetTerminal && chatSending) }
 
     /// The menu's sections, top to bottom (the order stays when the menu opens above its key).
-    static func sections(keyboardVisible: Bool) -> [[TerminalMenuItem]] {
-        var sections: [[TerminalMenuItem]] = [[.search, .paste, .selectAll], [.clearScreen, .resetTerminal]]
-        if keyboardVisible { sections.append([.hideKeyboard]) }
-        return sections
-    }
+    static let sections: [[TerminalMenuItem]] = [[.search, .paste, .selectAll], [.clearScreen, .resetTerminal]]
 }

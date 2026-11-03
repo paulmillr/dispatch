@@ -254,7 +254,8 @@ records! {
     Prefix {
         key,
         repeat_ms,
-        bindings
+        bindings,
+        prefix2
     };
     PrefixBinding {
         key,

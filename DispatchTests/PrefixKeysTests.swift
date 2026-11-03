@@ -120,3 +120,81 @@ final class PrefixKeysTests: XCTestCase {
         XCTAssertNil(PrefixTable.herdr(config: "[keys]\nprefix = \"cmd+b\""), "A Command prefix is the app's")
     }
 }
+
+/// The 2026-10-31 tmux configuration audit (test/tmux-config-audit.py has the live-server side).
+extension PrefixKeysTests {
+    /// T5: a server binding maps to Dispatch's action only when it does what tmux would; operands Dispatch has no
+    /// equivalent for (a name, a program, a size, a target) leave the key refused, never mapped to something else.
+    func testTmuxActionsMapOnlyEquivalentCommands() {
+        for command in [#"new-window -n logs "tail -f /tmp/app.log""#, "new-window -d", "split-window -h -l 15 -c /tmp",
+                        "split-window -b", "kill-pane -t %42", "kill-window -a", "next-window -t :3", "detach-client -a",
+                        "switch-client -T custom", "copy-mode -e", "paste-buffer -b named", "break-pane -d",
+                        #"command-prompt -T window-target -p index { select-window -t ":%%" }"#,
+                        #"command-prompt { rename-window -t :1 "%%" }"#, #"confirm-before -p "kill?" "kill-pane -t %3""#,
+                        #"source-file ~/.tmux.conf \; display-message reloaded"#, "display-panes", "command-prompt"] {
+            XCTAssertNil(PrefixTable.tmuxAction(command), command)
+        }
+        for (command, action): (String, PrefixAction) in [
+            ("new-window", .newTab), (##"new-window -c "#{pane_current_path}""##, .newTab),
+            (##"split-window -h -c "#{pane_current_path}""##, .splitRight), ("split-window -v", .splitDown), ("split-window", .splitDown),
+            ("kill-pane", .closePane), (##"confirm-before -p "kill-window #W? (y/n)" kill-window"##, .closeTab),
+            (##"command-prompt -I "#W" { rename-window "%%" }"##, .renameTab), (#"command-prompt "rename-session '%%'""#, .renameSpace),
+            (#"command-prompt { find-window -Z "%%" }"#, .searchSpaces), ("choose-tree -Zs", .searchSpaces),
+            ("next-window -a", .nextAttention), ("copy-mode -u", .scrollPageUp), ("paste-buffer -p", .paste),
+            ("list-keys -N", .shortcuts), ("select-window -t :=7", .selectWindow(7)), ("select-layout tiled", .layout(.grid)),
+            ("resize-pane -U 5", .tmux("resize-pane -U 5")), ("send-prefix", .tmux("send-prefix")),
+        ] {
+            XCTAssertEqual(PrefixTable.tmuxAction(command), action, command)
+        }
+        // tmux's own default table keeps every mapping it had, and refuses nothing.
+        XCTAssertTrue(PrefixTable.tmuxDefaults.rejected.isEmpty, "\(PrefixTable.tmuxDefaults.rejected)")
+        XCTAssertEqual(PrefixTable.tmuxDefaults.bindings.count, 59)
+        XCTAssertEqual(PrefixTable.tmuxDefaults.bindings[PrefixKey(",")]?.action, .renameTab)
+        XCTAssertEqual(PrefixTable.tmuxDefaults.bindings[PrefixKey("s")]?.action, .searchSpaces)
+    }
+
+    /// T1, T4: the helper's reply for a session (backends.prefix) becomes the table: its prefix and prefix2 arm it,
+    /// its bindings run, and a key bound to a command Dispatch cannot run ends the sequence refused.
+    func testServerTableArmsOnBothPrefixesAndRefusesUnsupportedBindings() throws {
+        let reply = HelperClient.Prefix(key: "C-a", repeatMilliseconds: 1234, bindings: [
+            .init(key: "c", command: "split-window -h", repeat: false),
+            .init(key: "h", command: #"new-window -n logs "tail -f /tmp/app.log""#, repeat: false),
+            .init(key: "\\%", command: "split-window -h", repeat: false),
+            .init(key: "Up", command: "select-pane -U", repeat: true),
+        ], prefix2: "F12")
+        let table = try XCTUnwrap(PrefixTable.tmux(server: reply))
+        XCTAssertEqual(table.prefix, PrefixKey("a", control: true))
+        XCTAssertEqual(table.prefix2, PrefixKey("F12"))
+        XCTAssertEqual(table.repeatTime, 1.234, accuracy: 0.0001)
+        XCTAssertEqual(table.bindings[PrefixKey("c")], PrefixBinding(action: .splitRight))
+        XCTAssertEqual(table.bindings[PrefixKey("%")], PrefixBinding(action: .splitRight))
+        XCTAssertEqual(table.bindings[PrefixKey("Up")], PrefixBinding(action: .tmux("select-pane -U"), repeats: true))
+        XCTAssertEqual(table.rejected, [PrefixKey("h"): #"new-window -n logs "tail -f /tmp/app.log""#])
+        XCTAssertNil(PrefixTable.tmux(server: .init(key: "None", repeatMilliseconds: 500, bindings: [], prefix2: nil)))
+        XCTAssertNil(PrefixTable.tmux(server: .init(key: "C-a", repeatMilliseconds: nil, bindings: [], prefix2: "None"))?.prefix2)
+
+        let keys = PrefixKeys(), surface = System.uuid()
+        var performed: [PrefixAction] = [], refused: [String] = []
+        keys.table = { _ in table }
+        keys.perform = { action, _ in performed.append(action) }
+        keys.reject = { command, _ in refused.append(command) }
+        var ended = 0
+        keys.finished = { _ in ended += 1 }
+        XCTAssertFalse(keys.handle(prefix, surface: surface), "⌃B is not this server's prefix")
+        XCTAssertTrue(keys.handle(key(0, "a", .control), surface: surface))
+        XCTAssertTrue(keys.handle(key(8, "c"), surface: surface))
+        XCTAssertTrue(keys.handle(key(111, "\u{F70F}"), surface: surface), "prefix2 arms the same table")
+        XCTAssertTrue(keys.claims(key(4, "h"), surface: surface))
+        XCTAssertTrue(keys.handle(key(4, "h"), surface: surface))
+        XCTAssertNil(keys.armed)
+        XCTAssertEqual(performed, [.splitRight])
+        XCTAssertEqual(refused, [#"new-window -n logs "tail -f /tmp/app.log""#])
+        XCTAssertTrue(keys.handle(key(111, "\u{F70F}"), surface: surface))
+        XCTAssertFalse(keys.handle(key(111, "\u{F70F}"), surface: surface), "prefix2 twice sends it to the terminal")
+        XCTAssertTrue(keys.handle(key(0, "a", .control), surface: surface))
+        XCTAssertTrue(keys.handle(key(53, "\u{1B}"), surface: surface))
+        XCTAssertTrue(keys.handle(key(0, "a", .control), surface: surface))
+        XCTAssertTrue(keys.handle(key(7, "y"), surface: surface), "An unbound key ends the sequence")
+        XCTAssertEqual(ended, 5, "Every ended sequence is reported, so the server's table is read again")
+    }
+}

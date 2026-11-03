@@ -43,7 +43,8 @@ enum SettingsExport {
         switch p.scrollback {
         case .automatic: break
         case .unlimited: lines.append("scrollback-limit-bytes = unlimited")
-        default: lines.append("scrollback-limit-bytes = \(p.scrollback.limit(automatic: 0))")
+        case .lines10k, .lines100k: lines.append("scrollback-limit-lines = \(p.scrollback.lines ?? 0)")
+        case .small, .large: lines.append("scrollback-limit-bytes = \(p.scrollback.limit(automatic: 0))")
         }
         if !p.shell.isEmpty { lines.append("command = \(p.shell)") }
         lines.append("working-directory = \(p.startingDirectory == System.home.path ? "home" : p.startingDirectory)")

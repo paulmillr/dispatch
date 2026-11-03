@@ -98,6 +98,10 @@ impl Request<'_> {
         });
         let beside = optional(p, "beside").map(local);
         let active = pending.clone();
+        // An ordinary terminal (no launch, no command): the helper's login shell, which a
+        // multiplexer with defaults of its own may replace (Multiplexer::create_shell).
+        let ordinary = Rc::new(Cell::new(false));
+        let shell = ordinary.clone();
         let create: Done<Option<std::process::Command>> =
             deferred(Box::new(move |io, result| match result {
                 Ok(command) => {
@@ -114,9 +118,14 @@ impl Request<'_> {
                                 message: String::new(),
                             }),
                         ),
-                        Ok(parent) => mux
-                            .borrow_mut()
-                            .create(io, parent, beside, command, grid, done),
+                        Ok(parent) => match command {
+                            Some(command) if shell.get() => mux
+                                .borrow_mut()
+                                .create_shell(io, parent, beside, command, grid, done),
+                            command => mux
+                                .borrow_mut()
+                                .create(io, parent, beside, command, grid, done),
+                        },
                         Err(error) => done(io, Err(error)),
                     });
                     match dependency {
@@ -170,6 +179,7 @@ impl Request<'_> {
             } else if let Some(command) = self.script(p)? {
                 create(self.io, Ok(Some(command)));
             } else {
+                ordinary.set(true);
                 self.shell(p, create)?;
             }
             Ok(())

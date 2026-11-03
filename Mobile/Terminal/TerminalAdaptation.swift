@@ -46,7 +46,7 @@ enum TerminalAdaptation {
     /// The text size the user chose in iOS's Settings.
     @MainActor static var category: UIContentSizeCategory { UIApplication.shared.preferredContentSizeCategory }
 
-    /// The key capsule: the phone's six keys (`full`), or on an iPad with a hardware keyboard a small button that
+    /// The key capsule: the phone's seven keys (`full`), or on an iPad with a hardware keyboard a small button that
     /// brings them back (`collapsed`): the keyboard has Esc, Tab, Ctrl, Option and arrows of its own (one without Esc
     /// still has Ctrl-[), and the rows the capsule took go back to the terminal.
     enum CapsuleForm: Equatable, Sendable { case full, collapsed }
@@ -58,8 +58,8 @@ enum TerminalAdaptation {
         idiom == .pad && hardwareKeyboard && !shown ? .collapsed : .full
     }
 
-    /// The capsule's widest on an iPad: six keys of a phone's width (66 points each), centred, rather than keys a
-    /// sixth of a 1,000-point column wide. The phone's capsule spans its width (at most 420 points) as before.
+    /// The capsule's widest on an iPad: a phone's capsule (404 points, as six 66-point keys were), centred, rather than
+    /// keys a seventh of a 1,000-point column wide. The phone's capsule spans its width (at most 420 points) as before.
     static let padCapsuleWidth = 6 * 66.0 + 8
 
     static func capsuleMaxWidth(idiom: UIUserInterfaceIdiom) -> CGFloat {

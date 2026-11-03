@@ -134,7 +134,7 @@ final class TerminalIntegrationTests: XCTestCase {
         tty.setcbreak(0)
         os.write(1, b'\x1b]7501;?\x1b\\')
         ready, _, _ = select.select([0], [], [], 5)
-        reply = os.read(0, 64) if ready else b''
+        reply = os.read(0, 512) if ready else b''  # the capability reply names every state and kind
         os.write(1, (b'PROBE_REPLY_OK' if b'\x1b]7501;?' in reply else b'PROBE_REPLY_' + repr(reply).encode()) + b'\r\n')
         os.write(1, b'\x1b]7501;state=working:app=probe\x1b\\')
         os.write(1, b'\x1b]7501;state=blocked:kind=question:id=ask:msg=' + base64.b64encode(b'Continue?') + b'\x07')

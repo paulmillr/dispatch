@@ -102,26 +102,40 @@ enum VoiceKey: String, Codable, CaseIterable {
     }
 }
 
-/// Each new terminal's scrollback: sized from the Mac's memory, a fixed size, or unlimited.
+/// Each new terminal's scrollback: sized from the Mac's memory, a fixed size, unlimited, or a number of lines (which
+/// keeps the memory-sized limit too: whichever is reached first).
 enum Scrollback: String, Codable, CaseIterable {
-    case automatic, small, large, unlimited
+    case automatic, small, large, unlimited, lines10k = "lines10000", lines100k = "lines100000"
     var title: String {
         switch self {
         case .automatic: "Automatic"
         case .small: "10 MB"
         case .large: "1 GB"
         case .unlimited: "Unlimited"
+        case .lines10k: "10,000 lines"
+        case .lines100k: "100,000 lines"
         }
     }
-    /// scrollback-limit-bytes; `automatic` takes the memory-sized default.
+    /// scrollback-limit-bytes; `automatic` and the line counts take the memory-sized default.
     func limit(automatic: Int) -> String {
         switch self {
-        case .automatic: String(automatic)
+        case .automatic, .lines10k, .lines100k: String(automatic)
         case .small: String(10_000_000)
         case .large: String(1_000_000_000)
         case .unlimited: "unlimited"
         }
     }
+    /// scrollback-limit-lines (nil: no line limit). Ghostty counts lines besides the screen, soft-wrapped ones each,
+    /// and drops whole pages: a terminal keeps up to this many, at most a page (a few hundred lines) fewer.
+    var lines: Int? {
+        switch self {
+        case .lines10k: 10_000
+        case .lines100k: 100_000
+        case .automatic, .small, .large, .unlimited: nil
+        }
+    }
+    /// The sizes, then the line counts (the dropdown's two groups).
+    static let sizes: [Scrollback] = [.automatic, .small, .large, .unlimited], lineCounts: [Scrollback] = [.lines10k, .lines100k]
 }
 
 /// Settings › Features › Remote helper and its Auto-confirm uploads, as one choice: ask on a new host, grant every

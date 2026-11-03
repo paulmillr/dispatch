@@ -251,11 +251,12 @@ struct SettingsView: View {
             }
             settingsGroup("Terminal") {
                 launchRow
-                row("Scrollback", detail: draft.scrollback == .automatic ? "sized to this Mac’s RAM · new tabs" : "history each new tab keeps") {
+                row("Scrollback", detail: draft.scrollback == .automatic ? "sized to this Mac’s RAM · new tabs"
+                        : draft.scrollback.lines != nil ? "lines each new tab keeps · within this Mac’s RAM size" : "history each new tab keeps") {
                     dropdown("Scrollback", selection: Binding(get: { draft.scrollback.title }, set: { title in
                         if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }
-                    }), choices: Scrollback.allCases.map(\.title))
-                        .help("Unlimited keeps every line until the tab closes, in memory.")
+                    }), choices: Scrollback.sizes.map(\.title) + [SettingsDropdown.separator] + Scrollback.lineCounts.map(\.title))
+                        .help("Unlimited keeps every line until the tab closes, in memory. A number of lines also keeps the automatic size limit: the first one reached drops the oldest lines.")
                 }
                 windowOptions
                 newTabOptions

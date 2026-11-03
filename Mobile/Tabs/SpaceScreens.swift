@@ -2,9 +2,10 @@ import SwiftUI
 
 /// P2: a space's tabs, as the Mac strip shows them: named for what runs in them, the agent's mark or a terminal, what
 /// each is doing, in server order. The header carries the space with its branch, its host and path, and the space's
-/// menu (Rename…, New tab, Edit tabs, Detach, Terminate…); a row swipes to Detach and Close and holds the tab's menu;
-/// Edit tabs (P2d) reorders them on the server and closes them; the New tab capsule opens a shell here, held the agents
-/// the host can start (P2e). A plain host's Shell space has its shells only: Close, no Rename, Detach or reorder.
+/// menu (New tab, Edit, Detach, Terminate…); a row swipes to Detach and Close and holds the tab's menu; Edit (P2d)
+/// renames the space and its tabs in place, reorders the tabs on the server and closes them; the New tab capsule opens
+/// a shell here, held the agents the host can start (P2e). A plain host's Shell space has its shells only: Close, no
+/// Rename, Detach or reorder.
 struct SpaceTabsScreen: View {
     let navigator: SpacesNavigator
     let ref: SpaceRef
@@ -51,7 +52,7 @@ struct SpaceTabsScreen: View {
                     }
                     .accessibilityLabel("Done")
                 } else if let space {
-                    SpaceMenu(navigator: navigator, space: space, shells: shells, editTabs: { editing = true })
+                    SpaceMenu(navigator: navigator, space: space, shells: shells, edit: { editing = true })
                 }
             }
         }
@@ -78,13 +79,33 @@ struct SpaceTabsScreen: View {
         let shells = space.kind == .plainShell
         let open = shownTab ?? model.openedTabs[ref]
         let reorders = workspace.canReorder(space)
+        // Edit's name fields: never a plain host's shells. They rename (`entities.rename`) only while the host is
+        // connected and live; meanwhile they stay, disabled, keeping what was typed.
+        let renames = !shells
+        let live = workspace.client != nil && workspace.host.live
         return List {
+            if editing, renames {
+                Section {
+                    SpaceNameField(name: space.name, prompt: "Space name", live: live) { name in
+                        await rename { try await workspace.rename(space: space, to: name) }
+                    }
+                    .accessibilityIdentifier("space-name-field")
+                } header: {
+                    Text("Space")
+                }
+            }
             Section {
                 ForEach(rows) { entry in
                     let row = SpaceTabRow(entry: entry, line: SpaceTabRow.line(entry, model: model), agent: model.agent(of: entry.tab),
-                                          open: entry.id == open, editing: editing, now: now)
+                                          open: entry.id == open, editing: editing, now: now, renameLive: live,
+                                          rename: renames ? { name in
+                                              await rename {
+                                                  guard let tab = workspace.tab(entry.id.key) else { return }
+                                                  try await workspace.rename(tab: tab, to: name)
+                                              }
+                                          } : nil)
                     Group {
-                        // Edit tabs (P2d): the row itself, no link (no chevron, not dimmed), beside the list's controls.
+                        // Edit (P2d): the row itself, no link (no chevron, not dimmed), beside the list's controls.
                         if editing {
                             row
                         } else {
@@ -95,8 +116,8 @@ struct SpaceTabsScreen: View {
                     .accessibilityIdentifier("space-tab")
                     .contextMenu {
                         TabsTabMenu(actions: actions, tab: entry.id)
-                        if reorders {
-                            Button("Edit tabs", systemImage: "arrow.up.arrow.down") { editing = true }
+                        if !shells {
+                            Button("Edit", systemImage: "pencil") { editing = true }
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -115,12 +136,14 @@ struct SpaceTabsScreen: View {
                     for index in offsets { actions.close(.tab(rows[index].id), .close) }
                 }
             } footer: {
-                Text(editing ? Self.editNote : Self.note)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 6)
+                if editing {
+                    Text(renames ? Self.editNote : Self.closeNote)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 6)
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -131,8 +154,19 @@ struct SpaceTabsScreen: View {
         .overlay { if rows.isEmpty { TabsNothing(query: TabsQuery()) } }
     }
 
-    static let note = "Long-press a tab for Rename, Detach and Terminate."
-    static let editNote = "Drag to reorder. Closing a tab detaches it unless it is idle."
+    static let editNote = "Tap a name to rename it. Drag to reorder. Closing a tab detaches it unless it is idle."
+    static let closeNote = "Closing a tab detaches it unless it is idle."
+
+    /// A rename from Edit: the server's answer, a refusal shown as the screen's other failures are. True once it took.
+    private func rename(_ work: () async throws -> Void) async -> Bool {
+        do {
+            try await work()
+            return true
+        } catch {
+            actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
 
     /// P2d's drag: the rows take the new order at once (`MobileWorkspace.reorder` keeps it until the server answers),
     /// and the tab moves before its new neighbour on the server (`memberships.move`: tmux's window order, herdr's tab
@@ -170,27 +204,25 @@ struct SpaceTabsScreen: View {
     private func pop() { if !path.isEmpty { path.removeLast() } }
 }
 
-/// P2c: the space's menu behind the header's "…": Rename…, New tab, Edit tabs, then Detach ("keeps everything
-/// running") and Terminate… ("ends every shell and agent"), which asks first. A Shell space's: New tab and Close all.
+/// P2c: the space's menu behind the header's "…": New tab, Edit (renaming the space and its tabs, reordering and
+/// closing them), then Detach ("keeps everything running") and Terminate… ("ends every shell and agent"), which asks
+/// first. A Shell space's: New tab and Close all.
 private struct SpaceMenu: View {
     let navigator: SpacesNavigator
     let space: MobileSpace
     let shells: Bool
-    let editTabs: () -> Void
+    let edit: () -> Void
 
     var body: some View {
         let workspace = navigator.model.workspace(space.ref.host)
         let connected = workspace?.client != nil
         Menu {
-            if !shells {
-                Button("Rename…", systemImage: "pencil") { navigator.actions.rename(.space(space.ref)) }
-                    .disabled(!connected)
-            }
             if workspace?.canAddTab(to: space) == true {
                 Button("New tab", systemImage: "plus") { navigator.newTab(in: space) }
             }
-            if !shells, workspace?.canReorder(space) == true {
-                Button("Edit tabs", systemImage: "arrow.up.arrow.down", action: editTabs)
+            if !shells {
+                Button("Edit", systemImage: "pencil", action: edit)
+                    .disabled(!connected)
             }
             Divider()
             if shells {
@@ -354,9 +386,9 @@ struct SpacesAgentLauncher {
 }
 
 /// P2's tab row: the state dot (blue needs you or unseen, amber working), the agent's mark or a terminal, the title as
-/// the Mac strip names it with "open" on the tab shown last, the time and a chevron; under it what the tab is doing (the
-/// question or approval in the primary colour while it waits). Edit mode (P2d) drops the dot and the time for the
-/// list's controls.
+/// the Mac strip names it, the time and a chevron; under it what the tab is doing (the question or approval in the
+/// primary colour while it waits). The tab shown last is "open" to VoiceOver only. Edit mode (P2d) drops the dot and
+/// the time for the list's controls, and the title becomes a field that renames the tab (`rename`).
 struct SpaceTabRow: View {
     let entry: TabsEntry
     let line: TabsStatus?
@@ -365,6 +397,10 @@ struct SpaceTabRow: View {
     var open = false
     var editing = false
     var now = Date()
+    /// The host can take a rename now (`SpaceNameField.live`).
+    var renameLive = true
+    /// Edit mode's rename of this tab, true once the server took it (nil: its title stays text, as a plain shell's).
+    var rename: ((String) async -> Bool)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -377,15 +413,13 @@ struct SpaceTabRow: View {
             AgentGlyph(agent: entry.tab.isChat ? (agent ?? "agent") : nil)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    // The title first: the time gives way (it shrinks a little) before a title like the mockup's does.
-                    Text(entry.label).font(.headline).lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                    if open {
-                        Text("open")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .frame(minHeight: 16)
-                            .background(Color.chipFill, in: Capsule())
+                    // As a shell row: the title, then the time at its own width; a long title truncates, never the time.
+                    // (The title's priority over an "open" chip and the time once folded the chip into a tall capsule
+                    // and cut the time to a letter.)
+                    if editing, let rename {
+                        SpaceTabNameField(name: entry.label, live: renameLive, rename: rename)
+                    } else {
+                        Text(entry.label).font(.headline).lineLimit(1).truncationMode(.tail)
                     }
                     Spacer(minLength: 2)
                     if !editing, let time = TabsTime.label(entry.activity, now: now) {
@@ -393,7 +427,9 @@ struct SpaceTabRow: View {
                             .font(.subheadline)
                             .foregroundStyle(entry.host.stale ? .tertiary : .secondary)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.75)
+                            .fixedSize()
+                            .layoutPriority(1)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { timeWidth?($0) }
                     }
                 }
                 if let line {
@@ -406,14 +442,13 @@ struct SpaceTabRow: View {
         }
         .padding(.vertical, 11)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(entry.label)
-        .accessibilityValue(Self.value(entry: entry, line: line, open: open, now: now))
-        // The split's sidebar marks the tab beside it, as a selected row in Mail.
-        .accessibilityAddTraits(shown == entry.id ? .isSelected : [])
+        .modifier(SpaceTabRowAccessibility(field: editing && rename != nil, label: entry.label,
+                                           value: Self.value(entry: entry, line: line, open: open, now: now),
+                                           selected: shown == entry.id))
     }
 
     @Environment(\.tabsShownTab) private var shown
+    @Environment(\.tabsRowTimeWidth) private var timeWidth
 
     /// "Needs you, Allow cargo test --workspace?, 2:51 AM", "open, ~/src/app".
     static func value(entry: TabsEntry, line: TabsStatus?, open: Bool, now: Date) -> String {
@@ -439,6 +474,116 @@ struct SpaceTabRow: View {
         if let program = tab.program, program != entry.label, !tab.atShell, !tab.isChat { return TabsStatus(text: program) }
         return entry.host.abbreviate(tab.cwd).map { TabsStatus(text: $0) }
     }
+}
+
+/// A tab row as one VoiceOver element (its name, then its state, line and time), or while Edit shows its name field the
+/// field on its own, which a combined element could not edit. The split's sidebar marks the tab beside it, as a
+/// selected row in Mail.
+private struct SpaceTabRowAccessibility: ViewModifier {
+    let field: Bool
+    let label: String
+    let value: String
+    let selected: Bool
+
+    func body(content: Content) -> some View {
+        if field {
+            content.accessibilityElement(children: .contain)
+        } else {
+            content
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(label)
+                .accessibilityValue(value)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+        }
+    }
+}
+
+/// Edit's name field for a space or a tab (P2d): the name as it shows; Return, or leaving the field, renames it on the
+/// server when the text changed and is not empty. What was sent last stays in the field until the topology names it so,
+/// whatever earlier renames still on their way bring first, so the field never shows a name for a moment that is not
+/// the latest (a name the server made of it, not one of those sent, ends the wait once every rename answered; a failed
+/// rename puts the server's name back). While the host is not live (`live`) the field is disabled and keeps what was
+/// typed: nothing is sent to a connection that cannot take it.
+struct SpaceNameField: View {
+    let name: String
+    var prompt = "Tab name"
+    var live = true
+    let rename: (String) async -> Bool
+    @State private var draft: String?
+    @State private var renames = SpaceRenames()
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(prompt, text: Binding(get: { draft ?? renames.shown(name) }, set: { draft = $0 }))
+            .font(.headline)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .focused($focused)
+            .disabled(!live)
+            .onSubmit(commit)
+            .onChange(of: focused) { _, now in if !now { commit() } }
+            .onChange(of: name) { _, now in renames.arrived(now) }
+            .onDisappear(perform: commit)
+            .accessibilityLabel("Rename \(name)")
+    }
+
+    private func commit() {
+        // Not live: nothing is sent, and what was typed stays in the field.
+        guard live, let typed = draft else { return }
+        draft = nil
+        guard let next = renames.send(typed, name: name) else { return }
+        Task { renames.answered(next, took: await rename(next)) }
+    }
+}
+
+/// The renames an Edit name field sent and what it shows meanwhile (`SpaceNameField`): the latest name sent until the
+/// topology names it so, whatever earlier renames bring first; a name the server made of it (none of those sent) once
+/// every rename answered; the server's own after a failed latest one.
+struct SpaceRenames: Equatable {
+    /// The latest name sent and not yet in the topology.
+    private(set) var sent: String?
+    /// Every name sent since the field last showed the topology's.
+    private(set) var names: Set<String> = []
+    /// Renames not answered yet.
+    private(set) var pending = 0
+
+    func shown(_ name: String) -> String { sent ?? name }
+
+    /// Typed text to send: trimmed, nil when empty or what shows already.
+    mutating func send(_ typed: String, name: String) -> String? {
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != shown(name) else { return nil }
+        sent = trimmed
+        names.insert(trimmed)
+        pending += 1
+        return trimmed
+    }
+
+    /// The topology's name now.
+    mutating func arrived(_ name: String) {
+        guard let sent else { return }
+        if name == sent || (!names.contains(name) && pending == 0) { reset() }
+    }
+
+    /// A rename's answer: a failed latest one shows the topology's name again.
+    mutating func answered(_ name: String, took: Bool) {
+        pending = max(0, pending - 1)
+        if !took, sent == name { reset() }
+    }
+
+    private mutating func reset() {
+        sent = nil
+        names = []
+    }
+}
+
+/// The tab row's title while Edit renames tabs.
+struct SpaceTabNameField: View {
+    let name: String
+    var live = true
+    let rename: (String) async -> Bool
+    var body: some View { SpaceNameField(name: name, live: live, rename: rename) }
 }
 
 /// A tab's one-line state where the space and folder are said elsewhere (the watch's tab rows): an ended shell's end,
@@ -582,4 +727,9 @@ private struct SpacesDetachedRow: View {
         }
         .padding(.vertical, 4)
     }
+}
+
+extension EnvironmentValues {
+    /// Told the width a tab row's time is laid out at (`SpaceTabRow`): tests check a long title never cuts it.
+    @Entry var tabsRowTimeWidth: ((CGFloat) -> Void)? = nil
 }

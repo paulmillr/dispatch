@@ -36,10 +36,13 @@ final class MobileSettings {
     nonisolated static let boldIsBrightKey = "terminal.boldIsBright"
     nonisolated static let cursorKey = "terminal.cursor"
     nonisolated static let cursorBlinkKey = "terminal.cursorBlink"
+    nonisolated static let ligaturesKey = "terminal.ligatures"
     /// The terminal's rows and chat's lines together, as the Mac's Settings › Appearance › Size › Line spacing.
     nonisolated static let lineSpacingKey = "text.lineSpacing"
     nonisolated static let chatFontKey = "chat.font"
     nonisolated static let chatTextSizeKey = "chat.textSize"
+    /// The composer's code keys row ("+" › Show code keys), off by default; the composer reads it (`@AppStorage`).
+    nonisolated static let composerCodeKeysKey = "composer.codeKeys"
     nonisolated static let notifyNeedsYouKey = "notify.needsYou"
     nonisolated static let notifyFinishedKey = "notify.finished"
     nonisolated static let notifyFailedKey = "notify.failed"
@@ -121,6 +124,11 @@ final class MobileSettings {
         didSet { if cursorBlink != oldValue { save(cursorBlink, Self.cursorBlinkKey) } }
     }
 
+    /// The font's code ligatures, on by default (the Mac's Ligatures).
+    var ligatures: Bool {
+        didSet { if ligatures != oldValue { save(ligatures, Self.ligaturesKey) } }
+    }
+
     /// Tight, normal or relaxed lines in the terminal and chat (`LineSpacing`); chat reads the same key
     /// (`mobileAppearance()`).
     var lineSpacing: LineSpacing {
@@ -179,6 +187,7 @@ final class MobileSettings {
         boldIsBright = style.boldIsBright
         cursor = style.cursor
         cursorBlink = style.cursorBlink
+        ligatures = style.ligatures
         lineSpacing = style.lineSpacing
         chatFont = defaults.string(forKey: Self.chatFontKey).flatMap(MobileChatFont.init(rawValue:)) ?? .system
         chatTextSize = defaults.string(forKey: Self.chatTextSizeKey).flatMap(ChatTextSize.init(rawValue:)) ?? .standard

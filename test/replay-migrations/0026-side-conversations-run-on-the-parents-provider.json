@@ -1,0 +1,12 @@
+{
+  "kind": "rerecord",
+  "why": "Side conversations (/btw, /side) now run on the parent's provider, model and credentials. A Codex side asks its parent for more variables (side::SIDE_ENVIRONMENT: CODEX_CA_CERTIFICATE, the lowercase proxies and DISPATCH_SIDE_ENVIRONMENT), starts its app-server with the parent's own -c/--enable/--disable overrides, reads the parent thread (thread/read) and forks it with that thread's model, modelProvider and effort, starting its app-server again with the variables the effective configuration names (the provider's env_key and env_http_headers, MCP credentials for /side) when the parent has any; a Claude side asks for a longer list of variables, bound to the parent's start time and executable, then reads the settings files whose credential commands may name more. The model catalog's server (Codex's model picker) now also gets the parent's overrides and SIDE_ENVIRONMENT, asks for its environment bound to the parent's start time and executable, and reads its configuration (config/read) to start again with the credentials its default provider names, so its recordings record other requests too (`environment` request arguments differ first). Every recorded side launch therefore records other helper requests, which a rewrite cannot add: the one corpus test with a side conversation (its environment request failed replay first, `expected submit, got submit; arguments match: false`) and the five Codex model picker tests whose catalog server's environment request failed replay are recorded again.",
+  "tests": [
+    "ChatModelPickerTests/testLocalHerdrTransportModelQueueAndExit",
+    "ChatModelPickerTests/testLocalTmuxTransportModelQueueAndExit",
+    "ChatModelPickerTests/testRealLocalHerdrModelAndEffortPicker",
+    "ChatModelPickerTests/testRealLocalTmuxChatCommands",
+    "ChatModelPickerTests/testRealLocalTmuxModelAndEffortPicker",
+    "ChatSideConversationTests/testRealCodexForkKeepsSideReplyOutOfMainThread"
+  ]
+}

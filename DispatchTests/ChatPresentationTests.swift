@@ -890,3 +890,60 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertNotNil(composer.accessibilityLabel())
     }
 }
+
+extension ChatPresentationTests {
+    /// A working agent's footer gives up its labels before its row: one line at a narrow pane, two only when even
+    /// the minimal row cannot fit.
+    func testWorkingComposerFooterKeepsOneRowInNarrowPanes() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = "footer-density"; session.active = true; session.showChat = true
+        session.model = "gpt-6-astra"; session.effort = "high"
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
+        session.helper = HelperChat(terminal: 0)
+        session.busy = true; session.submittedThinkingAt = .now.addingTimeInterval(-411)
+        session.draft = "Also cover invoice.paid"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 490, height: 400),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: true, floatingSwitch: false))
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        // The composer's container identifier replaces its controls' identifiers: find them by label.
+        func frame(_ label: String) -> NSRect? {
+            PresentationTestSupport.accessibilityFrames(matching: { _ in true }, label: label, in: window).first { !$0.isEmpty }
+        }
+        var sendWidths: [Double: CGFloat] = [:]
+        for width in [560.0, 490.0, 375.0, 220.0] {
+            window.setContentSize(NSSize(width: width, height: 400))
+            try await TestSupport.eventually { frame("Queue message").map { $0.maxX <= width } ?? false }
+            let send = try XCTUnwrap(frame("Queue message")), model = try XCTUnwrap(frame("Choose model"))
+            let stop = try XCTUnwrap(frame("Stop agent"))
+            XCTAssertLessThanOrEqual(send.maxX, width, "Send must stay inside a \(width) pt pane")
+            sendWidths[width] = send.width
+            if width >= 375 {
+                XCTAssertEqual(model.midY, send.midY, accuracy: 2, "Model and Send share one row at \(width) pt")
+                XCTAssertEqual(stop.midY, send.midY, accuracy: 2, "Stop shares the row at \(width) pt")
+            } else {
+                XCTAssertGreaterThan(abs(model.midY - send.midY), 8, "Only a pane too narrow for the minimal row takes two")
+            }
+        }
+        XCTAssertGreaterThan(sendWidths[560] ?? 0, (sendWidths[490] ?? 0) + 8, "The keycap goes first")
+        window.setContentSize(NSSize(width: 490, height: 400))
+        try await TestSupport.eventually { frame("Queue message")?.width == sendWidths[490] }
+        let labeled = try await PresentationTestSupport.capture(window, named: "working-490", in: "chat-footer-validation").text().lowercased()
+        XCTAssertTrue(labeled.contains("thinking"), "The activity keeps its label after the keycap goes: \(labeled)")
+        // Hidden in the tightest row, the ⌘/ chip still anchors its sheet.
+        window.setContentSize(NSSize(width: 375, height: 400))
+        // Only the hidden anchor is left, behind the reply button's leading edge.
+        try await TestSupport.eventually {
+            guard let send = frame("Queue message") else { return false }
+            return frame("Composer shortcuts").map { abs($0.minX - send.minX) < 1 } ?? true
+        }
+        session.shortcutsPresented = true
+        try await TestSupport.eventually { NSApp.windows.contains { $0 !== window && $0.isVisible && $0.contentView != nil } }
+        session.shortcutsPresented = false
+    }
+}

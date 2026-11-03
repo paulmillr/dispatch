@@ -43,36 +43,86 @@ struct ChatThinkingGlyph: View {
     }
 }
 
-/// "thinking" with the light sweeping across it (hx-shimmer, 2.4 s); plain with Reduce Motion.
+/// The working row's one sweep: the glint crossing the row's hairline (`ChatAccentScan`) is the light on "thinking"
+/// (`ChatShimmerText` with a `ChatSweepTrack`): the label lights exactly where and while the glint passes over it,
+/// leading to trailing, on one 2.2 s ease-in-out period (hx-scan's; hx-shimmer's own 2.4 s right-to-left loop ran
+/// against it). A pure function of the instant, as the Mac's loops are phase-aligned to the media clock: both views,
+/// and any two rows, draw the same point in a frame.
+enum ChatThinkingSweep {
+    static let period = 2.2
+
+    /// 0 with the glint just off the line's leading end, 1 just off its trailing end; eased in and out.
+    static func progress(at date: Date) -> Double {
+        let time = date.timeIntervalSinceReferenceDate
+        let t = (time - (time / period).rounded(.down) * period) / period
+        return t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
+    }
+}
+
+/// Where a label sits under the hairline's glint: the line's width and the label's leading x on it.
+struct ChatSweepTrack: Equatable {
+    var lineWidth: CGFloat
+    var labelX: CGFloat
+
+    /// The glint's centre and half width on the line at `progress` (`ChatThinkingSweep`).
+    static func glint(lineWidth: CGFloat, progress: Double) -> (center: CGFloat, half: CGFloat) {
+        let width = lineWidth * ChatAccentScan.share
+        return (-width + (lineWidth + width) * progress + width / 2, width / 2)
+    }
+}
+
+/// "thinking" with the light sweeping across it (`ChatThinkingSweep`); plain with Reduce Motion. On a `track` the light
+/// is the hairline's glint itself, as wide and where it is; without one it crosses the label in the same period.
 struct ChatShimmerText: View {
     let text: String
+    var track: ChatSweepTrack? = nil
     @ReduceMotion private var reduceMotion
     @Environment(\.animationDateOverride) private var fixedDate
     private static let base = Color.shimmerBase
+    /// Half the light's width without a track, as a share of the label's.
+    private static let half = 0.25
 
     var body: some View {
         let label = Text(text).font(.subheadline.weight(.semibold))
         if reduceMotion {
             label.foregroundStyle(Self.base)
         } else {
-            TimelineView(.animation) { context in
-                let phase = (fixedDate ?? context.date).timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
-                // The background-position sweep from 120% to -120% over a 250% wide gradient.
-                let center = 1.2 - 2.4 * phase
-                label.foregroundStyle(LinearGradient(stops: [
-                    .init(color: Self.base, location: 0),
-                    .init(color: Self.base, location: max(0, min(1, center - 0.25))),
-                    .init(color: .shimmerHighlight, location: max(0, min(1, center))),
-                    .init(color: Self.base, location: max(0, min(1, center + 0.25))),
-                    .init(color: Self.base, location: 1),
-                ], startPoint: .leading, endPoint: .trailing))
+            // The label keeps its place; the copy over it reads the label's width in the same pass.
+            label.hidden().overlay {
+                GeometryReader { proxy in
+                    TimelineView(.animation) { context in
+                        let (start, end) = span(progress: ChatThinkingSweep.progress(at: fixedDate ?? context.date),
+                                                width: proxy.size.width)
+                        // The gradient's ends pad with the base colour beyond its points: off the label nothing is
+                        // lit, and the light leaves and comes back with nothing drawn between (no jump at the wrap).
+                        label.foregroundStyle(LinearGradient(colors: [Self.base, .shimmerHighlight, Self.base],
+                                                             startPoint: UnitPoint(x: start, y: 0.5),
+                                                             endPoint: UnitPoint(x: end, y: 0.5)))
+                    }
+                }
             }
         }
     }
+
+    /// The light's ends in the unit space of a label `width` wide at `progress`.
+    private func span(progress: Double, width: CGFloat) -> (CGFloat, CGFloat) {
+        if let track {
+            // Not laid out yet: unlit, rather than a frame of a light that is not the glint's.
+            guard track.lineWidth > 0, width > 0 else { return (-2, -1) }
+            let glint = ChatSweepTrack.glint(lineWidth: track.lineWidth, progress: progress)
+            let center = glint.center - track.labelX
+            return ((center - glint.half) / width, (center + glint.half) / width)
+        }
+        // Without a track: from just off the leading end to just off the trailing one.
+        let center = -Self.half + (1 + 2 * Self.half) * progress
+        return (center - Self.half, center + Self.half)
+    }
 }
 
-/// The accent scan along a hairline (hx-scan, 2.2 s ease-in-out): a 30% wide pink glint crossing it.
+/// The accent scan along a hairline (hx-scan, `ChatThinkingSweep`): a 30% wide pink glint crossing it.
 struct ChatAccentScan: View {
+    /// The glint's width, as a share of the line's.
+    static let share: CGFloat = 0.3
     @ReduceMotion private var reduceMotion
     @Environment(\.animationDateOverride) private var fixedDate
     var body: some View {
@@ -81,13 +131,12 @@ struct ChatAccentScan: View {
         } else {
             GeometryReader { geometry in
                 TimelineView(.animation) { context in
-                    let t = (fixedDate ?? context.date).timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.2) / 2.2
-                    let eased = t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
-                    let width = geometry.size.width * 0.3
+                    let glint = ChatSweepTrack.glint(lineWidth: geometry.size.width,
+                                                     progress: ChatThinkingSweep.progress(at: fixedDate ?? context.date))
                     LinearGradient(colors: [.clear, .dispatchPink, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: width)
+                        .frame(width: glint.half * 2)
                         .opacity(0.7)
-                        .offset(x: -width + (geometry.size.width + width) * eased)
+                        .offset(x: glint.center - glint.half)
                 }
             }
             .clipped()
@@ -111,7 +160,9 @@ struct ChatWorkingRow: View {
     }
 
     /// What the agent waits for, when it waits for the user (the Mac's AgentWorkingIndicator).
-    private var waiting: String? {
+    private var waiting: String? { Self.waiting(session) }
+
+    static func waiting(_ session: MobileChatSession) -> String? {
         guard session.waitingForUser else { return nil }
         let question = session.questions.contains { $0.blocking && !$0.submitted }
             || session.approvals.contains { $0.pending.pending && $0.pending.questions != nil }
@@ -119,11 +170,18 @@ struct ChatWorkingRow: View {
     }
 
     /// The clock: the prompt this phone sent, else the turn's start, else when the agent began working.
-    private var started: Date? {
+    private var started: Date? { Self.started(session) }
+
+    static func started(_ session: MobileChatSession) -> Date? {
         if let sent = session.submittedAt { return sent }
         if let turn = session.transcript.openTurn, turn.started.timeIntervalSince1970 > 0 { return turn.started }
         return session.workingSince
     }
+
+    /// The row's space: the hairline spans it from 0, and the label's light is placed on it.
+    private static let space = "chat-working-row"
+    @State private var lineWidth: CGFloat = 0
+    @State private var labelX: CGFloat = 0
 
     var body: some View {
         let steps = steps
@@ -132,6 +190,7 @@ struct ChatWorkingRow: View {
             ChatAccentScan()
                 .frame(height: 1)
                 .background(Color.thinkingBorder)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { lineWidth = $0 }
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     ChatThinkingGlyph(size: glyph)
@@ -139,7 +198,9 @@ struct ChatWorkingRow: View {
                         // Blocked on the user, as the Mac's indicator says: no thinking shimmer, no clock.
                         Text(waiting)
                     } else {
-                        ChatShimmerText(text: "thinking")
+                        ChatShimmerText(text: "thinking",
+                                        track: ChatSweepTrack(lineWidth: lineWidth, labelX: labelX))
+                            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named(Self.space)).minX }) { labelX = $0 }
                         Text("·").foregroundStyle(.tertiary)
                         ChatElapsed(since: started)
                     }
@@ -201,12 +262,81 @@ struct ChatWorkingRow: View {
                 .padding(.bottom, 6)
             }
         }
+        .coordinateSpace(.named(Self.space))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(session.agentName) is working")
     }
 
     @ScaledMetric(relativeTo: .subheadline) private var glyph: CGFloat = 16
     @ScaledMetric(relativeTo: .subheadline) private var disclosure: CGFloat = 28
+}
+
+/// S6e: while the turn runs and has agent text, its newest bubble's corner carries the work instead of the working row:
+/// a mini spinner, the step and the turn's time ("step 4 · 38s"), at the working row's cadence (`ChatElapsed`; with
+/// Reduce Motion the diamond stands still and the time counts in fives after ten seconds). Waiting for the user it
+/// says so, without spinner or clock. When the turn ends the same corner settles into the summary (`ChatTurnCorner`).
+/// Only the time ticks here: the bubble's text keeps a fixed room (`room`), so the bubble never moves with it.
+struct ChatTurnProgressCorner: View {
+    /// The turn's steps so far (tools, not thinking).
+    let steps: Int
+    let since: Date?
+    /// What the agent waits for (`ChatWorkingRow.waiting`): "step 4 · approve", "step 4 · answer".
+    var waiting: String? = nil
+    /// On trailing lines of its own (`ChatTurnCorner.wrapped`).
+    var wrapped = false
+    @ReduceMotion private var reduceMotion
+
+    var body: some View {
+        if wrapped {
+            content
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        } else {
+            content.lineLimit(1).fixedSize()
+        }
+    }
+
+    private var content: some View {
+        HStack(spacing: 5) {
+            if let waiting {
+                Text(Self.label(steps: steps, elapsed: Self.word(waiting)))
+            } else {
+                if reduceMotion {
+                    ChatThinkingGlyph(size: 12)
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
+                TimelineView(.periodic(from: since ?? .now, by: 1)) { context in
+                    Text(Self.label(steps: steps, elapsed: ChatElapsed.text(since.map { context.date.timeIntervalSince($0) } ?? 0,
+                                                                         reduceMotion: reduceMotion)))
+                }
+            }
+        }
+        .font(ChatTurnCorner.font)
+        .foregroundStyle(.secondary)
+    }
+
+    /// The corner's word for what the agent waits for: "answer" for a question, else "approve".
+    static func word(_ waiting: String) -> String { waiting.hasSuffix("answer") ? "answer" : "approve" }
+
+    /// "step 4 · 38s"; the time alone before the first step.
+    static func label(steps: Int, elapsed: String) -> String {
+        steps > 0 ? "step \(steps) · \(elapsed)" : elapsed
+    }
+
+    /// The text's room: the widest the label gets in the turn's first hour at up to three-digit steps ("step 000 · 00m
+    /// 00s", monospaced digits), with the spinner's, so neither the ticking time nor the next step moves the bubble.
+    static func room(steps: Int) -> String {
+        let digits = String(repeating: "0", count: max(3, String(steps).count))
+        return "\u{2003}\u{2003}" + label(steps: 1, elapsed: "00m 00s").replacingOccurrences(of: "1", with: digits)
+    }
+
+    /// For VoiceOver, as the bubble's value: "working, step 4", "waiting for your approval, step 4" (no clock: the
+    /// value does not change every second).
+    static func spoken(steps: Int, waiting: String?) -> String {
+        (waiting ?? "working") + (steps > 0 ? ", step \(steps)" : "")
+    }
 }
 
 /// The thinking line for VoiceOver: "claude is thinking, 40 seconds", the steps as its value. The time is spoken in

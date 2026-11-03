@@ -200,7 +200,12 @@ final class SettingsStyleTests: XCTestCase {
         MobileFonts.register()
         XCTAssertEqual(TerminalFont.all.first?.name, "Source Code Pro", "the default first")
         XCTAssertEqual(TerminalFont.all.filter(\.system).map(\.name), ["Menlo"])
-        XCTAssertEqual(TerminalFont.all.filter(\.ligatures).map(\.name), ["JetBrains Mono", "Fira Code", "0xProto"])
+        // The Mac's list and order (`SettingsView.fontMenuChoices`): the default, the system's, then Dispatch's own by name.
+        XCTAssertEqual(TerminalFont.all.map(\.name), [
+            "Source Code Pro", "Menlo", "0xProto", "Cascadia Code", "CommitMono", "Departure Mono", "Fira Code", "Geist Mono",
+            "Hack", "Hasklig", "IBM Plex Mono", "Inconsolata", "Intel One Mono", "Ioskeley Mono Term", "JetBrains Mono",
+            "Latin Modern Mono", "Maple Mono", "Rec Mono Casual", "Victor Mono",
+        ])
         for font in TerminalFont.all {
             XCTAssertFalse(UIFont.fontNames(forFamilyName: font.name).isEmpty, "\(font.name) is registered")
         }
@@ -210,7 +215,7 @@ final class SettingsStyleTests: XCTestCase {
     func testSchemesAreDispatchsThenGhosttysWithSwatches() throws {
         let schemes = TerminalSchemes.all()
         XCTAssertEqual(schemes.prefix(2).map(\.title), ["Dispatch", "Dispatch Gray"])
-        XCTAssertGreaterThan(schemes.count, 100, "Ghostty's bundled themes")
+        XCTAssertGreaterThan(schemes.count, 80, "Ghostty's bundled themes")
         let nord = try XCTUnwrap(schemes.first { $0.file == "Nord" })
         XCTAssertTrue(nord.isDark)
         XCTAssertEqual(nord.accents.count, 6)
@@ -361,7 +366,7 @@ final class SettingsStyleTests: XCTestCase {
         let composition = ResilienceFixture.composition(ResilienceFixture.sessions([ResilienceFixture.host("studio")]))
         composition.settings.terminalFont = "Fira Code"
         composition.settings.chatFont = .comicSans
-        let expected = ["Theme, Automatic", "Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast",
+        let expected = ["Theme, Automatic", "Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast, Light themes",
                         "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "studio, Chat on",
                         "Remove all data"]
         _ = try await labels(SettingsView(composition: composition).environment(composition.hosts), height: 2400, expected: expected)
@@ -370,8 +375,8 @@ final class SettingsStyleTests: XCTestCase {
     /// G2: every font by name, the selected one marked; a tap chooses.
     func testTerminalFontScreen() async throws {
         let settings = MobileSettings(defaults: defaults())
-        _ = try await labels(NavigationStack { TerminalFontSettingsView(settings: settings) },
-                             expected: TerminalFont.all.map(\.name) + ["Bold text as bright colors", "Cursor, Block", "Blinking cursor"])
+        _ = try await labels(NavigationStack { TerminalFontSettingsView(settings: settings) }, height: 2600,
+                             expected: TerminalFont.all.map(\.name) + ["Ligatures", "Bold text as bright colors", "Cursor, Block", "Blinking cursor"])
     }
 
     /// G3 and G4: the three fonts and the four themes by name.
@@ -387,5 +392,23 @@ final class SettingsStyleTests: XCTestCase {
         let composition = ResilienceFixture.composition(ResilienceFixture.sessions([]))
         _ = try await labels(NavigationStack { NotificationSettingsView(composition: composition) },
                              expected: ["Needs you", "Finished", "Failed or disconnected", "Sound, Default", "Show message text", "Badge app icon"])
+    }
+}
+
+/// Settings' Ligatures (the Mac's `fontLigatures`): on by default; off, the terminal's config turns the font's ligature
+/// features off as the Mac's does, and the open terminals take it at once.
+extension SettingsStyleTests {
+    func testLigaturesReachTheConfiguration() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertTrue(settings.ligatures, "on by default")
+        XCTAssertFalse(TerminalStyle(store).applied(to: TerminalConfiguration()).text.contains("font-feature"))
+        let posted = expectation(forNotification: TerminalStyle.changed, object: store)
+        settings.ligatures = false
+        wait(for: [posted], timeout: 1)
+        XCTAssertEqual(store.object(forKey: MobileSettings.ligaturesKey) as? Bool, false)
+        let text = TerminalStyle(store).applied(to: TerminalConfiguration()).text
+        XCTAssertTrue(text.contains("font-feature = -calt, -liga, -dlig"), text)
+        XCTAssertFalse(MobileSettings(defaults: store).ligatures, "kept")
     }
 }

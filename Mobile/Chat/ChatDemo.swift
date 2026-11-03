@@ -9,6 +9,8 @@ import UIKit
 /// Launch with `DISPATCH_MOBILE_CHAT_DEMO=<screen id>` (`SIMCTL_CHILD_DISPATCH_MOBILE_CHAT_DEMO` through simctl).
 enum ChatDemo {
     static var screen: String? { ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO"] }
+    /// `DISPATCH_MOBILE_CHAT_DEMO_ECHO=<seconds>`: a sent message is answered (`Peer.echo`).
+    static var echoes: Bool { ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_ECHO"] != nil }
     /// `DISPATCH_MOBILE_CHAT_DEMO_WIDTH=<points>`: M3a in a sidebar column that wide.
     static var sidebarWidth: CGFloat? {
         ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_WIDTH"].flatMap(Double.init).map { CGFloat($0) }
@@ -50,6 +52,55 @@ enum ChatDemo {
         }
         return [record(turn + ":started", "turn_started", time: base), record(turn + ":user", "user", text: question, time: base),
                 record(turn + ":answer", "assistant", text: answer, time: base + 9_000), record(turn + ":ended", "turn_ended", time: base + 9_000)]
+    }
+
+    /// S6's turns after the recorded two (idempotent.ts, then two files): one that only read three files and a plain
+    /// answer without a corner, all ended minutes ago so the corners tell today's times. `working` (S6e) adds a turn
+    /// that started 38 s ago and is still running: four steps and the start of its answer.
+    static func cornerTurns(working: Bool = false) -> [[String: Any]] {
+        let reads = ["tool-c1", "tool-d1", "tool-d2"]
+        let base: Int64 = 946_719_300_000
+        func record(_ id: String, _ kind: String, text: String = "", time: Int64) -> [String: Any] {
+            ["id": id, "turn": "p2b", "kind": kind, "text": text, "title": "", "output": "", "blocks": [], "completed": true,
+             "exit_code": NSNull(), "patch": NSNull(), "documents": [], "tool": NSNull(), "inline_reasoning": false,
+             "time_ms": time, "position": NSNull()]
+        }
+        var turn = [record("p2b:started", "turn_started", time: base), record("p2b:user", "user", text: sideQuestion, time: base)]
+        for (index, var tool) in records().filter({ reads.contains($0["id"] as? String ?? "") }).enumerated() {
+            tool["id"] = "s6-" + (tool["id"] as? String ?? "")
+            tool["turn"] = "p2b"
+            tool["time_ms"] = base + Int64(index / 2 + 1) * 1_000
+            turn.append(tool)
+        }
+        turn += [record("p2b:answer", "assistant", text: "The route handler in src/routes/invoices.ts runs first; the shared middleware sees the event after it.", time: base + 12_000),
+                 record("p2b:ended", "turn_ended", time: base + 12_000)]
+        var all = records() + turn + exchange("p3", question: "Does the replay command reuse ids?", answer: "Yes, it keeps the original id.")
+        // The last turn ended two minutes ago.
+        let last = all.compactMap { $0["time_ms"] as? Int64 }.max() ?? 0
+        var shift = Int64(Date().timeIntervalSince1970 * 1000) - 120_000 - last
+        if working {
+            let start = last + 60_000
+            var running = [record("p4:started", "turn_started", time: start), record("p4:user", "user", text: "Add a test for the retry path.", time: start)]
+            running[0]["turn"] = "p4"
+            running[1]["turn"] = "p4"
+            for (index, var tool) in records().filter({ ["tool-c1", "tool-c2", "tool-c4", "tool-c5"].contains($0["id"] as? String ?? "") }).enumerated() {
+                tool["id"] = "s6e-" + (tool["id"] as? String ?? "")
+                tool["turn"] = "p4"
+                tool["time_ms"] = start + Int64(index / 2 + 1) * 4_000
+                running.append(tool)
+            }
+            var answer = record("p4:answer", "assistant", text: "Writing a test that delivers the same event twice and checks the second one is skipped.", time: start + 30_000)
+            answer["turn"] = "p4"
+            all += running + [answer]
+            // It started 38 s ago.
+            shift = Int64(Date().timeIntervalSince1970 * 1000) - 38_000 - start
+        }
+        all = all.map { record in
+            var record = record
+            if let time = record["time_ms"] as? Int64 { record["time_ms"] = time + shift }
+            return record
+        }
+        return all
     }
 
     /// The state a screen opens with: C4's goal, subagents and context.
@@ -105,6 +156,9 @@ enum ChatDemo {
         private let screen: String
         private var serial: UInt64 = 0
         private var stored: [String: Data] = [:]
+        /// The main conversation's `chat.open`, whose subscription the echo's records and states come on.
+        private var opened: UInt64?
+        private let echoQueue = DispatchQueue(label: "ChatDemo.echo")
 
         init(screen: String) {
             self.screen = screen
@@ -129,7 +183,9 @@ enum ChatDemo {
             let terminal = params["terminal"] as? UInt64 ?? 11
             switch method {
             case "chat.open" where params["session"] as? String == ChatDemo.side: openSide(id, terminal: terminal)
-            case "chat.open": open(id, terminal: terminal)
+            case "chat.open":
+                lock.withLock { opened = id }
+                open(id, terminal: terminal)
             // C1's earlier page never comes: the search says it is still looking.
             case "chat.page" where params["earlier"] is String: return
             case "chat.side":
@@ -158,6 +214,7 @@ enum ChatDemo {
             // composer is typed into the terminal (the thread keeps the sent bubble; no turn follows).
             case "interactions.answer", "chat.send", "chat.stop":
                 respond(id, ["written": true, "may_have_sent": true, "reason": NSNull()])
+                if method == "chat.send", ChatDemo.echoes, let text = params["text"] as? String { echo(text, terminal: terminal) }
             case "queue.add":
                 serial += 1
                 respond(id, item("held-\(serial)", params["text"] as? String ?? ""))
@@ -187,16 +244,16 @@ enum ChatDemo {
 
         private func open(_ id: UInt64, terminal: UInt64) {
             var records = ChatDemo.records()
-            let busy = ["M5a", "M5f", "M5c"].contains(screen)
+            let busy = ["M5a", "M5f", "M5c", "S6e"].contains(screen)
             if screen == "M3b" { records = [] }
-            if busy {
+            if busy, screen != "S6e" {
                 // Turn 2 still running: its first steps are in, the answer is not.
                 records = records.filter { $0["id"] as? String != "f2:ended" && $0["id"] as? String != "claude-f2-0" }
                 if screen == "M5c" { records = records.filter { $0["turn"] as? String == "p1" && $0["kind"] as? String == "user" } }
             }
             // M4b's approval and M4c's queued message come after the first turn: the thread shows that turn only.
             if ["M4b", "M4c"].contains(screen) { records = records.filter { $0["turn"] as? String == "p1" } }
-            if busy {
+            if busy, screen != "S6e" {
                 // The running turn started 48 s ago, as in the mockup's clock.
                 let started = records.last { $0["kind"] as? String == "turn_started" }?["time_ms"] as? Int64 ?? 0
                 let shift = Int64(Date().timeIntervalSince1970 * 1000) - 48_000 - started
@@ -206,6 +263,10 @@ enum ChatDemo {
                     return record
                 }
             }
+            // S6: the recorded turns and two more, ended today (`cornerTurns`).
+            if screen == "S6" { records = ChatDemo.cornerTurns() }
+            // S6e: the same, then a turn still running with its answer begun: four steps, 38 s.
+            if screen == "S6e" { records = ChatDemo.cornerTurns(working: true) }
             if screen == "C6" {
                 // C6: a longer thread read from its top, two more messages arriving while it is scrolled up.
                 records += ChatDemo.exchange("p2b", question: "Does the guard survive a deploy?",
@@ -232,10 +293,44 @@ enum ChatDemo {
             }
         }
 
-        /// C3's side conversation: the question, three reads and the answer, 12 s.
+        /// `DISPATCH_MOBILE_CHAT_DEMO_ECHO`: a sent prompt comes back as the agent's records would, the user's message
+        /// at once with the agent busy, its answer (several lines, streamed) `DISPATCH_MOBILE_CHAT_DEMO_ECHO` seconds later.
+        private func echo(_ text: String, terminal: UInt64) {
+            guard let open = lock.withLock({ opened }) else { return }
+            serial += 1
+            let turn = "echo-\(serial)"
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let delay = Double(ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_ECHO"] ?? "") ?? 1.5
+            func records(_ records: [[String: Any]]) -> [String: Any] {
+                ["terminal": terminal, "session": ChatDemo.conversation, "replace": NSNull(), "earlier": NSNull(), "records": records]
+            }
+            func state(busy: Bool) -> [String: Any] {
+                ["terminal": terminal, "session": ChatDemo.conversation, "state": ChatDemo.state(busy: busy)]
+            }
+            // One serial queue: the updates must reach the app in their order.
+            let queue = echoQueue
+            queue.asyncAfter(deadline: .now() + 0.2) { [self] in
+                notify(open, "chat.state", state(busy: true))
+                notify(open, "chat.records", records([record(turn + ":started", "turn_started", turn: turn, time: now),
+                                                      record(turn + ":user", "user", turn: turn, text: text, time: now)]))
+            }
+            // The answer streams in, a line every 40 ms, as the helper sends a growing record.
+            let lines = (1...6).map { "Line \($0) of the answer to “\(text)”: the guard keys on the event id." }
+            for count in 1...lines.count {
+                queue.asyncAfter(deadline: .now() + delay + Double(count - 1) * 0.04) { [self] in
+                    let answer = lines.prefix(count).joined(separator: "\n\n")
+                    var update = [record(turn + ":answer", "assistant", turn: turn, text: answer, time: now + 1_500)]
+                    if count == lines.count { update.append(record(turn + ":ended", "turn_ended", turn: turn, time: now + 1_500)) }
+                    notify(open, "chat.records", records(update))
+                    if count == lines.count { notify(open, "chat.state", state(busy: false)) }
+                }
+            }
+        }
+
+        /// C3's side conversation: the question, three reads and the answer, 12 s, ended a minute ago (its corner's time).
         private func openSide(_ id: UInt64, terminal: UInt64) {
             let reads = Set(["tool-c1", "tool-d1", "tool-d2"])
-            let base: Int64 = 946_719_300_000
+            let base = Int64(Date().timeIntervalSince1970 * 1000) - 72_000
             var records: [[String: Any]] = [record("s:started", "turn_started", turn: "s1", time: base),
                                             record("s:user", "user", turn: "s1", text: ChatDemo.sideQuestion, time: base)]
             for (index, var tool) in ChatDemo.records().filter({ reads.contains($0["id"] as? String ?? "") }).enumerated() {
@@ -381,14 +476,14 @@ struct ChatDemoRoot: View {
             NavigationStack {
                 Group {
                     if let row = session.transcript.rows.last {
-                        ChatMessageDetails(session: session, row: row, space: "app", tab: "claude", directory: "/Users/paul/src/app") { _ in }
+                        ChatMessageDetails(session: session, row: row, space: "app", tab: "claude", directory: "/Users/alex/src/app") { _ in }
                     } else { Color.canvas }
                 }
             }
             .toolbar(.hidden, for: .tabBar)
         default:
             let session = conversations.session(for: key)
-            let redesign = screen.hasPrefix("C") || screen == "S6"
+            let redesign = screen.hasPrefix("C") || screen.hasPrefix("S6")
             NavigationStack {
                 VStack(spacing: 0) {
                     ChatDemoHeader(session: session, needsYou: redesign ? 2 : 1, title: redesign ? "Billing webhook retries" : "app")

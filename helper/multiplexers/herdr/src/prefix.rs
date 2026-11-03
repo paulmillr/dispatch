@@ -52,6 +52,7 @@ pub(super) fn table(config: &str) -> Prefix {
     Prefix {
         key: keys.get("prefix").map(|value| (*value).into()),
         repeat_ms: None,
+        prefix2: None,
         bindings: keys
             .into_iter()
             .filter_map(|(command, binding)| {

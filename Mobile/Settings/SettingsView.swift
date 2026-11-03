@@ -3,9 +3,8 @@ import SwiftUI
 
 /// Settings (G1): appearance and the theme (G4), the terminal's font (G2), size, colour scheme and contrast, chat's
 /// font (G3) and dictation, notifications (G5) and background refresh, per host Chat and the multiplexer, whether Spaces
-/// shows the offline hosts, the Apple
-/// Watch, and Remove all data. Opened from the end of Spaces' edit mode, beside Add host, where hosts are managed: the
-/// headers of M2a and M3a stay as the mockup draws them.
+/// shows the offline hosts, the Apple Watch, Remove all data, and last Security (unsafe pastes). Opened from the end of
+/// Spaces' edit mode, beside Add host, where hosts are managed: the headers of M2a and M3a stay as the mockup draws them.
 struct SettingsView: View {
     let composition: MobileComposition
     @Bindable var settings: MobileSettings
@@ -100,15 +99,6 @@ struct SettingsView: View {
                     }
 
                     Section {
-                        Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
-                            .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
-                    } header: {
-                        Text("Security")
-                    } footer: {
-                        Text("Turn off to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
-                    }
-
-                    Section {
                         NavigationLink(value: Route.chatFont) {
                             LabeledContent("Font") { Text(settings.chatFont.rawValue) }
                         }
@@ -138,7 +128,7 @@ struct SettingsView: View {
                         }))
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("About every 15 minutes, as iOS allows, Dispatch connects to the hosts with Chat on and notifies you as Notifications says. Hosts that log in with a key behind Face ID are skipped: iOS shows no Face ID in the background.")
+                            Text("About every 15 minutes, as iOS allows, Dispatch connects to the hosts with Chat on and notifies you as Notifications says. Hosts that log in with a Secure Enclave key are skipped: it asks for Face ID, which iOS shows only in the foreground.")
                             if let refreshNote { Text(refreshNote).foregroundStyle(.red) }
                         }
                     }
@@ -192,6 +182,15 @@ struct SettingsView: View {
                         }
                     } message: { removal in
                         Text(removal.message)
+                    }
+
+                    Section {
+                        Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
+                            .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
+                    } header: {
+                        Text("Security")
+                    } footer: {
+                        Text("Turn off to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                     }
                 }
                 // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
@@ -321,7 +320,9 @@ extension MobileComposition {
         for record in hosts.store.hosts { hosts.remove(record.id) }
         hosts.knownHosts.removeAll()
         if keepingKeys {
-            let kept = Set(hosts.keys.keys.flatMap { [KeyStore.privateAccount($0.id), KeyStore.passphraseAccount($0.id)] })
+            // A key's `moving:` copy too: after a move out of Face ID cut short it can be the key's only copy.
+            let kept = Set(hosts.keys.keys.flatMap { [KeyStore.privateAccount($0.id), KeyStore.passphraseAccount($0.id),
+                                                      KeyStore.movingPrefix + KeyStore.privateAccount($0.id)] })
             try? hosts.keys.vault.removeAll(keeping: kept.contains)
         } else {
             for key in hosts.keys.keys { hosts.keys.delete(key.id) }

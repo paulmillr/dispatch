@@ -496,3 +496,83 @@ extension ChatToolGroupingTests {
         XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message"])
     }
 }
+
+extension ChatToolGroupingTests {
+    func testMessageInfoShowsRawDateIdentitiesAndRecord() throws {
+        let record = HelperChat.Record(id: "reply", turn: "turn", kind: "assistant", text: "Checked/handled", title: "", output: "",
+                                       blocks: [], completed: true, exit_code: nil, patch: nil, time_ms: 1_750_000_060_500,
+                                       documents: [], tool: nil, inline_reasoning: false)
+        let shown = try XCTUnwrap(record.display(at: Date(timeIntervalSince1970: 0)))
+        guard case .item(let item) = shown.action else { return XCTFail("not an item") }
+        let info = ChatMessageInfo(date: shown.date, item: item, rowID: "row", turnID: "turn", agent: "Codex",
+                                   conversation: "raw-message", host: "build.example", offset: 4096)
+        let fields = Dictionary(uniqueKeysWithValues: info.fields.map { ($0.label, $0.value) })
+        XCTAssertEqual(fields["UTC"], "2025-06-15T15:07:40.500Z")
+        XCTAssertEqual(fields["Epoch ms"], "1750000060500")
+        XCTAssertEqual(fields["Time from"], "record time_ms")
+        XCTAssertEqual(fields["Kind"], "assistant")
+        XCTAssertEqual(fields["Turn"], "turn")
+        XCTAssertEqual(fields["Host"], "build.example")
+        XCTAssertEqual(fields["Offset"], "4096 bytes")
+        XCTAssertNil(fields["Completed"], "Only tools and commands say whether they completed")
+        XCTAssertNil(fields["Exit code"])
+        // The record as the helper sent it: sorted keys, slashes unescaped.
+        let json = try XCTUnwrap(info.record)
+        XCTAssertTrue(json.contains(#""text" : "Checked/handled""#), json)
+        XCTAssertTrue(json.contains(#""time_ms" : 1750000060500"#), json)
+        XCTAssertTrue(info.text.hasPrefix("Local"))
+        XCTAssertTrue(info.text.hasSuffix(json))
+        // A message the app made itself has its time from the index and no record.
+        let local = ChatMessageInfo(date: Date(timeIntervalSince1970: 1_750_000_000), item: ChatItem(id: "prompt", kind: .user, text: "Hi"),
+                                    rowID: "row")
+        let localFields = Dictionary(uniqueKeysWithValues: local.fields.map { ($0.label, $0.value) })
+        XCTAssertEqual(localFields["Time from"], "transcript index")
+        XCTAssertEqual(localFields["Epoch ms"], "1750000000000")
+        XCTAssertNil(localFields["Turn"])
+        XCTAssertNil(local.record)
+        XCTAssertTrue(local.text.hasSuffix("No helper record."))
+    }
+
+    func testClickingReplyTimesShowsRawMessageWithoutTogglingSteps() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        func record(_ id: String, _ kind: String, _ text: String, at time: Int64) -> HelperChat.Record {
+            HelperChat.Record(id: id, turn: "turn", kind: kind, text: text, title: kind == "tool" ? "exec_command" : "", output: "",
+                              blocks: [], completed: true, exit_code: kind == "tool" ? 0 : nil, patch: nil, time_ms: time,
+                              documents: [], tool: nil, inline_reasoning: false)
+        }
+        let session = ChatSession(id: System.uuid())
+        session.sessionID = "raw-message"; session.atBottom = false
+        let ms: Int64 = 1_750_000_000_000
+        session.mergeHistorical([record("prompt", "user", "Hello", at: ms), record("reply", "assistant", "Checking the handler.", at: ms + 60_000),
+                                 record("one", "tool", #"{"cmd":"echo one"}"#, at: ms + 61_000),
+                                 record("two", "tool", #"{"cmd":"echo two"}"#, at: ms + 62_000),
+                                 record("final", "assistant", "Done.", at: ms + 120_000)]
+            .compactMap { $0.display(at: Date(timeIntervalSince1970: 0)) })
+        let rows = session.transcriptRows
+        let grouped = try XCTUnwrap(rows.first { $0.group != nil }), group = try XCTUnwrap(grouped.group)
+        let final = try XCTUnwrap(rows.first { $0.item?.id == "final" })
+        let window = makeWindow()
+        defer { window.close(); window.contentView = nil }
+        mount(session, in: window)
+        let disclosure = session.groupDisclosure(group, turnID: grouped.turnID)
+        // Beside a group's steps, and under a reply of its own.
+        for row in [grouped, final] {
+            // The bubble's identifier is its controls' too, so the time is found by its label.
+            let label = "Reply time " + (try XCTUnwrap(row.replyTime)).formatted(.dateTime.hour().minute())
+            var time: NSRect?
+            try await TestSupport.eventually(diagnostic: "No clickable time for \(row.id)") {
+                time = PresentationTestSupport.accessibilityFrames("chat-message-" + row.id, label: label, in: window).first
+                return time != nil
+            }
+            try await click(x: time!.midX, y: time!.midY, window: window)
+            var popover: NSWindow?
+            try await TestSupport.eventually(diagnostic: "The raw message opens for \(row.id)") {
+                popover = NSApp.windows.first { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+                return popover.map { !PresentationTestSupport.accessibilityFrames("chat-message-record", in: $0).isEmpty } ?? false
+            }
+            XCTAssertEqual(session.groupDisclosure(group, turnID: grouped.turnID), disclosure, "The time is not the steps' header")
+            popover?.close()
+            try await TestSupport.eventually(diagnostic: "The raw message closes") { !(popover?.isVisible ?? false) }
+        }
+    }
+}

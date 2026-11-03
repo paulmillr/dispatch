@@ -371,10 +371,22 @@ extension Page {
 
     func any(_ y: Int, _ test: (Cell) -> Bool) -> Bool { (0..<cols).contains { test(cell(cellAt(y, $0))) } }
 
-    /// Rows [r] move up by one, the first to the end (Ghostty's fastmem.rotateOnce).
-    func rotateUp(_ r: Range<Int>) { guard r.count > 1 else { return }; let f = words[r.lowerBound]; for y in r.dropLast() { words[y] = words[y + 1] }; words[r.upperBound - 1] = f }
+    /// Rows [r] move up by one, the first to the end (Ghostty's fastmem.rotateOnce). Only the row
+    /// words move (each keeps its cells offset: the cells stay put), in one overlapping copy
+    /// (copyMemory is memmove).
+    func rotateUp(_ r: Range<Int>) {
+        guard r.count > 1 else { return }
+        let f = words[r.lowerBound]
+        UnsafeMutableRawPointer(words + r.lowerBound).copyMemory(from: words + r.lowerBound + 1, byteCount: (r.count - 1) * MemoryLayout<UInt64>.stride)
+        words[r.upperBound - 1] = f
+    }
     /// Rows [r] move down by one, the last to the start (rotateOnceR).
-    func rotateDown(_ r: Range<Int>) { guard r.count > 1 else { return }; let l = words[r.upperBound - 1]; for y in r.dropFirst().reversed() { words[y] = words[y - 1] }; words[r.lowerBound] = l }
+    func rotateDown(_ r: Range<Int>) {
+        guard r.count > 1 else { return }
+        let l = words[r.upperBound - 1]
+        UnsafeMutableRawPointer(words + r.lowerBound + 1).copyMemory(from: words + r.lowerBound, byteCount: (r.count - 1) * MemoryLayout<UInt64>.stride)
+        words[r.lowerBound] = l
+    }
     func swapRows(_ a: Int, _ b: Int) { (words[a], words[b]) = (words[b], words[a]) }
 
     func resetRow(_ y: Int) {

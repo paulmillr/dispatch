@@ -161,9 +161,9 @@ struct TerminalSurfaceView: UIViewRepresentable {
     func updateUIView(_ view: TerminalHostView, context: Context) {}
 }
 
-/// The key capsule (M6a): Liquid Glass like the tab bar, six keys of equal width with no gaps: Ctrl, Esc, Tab and Alt
-/// in the monospaced system font, the d-pad, and the keyboard key with the terminal's menu (T2,
-/// `TerminalMenuKey`). Ctrl and Alt light up while latched (tinted when locked by a double tap).
+/// The key capsule (M6a): Liquid Glass like the tab bar, seven keys of equal width with no gaps: Ctrl, Esc, Tab and Alt
+/// in the monospaced system font, the d-pad, the terminal's menu ("…", T2, `TerminalMenuKey`) and the keyboard key
+/// (`TerminalKeyboardKeyView`). Ctrl and Alt light up while latched (tinted when locked by a double tap).
 struct TerminalKeyCapsule: View {
     let controller: TerminalController
     @State private var dpadTouched = false
@@ -176,9 +176,10 @@ struct TerminalKeyCapsule: View {
             key("Tab") { controller.press(.tab) }
             modifier("Alt", .alt)
             dpad
-            // The keyboard key, the menu's ellipsis while the software keyboard is up, or (a hardware keyboard on an
-            // iPad) the key that folds the capsule; a long press opens the menu (T2).
+            // The menu (T2), whether or not the software keyboard is up.
             TerminalMenuKey(controller: controller)
+            // Shows or hides the software keyboard, or (a hardware keyboard on an iPad) folds the capsule.
+            TerminalKeyboardKeyView(controller: controller)
         }
         .buttonStyle(KeyCapsuleButtonStyle())
         // A colour, not the hierarchical `.primary`: the d-pad's Canvas draws with it.
@@ -253,7 +254,7 @@ struct TerminalKeyCapsule: View {
 }
 
 /// The collapsed capsule (an iPad with a hardware keyboard): one glass key over the terminal's bottom right that
-/// brings the six keys back (Esc for a keyboard without one, the latches, the d-pad). Its glyph is the capsule's
+/// brings the seven keys back (Esc for a keyboard without one, the latches, the d-pad). Its glyph is the capsule's
 /// own keyboard key.
 struct TerminalKeysButton: View {
     let controller: TerminalController

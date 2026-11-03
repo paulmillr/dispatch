@@ -10,12 +10,250 @@ use dispatch_helper_core::{
     rpc::{Lines, Queue},
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io,
     os::fd::RawFd,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+/// The parent's variables every side takes (docs/security.md, Side conversations), read from the
+/// parent process (e076fd7 CodexProcess.sideEnvironment): the process basics an `apiKeyHelper`
+/// or a credential process needs (PATH lookup, home, user, shell, locale, zone), Claude's config
+/// folder, Anthropic's API, OAuth and model variables, the cloud providers' selectors, proxies,
+/// certificates, and the telemetry opt-outs. A selector set in the parent adds its provider's
+/// variables (PROVIDERS); the parent's settings add what their credential commands name.
+pub const ENVIRONMENT: [&str; 46] = [
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_USE_SYSTEM_CA",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CLAUDE_CODE_CLIENT_CERT",
+    "CLAUDE_CODE_CLIENT_KEY",
+    "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_AUTOUPDATER",
+    "DISABLE_TELEMETRY",
+    "DISABLE_ERROR_REPORTING",
+    DECLARED,
+];
+
+/// The parent's list of further variables its sides need (names separated by spaces, commas or
+/// colons), e.g. what a credential script reads; it is not passed on.
+pub const DECLARED: &str = "DISPATCH_SIDE_ENVIRONMENT";
+
+const AWS: [&str; 18] = [
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    "AWS_CA_BUNDLE",
+    "AWS_ENDPOINT_URL",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+];
+const GOOGLE: [&str; 7] = [
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GCLOUD_PROJECT",
+    "CLOUDSDK_CONFIG",
+    "CLOUDSDK_CORE_PROJECT",
+    "CLOUDSDK_AUTH_ACCESS_TOKEN",
+    "CLOUD_ML_REGION",
+];
+
+/// Each cloud provider's own variables, taken when the parent sets its selector.
+pub const PROVIDERS: [(&str, &[&str]); 6] = [
+    (
+        "CLAUDE_CODE_USE_BEDROCK",
+        &[
+            "ANTHROPIC_BEDROCK_BASE_URL",
+            "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+            "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+            "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+        ],
+    ),
+    (
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        &["ANTHROPIC_AWS_API_KEY", "ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_AWS_WORKSPACE_ID", "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH"],
+    ),
+    (
+        "CLAUDE_CODE_USE_MANTLE",
+        &["ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "CLAUDE_CODE_SKIP_MANTLE_AUTH"],
+    ),
+    (
+        "CLAUDE_CODE_USE_VERTEX",
+        &["ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_VERTEX_BASE_URL", "CLAUDE_CODE_SKIP_VERTEX_AUTH"],
+    ),
+    (
+        "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+        &[
+            "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+            "ANTHROPIC_GOOGLE_CLOUD_LOCATION",
+            "ANTHROPIC_GOOGLE_CLOUD_PROJECT",
+            "ANTHROPIC_GOOGLE_CLOUD_WORKSPACE_ID",
+            "CLAUDE_CODE_SKIP_ANTHROPIC_GOOGLE_CLOUD_AUTH",
+        ],
+    ),
+    (
+        "CLAUDE_CODE_USE_FOUNDRY",
+        &[
+            "ANTHROPIC_FOUNDRY_API_KEY",
+            "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+            "ANTHROPIC_FOUNDRY_BASE_URL",
+            "ANTHROPIC_FOUNDRY_RESOURCE",
+            "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+            "AZURE_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "AZURE_CLIENT_SECRET",
+            "AZURE_CLIENT_CERTIFICATE_PATH",
+            "AZURE_FEDERATED_TOKEN_FILE",
+            "AZURE_AUTHORITY_HOST",
+            "AZURE_CONFIG_DIR",
+        ],
+    ),
+];
+
+/// Settings whose shell commands Claude runs for credentials and headers.
+const HELPERS: [&str; 6] = [
+    "apiKeyHelper",
+    "awsAuthRefresh",
+    "awsCredentialExport",
+    "gcpAuthRefresh",
+    "otelHeadersHelper",
+    "proxyAuthHelper",
+];
+
+/// A variable a side may take from its parent: a portable name, never the dynamic loader's
+/// (`DYLD_*`, `LD_*`) or Dispatch's own (`DISPATCH_*`).
+pub fn forwardable(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= 128
+        && bytes.next().is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        && !["DYLD_", "LD_", "DISPATCH_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
+/// The settings files a side of a Claude in `directory` loads that can hold credential commands:
+/// the user's (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), the project's shared and local ones, and
+/// the machine's managed settings.
+pub fn settings(environment: &BTreeMap<String, Vec<u8>>, directory: &Path, os: &str) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = |name: &str| {
+        environment
+            .get(name)
+            .map(|value| PathBuf::from(std::ffi::OsStr::from_bytes(value)))
+            .filter(|path| path.is_absolute())
+    };
+    let user = path("CLAUDE_CONFIG_DIR").or_else(|| path("HOME").map(|home| home.join(".claude")));
+    let managed = match os {
+        "linux" => "/etc/claude-code/managed-settings.json",
+        _ => "/Library/Application Support/ClaudeCode/managed-settings.json",
+    };
+    user.map(|user| user.join("settings.json"))
+        .into_iter()
+        .chain([
+            directory.join(".claude/settings.json"),
+            directory.join(".claude/settings.local.json"),
+            PathBuf::from(managed),
+        ])
+        .collect()
+}
+
+/// What the side's settings files name (the native "file.json.references" job): the variables
+/// their credential commands expand, and the cloud selectors their `env` sets.
+#[derive(Debug, Default)]
+pub struct References {
+    pub names: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+/// The variables a side needs beyond ENVIRONMENT: those of each cloud provider whose selector
+/// the parent sets, in its environment or its settings' `env` (to anything but empty, `0` or
+/// `false`), the names the parent's credential commands use (`references`), and the parent's
+/// DECLARED names; each once, never a name ENVIRONMENT has.
+pub fn referenced(environment: &BTreeMap<String, Vec<u8>>, references: &References) -> Vec<String> {
+    let mut names = Vec::new();
+    let truthy = |value: &[u8]| !matches!(value, b"" | b"0" | b"false");
+    let set = |name: &str| {
+        environment.get(name).is_some_and(|value| truthy(value))
+            || references.env.get(name).is_some_and(|value| truthy(value.as_bytes()))
+    };
+    for (selector, own) in PROVIDERS {
+        if set(selector) {
+            let cloud: &[&str] = match selector {
+                "CLAUDE_CODE_USE_VERTEX" | "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD" => &GOOGLE,
+                "CLAUDE_CODE_USE_FOUNDRY" => &[],
+                _ => &AWS,
+            };
+            names.extend(cloud.iter().chain(own).map(|name| (*name).to_owned()));
+        }
+    }
+    names.extend(references.names.iter().cloned());
+    let mut seen = BTreeSet::new();
+    let mut keep = |name: &str| {
+        forwardable(name) && !ENVIRONMENT.contains(&name) && seen.insert(name.to_owned())
+    };
+    names.retain(|name| keep(name));
+    if let Some(value) = environment.get(DECLARED) {
+        let declared = String::from_utf8_lossy(value).into_owned();
+        names.extend(
+            declared
+                .split(|c: char| c.is_whitespace() || c == ',' || c == ':')
+                .filter(|name| keep(name))
+                .take(64)
+                .map(str::to_owned),
+        );
+    }
+    names.truncate(256);
+    names
+}
 
 pub fn arguments(parent: &str, read_only: bool) -> Vec<String> {
     let mut args = vec![
@@ -155,13 +393,70 @@ struct Fork {
     /// Answered requests, retired from the UI at the next event (answer has no UI).
     answered: Vec<String>,
 }
+/// A launch reading what its side needs: the parent's ENVIRONMENT values, then its settings
+/// files, then the further variables they name.
+struct Preparing {
+    launch: Launch,
+    environment: BTreeMap<String, Vec<u8>>,
+}
 #[derive(Default)]
 pub struct Sides {
     /// Process verification job -> fork pid.
     jobs: BTreeMap<Work, u32>,
-    /// Parent environment job -> the launch waiting for it.
+    /// Parent environment job (ENVIRONMENT) -> the launch waiting for it.
     launches: BTreeMap<Work, Launch>,
+    /// Settings references and further environment jobs -> their preparation.
+    reads: BTreeMap<Work, u64>,
+    further: BTreeMap<Work, u64>,
+    preparing: BTreeMap<u64, Preparing>,
+    prepared: u64,
     forks: BTreeMap<u32, Fork>,
+}
+
+/// The parent's variables `names` (each once), from the parent `launch` names, refused for a
+/// reused pid or another executable.
+fn environment(io: &mut dyn Io, parent: &Process, names: &[&str]) -> Result<Work, Error> {
+    let input = dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
+        ("pid", Data::Unsigned(parent.pid.into())),
+        ("start", Data::Array(parent.start.iter().map(|n| Data::Unsigned(*n)).collect())),
+        ("executable", Data::from(parent.executable.as_path())),
+        ("names", Data::Array(names.iter().map(|name| Data::String(name)).collect())),
+    ]))
+    .map_err(|e| error("json", format!("{e:?}")))?;
+    io.submit(Job::Native {
+        name: "environment",
+        value: input,
+    })
+    .map_err(|e| error("io", e))
+}
+
+/// A native "file.json.references" answer.
+fn references(bytes: &[u8]) -> Result<References, Error> {
+    let value = dispatch_helper_core::wire::body::decode_plain(bytes)?;
+    let invalid = || error("side", "Invalid settings references");
+    let names = value.get("names").and_then(|v| v.array()).ok_or_else(invalid)?;
+    let names = names.map(|name| name.string().map(str::to_owned).ok_or_else(invalid)).collect::<Result<_, _>>()?;
+    let env = value.get("env").and_then(|v| v.object()).ok_or_else(invalid)?;
+    let env = env
+        .map(|(name, value)| Ok((name.to_owned(), value.string().ok_or_else(invalid)?.to_owned())))
+        .collect::<Result<_, Error>>()?;
+    Ok(References { names, env })
+}
+
+/// A native environment answer: names and their values as bytes.
+fn variables(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+    let environment = dispatch_helper_core::wire::body::decode_plain(bytes)?;
+    let values = environment
+        .object()
+        .ok_or_else(|| error("side", "Invalid parent environment"))?;
+    values
+        .map(|(name, value)| {
+            let value = value
+                .bytes()
+                .ok_or_else(|| error("side", "Invalid parent environment"))?;
+            Ok((name.to_owned(), value.to_vec()))
+        })
+        .collect()
 }
 
 fn sent(written: bool, partial: bool, reason: Option<String>) -> Sent {
@@ -384,41 +679,67 @@ impl Sides {
             == Some(binding)
     }
     pub fn open(&mut self, io: &mut dyn Io, launch: Launch) {
-        // e076fd7 CodexProcess.sideEnvironment: the side runs with the parent's own values of
-        // these names only (API endpoint/key, config dir), read from the parent process.
-        let names = [
-            "HOME",
-            "CLAUDE_CONFIG_DIR",
-            "ANTHROPIC_BASE_URL",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
-            "DISABLE_AUTOUPDATER",
-            "DISABLE_TELEMETRY",
-            "DISABLE_ERROR_REPORTING",
-        ]
-        .into_iter()
-        .map(Data::String)
-        .collect();
-        let input = dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
-            ("pid", Data::Unsigned(launch.parent.process.pid.into())),
-            ("names", Data::Array(names)),
-        ]));
-        let job = input.map(|value| Job::Native {
-            name: "environment",
-            value,
-        });
-        match job
-            .map_err(|e| error("json", format!("{e:?}")))
-            .and_then(|job| io.submit(job).map_err(|e| error("io", e)))
-        {
+        // The side runs with the parent's own values of these names only, read from the parent
+        // process (docs/security.md); its settings may name more (prepare).
+        match environment(io, &launch.parent.process, &ENVIRONMENT) {
             Ok(work) => {
                 self.launches.insert(work, launch);
             }
             Err(e) => deferred(launch.done)(io, Err(e)),
         }
     }
-    fn spawn(&mut self, io: &mut dyn Io, launch: Launch, environment: &[u8]) -> Result<(), Error> {
+    /// The parent's ENVIRONMENT arrived: ask what the settings files name (only names are
+    /// answered, so no file contents are read into the helper or a capture).
+    fn prepare(&mut self, io: &mut dyn Io, launch: Launch, environment: BTreeMap<String, Vec<u8>>) -> Result<(), Error> {
+        let id = self.prepared;
+        self.prepared += 1;
+        let paths = settings(&environment, &launch.directory, io.os());
+        let input = dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
+            ("paths", Data::Array(paths.iter().map(|path| Data::from(path.as_path())).collect())),
+            ("keys", Data::Array(HELPERS.iter().map(|key| Data::String(key)).collect())),
+            ("env", Data::Array(PROVIDERS.iter().map(|(selector, _)| Data::String(selector)).collect())),
+        ]))
+        .map_err(|e| error("json", format!("{e:?}")))?;
+        let work = io
+            .submit(Job::Native { name: "file.json.references", value: input })
+            .map_err(|e| error("io", e))?;
+        self.reads.insert(work, id);
+        self.preparing.insert(id, Preparing { launch, environment });
+        Ok(())
+    }
+    /// The settings' references arrived: ask the parent for the further variables, or start.
+    fn resolve(&mut self, io: &mut dyn Io, id: u64, references: &References) -> Result<(), Error> {
+        let preparing = &self.preparing[&id];
+        let names = referenced(&preparing.environment, references);
+        if names.is_empty() {
+            let preparing = self.preparing.remove(&id).unwrap();
+            return self.spawn(io, preparing.launch, preparing.environment);
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let work = environment(io, &preparing.launch.parent.process, &names)?;
+        self.further.insert(work, id);
+        Ok(())
+    }
+    /// Starts the side; a failure ends the launch with it.
+    fn spawn(&mut self, io: &mut dyn Io, launch: Launch, environment: BTreeMap<String, Vec<u8>>) -> Result<(), Error> {
+        let completion = std::rc::Rc::new(std::cell::RefCell::new(Some(launch.done)));
+        let captured = completion.clone();
+        let launch = Launch {
+            done: Box::new(move |io, result| {
+                if let Some(done) = captured.borrow_mut().take() {
+                    done(io, result);
+                }
+            }),
+            ..launch
+        };
+        if let Err(e) = self.start(io, launch, environment)
+            && let Some(done) = completion.borrow_mut().take()
+        {
+            deferred(done)(io, Err(e));
+        }
+        Ok(())
+    }
+    fn start(&mut self, io: &mut dyn Io, launch: Launch, mut environment: BTreeMap<String, Vec<u8>>) -> Result<(), Error> {
         let mut id = [0u8; 16];
         io.random(&mut id).map_err(|e| error("io", e))?;
         id[6] = id[6] & 0x0f | 0x40;
@@ -445,13 +766,11 @@ impl Sides {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .env_clear();
-        // The parent's environment as bytes: values pass on unchanged.
-        let environment = dispatch_helper_core::wire::body::decode_plain(environment)?;
-        for (name, value) in environment.object().into_iter().flatten() {
-            if let Some(value) = value.bytes() {
-                use std::os::unix::ffi::OsStrExt;
-                command.env(name, std::ffi::OsStr::from_bytes(value));
-            }
+        // The parent's environment as bytes: values pass on unchanged (DECLARED only names them).
+        environment.remove(DECLARED);
+        for (name, value) in &environment {
+            use std::os::unix::ffi::OsStrExt;
+            command.env(name, std::ffi::OsStr::from_bytes(value));
         }
         let child = io.spawn(command, None).map_err(|e| error("io", e))?;
         let (Some(input), Some(output)) = (child.input, child.output) else {
@@ -498,6 +817,14 @@ impl Sides {
             Err(e) => self.close(io, child.pid, e.to_string()),
         }
         Ok(())
+    }
+    /// Runs a preparation's next step; a failure ends its launch with that error.
+    fn settle(&mut self, io: &mut dyn Io, id: u64, step: impl FnOnce(&mut Self, &mut dyn Io) -> Result<(), Error>) {
+        if let Err(e) = step(self, io)
+            && let Some(preparing) = self.preparing.remove(&id)
+        {
+            deferred(preparing.launch.done)(io, Err(e));
+        }
     }
     fn ready(&mut self, io: &mut dyn Io, pid: u32) {
         if let Some(fork) = self.forks.get_mut(&pid)
@@ -618,7 +945,9 @@ impl Sides {
                     ..launch
                 };
                 let result = match result {
-                    Ok(Output::Value(bytes)) => self.spawn(io, launch, &bytes),
+                    Ok(Output::Value(bytes)) => {
+                        variables(&bytes).and_then(|environment| self.prepare(io, launch, environment))
+                    }
                     Ok(_) => Err(error("side", "Unexpected parent environment")),
                     Err(e) => Err(error("io", e)),
                 };
@@ -627,6 +956,28 @@ impl Sides {
                 {
                     deferred(done)(io, Err(e));
                 }
+            }
+            Event::Done { work, result } if self.reads.contains_key(&work) => {
+                let id = self.reads.remove(&work).unwrap();
+                // Unreadable settings name nothing; Claude reports its own settings errors.
+                let references = match result {
+                    Ok(Output::Value(bytes)) => references(&bytes).unwrap_or_default(),
+                    _ => References::default(),
+                };
+                self.settle(io, id, |sides, io| sides.resolve(io, id, &references));
+            }
+            Event::Done { work, result } if self.further.contains_key(&work) => {
+                let id = self.further.remove(&work).unwrap();
+                self.settle(io, id, |sides, io| {
+                    let further = match result {
+                        Ok(Output::Value(bytes)) => variables(&bytes)?,
+                        Ok(_) => return Err(error("side", "Unexpected parent environment")),
+                        Err(e) => return Err(error("io", e)),
+                    };
+                    let mut preparing = sides.preparing.remove(&id).unwrap();
+                    preparing.environment.extend(further);
+                    sides.spawn(io, preparing.launch, preparing.environment)
+                });
             }
             Event::Done { work, result } if self.jobs.contains_key(&work) => {
                 let pid = self.jobs.remove(&work).unwrap();
@@ -691,3 +1042,7 @@ impl Sides {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "side.test.rs"]
+mod tests;

@@ -31,7 +31,7 @@ final class TermTablesTests: XCTestCase {
         var classes: [UInt8: UInt32] = [:]
         for cp in UInt32(0)..<0x110000 where classes[Unicode.props(cp).graphemeBreak] == nil { classes[Unicode.props(cp).graphemeBreak] = cp }
         let breaks = lines.filter { $0.hasPrefix("break ") }.map { $0.split(separator: " ").dropFirst().map { UInt8($0)! } }
-        XCTAssertEqual(breaks.count, 5 * 17 * 17)  // uucode 0.2.0: 5 break states, 17 classes without controls
+        XCTAssertEqual(breaks.count, 5 * 18 * 18)  // uucode ea62149 (Unicode 18): 5 break states, 18 classes without controls
         XCTAssertEqual(breaks.map { f in
             var state = f[0]
             let broken = Unicode.graphemeBreak(classes[f[1]]!, classes[f[2]]!, &state)

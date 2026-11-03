@@ -836,6 +836,17 @@ impl Multiplexer for Tmux {
     ) {
         Tmux::create(self, io, parent, beside, command, deferred(done));
     }
+    fn create_shell(
+        &mut self,
+        io: &mut dyn Io,
+        parent: Id,
+        beside: Option<Id>,
+        command: Command,
+        _size: Option<Grid>,
+        done: Done<Id>,
+    ) {
+        Tmux::create_shell(self, io, parent, beside, command, deferred(done));
+    }
     // The renderer keeps the captured history (see seek). tmux copy-mode would be invisible to a
     // control client and would swallow every later keystroke, so the app scrolls locally instead.
     fn scroll(&mut self, io: &mut dyn Io, _terminal: Id, _scroll: &Scroll, done: Done<()>) {

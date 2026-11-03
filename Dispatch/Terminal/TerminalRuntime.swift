@@ -190,7 +190,7 @@ final class TerminalRuntime {
     nonisolated static func scrollbackLimit(_ memory: UInt64) -> Int { min(256_000_000, max(50_000_000, Int(clamping: memory / 64))) }
 
     /// Dispatch's terminal config text (Ghostty's config syntax, read by the Swift terminal).
-    private func makeConfig(_ settings: Preferences) throws -> String {
+    func makeConfig(_ settings: Preferences) throws -> String {
         try SettingsStore.validate(settings)
         // A custom scheme by its file's path; one that's gone, Dispatch's own (Settings says which).
         let resolution = ThemeResolution.value(for: settings.resolvedTheme(systemIsDark: systemIsDark)), theme = resolution.value
@@ -212,9 +212,11 @@ final class TerminalRuntime {
         window-padding-x = 10
         window-padding-y = 8
         scrollback-limit-bytes = \(settings.scrollback.limit(automatic: Self.scrollbackLimit(System.machine.memory)))
+        \(settings.scrollback.lines.map { "scrollback-limit-lines = \($0)" } ?? "")
         image-storage-limit = \(settings.enableKittyGraphics ? ImageStorage.defaultTotalLimit : 0)
         clipboard-read = ask
         clipboard-write = ask
+        vt-xt-checksum-report = false
         shell-integration-features = cursor,no-sudo,title,no-ssh-env,no-ssh-terminfo,no-path
         keybind = clear
         keybind = super+c=copy_to_clipboard

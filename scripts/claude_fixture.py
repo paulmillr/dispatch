@@ -267,10 +267,10 @@ class FixtureServer(ThreadingHTTPServer):
         finally:
             self.slots.release()
 
-    def record(self, path, body, identifier):
+    def record(self, path, body, identifier, auth='key'):
         with self.lock:
             log = self.state / 'requests.jsonl'
-            data = json.dumps({'id': identifier, 'path': path, 'body': body}) + '\n'
+            data = json.dumps({'id': identifier, 'path': path, 'auth': auth, 'body': body}) + '\n'
             if (log.stat().st_size if log.exists() else 0) + len(data.encode()) > MAX_LOG:
                 raise ValueError('Fixture capture is full; use a new state directory')
             with log.open('a') as file:
@@ -322,7 +322,10 @@ class Handler(BaseHTTPRequestHandler):
         if path not in ('/v1/messages', '/v1/messages/count_tokens'):
             self.error('Unknown fixture endpoint', 404)
             return
-        if self.headers.get('Authorization') or self.headers.get('x-api-key') != API_KEY:
+        # The dummy key itself, as x-api-key or as the Bearer token an apiKeyHelper's output becomes.
+        authorization, key = self.headers.get('Authorization'), self.headers.get('x-api-key')
+        helper = authorization == 'Bearer ' + API_KEY and key in (None, API_KEY)
+        if not helper and (authorization or key != API_KEY):
             self.error('Use only the dummy fixture API key; credentials are never recorded', 401)
             return
         try:
@@ -343,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         prompt = '' if path.endswith('/count_tokens') else prompt_and_result(body)[0]
         with self.server.barriers.request(prompt, self.connection) as request:
-            self.server.record(path, body, request.identifier)
+            self.server.record(path, body, request.identifier, 'helper' if helper else 'key')
             request.wait()
             self.respond(body, path, data)
 
@@ -378,6 +381,7 @@ def main():
     parser.add_argument('--integration', action='store_true', help='Use normal interactive mode with its live session registry')
     parser.add_argument('--hooks', action='store_true', help='Load settings.json from the isolated fixture profile (requires --integration)')
     parser.add_argument('--config', type=Path, help='Claude config directory (default STATE/claude-home), e.g. where the helper installs its integration')
+    parser.add_argument('--api-key-helper', action='store_true', help='Authenticate through an apiKeyHelper in settings.json that reads the dummy key from FIXTURE_CLAUDE_KEY (requires --integration)')
     args = parser.parse_args()
     try:
         if args.mode == 'serve':
@@ -418,6 +422,21 @@ def main():
                     parser.error('Install hooks into the fixture settings.json first')
                 extra += ['--settings', str(settings)]
             env = environment(state, port, config)
+            if args.api_key_helper:
+                if not args.integration:
+                    parser.error('--api-key-helper requires --integration')
+                settings = config / 'settings.json'
+                value = json.loads(settings.read_text())
+                value['apiKeyHelper'] = 'printf %s "$FIXTURE_CLAUDE_KEY"'
+                staged = settings.with_name('.settings.json.fixture')
+                staged.write_text(json.dumps(value))
+                staged.chmod(0o600)
+                staged.replace(settings)
+                # Only the helper's variable holds the dummy key.
+                env.pop('ANTHROPIC_API_KEY')
+                env['FIXTURE_CLAUDE_KEY'] = API_KEY
+                if not args.hooks:
+                    extra += ['--settings', str(settings)]
             os.execvpe(args.claude, command(args.claude, *extra, integration=args.integration), env)
     except KeyboardInterrupt:
         pass

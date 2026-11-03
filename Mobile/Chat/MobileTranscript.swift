@@ -86,8 +86,8 @@ struct MobileTranscript {
 
 // MARK: What the thread shows
 
-/// A turn's steps, duration and changes: the footnote under its last agent bubble ("5 steps in 1m 26s · 2 files +38 −4",
-/// S6) and the steps of message details (M5b). Steps are the turn's tool rows as the Mac groups them
+/// A turn's steps, duration and changes: the corner of its last agent bubble ("3 files +127 −22 · 10:17", S6d) and
+/// the steps of message details (M5b). Steps are the turn's tool rows as the Mac groups them
 /// (ToolOrchestration.coalesced, a patch wrapper folded into its patch), so the count is what the Mac's tool groups
 /// hold; the duration is the turn's `ended - started`, unknown for a turn read without times; the files are the distinct
 /// paths its applied patches touched, with their added and removed lines summed (a declined, failed or interrupted
@@ -95,6 +95,8 @@ struct MobileTranscript {
 struct ChatTurnSummary: Equatable {
     var steps: [ChatItem]
     var duration: TimeInterval?
+    /// When the turn ended; nil for a turn read without times.
+    var ended: Date?
     /// Distinct paths the turn's applied patches touched, in the order first touched.
     var files: [String] = []
     var additions = 0
@@ -102,9 +104,10 @@ struct ChatTurnSummary: Equatable {
     /// Every step read a file (a read-only side question's turn): "Read 3 files".
     var reads: [String]? = nil
 
-    init(steps: [ChatItem], duration: TimeInterval?) {
+    init(steps: [ChatItem], duration: TimeInterval?, ended: Date? = nil) {
         self.steps = steps
         self.duration = duration
+        self.ended = ended
         tally()
     }
 
@@ -113,6 +116,8 @@ struct ChatTurnSummary: Equatable {
         if let ended = turn.ended, turn.started.timeIntervalSince1970 > 0, ended >= turn.started {
             duration = ended.timeIntervalSince(turn.started)
         } else { duration = nil }
+        // A turn read without times ends at the epoch (`ChatTranscript`'s historical date).
+        ended = turn.ended.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
         tally()
     }
 
@@ -160,24 +165,89 @@ struct ChatTurnSummary: Equatable {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// The footnote under the turn's last bubble (S6): "5 steps in 1m 26s · 2 files +38 −4", "Read 3 files · 12s" when
-    /// every step read a file, the duration alone without steps; nil when there is nothing to say.
-    var footnote: String? {
-        var parts: [String] = []
-        if let reads, !reads.isEmpty {
-            parts.append("Read " + Self.count(reads.count, "file"))
-            if let duration { parts.append(Self.elapsed(duration)) }
-        } else if !steps.isEmpty {
-            parts.append(Self.count(steps.count, "step") + (duration.map { " in " + Self.elapsed($0) } ?? ""))
-        } else if let duration {
-            parts.append(Self.elapsed(duration))
+    /// The corner of the turn's last bubble (S6d), where messengers put a message's time: what the turn changed and when
+    /// it ended. "idempotent.ts +38 −4 · 10:14" for one file (its name), "3 files +127 −22 · 10:17" for more (grouped
+    /// digits), "Read 12 files · 10:17" when nothing changed and each of three or more steps read a file, "40 steps ·
+    /// 10:17" for three or more other steps; nil for a plain answer (two steps or fewer, nothing changed). Without an
+    /// end time the same without "· time". The time is the locale's short time today, "Yesterday 10:17", the weekday
+    /// within a week ("Thu 10:17"), else the date ("Oct 12", with the year when it is not `now`'s). `fits` says whether a
+    /// text fits the bubble's line (`ChatCornerMetrics`): a file name too long for it is shortened in its middle
+    /// ("PaymentWeb…test.ts"), the counts and time kept.
+    func corner(now: Date, calendar: Calendar, fits: (String) -> Bool = { _ in true }) -> String? {
+        guard let subject = corner(calendar: calendar) else { return nil }
+        let time = ended.map { " · " + Self.time($0, now: now, calendar: calendar) } ?? ""
+        let text = subject.text + time
+        guard !fits(text), files.count == 1, let name = files.first.map({ ($0 as NSString).lastPathComponent }),
+              let range = subject.text.range(of: name) else { return text }
+        let rest = subject.text[range.upperBound...] + time
+        let ext = (name as NSString).pathExtension
+        let suffix = ext.isEmpty || ext.count > 6 ? "" : "." + ext
+        let stem = Array(name.dropLast(suffix.count))
+        for keep in stride(from: stem.count - 1, through: 2, by: -1) {
+            let short = String(stem.prefix((keep + 1) / 2)) + "…" + String(stem.suffix(keep / 2)) + suffix
+            if fits(short + rest) { return short + rest }
         }
-        if !files.isEmpty { parts.append(Self.count(files.count, "file") + " +\(additions) −\(deletions)") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return "…" + suffix + rest
+    }
+
+    /// The corner for VoiceOver: "idempotent.ts, 38 added, 4 removed, 10:14".
+    func spokenCorner(now: Date, calendar: Calendar) -> String? {
+        corner(calendar: calendar).map { subject in
+            ([subject.spoken] + (ended.map { [Self.time($0, now: now, calendar: calendar)] } ?? [])).joined(separator: ", ")
+        }
+    }
+
+    /// The corner's subject, drawn and spoken; nil for a plain answer.
+    private func corner(calendar: Calendar) -> (text: String, spoken: String)? {
+        let locale = calendar.locale ?? .autoupdatingCurrent
+        func number(_ value: Int) -> String { value.formatted(.number.locale(locale)) }
+        if let first = files.first {
+            let subject = files.count == 1 ? (first as NSString).lastPathComponent : "\(number(files.count)) files"
+            return ("\(subject) +\(number(additions)) −\(number(deletions))",
+                    "\(subject), \(number(additions)) added, \(number(deletions)) removed")
+        }
+        guard steps.count >= 3 else { return nil }
+        let text = if let reads, !reads.isEmpty { "Read " + Self.count(reads.count, "file", number: number) }
+            else { Self.count(steps.count, "step", number: number) }
+        return (text, text)
+    }
+
+    /// When a turn ended, as the corner says it: the short time today, "Yesterday 10:17", "Thu 10:17" within a week,
+    /// else "Oct 12" ("Oct 12, 2025" in another year).
+    static func time(_ date: Date, now: Date, calendar: Calendar) -> String {
+        let locale = calendar.locale ?? .autoupdatingCurrent
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = date.formatted(style.hour().minute())
+        var days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        // A host's clock a little ahead of the phone's around midnight: a turn that just ended is today's.
+        if days < 0, date.timeIntervalSince(now) < 15 * 60 { days = 0 }
+        switch days {
+        case 0: return time
+        case 1: return yesterday(locale: locale, calendar: calendar) + " " + time
+        case 2..<7: return date.formatted(style.weekday(.abbreviated)) + " " + time
+        default:
+            let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+            return date.formatted(sameYear ? style.month(.abbreviated).day() : style.month(.abbreviated).day().year())
+        }
+    }
+
+    /// The locale's word for yesterday ("Yesterday", "Gestern"), as relative date formatting says it.
+    static func yesterday(locale: Locale, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.doesRelativeDateFormatting = true
+        // Relative to the real day: the word is all that is taken.
+        return formatter.string(from: calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date())
     }
 
     /// "1 step", "5 steps".
-    static func count(_ count: Int, _ noun: String) -> String { "\(count) \(noun)\(count == 1 ? "" : "s")" }
+    static func count(_ count: Int, _ noun: String, number: (Int) -> String = { "\($0)" }) -> String {
+        "\(number(count)) \(noun)\(count == 1 ? "" : "s")"
+    }
 
     /// The Mac's elapsed text (`ChatTranscript.elapsed`, shared).
     static func elapsed(_ interval: TimeInterval) -> String { ChatTranscript.elapsed(interval) }
@@ -194,7 +264,7 @@ struct ChatThreadRow: Identifiable, Equatable {
         case user
         /// An agent message; `summary` is set on the last one of an ended turn.
         case agent(summary: ChatTurnSummary?)
-        /// Claude's thinking (`inline_reasoning`, `ChatItem.isNarration`): shown inline, as on the Mac.
+        /// Claude's thinking (`inline_reasoning`, `ChatItem.isNarration`): an agent bubble of its own.
         case thinking
         case notice
     }
@@ -237,6 +307,17 @@ extension MobileTranscript {
     var openTurn: ChatTurn? {
         guard let id = activeTurnID, let turn = turns.last(where: { $0.id == id }), turn.ended == nil else { return nil }
         return turn
+    }
+
+    /// The row of the open turn's newest agent bubble, a message or Claude's thinking (`rows`), which carries the
+    /// turn's progress in its corner (S6e); nil while the turn has no agent text yet (the working row shows then) or no
+    /// turn is open. At the turn's end the summary goes on its last message, which is the same bubble unless the turn
+    /// ended on thinking.
+    var progressRow: String? {
+        guard let turn = openTurn, let item = turn.items.last(where: {
+            $0.kind == .assistant || ($0.kind == .reasoning && $0.isNarration && !$0.text.isEmpty)
+        }) else { return nil }
+        return item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)"
     }
 
     /// The newest agent message (the Agents preview, M3a).

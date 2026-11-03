@@ -195,6 +195,21 @@ final class HelperClient: Sendable {
   /// A reply whose value the caller does not need.
   struct Ignored: Decodable { init(from decoder: any Decoder) throws {} }
 
+  /// backends.prefix: the server's own prefix table for the node's session, as tmux names keys and commands.
+  struct Prefix: Decodable, Equatable, Sendable {
+    struct Binding: Decodable, Equatable, Sendable {
+      let key: String
+      let command: String
+      let `repeat`: Bool
+    }
+    let key: String?
+    let repeatMilliseconds: UInt64?
+    let bindings: [Binding]
+    /// tmux's prefix2; nil when unset (and from helpers before it was read).
+    let prefix2: String?
+    enum CodingKeys: String, CodingKey { case key, repeatMilliseconds = "repeat_ms", bindings, prefix2 }
+  }
+
   struct Rename: Encodable, Sendable {
     let node: UInt64
     let name: String
@@ -336,6 +351,10 @@ final class HelperClient: Sendable {
 
   nonisolated(nonsending) func command(_ params: Command) async throws {
     let _: Ignored = try await connection.request("backends.command", params: params)
+  }
+
+  nonisolated(nonsending) func prefix(_ params: Node) async throws -> Prefix {
+    try await connection.request("backends.prefix", params: params)
   }
 
   nonisolated(nonsending) func rename(_ params: Rename) async throws {

@@ -30,6 +30,8 @@ public struct TerminalFlags {
     public var mouseEvent = MouseEvent.none, mouseFormat = MouseFormat.x10
     public var mouseShiftCapture = Capture.null
     public var focused = true, visible = true, passwordInput = false, selectionScroll = false
+    /// XTCHECKSUM's choice for DECRQCRA (a full reset restores the DEC checksum).
+    public var checksum = ChecksumFlags()
 }
 
 public struct CursorDefaults { public var isDefault = true, defaultStyle = CursorShape.block, defaultBlink: Bool? = false }
@@ -534,9 +536,22 @@ public final class Terminal {
         if mark { s.page.updateRow(s.pin.y) { $0.wrapContinuation = true } }
     }
 
+    /// REP (Ghostty's printRepeat): the code point goes to printSlice in slices of up to 4096, so
+    /// eligible runs take the batched path; printSlice is print per code point (wrapping, margins,
+    /// wide cells and grapheme joins included: whatever `fill` can't store goes through print).
+    /// One repeat, or a state that keeps text off the run path (`runs`), prints one at a time.
     public func printRepeat(_ n: Int) {
         guard let c = previousChar else { return }
-        for _ in 0..<max(n, 1) { print(c) }
+        var remaining = max(n, 1)
+        guard remaining > 1, runs else { for _ in 0..<remaining { print(c) }; return }
+        withUnsafeTemporaryAllocation(of: UInt32.self, capacity: min(remaining, 4096)) { buf in
+            buf.initialize(repeating: c)
+            while remaining > 0 {
+                let count = min(remaining, buf.count)
+                printSlice(UnsafeBufferPointer(rebasing: buf[..<count]))
+                remaining -= count
+            }
+        }
     }
 
     // Charsets.

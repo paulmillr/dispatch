@@ -129,25 +129,41 @@ final class TerminalSearchTests: XCTestCase {
         XCTAssertEqual(search.selected, 1, "The selected match stays where it was; a newer one came below it")
     }
 
-    /// The capsule's last key: the keyboard key while the software keyboard is down, the menu while it is up, the
-    /// folding key on an iPad with a hardware keyboard; it shows the ellipsis whenever the menu is open.
-    func testTheLastKeysRole() async throws {
+    /// The capsule's last key: it shows the software keyboard while it is down and hides it while it is up (never
+    /// the menu, which has its own "…" key), or folds the capsule on an iPad with a hardware keyboard.
+    func testTheKeyboardKeysRole() async throws {
         let controller = try await makeController(ScriptedTerminalFeed(output: Data()), waitFor: nil)
         controller.idiom = .phone
         controller.hardwareKeyboard = HardwareKeyboard(attached: false)
-        XCTAssertEqual(controller.menuKey, .keyboard)
-        XCTAssertEqual(controller.menuKey.symbol(menuOpen: false), "keyboard")
-        XCTAssertEqual(controller.menuKey.symbol(menuOpen: true), "ellipsis.circle")
-        XCTAssertEqual(controller.menuKey.label, "Show keyboard")
-        XCTAssertFalse(controller.menuKey.opensOnTap, "A tap brings the keyboard; a long press opens the menu")
+        XCTAssertEqual(controller.keyboardKey, .showKeyboard)
+        XCTAssertEqual(controller.keyboardKey.symbol, "keyboard")
+        XCTAssertEqual(controller.keyboardKey.label, "Show keyboard")
+        XCTAssertEqual(TerminalKeyboardKey.hideKeyboard.symbol, "keyboard.chevron.compact.down")
+        XCTAssertEqual(TerminalKeyboardKey.hideKeyboard.label, "Hide keyboard")
+        // Pressed with the keyboard up, the key hides it: the terminal keeps the focus (hardware keys, the capsule).
+        let view = controller.hostView
+        XCTAssertTrue(view.becomeFirstResponder())
+        let window = try XCTUnwrap(view.window)
+        controller.keyboardChanged(CGRect(x: 0, y: window.bounds.height - 300, width: window.bounds.width, height: 300))
+        XCTAssertEqual(controller.keyboardKey, .hideKeyboard)
+        controller.pressKeyboardKey()
+        XCTAssertFalse(view.softwareKeyboard, "the software keyboard goes")
+        XCTAssertTrue(view.isFirstResponder, "the terminal keeps the focus")
+        XCTAssertFalse(controller.menuOpen, "never the menu")
+        controller.keyboardChanged(nil)
+        XCTAssertEqual(controller.keyboardKey, .showKeyboard)
+        controller.pressKeyboardKey()
+        XCTAssertTrue(view.softwareKeyboard, "and comes back")
+        _ = view.resignFirstResponder()
         controller.hardwareKeyboard = HardwareKeyboard(attached: true)
-        XCTAssertEqual(controller.menuKey, .keyboard, "The phone keeps its keyboard key with a hardware keyboard")
+        XCTAssertEqual(controller.keyboardKey, .showKeyboard, "The phone keeps its keyboard key with a hardware keyboard")
         controller.idiom = .pad
-        XCTAssertEqual(controller.menuKey, .hideKeys)
-        XCTAssertEqual(controller.menuKey.symbol(menuOpen: false), "chevron.down")
-        XCTAssertEqual(TerminalMenuKeyRole.menu.symbol(menuOpen: false), "ellipsis.circle")
-        XCTAssertTrue(TerminalMenuKeyRole.menu.opensOnTap)
-        XCTAssertEqual(TerminalMenuKeyRole.menu.label, "Terminal menu")
+        XCTAssertEqual(controller.keyboardKey, .hideKeys)
+        XCTAssertEqual(controller.keyboardKey.symbol, "chevron.down")
+        controller.showKeys()
+        XCTAssertEqual(controller.capsuleForm, .full)
+        controller.pressKeyboardKey()
+        XCTAssertEqual(controller.capsuleForm, .collapsed, "the iPad's key folds the capsule (and is remembered folded)")
         XCTAssertFalse(controller.menuOpen)
         controller.menu(open: true)
         XCTAssertTrue(controller.menuOpen)
@@ -170,11 +186,11 @@ final class TerminalSearchTests: XCTestCase {
         }
     }
 
-    /// The menu's items in the mockup's order, Clear screen with its chord; Hide keyboard while the keyboard is up.
+    /// The menu's items in the mockup's order, Clear screen with its chord; no Hide keyboard (the keyboard key hides it).
     func testTheMenusItems() {
-        XCTAssertEqual(TerminalMenuItem.sections(keyboardVisible: false).map { $0.map(\.title) },
+        XCTAssertEqual(TerminalMenuItem.sections.map { $0.map(\.title) },
                        [["Search", "Paste", "Select all"], ["Clear screen", "Reset terminal"]])
-        XCTAssertEqual(TerminalMenuItem.sections(keyboardVisible: true).last, [.hideKeyboard])
+        XCTAssertEqual(Array(TerminalMenuItem.sections.joined()), TerminalMenuItem.allCases)
         XCTAssertEqual(TerminalMenuItem.clearScreen.note(), "⌘K on a keyboard")
         XCTAssertEqual(TerminalMenuItem.allCases.compactMap { $0.note() }.count, 1)
         XCTAssertEqual(TerminalMenuItem.resetTerminal.note(chatSending: true), "Not while the agent is sending")

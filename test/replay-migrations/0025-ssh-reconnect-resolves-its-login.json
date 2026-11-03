@@ -1,0 +1,32 @@
+{
+  "kind": "rerecord",
+  "why": "A reconnect now resolves its own login before it logs in: after the connection's `ssh -G` (the scope check, as before) the app asks a second `ssh.configuration`, of the `-f -N` login it is about to run (the login sheet's or, for an automatic attempt, the silent one's, with a placeholder control path), and compares the two apart from Dispatch's own options (`SSHResolvedConnection`), because `Match sessiontype none` or a Match on the command can send that master to another host or account. A recording of a reconnect made before holds one configuration query where the app now asks two; a rewrite cannot add a record. These are the tests whose recordings hold a reconnect login (the scan behind 0022); none is in the corpus now (0022 and 0023 retired them), so this only keeps a recording made with the old code from replaying against the new one. Helper channels gain `-o SendEnv=NAME` only for a connection whose ssh -G sends variables (every test fixture uses -F /dev/null, so none), and saved SSH shells gain a `directory` only for logins captured from now on: neither changes a recorded input.",
+  "tests": [
+    "SSHClaudeIntegrationTests/testRemoteTmuxClaudeChatSurvivesInPlaceReconnect",
+    "SSHHerdrIntegrationTests/testDisablingHelperRetainsHerdrRecovery",
+    "SSHHerdrIntegrationTests/testHerdrThenTmuxRevocationRetainsBothSessions",
+    "SSHHerdrIntegrationTests/testRemovingHerdrPermissionRetainsRecovery",
+    "SSHHerdrIntegrationTests/testRemovingOnlyHerdrPermissionRetainsRecovery",
+    "SSHHerdrIntegrationTests/testTmuxThenHerdrRevocationRetainsBothSessions",
+    "SSHLinuxIntegrationTests/testLinuxExit255ReturnsToEditableLocalShell",
+    "SSHReconnectIntegrationTests/testBrokerOnlyFailureRetiresOldMasterBeforeResumingLauncher",
+    "SSHReconnectIntegrationTests/testDisablingHelperRetainsNativeTmuxRecovery",
+    "SSHReconnectIntegrationTests/testDisconnectDuringReplacementShellStartupCanRetry",
+    "SSHReconnectIntegrationTests/testInputImmediatelyAfterShellRecoveryReachesRemoteShell",
+    "SSHReconnectIntegrationTests/testNewRemoteTmuxTabFollowsFocusedPaneDirectoryAcrossReconnect",
+    "SSHReconnectIntegrationTests/testOfflineSpaceGroupingAndNameArePersistedAfterReconnect",
+    "SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
+    "SSHReconnectIntegrationTests/testPermissionRevocationDuringReplacementShellStartupCanRetry",
+    "SSHReconnectIntegrationTests/testRecoveryKeepsRemoteTmuxTabsAndServerPanes",
+    "SSHReconnectIntegrationTests/testRemovingTmuxPermissionRetainsRecovery",
+    "SSHReconnectIntegrationTests/testRepeatedDetachFreshSSHAttachAndReconnectKeepDetachedAndVisibleDisjoint",
+    "SSHReconnectIntegrationTests/testShellRecoveryPreservesSurfacesAndHealthyConnectionsAcrossSpaces",
+    "SSHReconnectIntegrationTests/testTmuxSuspensionDropsInputAndPreservesBackendState",
+    "SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
+    "SSHReconnectTests/testSilentLoginNeverPromptsAndTellsRefusalFromUnreachable",
+    "SSHRecoveryIntegrationTests/testRemoteTmuxMasterLossPreservesDraftLayoutAndPendingApprovalWithoutReplay",
+    "SSHRecoveryIntegrationTests/testRemoteTmuxReconnectPreservesDraftBeforeFirstTurn",
+    "SSHShellIntegrationTests/testHostTintFollowsSSHAcrossMixedPanesAndReconnect",
+    "SSHSpaceTests/testSSHTmuxHandoffLoginStaysHiddenAcrossReconnect"
+  ]
+}

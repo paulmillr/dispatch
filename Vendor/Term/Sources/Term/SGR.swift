@@ -61,9 +61,12 @@ struct SGR {
             let indexed: (UInt8) -> Attribute = s(0) == 38 ? { .fg256($0) } : s(0) == 48 ? { .bg256($0) } : { .underlineColor256($0) }
             guard n >= 2 else { break }
             if s(1) == 5, n >= 3 { i += 2; return indexed(UInt8(truncatingIfNeeded: s(2))) }
-            // 38;2;r;g;b, or with colons 38:2:r:g:b / 38:2:cs:r:g:b.
+            // 38;2;r;g;b, or with colons 38:2:r:g:b / 38:2:cs:r:g:b (3 or 4 colon params after
+            // the 2: r at 2 or 3; other counts are unknown).
             if s(1) == 2, n >= 5 {
-                if let at = !c ? 2 : [3: 2, 4: 3][colonCount()] {
+                let after = c ? colonCount() : 3
+                if after == 3 || after == 4 {
+                    let at = after - 1
                     i += at + 2
                     return rgb(RGB(r: UInt8(truncatingIfNeeded: s(at)), g: UInt8(truncatingIfNeeded: s(at + 1)), b: UInt8(truncatingIfNeeded: s(at + 2))))
                 }

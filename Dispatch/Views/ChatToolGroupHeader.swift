@@ -1,50 +1,52 @@
 import SwiftUI
 
 /// A tool group's header: a run chart of its steps, their count and time, and the reply time. Clicking it opens
-/// every step. The children are rendered as separate lazy transcript rows, not in this view.
+/// every step; clicking the time shows the reply. The children are rendered as separate lazy transcript rows, not in
+/// this view.
 struct ChatToolGroupHeader: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let group: ChatToolGroup
     var replyTime: Date? = nil
+    var replyInfo: ChatMessageInfo? = nil
     let disclosure: ChatToolGroupDisclosure
     /// The live turn's newest group: its steps animate in, and its time waits for the turn to end.
     var live = false
     @State private var settling = false
     let toggle: () -> Void
     var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 10) {
-                // A group that stops being live keeps the live chart while its color fades, then takes the static one
-                // that draws the same bars.
-                if live || settling {
-                    ChatLiveStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
-                } else {
-                    ChatStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
+        // The reply time sits beside the steps' button, not in it: clicking it shows the reply instead.
+        HStack(spacing: 8) {
+            Button(action: toggle) {
+                HStack(spacing: 10) {
+                    // A group that stops being live keeps the live chart while its color fades, then takes the static
+                    // one that draws the same bars.
+                    if live || settling {
+                        ChatLiveStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
+                    } else {
+                        ChatStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
+                    }
+                    // A live group's time waits for the turn to end, then fades in. (Its count doesn't roll: a numeric
+                    // text transition kept a live turn's CPU twice as high while the agent waited.)
+                    Text(Self.caption(count: group.children.count, elapsed: live ? nil : group.elapsed, radio: theme.radioLog)).fixedSize()
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: live)
                 }
-                // A live group's time waits for the turn to end, then fades in. (Its count doesn't roll: a numeric text
-                // transition kept a live turn's CPU twice as high while the agent waited.)
-                Text(Self.caption(count: group.children.count, elapsed: live ? nil : group.elapsed, radio: theme.radioLog)).fixedSize()
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: live)
-                if let replyTime {
-                    Spacer(minLength: 8)
-                    ChatReplyTime(date: replyTime)
-                }
+                .frame(maxWidth: .infinity, minHeight: theme.typography.detailLineHeight, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .font(theme.typography.detail).foregroundStyle(theme.muted)
-            .frame(maxWidth: .infinity, minHeight: theme.typography.detailLineHeight, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(group.children.count) tool runs")
+            .accessibilityValue(disclosure == .all ? "Expanded" : disclosure == .current ? "Current step" : "Collapsed")
+            .accessibilityIdentifier("tool-group-header-\(group.id)")
+            if let replyTime { ChatReplyTime(date: replyTime, info: replyInfo) }
         }
+        .font(theme.typography.detail).foregroundStyle(theme.muted)
         .onChange(of: live) { old, new in settling = old && !new && !reduceMotion }
         .task(id: settling) {
             guard settling else { return }
             try? await Task.sleep(for: .milliseconds(400))
             settling = false
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(group.children.count) tool runs")
-        .accessibilityValue(disclosure == .all ? "Expanded" : disclosure == .current ? "Current step" : "Collapsed")
-        .accessibilityIdentifier("tool-group-header-\(group.id)")
     }
 
     /// "6 steps · 47s"; the time only when every step's is known.
@@ -70,12 +72,16 @@ struct ChatToolGroupHeader: View {
 struct ChatReplyTime: View {
     @Environment(\.chatTheme) private var theme
     let date: Date
+    /// The reply behind the time, which clicking it shows.
+    var info: ChatMessageInfo? = nil
 
     var body: some View {
-        Text(date, format: .dateTime.hour().minute())
-            .font(theme.typography.detail).monospacedDigit()
-            .foregroundStyle(theme.muted.opacity(0.75)).fixedSize()
-            .accessibilityLabel("Reply time " + date.formatted(.dateTime.hour().minute()))
+        ChatMessageTime(info: info) {
+            Text(date, format: .dateTime.hour().minute())
+                .font(theme.typography.detail).monospacedDigit()
+                .foregroundStyle(theme.muted.opacity(0.75)).fixedSize()
+        }
+        .accessibilityLabel("Reply time " + date.formatted(.dateTime.hour().minute()))
     }
 }
 

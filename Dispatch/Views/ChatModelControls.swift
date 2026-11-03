@@ -6,6 +6,8 @@ struct ChatModelControls: View {
     let coordinator: ChatCoordinator
     let focused: Bool
     var compactEffort = false
+    /// Where the footer is tight: the model name's widest, truncated in the middle (its help names it in full).
+    var modelWidth: CGFloat? = nil
 
     /// The model's ID, never an agent's alias or catalog name for it ("Opus", "Claude Opus 5.5").
     private var modelLabel: String { Self.label(for: session.model) }
@@ -22,7 +24,8 @@ struct ChatModelControls: View {
         let currentPicker = session.modelPicker
         return HStack(spacing: 7) {
             Button { coordinator.openModelPicker(session, column: .model) } label: {
-                Text(modelLabel).footerMenuUnderline(theme.muted)
+                Text(modelLabel).lineLimit(1).truncationMode(.middle).frame(maxWidth: modelWidth, alignment: .leading)
+                    .footerMenuUnderline(theme.muted)
             }.help(session.model).accessibilityLabel("Choose model").accessibilityValue(session.model)
                 .accessibilityIdentifier("chat-model-picker")
                 .keyboardShortcut(focused ? KeyboardShortcut("m", modifiers: [.command, .shift]) : nil)

@@ -27,7 +27,7 @@ review in the accessory slot. Outside a git repository the bar has only Files an
 | pushed | F2 file preview, C2 commit detail |
 | spaces | P1 Spaces tree with the filter row All · Needs you · Agents (P1b Needs you), Detached row per host, branch per space; P2 a space's tabs, titled as the Mac strip titles them with a line that follows the agent's state (P2b swipe Detach / Close, P2c menu, P2d Edit with reorder, P2e New tab held: Shell, Claude, Codex, Pi); P3 the switcher sheet from a tab's host disc |
 | host | W0 Spaces tree with the host glyph as the stats button and the Offline group (W0b folded, W0c the filter menu); W1a the small stats sheet (stat strip and sparkline), W1b dragging up, W1c small and offline; W1 the large sheet by CPU, W2 by memory, W3 scrubbing; W4 Host details; W5 disconnected, W6 plain SSH, W7 Low Power Mode |
-| states | S1 no helper, S2 no grant, S3 offline, S4 review sent with Undo, S5 diff fold and outdated comment, S6 the turn footnote in chat |
+| states | S1 no helper, S2 no grant, S3 offline, S4 review sent with Undo, S5 diff fold and outdated comment, S6 the turn footnote in chat; S6b and S6c the steps and time in the bubble's corner (rejected); S6d what the turn changed and when it ended in the corner, S6e the same corner while the agent works |
 | settings | G1 Settings; G2 terminal font; G3 chat font; G4 theme; G5 notifications |
 | terminal | T1 search; T2 the key bar's menu with Clear screen |
 | chat | C1 search; C2 slash commands; C3 side conversation; C4 goal strip (C4b Manage goal); C5 conversation mode; C6 Jump to latest |
@@ -62,6 +62,9 @@ Commits are a 360-point list beside a pane; the stats widget is a popover on the
   sheet offline shows the connection facts and Connect instead.
 - Offline hosts gather under an Offline group as header rows only; the group folds and the filter menu can hide it.
 - No flat Spaces list and no sort menu; the filter is All · Needs you · Agents.
+- A chat turn's summary sits in its last agent bubble's corner, as a messenger's time: what it changed and when it
+  ended ("3 files +127 −22 · 10:17"), nothing for a plain answer; steps and duration stay in message details. While
+  the agent works the newest bubble's corner carries a spinner, the step and its time instead (S6d, S6e).
 
 Not drawn: markdown, image, folder and binary previews; listing empty and error states; transfers; renames, binary
 rows and the no-newline marker in diffs; Source mode; editing a comment; lane folding and signature verdicts in

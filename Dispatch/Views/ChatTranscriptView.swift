@@ -590,14 +590,14 @@ private struct ChatTranscriptRowView: View {
             ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle) { coordinator.showTerminal(session) }
                 .padding(.vertical, 8)
         } else if row.item?.kind == .user, let item = row.item {
-            ChatRadioLog.line(time: row.time, station: HarbourRadio.ownStation, own: true, theme: theme) {
+            ChatRadioLog.line(time: row.time, info: messageInfo(row.time), station: HarbourRadio.ownStation, own: true, theme: theme) {
                 radioUserMessage(item)
             }
             .padding(.vertical, 9)
             .background(LinearGradient(colors: [.clear, theme.ink.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
             .overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
         } else if let item = row.item, item.kind == .notice {
-            ChatRadioLog.line(time: row.time, station: nil, theme: theme) {
+            ChatRadioLog.line(time: row.time, info: messageInfo(row.time), station: nil, theme: theme) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if HarbourDistress.isFailure(item.text) { ChatRadioLog.tag("MAYDAY", color: theme.red, theme: theme) }
                     itemView(item)
@@ -605,7 +605,7 @@ private struct ChatTranscriptRowView: View {
             }
             .padding(.vertical, 6).overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
         } else {
-            ChatRadioLog.line(time: row.bubbleStart ? row.time : nil,
+            ChatRadioLog.line(time: row.bubbleStart ? row.time : nil, info: messageInfo(row.bubbleStart ? row.time : nil),
                               station: row.bubbleStart ? HarbourRadio.callSign(for: session.id) : nil, theme: theme) {
                 VStack(alignment: .leading, spacing: 4) {
                     if let item = row.item, item.kind == .tool {
@@ -655,7 +655,7 @@ private struct ChatTranscriptRowView: View {
                         }
                         .padding(.top, row.item == nil ? 0 : 4)
                     } else if let replyTime = row.replyTime {
-                        ChatReplyTime(date: replyTime)
+                        ChatReplyTime(date: replyTime, info: messageInfo(replyTime))
                             .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                 }
@@ -687,9 +687,18 @@ private struct ChatTranscriptRowView: View {
     private func groupHeader(_ group: ChatToolGroup, replyTime: Date? = nil) -> some View {
         let disclosure = session.groupDisclosure(group, turnID: row.turnID)
         let live = disclosure == .current || (disclosure == .all && session.groupIsLive(group, turnID: row.turnID))
-        return ChatToolGroupHeader(group: group, replyTime: replyTime, disclosure: disclosure, live: live) {
+        return ChatToolGroupHeader(group: group, replyTime: replyTime, replyInfo: messageInfo(replyTime), disclosure: disclosure,
+                                   live: live) {
             session.setGroupExpanded(group, disclosure != .all)
         }
+    }
+
+    /// What clicking the row's time at `date` shows; nil without a time or a message.
+    private func messageInfo(_ date: Date?) -> ChatMessageInfo? {
+        guard let date, let item = row.item else { return nil }
+        return ChatMessageInfo(date: date, item: item, rowID: row.id, turnID: row.turnID, agent: session.agentTitle,
+                               conversation: session.sessionID, host: session.host,
+                               offset: row.turnID.flatMap { session.itemOffsets[.init(turn: $0, item: item.id)] })
     }
 
     /// The step the current one replaced, as it was shown: its header line on its own dot, and as the live step, no
@@ -877,13 +886,16 @@ enum ChatRadioLog {
         max(0, min(contentWidth - timeWidth(theme) - stationWidth(theme) - spacing * 2, theme.typography.characterWidth * 80))
     }
 
-    @MainActor static func line<Message: View>(time: Date?, station: String?, own: Bool = false, theme: ChatTheme,
-                                              @ViewBuilder message: () -> Message) -> some View {
+    /// `info` is what clicking the time shows.
+    @MainActor static func line<Message: View>(time: Date?, info: ChatMessageInfo? = nil, station: String?, own: Bool = false,
+                                              theme: ChatTheme, @ViewBuilder message: () -> Message) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: spacing) {
             Group {
                 if let time {
-                    Text(time, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-                        .help(ShipsTime.bellsText(time))
+                    ChatMessageTime(info: info) {
+                        Text(time, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+                    }
+                    .help(ShipsTime.bellsText(time))
                 } else { Text(" ") }
             }
             .font(theme.typography.detail).monospacedDigit().foregroundStyle(theme.muted.opacity(0.6))

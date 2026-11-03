@@ -219,6 +219,17 @@ pub fn native(arguments: &[String]) -> bool {
     true
 }
 
+/// Said where a TUI with a profile falls back from the private server (docs/integrations.md).
+pub const PROFILE: &str = "dispatch: codex --profile runs without Dispatch's private app server, so Chat works with this session through the terminal only (no native queue or live diffs) and /btw and /side are unavailable. To keep them, give the profile's settings as -c key=value options instead.";
+
+/// The TUI arguments name a configuration profile (`-p`, `--profile`).
+fn profiled(arguments: &[String]) -> bool {
+    let argv: Vec<String> = std::iter::once(String::from("codex"))
+        .chain(arguments.iter().cloned())
+        .collect();
+    crate::side::overrides(&argv).profile
+}
+
 #[derive(Clone, Default)]
 pub struct Launch {
     pub servers: Servers,
@@ -284,10 +295,12 @@ impl Launch {
                         || help
                             .split(u8::is_ascii_whitespace)
                             .any(|word| word == b"--no-daemon"));
-                let invocation = (help.windows(8).any(|word| word == b"--remote")
-                    && help.windows(7).any(|word| word == b"unix://"))
-                .then(|| Invocation::parse(&arguments))
-                .flatten();
+                let remote = help.windows(8).any(|word| word == b"--remote")
+                    && help.windows(7).any(|word| word == b"unix://");
+                let invocation = remote.then(|| Invocation::parse(&arguments)).flatten();
+                if remote && invocation.is_none() && native(&arguments) && profiled(&arguments) {
+                    eprintln!("{PROFILE}");
+                }
                 let server = invocation
                     .as_ref()
                     .map(|invocation| invocation.server.clone());

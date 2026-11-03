@@ -477,18 +477,23 @@ impl Codex {
         });
         let (catalogs, exits, parent) =
             (self.catalogs.clone(), self.exits.clone(), binding.clone());
+        let names: Vec<String> = crate::side::SIDE_ENVIRONMENT.map(str::to_owned).to_vec();
+        let jobs = self.jobs.clone();
         crate::owned::command(
             self.jobs.clone(),
             io,
             binding.clone(),
+            names.clone(),
             Box::new(move |io, result| {
-                let (command, _, scratch) = match result {
+                let crate::owned::Prepared { command, cwd, scratch, .. } = match result {
                     Ok(value) => value,
                     Err(error) => return deferred(done)(io, Err(error)),
                 };
+                let (command, declared, variables) = crate::owned::launchable(command, false);
                 let envs: Vec<_> = command.get_envs().collect();
+                let args: Vec<_> = command.get_args().collect();
                 let key = format!(
-                    "{}:{:?}:{envs:?}",
+                    "{}:{:?}:{envs:?}:{args:?}",
                     parent.process.executable.display(),
                     command.get_current_dir()
                 );
@@ -501,7 +506,7 @@ impl Codex {
                     }
                     return crate::catalog::list(channel, io, Vec::new(), None, done);
                 }
-                let channel = match Channel::spawn(io, parent, command) {
+                let channel = match Channel::spawn(io, parent.clone(), command) {
                     Ok(channel) => Rc::new(RefCell::new(channel)),
                     Err(error) => {
                         crate::owned::remove(io, scratch);
@@ -511,7 +516,7 @@ impl Codex {
                 if let Some(path) = scratch {
                     exits.borrow_mut().insert(channel.borrow().pid, path);
                 }
-                catalogs.borrow_mut().insert(key, channel.clone());
+                catalogs.borrow_mut().insert(key.clone(), channel.clone());
                 let next = channel.clone();
                 initialize(
                     channel,
@@ -522,8 +527,21 @@ impl Codex {
                             deferred(done)(io, Err(error));
                             return;
                         }
-                        next.borrow_mut().ready = true;
-                        crate::catalog::list(next, io, Vec::new(), None, done);
+                        // The credentials its configuration names; a server with them may replace it.
+                        crate::owned::credentials(
+                            jobs, io, parent, next, cwd, names, declared, variables, exits,
+                            Box::new(move |io, result| match result {
+                                Ok(channel) => {
+                                    channel.borrow_mut().ready = true;
+                                    catalogs.borrow_mut().insert(key, channel.clone());
+                                    crate::catalog::list(channel, io, Vec::new(), None, done);
+                                }
+                                Err(error) => {
+                                    catalogs.borrow_mut().remove(&key);
+                                    deferred(done)(io, Err(error));
+                                }
+                            }),
+                        );
                     }),
                 );
             }),

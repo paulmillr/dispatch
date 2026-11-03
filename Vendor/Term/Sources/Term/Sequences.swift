@@ -117,6 +117,10 @@ extension Stream {
             let f: ((KittyFlags) -> Action)? = switch n >= 2 ? p1 : 1 { case 1: Action.kittyKeyboardSet; case 2: Action.kittyKeyboardSetOr; case 3: Action.kittyKeyboardSetNot; default: nil }
             if let f { kitty(f) }
         case (0x7D, 0x24): if n == 1 && p0 <= 1 { emit(.activeStatusDisplay(p0 == 0 ? .main : .statusLine)) } // $}
+        case (0x79, 0x2A) where n <= 6:                                         // *y DECRQCRA (the page, Pg, ignored)
+            let v = { (i: Int) in i < n ? p[p.startIndex + i] : 0 }
+            emit(.requestChecksum(ChecksumRequest(id: v(0), top: v(2), left: v(3), bottom: v(4), right: v(5))))
+        case (0x79, 0x23) where n <= 1: emit(.checksumExtension(ChecksumFlags(rawValue: UInt8(truncatingIfNeeded: p0)))) // #y XTCHECKSUM
         default: break
         }
     }

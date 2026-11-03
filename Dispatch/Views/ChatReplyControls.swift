@@ -9,9 +9,12 @@ struct ChatReplyButton: View {
     var multiline = false
     var command = false
     var identifier = "chat-send"
+    /// Without it, a tight footer drops the keycap (the help keeps it).
+    var showsKey = true
     let action: () -> Void
 
     private var title: String { optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send" }
+    private var key: String { optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎" }
 
     var body: some View {
         if theme.radioLog { radioBody } else { standardBody }
@@ -27,8 +30,10 @@ struct ChatReplyButton: View {
                     Text("TRANSMIT").hidden().accessibilityHidden(true)
                     Text(title == "Send" ? "TRANSMIT" : title.uppercased())
                 }.font(HarbourType.heading(theme.typography.detailSize + 0.5)).tracking(1.8)
-                Text(optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎")
-                    .font(AppFont.shortcut(size: theme.typography.codeDetailSize)).foregroundStyle(theme.muted)
+                if showsKey {
+                    Text(key)
+                        .font(AppFont.shortcut(size: theme.typography.codeDetailSize)).foregroundStyle(theme.muted)
+                }
             }.padding(.horizontal, 10)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
                 .foregroundStyle(canSubmit ? theme.ink : theme.muted)
@@ -47,16 +52,19 @@ struct ChatReplyButton: View {
                     Text("Requeue").hidden().accessibilityHidden(true)
                     Text(title)
                 }
-                ZStack {
-                    Text("⌥⏎").hidden().accessibilityHidden(true)
-                    Text("⌘⏎").hidden().accessibilityHidden(true)
-                    Text(optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎")
-                }.font(AppFont.shortcut(size: theme.typography.codeDetailSize)).opacity(0.7)
+                if showsKey {
+                    ZStack {
+                        Text("⌥⏎").hidden().accessibilityHidden(true)
+                        Text("⌘⏎").hidden().accessibilityHidden(true)
+                        Text(key)
+                    }.font(AppFont.shortcut(size: theme.typography.codeDetailSize)).opacity(0.7)
+                }
             }.padding(.horizontal, 9)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
                 .foregroundStyle(canSubmit ? theme.terminal : theme.muted)
                 .modifier(ReplyButtonSurface(enabled: canSubmit))
         }.font(theme.typography.detail).buttonStyle(.plain).disabled(!canSubmit).fixedSize()
+            .help("\(title) · \(key)")
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(optionHeld ? "Steer" : editingQueued ? "Requeue message" : busy ? "Queue message" : command ? "Send command" : "Send message")
     }

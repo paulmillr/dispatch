@@ -538,6 +538,61 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             }
             write(&Data::Object(selected.into_iter().collect()))
         }
+        // Only names leave this job, never the files' other contents (docs/security.md, Side
+        // conversations): what JSON files' command strings expand, and selector settings.
+        "file.json.references" => {
+            let strings = |key: &str| -> io::Result<Vec<&str>> {
+                root.get(key)
+                    .and_then(|v| v.array())
+                    .ok_or_else(invalid)?
+                    .map(|v| v.string().ok_or_else(invalid))
+                    .collect()
+            };
+            let (keys, wanted) = (strings("keys")?, strings("env")?);
+            let paths = root.get("paths").and_then(|v| v.array()).ok_or_else(invalid)?;
+            let mut names = Vec::new();
+            let mut seen = BTreeSet::new();
+            let mut env = std::collections::BTreeMap::new();
+            for path in paths {
+                let path = path.path().ok_or_else(invalid)?;
+                let Ok(file) = fs::File::open(path) else { continue };
+                if !file.metadata().is_ok_and(|m| m.is_file()) {
+                    continue;
+                }
+                let mut bytes = Vec::new();
+                if (&file).take(1_048_577).read_to_end(&mut bytes).is_err() || bytes.len() > 1_048_576 {
+                    continue;
+                }
+                let Ok(document) = crate::json::Json::parse(&bytes) else { continue };
+                let document = document.root();
+                for key in &keys {
+                    if let Some(command) = document.get(key).and_then(|v| v.string()) {
+                        for name in crate::text::expansions(command) {
+                            if names.len() < 256 && seen.insert(name.clone()) {
+                                names.push(name);
+                            }
+                        }
+                    }
+                }
+                for name in &wanted {
+                    let value = document.get("env").and_then(|env| env.get(name));
+                    let text = match value {
+                        Some(value) if value.string().is_some() => value.string().map(str::to_owned),
+                        Some(value) if matches!(value.kind(), crate::json::Kind::Bool | crate::json::Kind::Number) => {
+                            value.write().ok().and_then(|bytes| String::from_utf8(bytes).ok())
+                        }
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        env.insert(*name, text);
+                    }
+                }
+            }
+            write(&Data::Object(vec![
+                ("names", Data::Array(names.iter().map(|name| Data::String(name)).collect())),
+                ("env", Data::Object(env.iter().map(|(name, value)| (*name, Data::String(value))).collect())),
+            ]))
+        }
         "file.program" => {
             let program = root.get("program").and_then(|v| v.string()).ok_or_else(invalid)?;
             if program.is_empty() || program.contains('/') { return Err(invalid()); }

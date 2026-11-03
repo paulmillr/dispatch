@@ -6,7 +6,7 @@ struct SSHLaunchRequest: Codable, Sendable {
     let token: String
     let connectionID: SSHConnectionID
     let credential: String
-    let master: SSHMaster
+    var master: SSHMaster
     let shell: SSHShell
     var integrationScope: SSHIntegrationScope? = nil
     /// App-observed routing identity, used only for sidebar grouping.
@@ -17,6 +17,19 @@ struct SSHLaunchRequest: Codable, Sendable {
     var origin: AgentProcess? = nil
     var sshProcess: AgentProcess? = nil
     var terminalDevice: UInt32? = nil
+
+    /// What a capture journal keeps of this request: the session variables masked (`SSHMaster.recorded`).
+    var recorded: Self {
+        var copy = self
+        copy.master = master.recorded
+        return copy
+    }
+    /// A launch request file's bytes as a capture journal keeps them: unchanged unless they hold session variables.
+    static func recorded(_ data: Data) -> Data {
+        guard let request = try? JSONDecoder().decode(Self.self, from: data), request.master.environment?.isEmpty == false,
+              let masked = try? JSONEncoder().encode(request.recorded) else { return data }
+        return masked
+    }
 }
 
 struct SSHCloseNotice: Codable, Sendable {
@@ -36,6 +49,13 @@ struct SSHResumeDecision: Codable, Sendable {
     var launch: SSHLaunchRequest? = nil
     var exitStatus: Int32? = nil
     var waiting: Bool? = nil
+
+    /// What a capture journal keeps of this decision (`SSHLaunchRequest.recorded`).
+    var recorded: Self {
+        var copy = self
+        copy.launch = launch?.recorded
+        return copy
+    }
 }
 
 struct SSHConsentRequest: Codable, Sendable {
@@ -57,7 +77,12 @@ enum SSHLauncherCommand {
     nonisolated(unsafe) private static var child: pid_t = 0
 
     static func run(_ args: [String]) -> Int32 {
-        let environment = System.inherited
+        var environment = System.inherited
+        // A clone starts where the connection it copies was typed (`SSHShell.directory`): relative paths resolve alike.
+        if let directory = environment.removeValue(forKey: "DISPATCH_SSH_DIRECTORY") {
+            unsetenv("DISPATCH_SSH_DIRECTORY")
+            _ = FileManager.default.changeCurrentDirectoryPath(directory)
+        }
         guard let executable = environment["DISPATCH_SSH_EXECUTABLE"] ?? ShellCommandWrapper.ssh.executable(in: environment) else {
             try? FileHandle.standardError.write(contentsOf: Data("ssh is not installed or is missing from PATH.\n".utf8)); return 127
         }
@@ -70,15 +95,21 @@ enum SSHLauncherCommand {
               let origin = AgentProcess.capture(System.pid) else { return replace(executable, args) }
         guard let grant = permission(scope: scope, directory: directory, tab: tab, token: token, origin: origin) else { return 130 }
         guard grant.isCurrent, grant.profile != .ordinary else { return replace(executable, args) }
-        // A configuration edited while the consent sheet was open cannot carry
-        // the old account's grant into the new invocation.
-        guard let current = resolvedConfiguration(invocation, executable: executable),
-              SSHIntegrationScope(executable: executable, destination: invocation.destination, configuration: current) == scope else {
-            return replace(executable, args)
-        }
         let id = SSHConnectionID(), credential = System.uuid().uuidString
         let sessionID = String(id.rawValue.uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24))
         let folder = URL(fileURLWithPath: directory).appendingPathComponent("s-" + id.rawValue.uuidString.prefix(12))
+        let master = SSHMaster(executable: executable, controlPath: folder.appendingPathComponent("master").path, destination: invocation.destination,
+                               environment: SSHSessionEnvironment.values(configuration: configuration, environment: environment))
+        let remote = remoteCommand(sessionID: sessionID, grant: grant, command: invocation.command)
+        let arguments = invocation.masterArguments(controlPath: master.controlPath, remoteCommand: remote, configuration: configuration)
+        // The grant covers `configuration`, the typed invocation's. OpenSSH resolves the master's again, with Dispatch's
+        // command and `-tt`: a Match on the command or session type can pick another host or account, and a configuration
+        // edited while the consent sheet was open another anything. Either way this login is plain SSH, saying why.
+        if let refusal = loginRefusal(approved: configuration, arguments: arguments, executable: executable) {
+            try? FileHandle.standardError.write(contentsOf: Data("Dispatch SSH integration unavailable (\(refusal)); opening plain SSH.\n".utf8))
+            return replace(executable, args)
+        }
+        // Made only for a login that goes ahead: `replace` execs, so nothing after it would remove the folder.
         do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
         catch { return replace(executable, args) }
         var announced = false
@@ -86,9 +117,8 @@ enum SSHLauncherCommand {
         // Once announced, the app owns this directory until the originating
         // shell and every native consumer have released their connection.
         defer { if !announced { try? FileManager.default.removeItem(at: folder) } }
-        let master = SSHMaster(executable: executable, controlPath: folder.appendingPathComponent("master").path, destination: invocation.destination)
-        let remote = remoteCommand(sessionID: sessionID, grant: grant, command: invocation.command)
-        let arguments = invocation.masterArguments(controlPath: master.controlPath, remoteCommand: remote, configuration: current)
+        let shell = SSHShell(destination: invocation.destination, options: invocation.options, executable: executable,
+                             directory: FileManager.default.currentDirectoryPath)
         var pointers = ([executable] + arguments).map { strdup($0) }; pointers.append(nil)
         var env = environment.map { strdup($0.key + "=" + $0.value) }; env.append(nil)
         defer { pointers.forEach { free($0) }; env.forEach { free($0) } }
@@ -100,7 +130,7 @@ enum SSHLauncherCommand {
                 }
             }
         }
-        guard launched == 0 else { return replace(executable, args) }
+        guard launched == 0 else { try? FileManager.default.removeItem(at: folder); return replace(executable, args) }
         child = pid
         let previousHup = signal(SIGHUP) { _ in if SSHLauncherCommand.child > 0 { kill(SSHLauncherCommand.child, SIGHUP) } else { _exit(129) } }
         let previousTerm = signal(SIGTERM) { _ in if SSHLauncherCommand.child > 0 { kill(SSHLauncherCommand.child, SIGTERM) } else { _exit(143) } }
@@ -119,7 +149,7 @@ enum SSHLauncherCommand {
             let ready = FileManager.default.fileExists(atPath: master.controlPath)
             if (!connectingAnnounced || ready) && !announced {
                 let request = SSHLaunchRequest(tabID: tab, token: token, connectionID: id, credential: credential,
-                    master: master, shell: SSHShell(destination: invocation.destination, options: invocation.options, executable: executable),
+                    master: master, shell: shell,
                     integrationScope: scope, integrationGrant: grant, origin: origin, sshProcess: AgentProcess.capture(pid), terminalDevice: AgentProcess.info(System.pid)?.tty)
                 // Publish progress while OpenSSH is still connecting/authenticating.
                 // Only the ready request permits the app to open helper channels.
@@ -135,14 +165,16 @@ enum SSHLauncherCommand {
         guard announced else { return result }
         child = 0
         return awaitRecovery(directory: directory, id: id, credential: credential, status: result,
-                             recoverable: invocation.command == nil, exitedNormally: status & 0x7f == 0)
+                             recoverable: invocation.command == nil, exitedNormally: status & 0x7f == 0,
+                             forwardAgent: SSHMaster.forwardsAgent(configuration))
     }
 
     /// The launcher remains the terminal's foreground owner while offline.
     /// Resumption arrives through its private mailbox, never terminal input.
+    /// `forwardAgent`: the connection's own login forwards the agent (`SSHMaster.forwardsAgent`), so the resumed shell does.
     static func awaitRecovery(directory: String, id initialID: SSHConnectionID, credential initialCredential: String,
                               status initialStatus: Int32, recoverable: Bool, exitedNormally initialExitedNormally: Bool,
-                              input: Int32 = STDIN_FILENO) -> Int32 {
+                              forwardAgent: Bool = false, input: Int32 = STDIN_FILENO) -> Int32 {
         var id = initialID, credential = initialCredential, status = initialStatus
         var exitedNormally = initialExitedNormally
         while true {
@@ -181,10 +213,10 @@ enum SSHLauncherCommand {
             if let exit = decision.exitStatus { return exit }
             guard recoverable, let request = decision.launch, let grant = request.integrationGrant else { return status }
             id = request.connectionID; credential = request.credential
-            var arguments = request.master.arguments(command: remoteCommand(sessionID: request.sessionID, grant: grant, command: nil))
-            if let index = arguments.firstIndex(of: "-T") { arguments[index] = "-tt" }
+            let arguments = request.master.shellArguments(command: remoteCommand(sessionID: request.sessionID, grant: grant, command: nil),
+                                                          forwardAgent: forwardAgent)
             var pointers = ([request.master.executable] + arguments).map { strdup($0) }; pointers.append(nil)
-            var environment = System.inherited.map { strdup($0.key + "=" + $0.value) }; environment.append(nil)
+            var environment = (request.master.processEnvironment ?? System.inherited).map { strdup($0.key + "=" + $0.value) }; environment.append(nil)
             var pid: pid_t = 0
             let launched = request.master.executable.withCString { executable in
                 pointers.withUnsafeMutableBufferPointer { arguments in
@@ -202,13 +234,33 @@ enum SSHLauncherCommand {
         }
     }
 
-    static func resolvedConfiguration(_ invocation: SSHInvocation, executable: String) -> String? {
-        struct Input: Codable { let executable: String; let arguments: [String] }
+    /// Why the login master Dispatch starts (`arguments`, `SSHInvocation.masterArguments`) is not the connection the
+    /// grant covers (`approved`, the typed invocation's `ssh -G`), for the terminal; nil when OpenSSH resolves it alike,
+    /// Dispatch's own options aside (`SSHResolvedConnection`). Resolving connects nowhere.
+    static func loginRefusal(approved: String, arguments: [String], executable: String, directory: String? = nil) -> String? {
+        guard let actual = resolvedConfiguration(arguments: ["-G", "-o", "ClearAllForwardings=no"] + arguments,
+                                                 executable: executable, directory: directory) else {
+            return "its SSH configuration could not be read again"
+        }
+        let differences = SSHResolvedConnection.differences(approved: approved, actual: actual, ignoring: SSHResolvedConnection.login)
+        return differences.isEmpty ? nil : SSHResolvedConnection.reason(differences)
+    }
+
+    /// `directory`: where ssh runs (`SSHShell.directory`, for relative paths); nil, this process's own.
+    static func resolvedConfiguration(_ invocation: SSHInvocation, executable: String, directory: String? = nil) -> String? {
         let arguments = ["-G", "-o", "ClearAllForwardings=no"] + invocation.options + ["--", invocation.destination] + (invocation.command.map { [$0] } ?? [])
+        return resolvedConfiguration(arguments: arguments, executable: executable, directory: directory, supported: invocation.supports(configuration:))
+    }
+
+    /// `ssh` run with `arguments` (which start with `-G`): what it resolves, nil when it fails or `supported` refuses it.
+    static func resolvedConfiguration(arguments: [String], executable: String, directory: String? = nil,
+                                      supported: (String) -> Bool = { _ in true }) -> String? {
+        struct Input: Codable { let executable: String; let arguments: [String]; var directory: String? }
         do {
-            let data = try AppReplay.query(kind: "ssh.configuration", input: AppReplay.value(Input(executable: executable, arguments: arguments))) {
+            let data = try AppReplay.query(kind: "ssh.configuration", input: AppReplay.value(Input(executable: executable, arguments: arguments, directory: directory))) {
                 let process = Process(), pipe = Pipe()
                 process.executableURL = URL(fileURLWithPath: executable)
+                if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true) }
                 // Native clones suppress duplicate forwarded listeners. Resolve the
                 // consent identity with forwarding definitions visible in both launches;
                 // the real SSH invocation still keeps ClearAllForwardings=yes. This also
@@ -229,7 +281,7 @@ enum SSHLauncherCommand {
                     }
                     process.waitUntilExit()
                     let configuration = String(decoding: data, as: UTF8.self)
-                    return try AppReplay.value(process.terminationStatus == 0 && invocation.supports(configuration: configuration) ? configuration : nil)
+                    return try AppReplay.value(process.terminationStatus == 0 && supported(configuration) ? configuration : nil)
                 } catch { if process.isRunning { process.terminate(); process.waitUntilExit() }; return .null }
             }
             return try AppReplay.decode(String?.self, data)

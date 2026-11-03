@@ -7,7 +7,8 @@ import Darwin
 enum SSHTestCommand {
     static func run(master: SSHMaster, argv: [String], input: Data = Data()) async throws -> SSHCommand.Result {
         try await SSHCommand.run(executable: master.executable,
-            arguments: master.arguments(command: argv.map(HerdrLaunch.quote).joined(separator: " ")), input: input)
+            arguments: master.arguments(command: argv.map(HerdrLaunch.quote).joined(separator: " ")), input: input,
+            environment: master.processEnvironment)
     }
 
     /// The production helper intentionally cannot stop an entire herdr server.
@@ -51,6 +52,7 @@ final class SSHTestDaemon {
         """
         process.executableURL = URL(fileURLWithPath: master.executable)
         process.arguments = master.arguments(command: (["/usr/bin/python3", "-c", launch, pidFile] + argv).map(HerdrLaunch.quote).joined(separator: " "))
+        if let environment = master.processEnvironment { process.environment = environment }
         process.standardInput = FileHandle.nullDevice
         _ = try AppReplay.query(kind: "fixture.launch", input: AppReplay.value(AppReplay.Launch(process))) {
             let output = System.temporary.appendingPathComponent("ssh-fixture-" + System.uuid().uuidString)

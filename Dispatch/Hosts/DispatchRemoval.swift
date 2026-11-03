@@ -49,7 +49,8 @@ enum DispatchRemoval {
                 + shell.options + ["-T", "--", shell.destination, command + (dry ? " --dry-run" : "")]
         }
         do {
-            let result = try await SSHCommand.run(executable: executable, arguments: arguments, timeout: 30, errors: true)
+            let result = try await SSHCommand.run(executable: executable, arguments: arguments, timeout: 30, errors: true,
+                                                  directory: machine.sshDirectory)
             let text = String(decoding: result.output + (result.errors ?? Data()), as: UTF8.self)
             return Outcome(status: result.status, output: tidy(text))
         } catch {

@@ -1,11 +1,11 @@
-// Program status (OSC 7501, superlogical.com/rex/docs/build/program-status rev 0.3): programs
-// report idle/working/done/blocked/error records; the terminal keeps them and answers only the `?`
-// query. Not part of Ghostty.
+// Program status (OSC 7501, superlogical.com/rex/docs/build/program-status rev 0.4, as Ghostty 1.4):
+// programs report idle/working/done/blocked/error records; the terminal keeps them and answers only
+// the `?` query, with the states and kinds it accepts.
 
 /// One stored record, with `app` resolved from the nearest ancestor that has one.
 public struct ProgramStatus: Equatable, Sendable {
-    public enum State: String, Sendable { case idle, working, done, blocked, error }
-    public enum Kind: String, Sendable { case permission, question, auth }
+    public enum State: String, Sendable, CaseIterable { case idle, working, done, blocked, error }
+    public enum Kind: String, Sendable, CaseIterable { case permission, question, auth }
     /// "" is the root record; children are "/"-separated paths.
     public var id: String
     public var state: State
@@ -37,6 +37,11 @@ public enum ProgramStatusCommand: Equatable {
     /// The record as reported (`app` not inherited, `serial` unset).
     case report(ProgramStatus)
     case query(Terminator)
+
+    /// The query's answer (rev 0.4, Ghostty's query_reply): `?`, then every state a report may set (`clear` is not a
+    /// state) and every kind, in the specification's order, so a program can fall back from what is missing.
+    public static let queryReply = "?:states=" + ProgramStatus.State.allCases.map(\.rawValue).joined(separator: ",")
+        + ":kinds=" + ProgramStatus.Kind.allCases.map(\.rawValue).joined(separator: ",")
 
     /// Bytes from OSC through ST, of which "ESC ] 7501 ;" is 7.
     static let sequenceLimit = 4096

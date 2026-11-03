@@ -342,19 +342,38 @@ struct ChatView: View {
         .accessibilityIdentifier("chat-inactive-composer")
     }
 
+    /// How much the one-row footer gives up to fit, least first; past `.minimal` it takes two rows.
+    private enum FooterDensity: Int, Comparable {
+        /// Everything, effort as text.
+        case regular
+        /// The effort meter in place of its text (only beside the agent's activity).
+        case compactEffort
+        /// Also the reply button without its keycap (its help names it).
+        case keyless
+        /// Also the activity without its label, orbit and time only (its help names it).
+        case unlabeled
+        /// Also the ⌘/ chip (the shortcut still opens its sheet) and a model name truncated in the middle.
+        case minimal
+
+        static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
     private var composerFooter: some View {
         let hasActivity = agentWorking
         return ViewThatFits(in: .horizontal) {
-            composerFooterRow(compactEffort: false)
+            composerFooterRow(.regular)
             if hasActivity {
-                composerFooterRow(compactEffort: true)
+                composerFooterRow(.compactEffort)
             }
+            composerFooterRow(.keyless)
+            composerFooterRow(.unlabeled)
+            composerFooterRow(.minimal)
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     ScrollView(.horizontal) {
                         HStack(spacing: 12) {
-                            modelControls(compactEffort: hasActivity).fixedSize().focusedOnly(focused)
-                            ChatComposerActivity(session: session, active: focused || agentWorking).fixedSize()
+                            modelControls(compactEffort: hasActivity, truncated: true).fixedSize().focusedOnly(focused)
+                            ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: false).fixedSize()
                             ChatComposerAgents(session: session).fixedSize()
                         }
                     }
@@ -365,23 +384,42 @@ struct ChatView: View {
                 HStack(spacing: 12) {
                     savedDraftControls.focusedOnly(focused)
                     Spacer(minLength: 0)
-                    attachControl
-                    dictationControl
-                    replyActions.focusedOnly(focused)
+                    trailingControls(.regular)
                 }
             }
         }
     }
 
-    private func composerFooterRow(compactEffort: Bool) -> some View {
-        HStack(spacing: 12) {
-            modelControls(compactEffort: compactEffort).fixedSize().focusedOnly(focused)
-            composerActivity.fixedSize()
-            savedDraftControls.focusedOnly(focused)
-            Spacer(minLength: 0)
-            attachControl
-            dictationControl
-            replyActions.focusedOnly(focused)
+    /// The spacer alone separates the two ends: as an item of the leading stack it would add the spacing twice.
+    private func composerFooterRow(_ density: FooterDensity) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 12) {
+                modelControls(compactEffort: density >= .compactEffort && agentWorking, truncated: density == .minimal)
+                    .fixedSize().focusedOnly(focused)
+                composerActivity(showsLabel: density < .unlabeled).fixedSize()
+                savedDraftControls.focusedOnly(focused)
+            }
+            Spacer(minLength: 12)
+            trailingControls(density)
+        }
+    }
+
+    /// The paperclip, microphone and ⌘/ squares pad their glyphs already, so they sit closer than the row's items.
+    private func trailingControls(_ density: FooterDensity) -> some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                attachControl
+                dictationControl
+                if density < .minimal { shortcutsControl.focusedOnly(focused) }
+            }
+            replyButton(showsKey: density < .keyless)
+                .background(alignment: .leading) {
+                    // Hidden, the chip still anchors the sheet ⌘/ opens.
+                    if density == .minimal {
+                        shortcutsControl.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+                .focusedOnly(focused)
         }
     }
 
@@ -413,10 +451,10 @@ struct ChatView: View {
         }
     }
 
-    private func modelControls(compactEffort: Bool) -> some View {
+    private func modelControls(compactEffort: Bool, truncated: Bool = false) -> some View {
         HStack(spacing: 7) {
             ChatModelControls(session: session, coordinator: coordinator, focused: focused && session.showChat && !session.drafts.shape.multiline,
-                              compactEffort: compactEffort)
+                              compactEffort: compactEffort, modelWidth: truncated ? theme.typography.detailSize * 9 : nil)
             if session.goal != nil {
                 Text("·").accessibilityHidden(true)
                 ChatGoalControls(session: session, coordinator: coordinator)
@@ -425,9 +463,9 @@ struct ChatView: View {
             .foregroundStyle(theme.muted.opacity(0.65))
     }
 
-    private var composerActivity: some View {
+    private func composerActivity(showsLabel: Bool) -> some View {
         HStack(spacing: 8) {
-            ChatComposerActivity(session: session, active: focused || agentWorking)
+            ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: showsLabel)
             ChatComposerAgents(session: session)
             composerStop
         }
@@ -447,15 +485,16 @@ struct ChatView: View {
         }
     }
 
-    private var replyActions: some View {
-        HStack(spacing: 8) {
-            ChatComposerShortcuts(session: session, presented: $session.shortcutsPresented)
-            ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy,
-                            editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
-                            command: session.draftIsCommand) {
-                if optionHeld { coordinator.sendNow(session) }
-                else { coordinator.sendFromComposer(session) }
-            }
+    private var shortcutsControl: some View {
+        ChatComposerShortcuts(session: session, presented: $session.shortcutsPresented)
+    }
+
+    private func replyButton(showsKey: Bool) -> some View {
+        ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy,
+                        editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
+                        command: session.draftIsCommand, showsKey: showsKey) {
+            if optionHeld { coordinator.sendNow(session) }
+            else { coordinator.sendFromComposer(session) }
         }
     }
 

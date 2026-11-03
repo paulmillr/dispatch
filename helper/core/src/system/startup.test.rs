@@ -66,3 +66,25 @@ fn without_a_startup_directory_bash_keeps_its_posix_launch_and_fish_its_inline_f
     assert!(args[2].contains("function codex"));
     assert_eq!(environment(&fish)["DISPATCH_SSH_HELPER"].as_deref(), Some("/h"));
 }
+
+/// S3 of the 2026-10-31 audit: a user alias for `source`, or SH_WORD_SPLIT with a space in the folder,
+/// must not skip a startup file, so each wrapper sources it as `builtin source` with a quoted operand.
+#[test]
+fn zsh_wrappers_source_the_users_files_with_the_builtin_and_a_quoted_path() {
+    let env = |_: &str| None;
+    let (_, files) = prepare(
+        Path::new("/bin/zsh"),
+        Path::new("/home/sam example"),
+        Some(Path::new("/run/startup-1")),
+        Path::new("/h"),
+        None,
+        Some(&typed()),
+        &env,
+    );
+    for (name, bytes) in &files {
+        let script = String::from_utf8(bytes.clone()).unwrap();
+        let line = format!("[[ -r $ZDOTDIR/{name} ]] && builtin source \"$ZDOTDIR/{name}\"\n");
+        assert!(script.contains(&line), "{name}: {script}");
+        assert!(!script.contains(&format!("&& source $ZDOTDIR/{name}")), "{name}");
+    }
+}

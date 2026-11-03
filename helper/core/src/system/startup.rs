@@ -96,8 +96,10 @@ pub fn prepare(
                         ".zshrc" => "if [[ -o login ]]; then ZDOTDIR=$DISPATCH_SSH_STARTUP; fi\n",
                         _ => "",
                     };
+                    // `builtin source` and a quoted operand: a user alias for `source`, or
+                    // SH_WORD_SPLIT with a space in the folder, must not skip the user's file.
                     let script = format!(
-                        "ZDOTDIR=$DISPATCH_SSH_ZDOTDIR\n{history}[[ -r $ZDOTDIR/{name} ]] && source $ZDOTDIR/{name}\nDISPATCH_SSH_ZDOTDIR=${{ZDOTDIR:-$HOME}}\n{next}{integration}"
+                        "ZDOTDIR=$DISPATCH_SSH_ZDOTDIR\n{history}[[ -r $ZDOTDIR/{name} ]] && builtin source \"$ZDOTDIR/{name}\"\nDISPATCH_SSH_ZDOTDIR=${{ZDOTDIR:-$HOME}}\n{next}{integration}"
                     );
                     files.push((name.into(), script.into_bytes()));
                 }

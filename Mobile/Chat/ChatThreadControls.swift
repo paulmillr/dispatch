@@ -1,24 +1,31 @@
+import CoreText
 import SwiftUI
 import UIKit
 
-/// The chat tab's header controls (C1, C3, C4b, C5): the ⋯ menu (Search, Conversation mode, Manage goal, the side
-/// conversations) beside the host disc, which becomes a pink waveform disc while conversation mode is on (a tap ends
-/// it). Tabs' `TabScreen` puts them in the header's trailing slot on the Chat segment (`TabsContent.chatTrailing`);
-/// beside the Duo's sidebar, where the Terminal / Chat switch takes the disc's place, the menu sits before the switch.
+/// The chat tab's header controls (C1, C3, C4b, C5): the conversation's menu (Search, Conversation mode, Manage goal,
+/// the side conversations) and the host disc, which becomes a pink waveform disc while conversation mode is on (a tap
+/// ends it). Tabs' `TabScreen` puts them in the header's trailing slot on the Chat segment (`TabsContent.chatTrailing`).
+/// On the phone (X9b) the disc is the tab's menu and holds the conversation's items (`menuInDisc`); beside the Duo's
+/// sidebar, where the Terminal / Chat switch takes the disc's place, the ⋯ menu sits before the switch.
 struct ChatHeaderControls<Disc: View>: View {
     let session: MobileChatSession
     /// Beside the Duo's sidebar `disc` is the Terminal / Chat switch, which stays: the waveform disc takes the menu's
     /// place instead of the disc's.
     var keepsDisc = false
+    /// `disc` is the tab's menu with `ChatThreadMenuItems` in it (X9b): no ⋯ beside it, and the waveform takes its place.
+    var menuInDisc = false
     @ViewBuilder var disc: Disc
     @State private var voice = MobileVoiceConversation.shared
 
-    /// The slot's width: the menu (or the waveform disc), the bar's gap, the disc (`disc` points wide).
+    /// The slot's width beside the Duo's sidebar: the menu (or the waveform disc), the bar's gap, the disc (`disc`
+    /// points wide). With the menu in the disc, the disc's 44 points.
     static func width(disc: CGFloat = 44) -> CGFloat { 44 + 8 + disc }
 
     var body: some View {
         HStack(spacing: 8) {
-            if keepsDisc {
+            if menuInDisc {
+                if voice.active(for: session) { waveform } else { disc }
+            } else if keepsDisc {
                 if voice.active(for: session) { waveform } else { ChatThreadMenu(session: session) }
                 disc
             } else {
@@ -41,36 +48,25 @@ struct ChatHeaderControls<Disc: View>: View {
     }
 }
 
-/// The ⋯ menu of a conversation.
+extension TabsContent {
+    /// The Chat segment's header for the conversation `session(tab, pane)` (`chatTrailing`, `chatMenu`): beside the
+    /// Duo's switch the ⋯ menu before it; on the phone the disc is the tab's menu with the conversation's items, and
+    /// conversation mode's waveform takes its place.
+    mutating func chatHeader(_ session: @escaping @MainActor (MobileTab, MobilePane) -> MobileChatSession) {
+        chatTrailing = { tab, pane, disc, keepsDisc in
+            AnyView(ChatHeaderControls(session: session(tab, pane), keepsDisc: keepsDisc, menuInDisc: !keepsDisc) { disc })
+        }
+        chatMenu = { tab, pane in AnyView(ChatThreadMenuItems(session: session(tab, pane))) }
+    }
+}
+
+/// The ⋯ menu of a conversation (beside the Duo's sidebar; the phone's tab menu holds its items, `ChatThreadMenuItems`).
 struct ChatThreadMenu: View {
     let session: MobileChatSession
-    @State private var voice = MobileVoiceConversation.shared
 
     var body: some View {
         Menu {
-            Button("Search", systemImage: "magnifyingglass") { session.search.open() }
-            if voice.active(for: session) {
-                Button("End Conversation Mode", systemImage: "waveform.slash") { voice.stop() }
-            } else {
-                Button("Conversation Mode", systemImage: "waveform") { voice.start(session) }
-                    .disabled(session.phase != .verified)
-            }
-            if session.goal != nil {
-                Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
-            }
-            if session.side != nil {
-                Button("Side Conversation", systemImage: "arrow.triangle.branch") { session.showingSide = true }
-            } else if session.offersSide(.btw) || session.offersSide(.side) {
-                Section {
-                    if session.offersSide(.btw) {
-                        Button("Ask on the Side", systemImage: "arrow.triangle.branch") { session.openSide(.btw) }
-                    }
-                    if session.offersSide(.side) {
-                        Button("Side Conversation with Changes", systemImage: "pencil") { session.openSide(.side) }
-                    }
-                }
-                .disabled(session.phase != .verified)
-            }
+            ChatThreadMenuItems(session: session)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -86,6 +82,38 @@ struct ChatThreadMenu: View {
         .contentShape(.hoverEffect, Circle())
         .hoverEffect(.highlight)
         .accessibilityLabel("Conversation menu")
+    }
+}
+
+/// A conversation's menu items: Search, Conversation mode, Manage goal, the side conversations.
+struct ChatThreadMenuItems: View {
+    let session: MobileChatSession
+    @State private var voice = MobileVoiceConversation.shared
+
+    var body: some View {
+        Button("Search", systemImage: "magnifyingglass") { session.search.open() }
+        if voice.active(for: session) {
+            Button("End Conversation Mode", systemImage: "waveform.slash") { voice.stop() }
+        } else {
+            Button("Conversation Mode", systemImage: "waveform") { voice.start(session) }
+                .disabled(session.phase != .verified)
+        }
+        if session.goal != nil {
+            Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
+        }
+        if session.side != nil {
+            Button("Side Conversation", systemImage: "arrow.triangle.branch") { session.showingSide = true }
+        } else if session.offersSide(.btw) || session.offersSide(.side) {
+            Section {
+                if session.offersSide(.btw) {
+                    Button("Ask on the Side", systemImage: "arrow.triangle.branch") { session.openSide(.btw) }
+                }
+                if session.offersSide(.side) {
+                    Button("Side Conversation with Changes", systemImage: "pencil") { session.openSide(.side) }
+                }
+            }
+            .disabled(session.phase != .verified)
+        }
     }
 }
 
@@ -351,7 +379,8 @@ struct ChatWaveform: View {
     }
 }
 
-/// C6: "Jump to latest" over the thread's bottom while it is scrolled up and newer messages came, with how many.
+/// C6: "Jump to latest" over the thread's bottom while the user scrolled up and newer messages came, with how many
+/// (`ChatFollow`).
 struct ChatJumpPill: View {
     let count: Int
     let action: () -> Void
@@ -386,28 +415,191 @@ struct ChatJumpPill: View {
     }
 }
 
-/// S6: a turn's footnote under its last bubble ("5 steps in 1m 26s · 2 files +38 −4"), the counts in green and red.
-struct ChatTurnFootnote: View {
-    let summary: ChatTurnSummary
+/// Whether the thread follows its end, and how many rows came while it did not (C6). The thread follows until something
+/// other than the app moves it away from the end: the user's drag or fling (stops following the moment it starts), or
+/// any other scroll toward older rows (VoiceOver's scroll and focus, the status bar's tap, Page Up and the arrow keys).
+/// Content that grows, the keyboard or the composer changing height take the end out of view without moving the offset
+/// up, so the thread goes back to it (`moved` answers true) instead of counting what comes meanwhile; the app's own
+/// animated scroll to the end (the pill) is let run. A drag that only took the keyboard down keeps a following thread
+/// following. "Jump to latest" shows only while not following with something new below: never at the end, also not
+/// for a frame; at the end again, after the pill or a send, it follows again.
+struct ChatFollow: Equatable {
+    private(set) var following: Bool
+    private(set) var unseen = 0
+    /// The user's finger or fling moves the thread.
+    private(set) var dragging = false
+    /// The app's animated scroll to the end is under way (the pill): its offsets are the app's.
+    private(set) var scrollingToEnd = false
+    private var followedBeforeDrag = false
+    private var dismissedKeyboard = false
+    private var offset: CGFloat?
+
+    init(following: Bool = true) { self.following = following }
+
+    /// What the view draws from this (the pill and the size-change anchor); the rest changes as the thread scrolls and
+    /// draws nothing.
+    struct Shown: Equatable {
+        var following: Bool
+        var unseen: Int
+        var showsJump: Bool { !following && unseen > 0 }
+    }
+
+    var shown: Shown { Shown(following: following, unseen: unseen) }
+    var showsJump: Bool { shown.showsJump }
+
+    /// The offset or the end's visibility changed. True: go back to the end now (a plain scroll; nothing else is
+    /// moving the thread).
+    mutating func moved(offset: CGFloat, atEnd: Bool) -> Bool {
+        let previous = self.offset
+        self.offset = offset
+        if atEnd {
+            unseen = 0
+            scrollingToEnd = false
+            if !dragging { following = true }
+            return false
+        }
+        guard following, !dragging, !scrollingToEnd else { return false }
+        if let previous, offset < previous - 0.5 {
+            // Toward older rows, and not the app: the user's (VoiceOver, the status bar, keys).
+            following = false
+            return false
+        }
+        return true
+    }
+
+    /// The user's drag began: the thread stops following at once.
+    mutating func dragBegan() {
+        if !dragging { followedBeforeDrag = following }
+        dragging = true
+        dismissedKeyboard = false
+        scrollingToEnd = false
+        following = false
+    }
+
+    /// The drag took the keyboard down (`ChatKeyboardDragDismissal`).
+    mutating func draggedKeyboardDown() { if dragging { dismissedKeyboard = true } }
+
+    /// The drag and its fling ended. True: go back to the end (a drag that took the keyboard down from a following
+    /// thread).
+    mutating func dragEnded(atEnd: Bool) -> Bool {
+        guard dragging else { return false }
+        dragging = false
+        if atEnd {
+            follow()
+            scrollingToEnd = false
+            return false
+        }
+        if dismissedKeyboard, followedBeforeDrag {
+            follow()
+            scrollingToEnd = false
+            return true
+        }
+        return false
+    }
+
+    /// Rows arrived at the end.
+    mutating func appended(_ count: Int) { if !following { unseen += count } }
+
+    /// A send, or the pill: the thread follows its end again, and the app scrolls there (`scrolling`: animated, let it
+    /// run).
+    mutating func follow(scrolling: Bool = false) {
+        following = true
+        unseen = 0
+        dragging = false
+        scrollingToEnd = scrolling
+    }
+
+    /// The app's animated scroll ended (or was taken over).
+    mutating func settled() { scrollingToEnd = false }
+
+    /// The thread moved away on the user's request (a search match).
+    mutating func leave() {
+        following = false
+        scrollingToEnd = false
+    }
+}
+
+/// S6d: a turn's summary in its last bubble's bottom-right corner, where messengers put a message's time: small
+/// secondary text, uncoloured ("3 files +127 −22 · 10:17", `ChatTurnSummary.corner`). One line over the room the
+/// bubble's text keeps (`room`), so the text never runs under it; `wrapped`, on trailing lines of its own below the text
+/// when it cannot share a line (`MobileChatMarkdownView`). Tapping the bubble opens the steps.
+struct ChatTurnCorner: View {
+    let text: String
+    var wrapped = false
 
     var body: some View {
-        if let text = summary.footnote {
-            footnote(text)
-                .font(.footnote)
-                .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 22)
-                .accessibilityLabel(text.replacingOccurrences(of: "−", with: "minus "))
+        if wrapped {
+            Text(text)
+                .font(Self.font)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        } else {
+            Text(text)
+                .font(Self.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 
-    /// The counts after the files coloured; the rest as it reads.
-    private func footnote(_ text: String) -> Text {
-        guard !summary.files.isEmpty, let range = text.range(of: " +\(summary.additions) −\(summary.deletions)", options: .backwards)
-        else { return Text(text) }
-        let added = Text("+\(summary.additions)").foregroundStyle(Color.added.opacity(0.85))
-        let removed = Text("−\(summary.deletions)").foregroundStyle(Color.destructive.opacity(0.85))
-        return Text("\(String(text[..<range.lowerBound])) \(added) \(removed)")
+    static let font = Font.caption2.monospacedDigit()
+    /// The gap the room keeps before the corner.
+    static let gap = "    "
+
+    /// The room the bubble's text keeps for `text`: the gap, then `text` in the corner's font and clear ink, its
+    /// characters joined so it wraps as one piece (onto a short line of its own when the last line is full).
+    static func room(_ text: String) -> AttributedString {
+        var room = AttributedString(gap + text.map(String.init).joined(separator: "\u{2060}"))
+        room.font = font
+        room.foregroundColor = .clear
+        return room
+    }
+}
+
+/// What an agent bubble says in its corner (S6d, S6e) and how its text keeps room for it (`MobileChatMarkdownView`).
+struct ChatCorner {
+    /// What the room is kept for: the widest the corner draws.
+    var room: String
+    /// The room fits one line of the bubble's text (`ChatCornerMetrics.fits`); else the corner takes lines of its own.
+    var fits: Bool
+    /// The corner as drawn: one line over the room, or `wrapped` on trailing lines of its own.
+    var view: (_ wrapped: Bool) -> AnyView
+    /// For VoiceOver, the value of the element the room ends (or the label of the corner's own lines); nil or empty:
+    /// nothing to read, and no element.
+    var spoken: String?
+    var hint: String? = nil
+}
+
+/// The corner's font as UIKit measures it, against the width of the bubble's text: whether a corner can share a line.
+struct ChatCornerMetrics {
+    let font: UIFont
+    /// The widest the bubble's text runs (`ChatMeasure.bubble` less the padding).
+    let column: CGFloat
+
+    init(column: CGFloat, measure: CGFloat, size: DynamicTypeSize) {
+        self.column = ChatMeasure.bubble(user: false, column: column, measure: measure) - ChatMeasure.padding
+        font = Self.font(size)
+    }
+
+    /// The room's width for `text`: the gap and the text, in caption2 with monospaced digits at `size`.
+    func width(_ text: String) -> CGFloat {
+        ceil((ChatTurnCorner.gap + text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    /// `text`'s room fits one line of the bubble's text, with a point to spare for rounding.
+    func fits(_ text: String) -> Bool { width(text) + 2 <= column }
+
+    /// The wider room of the two.
+    func wider(_ a: String, _ b: String) -> String { width(b) > width(a) ? b : a }
+
+    private static func font(_ size: DynamicTypeSize) -> UIFont {
+        let base = UIFont.preferredFont(forTextStyle: .caption2,
+                                        compatibleWith: UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size)))
+        let digits = base.fontDescriptor.addingAttributes([.featureSettings: [[
+            UIFontDescriptor.FeatureKey.type: kNumberSpacingType, UIFontDescriptor.FeatureKey.selector: kMonospacedNumbersSelector]]])
+        return UIFont(descriptor: digits, size: 0)
     }
 }
 
@@ -463,4 +655,91 @@ struct ChatTerminalSwitch {
 
 extension EnvironmentValues {
     @Entry var chatShowTerminal: ChatTerminalSwitch? = nil
+}
+
+/// Dragging a thread down onto its composer takes the keyboard down. `scrollDismissesKeyboard(.interactively)` starts
+/// only where the finger meets the keyboard, and the composer sits between the thread and the keyboard: a drag down the
+/// thread crossed the whole composer (the field, and the code keys when shown) before anything moved, so it seemed not
+/// to work. Put in the background of the scroll view's content, this finds the thread's `UIScrollView` and watches its
+/// own pan: once a downward drag passes the thread's visible bottom edge while a software keyboard shows, it ends
+/// editing, and the keyboard and the composer go down together (`dismissed` is told). With only a hardware keyboard
+/// (an iPad's shortcuts bar at most) it does nothing: the field keeps its focus. It takes no touches and adds no
+/// gesture of its own, so scrolling is unchanged.
+struct ChatKeyboardDragDismissal: UIViewRepresentable {
+    var dismissed: () -> Void = {}
+
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) { view.dismissed = dismissed }
+
+    /// Whether a drag at `location` (window coordinates, moved `translation` since it began) has crossed the thread's
+    /// visible bottom edge going down.
+    static func crosses(location: CGPoint, translation: CGPoint, bottom: CGFloat) -> Bool {
+        translation.y > 0 && location.y >= bottom
+    }
+
+    /// A software keyboard shows: the keyboard's visible height in the window is a keyboard's, not a hardware
+    /// keyboard's shortcuts bar (nil: not known yet, then no hardware keyboard is attached).
+    static func softwareKeyboard(visibleHeight: CGFloat?, hardwareKeyboard: Bool) -> Bool {
+        guard let visibleHeight else { return !hardwareKeyboard }
+        return visibleHeight >= 150
+    }
+
+    final class Probe: UIView {
+        var dismissed: () -> Void = {}
+        private weak var scrollView: UIScrollView?
+        private var fired = false
+        /// The keyboard's visible height in the window, from its last frame change.
+        private var keyboardHeight: CGFloat?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = false
+            for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification] {
+                NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanges), name: name, object: nil)
+            }
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        @objc private func keyboardChanges(_ note: Notification) {
+            let end = note.name == UIResponder.keyboardWillHideNotification
+                ? nil : note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            guard let end, let window else { keyboardHeight = 0; return }
+            let frame = window.convert(end, from: window.screen.coordinateSpace)
+            keyboardHeight = window.bounds.intersection(frame).height
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(pan))
+            scrollView = nil
+            guard window != nil else { return }
+            var view = superview
+            while let current = view, !(current is UIScrollView) { view = current.superview }
+            guard let found = view as? UIScrollView else { return }
+            scrollView = found
+            found.panGestureRecognizer.addTarget(self, action: #selector(pan))
+        }
+
+        @objc private func pan(_ gesture: UIPanGestureRecognizer) {
+            guard let scrollView, let window else { return }
+            switch gesture.state {
+            case .began: fired = false
+            case .changed where !fired:
+                let frame = scrollView.convert(scrollView.bounds, to: window)
+                let bottom = frame.maxY - scrollView.adjustedContentInset.bottom
+                guard ChatKeyboardDragDismissal.crosses(location: gesture.location(in: window),
+                                                        translation: gesture.translation(in: window), bottom: bottom),
+                      ChatKeyboardDragDismissal.softwareKeyboard(visibleHeight: keyboardHeight,
+                                                                 hardwareKeyboard: HardwareKeyboard.shared.attached)
+                else { return }
+                fired = true
+                window.endEditing(true)
+                dismissed()
+            default: break
+            }
+        }
+    }
 }

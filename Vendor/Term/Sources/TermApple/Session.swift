@@ -69,6 +69,13 @@ public final class Session {
     var targets: [(surface: IOSurfaceRef, texture: MTLTexture)?] = [nil, nil, nil], nextTarget = 0, drawn = 0
     let shownLock = NSLock()
     var shown = 0
+    /// A hidden session's GPU memory (targets, buffers, atlas textures) is given back after a retention or on memory
+    /// pressure (HiddenResources); `released`: it is (drawLock), no frame is drawn until shown again.
+    @_spi(Test) public private(set) lazy var hiddenResources = HiddenResources { [weak self] policy in
+        // A covered window can be revealed before the app hears it: it keeps showing its last frame meanwhile.
+        self?.releaseResources(keepingShownFrame: policy == .onMemoryPressure)
+    }
+    var released = false
 
     /// `scale`: the view's backing scale. The size is Ghostty's initial 800x600 pixels until the
     /// host sets it. `blocks`: where its pages come from and go (the process's shared ones: a
@@ -83,12 +90,12 @@ public final class Session {
         (self.config, self.scale) = (config, scale)
         cells = try Self.cells(config, scale)
         var options = HandlerOptions()
-        (options.hostname, options.version) = (Array(machine.host.utf8), ghosttyVersion)
+        (options.hostname, options.version, options.checksumReports) = (Array(machine.host.utf8), ghosttyVersion, config.checksumReports)
         var size = RenderSize(screen: (800, 600), cell: Self.cell(cells))
         size.pad(Self.padding(config, scale), .off)
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)
-        (o.blocks, o.kitty, o.maxScrollbackBytes, o.kittyImageStorageLimit) =
-            (blocks, allowHostMedia ? .apple : .appleInline, config.scrollbackLimitBytes, config.imageStorageLimitBytes)
+        (o.blocks, o.kitty, o.maxScrollbackBytes, o.maxScrollbackLines, o.kittyImageStorageLimit) =
+            (blocks, allowHostMedia ? .apple : .appleInline, config.scrollbackLimitBytes, config.scrollbackLimitLines, config.imageStorageLimitBytes)
         (o.cursorStyle, o.cursorBlink) = (config.cursorStyle, config.cursorBlink)
         surface = Surface(terminal: Terminal(o), options: options, size: size,
                           now: { DispatchTime.now().uptimeNanoseconds }, entropy: { n in (0..<n).map { _ in UInt8.random(in: .min ... .max) } })
@@ -244,6 +251,7 @@ public final class Session {
     func present(sync: Bool) {
         drawLock.lock()
         defer { drawLock.unlock() }
+        guard !released else { return }
         let (bounds, scale) = (surfaceLayer.bounds, surfaceLayer.contentsScale)
         let dimensions = { (value: CGFloat) -> Int? in
             let pixels = Double(value * scale)
@@ -260,9 +268,17 @@ public final class Session {
         drawn += 1
         let n = drawn
         if sync {
-            let finished = DispatchSemaphore(value: 0)
-            guard frame(into: target.texture, completed: { finished.signal() }) != nil else { return }
-            if finished.wait(timeout: .now() + .milliseconds(250)) == .success { show(target.surface, n) }
+            // A frame the GPU finishes after the wait is shown when it does (never left undrawn until the next one).
+            let finished = DispatchSemaphore(value: 0), state = NSLock()
+            var (done, late) = (false, false)
+            guard frame(into: target.texture, completed: { [weak self] in
+                state.lock(); done = true; let shownLate = late; state.unlock()
+                finished.signal()
+                if shownLate { DispatchQueue.main.async { self?.show(target.surface, n) } }
+            }) != nil else { return }
+            if finished.wait(timeout: .now() + .milliseconds(250)) == .success { return show(target.surface, n) }
+            state.lock(); late = !done; let finishedMeanwhile = done; state.unlock()
+            if finishedMeanwhile { show(target.surface, n) }
         } else {
             _ = frame(into: target.texture, completed: { [weak self] in DispatchQueue.main.async { self?.show(target.surface, n) } })
         }
@@ -376,14 +392,51 @@ public final class Session {
         blinkTimer = timer
     }
 
-    /// Hidden (occluded): no frames, the process keeps running; shown: a whole frame.
-    public func setVisible(_ visible: Bool) {
+    /// Hidden (occluded): no frames, the process keeps running; its GPU memory goes back after a retention or on
+    /// memory pressure (`release`). Shown: a whole frame, drawn at once when the memory was released (the layer
+    /// shows it before the view appears, never an empty frame).
+    public func setVisible(_ visible: Bool, release: HiddenResources.Policy = .afterRetention) {
         exclusive {
             surface.occlusion(visible)
             if visible { state.dirty = .full }
         }
+        if visible {
+            if hiddenResources.show() {
+                drawLock.lock(); released = false; drawLock.unlock()
+                present(sync: true)
+            }
+        } else {
+            hiddenResources.hide(release)
+        }
         frames?.show(visible)
         pump()
+    }
+
+    /// The hidden session's GPU memory back to the system (main queue): the swap chain's IOSurfaces and, unless
+    /// `keepingShownFrame`, the layer's reference to the shown one; the renderer's buffers and textures. A frame still
+    /// in flight is never shown.
+    func releaseResources(keepingShownFrame: Bool = false) {
+        drawLock.lock()
+        defer { drawLock.unlock() }
+        released = true
+        (targets, nextTarget) = ([nil, nil, nil], 0)
+        metal.releaseResources()
+        shownLock.lock()
+        shown = drawn
+        if !keepingShownFrame {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            surfaceLayer.contents = nil
+            CATransaction.commit()
+        }
+        shownLock.unlock()
+    }
+
+    /// Bytes of GPU memory the session holds for drawing: its targets and the renderer's (checks).
+    @_spi(Test) public var gpuBytes: Int {
+        drawLock.lock()
+        defer { drawLock.unlock() }
+        return targets.reduce(metal.heldBytes) { $0 + ($1.map { IOSurfaceGetAllocSize($0.surface) } ?? 0) }
     }
 
     /// A frame now (a whole one).

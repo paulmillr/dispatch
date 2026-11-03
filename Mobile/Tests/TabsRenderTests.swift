@@ -304,3 +304,68 @@ extension TabsRenderTests {
         XCTAssertEqual(taps.close, 0)
     }
 }
+
+/// Round 3 (item 2): a row whose title is too long for it reads as a shell row does (icon, title, time, chevron): the
+/// title truncates, the time keeps its width, and nothing else sits between them (no "open" chip to fold into a tall
+/// capsule). The tab shown last is "open" to VoiceOver only.
+extension TabsRenderTests {
+    func testALongTitleTruncatesBeforeTheTime() throws {
+        let model = TabsSample.spacesMockup(variant: "P1")
+        let space = try XCTUnwrap(model.space(SpaceRef(host: TabsSample.mba2.id, key: "herdr:app")))
+        let rows = model.rows(in: space)
+        final class Widths { var time: [CGFloat] = [] }
+        for width in [280.0, 320.0, 370.0] {
+            for entry in rows {
+                let widths = Widths()
+                let row = SpaceTabRow(entry: entry, line: SpaceTabRow.line(entry, model: model), agent: model.agent(of: entry.tab),
+                                      open: true)
+                    .environment(\.tabsRowTimeWidth) { widths.time.append($0) }
+                let host = UIHostingController(rootView: row.frame(width: width))
+                let height = host.sizeThatFits(in: CGSize(width: width, height: 400)).height
+                XCTAssertLessThan(height, 72, "\(entry.label) at \(width)")
+                XCTAssertGreaterThan(height, 56, "\(entry.label) at \(width)")
+                // The time at its full width, never cut for the title.
+                let time = try XCTUnwrap(TabsTime.label(entry.activity, now: Date()))
+                let full = UIHostingController(rootView: Text(time).font(.subheadline).lineLimit(1).fixedSize())
+                    .sizeThatFits(in: CGSize(width: 1000, height: 100)).width
+                _ = try render(row.frame(width: width), size: CGSize(width: width, height: 80))
+                XCTAssertEqual(try XCTUnwrap(widths.time.last, "\(entry.label)"), full, accuracy: 0.5, "\(entry.label)'s \(time) at \(width)")
+            }
+        }
+        let open = try XCTUnwrap(rows.first)
+        XCTAssertTrue(SpaceTabRow.value(entry: open, line: nil, open: true, now: Date()).contains("open"))
+        let list = VStack(spacing: 0) {
+            ForEach(rows) { SpaceTabRow(entry: $0, line: SpaceTabRow.line($0, model: model), agent: model.agent(of: $0.tab), open: true) }
+        }
+        try write(try render(list.frame(width: 300).background(.black), size: CGSize(width: 300, height: 360)), "space-rows-narrow")
+    }
+}
+
+/// Edit's name fields (P2d): two renames in a row never show the first name for a moment.
+extension TabsRenderTests {
+    func testTwoQuickRenamesNeverShowTheFirstOnTheWay() {
+        var renames = SpaceRenames()
+        XCTAssertEqual(renames.send(" billing ", name: "app"), "billing")
+        XCTAssertEqual(renames.send("payments", name: "app"), "payments")
+        XCTAssertNil(renames.send("payments", name: "app"), "already what shows")
+        XCTAssertNil(renames.send("  ", name: "app"))
+        renames.answered("billing", took: true)
+        renames.arrived("billing")
+        XCTAssertEqual(renames.shown("billing"), "payments", "the first name arriving keeps the latest in the field")
+        renames.answered("payments", took: true)
+        renames.arrived("payments")
+        XCTAssertEqual(renames.shown("payments"), "payments")
+        XCTAssertNil(renames.sent)
+
+        // A name the server made of it ends the wait once every rename answered.
+        XCTAssertEqual(renames.send("notes", name: "payments"), "notes")
+        renames.answered("notes", took: true)
+        renames.arrived("notes-1")
+        XCTAssertEqual(renames.shown("notes-1"), "notes-1")
+
+        // A refused latest rename shows the server's name again.
+        XCTAssertEqual(renames.send("docs", name: "notes-1"), "docs")
+        renames.answered("docs", took: false)
+        XCTAssertEqual(renames.shown("notes-1"), "notes-1")
+    }
+}

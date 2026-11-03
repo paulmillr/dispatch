@@ -16,6 +16,15 @@ struct ChatSideScreen: View {
     @FocusState private var focused: Bool
     @State private var column: CGFloat = 370
     @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// A side answer's corner (S6d), told against now: the side's turns are minutes old at most.
+    private func corner(_ summary: ChatTurnSummary?) -> ChatCorner? {
+        let metrics = ChatCornerMetrics(column: column, measure: measure, size: typeSize)
+        guard let summary, let text = summary.corner(now: Date(), calendar: .autoupdatingCurrent, fits: metrics.fits) else { return nil }
+        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+                          spoken: summary.spokenCorner(now: Date(), calendar: .autoupdatingCurrent))
+    }
 
     var body: some View {
         ScrollView {
@@ -25,17 +34,14 @@ struct ChatSideScreen: View {
                     case .user:
                         ChatUserMessage(text: row.item.text)
                     case .agent(let summary):
-                        VStack(spacing: 5) {
-                            ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text) }
-                                .environment(\.openURL, MobileChatMarkdown.openURL)
-                                .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
-                            if let summary { ChatTurnFootnote(summary: summary) }
-                        }
+                        ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text, corner: corner(summary)) }
+                        .environment(\.openURL, MobileChatMarkdown.openURL)
+                        .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
                     case .thinking:
-                        MobileChatMarkdownView(text: row.item.text, muted: true)
-                            .font(.footnote)
-                            .padding(.horizontal, 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Thinking is an agent bubble of its own, as in the thread.
+                        ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text) }
+                            .environment(\.openURL, MobileChatMarkdown.openURL)
+                            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
                     case .notice:
                         Text(row.item.text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
                     }
@@ -60,6 +66,7 @@ struct ChatSideScreen: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
+            .background(ChatKeyboardDragDismissal())
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)

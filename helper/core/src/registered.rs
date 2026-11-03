@@ -200,6 +200,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn open(key: &str) -> Id;
         fn start(key: &str) -> Id;
         fn create(parent: Id, beside: Option<Id>, command: Option<Command>, size: Option<Grid>) -> Id;
+        fn create_shell(parent: Id, beside: Option<Id>, command: Command, size: Option<Grid>) -> Id;
         fn rename(node: Id, name: &str) -> ();
         fn focus(node: Id) -> ();
         fn r#move(node: Id, parent: Id, before: Option<Id>) -> ();

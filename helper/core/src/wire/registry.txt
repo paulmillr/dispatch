@@ -419,3 +419,5 @@ s	attachments
 s	started_ms
 s	tokens
 r	id	kind	name	tokens	started_ms
+s	prefix2
+r	key	repeat_ms	bindings	prefix2

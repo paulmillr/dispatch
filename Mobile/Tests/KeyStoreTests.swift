@@ -154,12 +154,13 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertTrue(vault.accounts.isEmpty)
     }
 
-    /// The app's store puts private keys behind biometry; tests inject none (the simulator has no Face ID).
+    /// Software keys are stored after first unlock, never behind Face ID, whatever the store's protection (which is the
+    /// Secure Enclave's alone).
     func testPrivateKeysUseTheInjectedProtection() throws {
         let vault = MemoryVault()
         let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
         let record = try keys.generateED25519(label: "phone")
-        XCTAssertEqual(vault.protection(of: KeyStore.privateAccount(record.id)), .biometry)
+        XCTAssertEqual(vault.protection(of: KeyStore.privateAccount(record.id)), KeyProtection.none)
         try keys.setPassword("hunter2", for: UUID())
         XCTAssertEqual(vault.accounts.filter { $0.hasPrefix("password:") }.compactMap(vault.protection), [KeyProtection.none],
                        "Passwords are not behind Face ID")
@@ -343,5 +344,148 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertEqual(Self.accessible(service, key), Self.afterFirstUnlock)
         let none = await KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none).migrateSecrets()
         XCTAssertNil(none, "no Keychain, nothing to move")
+    }
+}
+
+/// Extra 1 (Face ID): software keys older builds kept behind Face ID move to after first unlock once, with one prompt
+/// for all of them, at their first use in the foreground; nothing is lost when a move is cut short.
+extension KeyStoreTests {
+    func testFaceIDKeysMoveOnceWithOnePrompt() async throws {
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let first = try keys.generateED25519(label: "one")
+        let second = try keys.importKey(Data(Self.ecdsaFile.utf8), label: "two")
+        try keys.setPassword("hunter2", for: UUID())
+        let firstAccount = KeyStore.privateAccount(first.id), secondAccount = KeyStore.privateAccount(second.id)
+        let seed = try XCTUnwrap(vault.secret(for: firstAccount, reason: "", interactive: false))
+        // As older builds stored them.
+        vault.protect(firstAccount, .biometry)
+        vault.protect(secondAccount, .biometry)
+
+        // In the background nothing moves and nothing prompts: the key behind Face ID refuses.
+        do {
+            _ = try await keys.material(for: first.id, interactive: false)
+            XCTFail("read without Face ID")
+        } catch { XCTAssertEqual(error as? SecretVaultError, .interactionNotAllowed) }
+        XCTAssertEqual(vault.prompts, 0)
+
+        // The first foreground use: one prompt moves both keys, then nothing asks again.
+        guard case .ed25519(let key)? = try await keys.material(for: first.id) else { return XCTFail("no key") }
+        XCTAssertEqual(key.rawRepresentation, seed, "the same key")
+        XCTAssertEqual(vault.prompts, 1)
+        XCTAssertEqual(vault.protection(of: firstAccount), KeyProtection.none)
+        XCTAssertEqual(vault.protection(of: secondAccount), KeyProtection.none)
+        XCTAssertFalse(vault.accounts.contains { $0.hasPrefix(KeyStore.movingPrefix) }, "the copies are gone")
+        _ = try await keys.material(for: second.id)
+        _ = try await keys.material(for: first.id, interactive: false)
+        XCTAssertEqual(vault.prompts, 1, "never again, in the foreground or the background")
+    }
+
+    /// A move cut short after the copy was written and the key removed: the next run puts the key back from its copy.
+    func testACutShortMoveLosesNoKey() async throws {
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let record = try keys.generateED25519(label: "one")
+        let account = KeyStore.privateAccount(record.id)
+        let seed = try XCTUnwrap(vault.secret(for: account, reason: "", interactive: false))
+        try vault.set(seed, for: KeyStore.movingPrefix + account, protection: .none)
+        try vault.remove(account)
+        guard case .ed25519(let key)? = try await keys.material(for: record.id) else { return XCTFail("lost") }
+        XCTAssertEqual(key.rawRepresentation, seed)
+        XCTAssertEqual(vault.accounts, [account])
+        XCTAssertEqual(vault.prompts, 0, "the copy reads without Face ID")
+    }
+
+    /// Dismissing the one prompt fails that connect as a dismissed Face ID did; the key stays where it was.
+    func testADismissedMoveKeepsTheKeyBehindFaceID() async throws {
+        final class Refusing: SecretVault, @unchecked Sendable {
+            let base = MemoryVault()
+            func set(_ secret: Data, for account: String, protection: KeyProtection) throws {
+                try base.set(secret, for: account, protection: protection)
+            }
+            func secret(for account: String, reason: String, interactive: Bool) throws -> Data? {
+                try base.secret(for: account, reason: reason, interactive: interactive)
+            }
+            func remove(_ account: String) throws { try base.remove(account) }
+            func removeAll() throws { try base.removeAll() }
+            func removeAll(keeping: (String) -> Bool) throws { try base.removeAll(keeping: keeping) }
+            func listing() throws -> [String: VaultClass] { try base.listing() }
+            func authenticated(reason: String) async throws -> any SecretVault { throw SecretVaultError.canceled }
+        }
+        let vault = Refusing()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let record = try keys.generateED25519(label: "one")
+        vault.base.protect(KeyStore.privateAccount(record.id), .biometry)
+        do {
+            _ = try await keys.material(for: record.id)
+            XCTFail("read though Face ID was dismissed")
+        } catch { XCTAssertEqual(error as? SecretVaultError, .canceled) }
+        XCTAssertEqual(vault.base.protection(of: KeyStore.privateAccount(record.id)), .biometry)
+    }
+}
+
+/// The move out of Face ID under concurrent connects, failed prompts and leftover copies.
+extension KeyStoreTests {
+    /// Two hosts connecting at once share one move: one prompt, both keys read.
+    func testHostsConnectingTogetherShareOneMove() async throws {
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let first = try keys.generateED25519(label: "one"), second = try keys.generateED25519(label: "two")
+        vault.protect(KeyStore.privateAccount(first.id), .biometry)
+        vault.protect(KeyStore.privateAccount(second.id), .biometry)
+        async let a = keys.material(for: first.id)
+        async let b = keys.material(for: second.id)
+        let (one, two) = try await (a, b)
+        XCTAssertNotNil(one)
+        XCTAssertNotNil(two)
+        XCTAssertEqual(vault.prompts, 1)
+    }
+
+    /// Face ID that cannot succeed (locked out, not enrolled) ends that connect with its reason: no second prompt for
+    /// the key's own read.
+    func testFaceIDThatCannotSucceedAsksOnce() async throws {
+        final class LockedOut: SecretVault, @unchecked Sendable {
+            let base = MemoryVault()
+            func set(_ secret: Data, for account: String, protection: KeyProtection) throws {
+                try base.set(secret, for: account, protection: protection)
+            }
+            func secret(for account: String, reason: String, interactive: Bool) throws -> Data? {
+                try base.secret(for: account, reason: reason, interactive: interactive)
+            }
+            func remove(_ account: String) throws { try base.remove(account) }
+            func removeAll() throws { try base.removeAll() }
+            func removeAll(keeping: (String) -> Bool) throws { try base.removeAll(keeping: keeping) }
+            func listing() throws -> [String: VaultClass] { try base.listing() }
+            func authenticated(reason: String) async throws -> any SecretVault {
+                throw SecretVaultError.faceID("Biometry is locked out.")
+            }
+        }
+        let vault = LockedOut()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let record = try keys.generateED25519(label: "one")
+        vault.base.protect(KeyStore.privateAccount(record.id), .biometry)
+        do {
+            _ = try await keys.material(for: record.id)
+            XCTFail("read though Face ID is locked out")
+        } catch { XCTAssertEqual(error as? SecretVaultError, .faceID("Biometry is locked out.")) }
+        XCTAssertEqual(vault.base.prompts, 0, "the key's own read did not prompt again")
+        XCTAssertTrue(SecretVaultError.canceled.endsTheAttempt)
+        XCTAssertFalse(SecretVaultError.interactionNotAllowed.endsTheAttempt)
+    }
+
+    /// A deleted key's copy goes with it, and a copy of no key is dropped at the next move rather than brought back.
+    func testCopiesOfDeletedKeysNeverComeBack() async throws {
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let gone = try keys.generateED25519(label: "gone"), kept = try keys.generateED25519(label: "kept")
+        let goneAccount = KeyStore.privateAccount(gone.id)
+        try vault.set(Data("seed".utf8), for: KeyStore.movingPrefix + goneAccount, protection: .none)
+        keys.delete(gone.id)
+        XCTAssertFalse(vault.accounts.contains { $0.contains(gone.id.uuidString) }, "\(vault.accounts)")
+
+        let orphan = KeyStore.privateAccount(UUID())
+        try vault.set(Data("seed".utf8), for: KeyStore.movingPrefix + orphan, protection: .none)
+        _ = try await keys.material(for: kept.id)
+        XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(kept.id)], "the orphan copy dropped, nothing restored")
     }
 }

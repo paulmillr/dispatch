@@ -14,6 +14,8 @@ struct TerminalConfiguration: Equatable, Sendable {
     static let fontSizes = 7.0...28.0
 
     static let defaultScheme = "dispatch-black"
+    /// The features the Mac turns off with Settings' Ligatures (`ChatTypography.noLigatures`, an AppKit-side file).
+    static let noLigatures = "-calt, -liga, -dlig"
 
     var fontSize = defaultFontSize
     /// `font-family`: nil leaves JetBrains Mono, which every terminal falls back to (`TerminalStyle` names Source Code Pro
@@ -31,6 +33,8 @@ struct TerminalConfiguration: Equatable, Sendable {
     var cursorBlink = true
     /// Writes `adjust-cell-height` unless Normal, as the Mac does.
     var lineSpacing = LineSpacing.normal
+    /// Off writes the Mac's `font-feature` that turns the font's ligatures off (`ChatTypography.noLigatures`).
+    var ligatures = true
     var paddingX = 14
     var paddingY = 10
     /// Kept small on a phone: the multiplexer keeps the long history (herdr), or tmux's own history is replayed.
@@ -55,6 +59,7 @@ struct TerminalConfiguration: Equatable, Sendable {
         lines.append("cursor-style = \(cursor.rawValue)")
         if !cursorBlink { lines.append("cursor-style-blink = false") }
         if let height = lineSpacing.cellHeight { lines.append("adjust-cell-height = \(height)") }
+        if !ligatures { lines.append("font-feature = \(Self.noLigatures)") }
         // At Source Code Pro's apparent size, as the Mac's (`TerminalFontScale`); no family is JetBrains Mono.
         MobileFonts.register()
         let size = TerminalFontScale.size(fontSize, family: fontFamily ?? "JetBrains Mono")
@@ -69,6 +74,7 @@ struct TerminalConfiguration: Equatable, Sendable {
         image-storage-limit = 0
         clipboard-read = ask
         clipboard-write = \(clipboardWrite ? "allow" : "deny")
+        vt-xt-checksum-report = false
         keybind = clear
         keybind = shift+page_up=scroll_page_up
         keybind = shift+page_down=scroll_page_down

@@ -40,15 +40,15 @@ final class TerminalSearchUITests: XCTestCase {
         XCTAssertEqual(count(app), expected, file: file, line: line)
     }
 
-    /// Opens the key bar's menu with a long press on the keyboard key (the software keyboard is down).
+    /// Opens the key bar's menu with a tap on its "…" key.
     static func openMenu(_ app: XCUIApplication) {
-        let key = app.buttons["Show keyboard"]
-        XCTAssertTrue(key.waitForExistence(timeout: 5), "the keyboard key")
-        key.press(forDuration: 1.0)
+        let key = app.buttons["Terminal menu"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5), "the menu key")
+        key.tap()
         XCTAssertTrue(app.buttons["Search"].waitForExistence(timeout: 5), "the menu's Search")
     }
 
-    /// A long press on the keyboard key opens the menu (Search, Paste, Select all, Clear screen, Reset terminal); its
+    /// The "…" key opens the menu (Search, Paste, Select all, Clear screen, Reset terminal); its
     /// Search swaps the key capsule for the search capsule: typing counts the matches newest first, the up arrow steps
     /// to the older one, Done brings the keys back.
     func testSearchFromTheKeyBarMenu() {
@@ -77,20 +77,25 @@ final class TerminalSearchUITests: XCTestCase {
         XCTAssertFalse(field.exists)
     }
 
-    /// While the software keyboard is up the last key is the menu's ellipsis: a tap opens the menu, which offers Hide
-    /// keyboard too.
-    func testTheEllipsisWhileTyping() {
+    /// While the software keyboard is up the keyboard key hides it, and the "…" key still opens the menu, which has no
+    /// Hide keyboard.
+    func testTheKeyboardKeyHidesTheKeyboard() {
         let app = launch(hardwareKeyboard: false)
         app.textViews["Terminal"].tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the software keyboard")
         let menu = app.buttons["Terminal menu"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 5), "the ellipsis in the keyboard key's place")
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "the menu key beside the keyboard key")
         menu.tap()
         XCTAssertTrue(app.buttons["Search"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == 'Hide keyboard'")).count, 1,
+                       "the keyboard key alone: the menu has no Hide keyboard")
+        app.buttons["Search"].tap()
+        app.buttons["Done"].tap()
         let hide = app.buttons["Hide keyboard"]
-        XCTAssertTrue(hide.exists)
+        XCTAssertTrue(hide.waitForExistence(timeout: 5), "the keyboard key while the keyboard is up")
         hide.tap()
         XCTAssertTrue(app.buttons["Show keyboard"].waitForExistence(timeout: 5), "the keyboard key again")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "the keyboard went down")
     }
 
     /// ⌘F with a hardware keyboard opens the search; ⌘G and ⇧⌘G step it from the field.

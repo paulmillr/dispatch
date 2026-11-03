@@ -415,6 +415,7 @@ def main():
     parser.add_argument('--port', type=int, default=0)
     parser.add_argument('--delay', type=float, default=0.08)
     parser.add_argument('--codex', default=shutil.which('codex'))
+    parser.add_argument('--codex-arg', action='append', default=[], help='Pass this argument on to the Codex TUI (repeatable; --codex-arg=-c for an option)')
     args = parser.parse_args()
     if args.mode == 'sessions':
         for path in sorted((args.state / 'codex-home/sessions').rglob('*.jsonl')):
@@ -461,7 +462,7 @@ def main():
             os.execvpe(args.codex, [args.codex, 'app-server', '--listen', args.remote], env)
         if args.remote and args.no_daemon:
             parser.error('--remote and --no-daemon select different native launch modes')
-        arguments = (['--no-daemon'] if args.no_daemon else []) + (['--remote', args.remote] if args.remote else []) + (['resume', args.resume] if args.resume else [])
+        arguments = (['--no-daemon'] if args.no_daemon else []) + (['--remote', args.remote] if args.remote else []) + args.codex_arg + (['resume', args.resume] if args.resume else [])
         if args.dispatch and not env.get('DISPATCH_HELPER_EXECUTABLE') and not env.get('DISPATCH_SSH_HELPER'):
             parser.error('--dispatch requires a Dispatch terminal')
         env['PATH'] = str(Path(args.codex).parent) + os.pathsep + env.get('PATH', '')

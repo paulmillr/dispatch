@@ -1,34 +1,48 @@
 import SwiftUI
 import UIKit
 
-/// The key capsule's last key (T2): its role's glyph drawn in SwiftUI, and over it a clear `UIButton` that carries the
-/// system menu (glass, anchored on the key, sections in order) and says when the menu opens and closes, which a
-/// SwiftUI `Menu` does not. A tap does the role's own thing (show the keyboard, fold the capsule) or, while the
-/// software keyboard is up, opens the menu; a long press always opens it. While the menu shows the key is the
-/// ellipsis, lit pink.
+/// The key capsule's "…" key (T2), between the d-pad and the keyboard key: the ellipsis drawn in SwiftUI, and over it a
+/// clear `UIButton` that carries the system menu (glass, anchored on the key, sections in order) and says when the menu
+/// opens and closes, which a SwiftUI `Menu` does not. A tap opens the menu, whether or not the software keyboard is up;
+/// while it shows the ellipsis is lit pink.
 struct TerminalMenuKey: View {
     let controller: TerminalController
     @State private var pressed = false
     @Environment(\.terminalMenuScheme) private var menuScheme
 
     var body: some View {
-        let role = controller.menuKey, open = controller.menuOpen
-        let symbol = role.symbol(menuOpen: open)
-        Image(systemName: symbol)
-            .scaledFont(role == .hideKeys && !open ? 17 : 19, relativeTo: .callout)
-            .foregroundStyle(symbol == "ellipsis.circle" ? Color.dispatchPink : Color.primary)
+        let open = controller.menuOpen
+        Image(systemName: open ? "ellipsis.circle" : "ellipsis")
+            .scaledFont(19, relativeTo: .callout)
+            .foregroundStyle(open ? Color.dispatchPink : Color.primary)
             .opacity(pressed ? 0.55 : 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityHidden(true)
             .overlay {
-                TerminalMenuButton(role: role, controller: controller, scheme: menuScheme, pressed: $pressed)
+                TerminalMenuButton(controller: controller, scheme: menuScheme, pressed: $pressed)
             }
     }
 }
 
-/// The clear button over the key (`TerminalMenuKey`).
+/// The capsule's last key: shows the software keyboard while it is down, hides it while it is up, or (a hardware
+/// keyboard on an iPad) folds the capsule. A plain key: no menu on a long press, the "…" key has it.
+struct TerminalKeyboardKeyView: View {
+    let controller: TerminalController
+
+    var body: some View {
+        let role = controller.keyboardKey
+        Button { controller.pressKeyboardKey() } label: {
+            Image(systemName: role.symbol)
+                .scaledFont(role == .hideKeys ? 17 : 19, relativeTo: .callout)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(role.label)
+    }
+}
+
+/// The clear button over the "…" key (`TerminalMenuKey`).
 struct TerminalMenuButton: UIViewRepresentable {
-    let role: TerminalMenuKeyRole
     let controller: TerminalController
     /// The app's appearance (the key itself is dark over the terminal); nil: the key's own.
     let scheme: ColorScheme?
@@ -37,28 +51,19 @@ struct TerminalMenuButton: UIViewRepresentable {
     func makeUIView(context: Context) -> TerminalMenuButtonView { TerminalMenuButtonView() }
 
     func updateUIView(_ button: TerminalMenuButtonView, context: Context) {
-        let controller = controller, role = role, pressed = $pressed
-        button.showsMenuAsPrimaryAction = role.opensOnTap
+        let pressed = $pressed
+        button.showsMenuAsPrimaryAction = true
         // The menu is the app's, light or dark as the rest of it, though the capsule stays dark over the terminal.
         button.overrideUserInterfaceStyle = switch scheme {
         case .light?: .light
         case .dark?: .dark
         default: .unspecified
         }
-        button.primary = { [weak controller] in
-            guard let controller else { return }
-            switch controller.menuKey {
-            case .keyboard: controller.toggleKeyboard()
-            case .hideKeys: controller.hideKeys()
-            case .menu: break
-            }
-        }
         button.items = { [weak controller] in controller.map(Self.menu) ?? [] }
         button.onMenu = { [weak controller] open in controller?.menu(open: open) }
         button.onPress = { down in if pressed.wrappedValue != down { pressed.wrappedValue = down } }
-        button.accessibilityLabel = role.label
-        button.accessibilityHint = role.opensOnTap ? nil : "Touch and hold for the terminal menu"
-        button.accessibilityCustomActions = TerminalMenuItem.sections(keyboardVisible: controller.keyboardVisible).joined().map { item in
+        button.accessibilityLabel = "Terminal menu"
+        button.accessibilityCustomActions = TerminalMenuItem.sections.joined().map { item in
             UIAccessibilityCustomAction(name: item.title) { [weak controller] _ in
                 controller?.perform(item)
                 return true
@@ -68,7 +73,7 @@ struct TerminalMenuButton: UIViewRepresentable {
 
     /// The menu as it opens: its sections inline, Paste only with text on the pasteboard (asked without reading it).
     @MainActor static func menu(_ controller: TerminalController) -> [UIMenuElement] {
-        TerminalMenuItem.sections(keyboardVisible: controller.keyboardVisible).map { section in
+        TerminalMenuItem.sections.map { section in
             UIMenu(options: .displayInline, children: section.map { item in
                 let sending = !controller.canReset
                 let action = UIAction(title: item.title, subtitle: item.note(chatSending: sending),
@@ -85,7 +90,6 @@ struct TerminalMenuButton: UIViewRepresentable {
 
 /// A clear `UIButton` whose menu is built when it opens; it reports presses and the menu's presentation.
 final class TerminalMenuButtonView: UIButton {
-    var primary: () -> Void = {}
     var items: () -> [UIMenuElement] = { [] }
     var onMenu: (Bool) -> Void = { _ in }
     var onPress: (Bool) -> Void = { _ in }
@@ -97,10 +101,6 @@ final class TerminalMenuButtonView: UIButton {
         menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
             MainActor.assumeIsolated { done(self?.items() ?? []) }
         }])
-        addAction(UIAction { [weak self] _ in
-            guard let self, !self.showsMenuAsPrimaryAction else { return }
-            self.primary()
-        }, for: .primaryActionTriggered)
     }
 
     required init?(coder: NSCoder) { fatalError("not from a nib") }

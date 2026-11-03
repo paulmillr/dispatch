@@ -52,7 +52,8 @@ enum SpaceBackend: String, CaseIterable, Codable, Sendable {
         struct Probe: Codable { let executable: String; let arguments: [String] }
         let live: SSHCommand.Result?
         if AppReplay.replaying { live = nil }
-        else { live = try? await AppReplay.unrecorded { try await SSHCommand.run(executable: executable, arguments: arguments, timeout: 5) } }
+        else { live = try? await AppReplay.unrecorded { try await SSHCommand.run(executable: executable, arguments: arguments, timeout: 5,
+                                                                                    directory: machine.sshDirectory) } }
         guard let result = try? System.observe("backends", Probe(executable: executable, arguments: arguments), { live }),
               result.status == 0 else { return nil }
         let lines = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline)

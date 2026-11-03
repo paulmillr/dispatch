@@ -118,6 +118,12 @@ public struct Stream<H: Handler>: ~Copyable {
                 i = end
                 if i == input.count { break }
             }
+            if state == .oscString && osc.invalid {
+                // A rejected OSC (unknown number, payload past its limit) ignores every byte from
+                // 0x20 up: skip to the next C0 byte (BEL, CAN, SUB and ESC end the string).
+                i = input.first(from: i) { $0.lt(0x20) }
+                if i == input.count { break }
+            }
             let c = input[i]; i += 1
             if state == .ground {
                 let (a, b) = utf8.next(c)
@@ -337,6 +343,8 @@ struct Lanes {
     @inline(__always) func lt(_ t: UInt8) -> V { let b = V(repeating: t), d = v &- b; return (~v & b | ~(v ^ b) & d) & 0x80 }
     @inline(__always) func ge(_ t: UInt8) -> V { ~lt(t) & 0x80 }
     @inline(__always) func eq(_ t: UInt8) -> V { let x = v ^ V(repeating: t); return (x &- 1) & ~x & 0x80 }
+    /// Whether any lane is nonzero (as two words: a SIMD comparison compiles lane by lane).
+    @inline(__always) static func any(_ m: V) -> Bool { let (a, b) = unsafeBitCast(m, to: (UInt64, UInt64).self); return a | b != 0 }
     /// The top bit of every lane, lane 0 first (movemask: one multiply packs a word's top bits).
     @inline(__always) static func bits(_ m: V) -> Int {
         let (a, b) = unsafeBitCast(m, to: (UInt64, UInt64).self), k: UInt64 = 0x0002_0408_1020_4081

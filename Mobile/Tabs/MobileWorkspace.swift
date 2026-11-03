@@ -303,7 +303,7 @@ final class MobileWorkspace: Identifiable {
     private(set) var detached: [MobileDetached] = []
     /// Detached keys the user removed from the list on this connection (`forget`).
     @ObservationIgnored private var forgotten: Set<String> = []
-    /// Edit tabs' drags on their way, by space key (`reorder`).
+    /// Edit's drags on their way, by space key (`reorder`).
     private struct Reorder {
         let keys: [String]
         let moved: String

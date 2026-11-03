@@ -1,7 +1,9 @@
 // Standard page blocks shared by every terminal in the process: a closed terminal's scrollback (or
 // a left alternate screen) warms the next one instead of faulting fresh memory in. Holds at most
-// one default scrollback; gives everything back to the system on memory pressure. Foundation only:
-// the Term tool uses it on Linux too.
+// one default scrollback; gives everything back to the system on memory pressure. On Darwin a held
+// block's pages are marked reusable, so the system may take them back and the process's footprint
+// does not count them; a new page zeroes what it uses anyway. Foundation only: the Term tool uses
+// it on Linux too.
 import Foundation
 import Term
 
@@ -41,6 +43,7 @@ public final class SharedPageBlocks: PageBlocks, @unchecked Sendable {
         defer { lock.unlock() }
         guard let block = blocks.popLast() else { missed += 1; return nil }
         taken += 1
+        PageBlockMemory.reuse(block)
         return block
     }
 
@@ -48,6 +51,7 @@ public final class SharedPageBlocks: PageBlocks, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard blocks.count < cap else { return false }
+        PageBlockMemory.release(block)
         blocks.append(block)
         return true
     }
@@ -58,7 +62,7 @@ public final class SharedPageBlocks: PageBlocks, @unchecked Sendable {
         let held = blocks
         blocks = []
         lock.unlock()
-        for block in held { block.deallocate() }
+        for block in held { PageBlockMemory.reuse(block); block.deallocate() }
     }
 
     @_spi(Test) public var held: Int {

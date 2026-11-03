@@ -1,16 +1,40 @@
 import AppKit
 
 extension AppDelegate {
-    /// A multiplexer's space answers that tool's table (by the name its helper gives it; a local
-    /// herdr's own config.toml), a native space tmux's, as far as Settings lets them.
+    /// A multiplexer's space answers that tool's table (by the name its helper gives it): a tmux space its server's
+    /// own table for the space's session (read by its helper when the session shows, until then tmux's defaults), a
+    /// local herdr its config.toml; a native space tmux's defaults, as far as Settings lets them.
     func prefixTable(for surface: UUID) -> PrefixTable? {
         guard let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(surface) } }) else { return nil }
         let scope = settings.values.prefixKeys
         guard space.structured else { return scope == .all ? PrefixStyle.tmux.table : nil }
-        guard scope != .off,
-              let style = space.backend.flatMap({ workspace.helper(space)?.multiplexer(of: $0) }).flatMap(PrefixStyle.init(rawValue:))
+        guard scope != .off, let helper = workspace.helper(space),
+              let style = space.backend.flatMap({ helper.multiplexer(of: $0) }).flatMap(PrefixStyle.init(rawValue:))
         else { return nil }
-        return style == .herdr && space.remote == nil ? HerdrKeyConfig.shared.table : style.table
+        switch style {
+        case .tmux:
+            // A server whose prefix is None (or a key Dispatch cannot see) has no prefix keys.
+            if let node = space.node, let server = helper.prefixTable(session: node) { return server }
+            return style.table
+        case .herdr: return space.remote == nil ? HerdrKeyConfig.shared.table : style.table
+        case .off: return nil
+        }
+    }
+
+    /// A server binding Dispatch cannot run as tmux would (a program, a size, a target, tmux's own client UI): the
+    /// sequence ends there, refused, rather than running something else.
+    func rejectPrefix(_ command: String, surface: UUID) {
+        print("Prefix binding not supported in Dispatch: \(command)")
+        NSSound.beep()
+    }
+
+    /// After every ended sequence in a tmux space the server's table is read again, so a `bind` or `set prefix` made
+    /// meanwhile applies from the next one (tmux tells a control client of no option or key table change).
+    func refreshPrefixTable(_ surface: UUID) {
+        guard let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(surface) } }),
+              let node = space.node, let helper = workspace.helper(space),
+              space.backend.flatMap({ helper.multiplexer(of: $0) }) == PrefixStyle.tmux.rawValue else { return }
+        helper.readPrefixTable(session: node)
     }
 
     /// Runs a binding through the menu action it names, keeping that action's safety rules.
@@ -30,7 +54,18 @@ extension AppDelegate {
         case .previousTab: previousTab()
         case .nextTab: nextTab()
         case .selectWindow(let index):
-            if index > 0 { workspace.selectNumberedItem(at: index - 1) }
+            // A tmux window index is the server's, in this terminal's session (base-index, gaps): the server selects it.
+            // A tab still being created (no terminal yet) has no server window to go from.
+            if let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(surface) } }),
+               let helper = workspace.helper(space), space.structured,
+               space.backend.flatMap({ helper.multiplexer(of: $0) }) == PrefixStyle.tmux.rawValue {
+                if let node = space.tabs.first(where: { $0.surfaceIDs.contains(surface) })?.terminal {
+                    helper.selectWindow(node, index: index)
+                }
+            } else if index > 0 {
+                // A native space numbers its tabs as the Tabs number keys do.
+                workspace.selectNumberedItem(at: index - 1)
+            }
         case .selectTab(let number): workspace.selectNumberedItem(at: number - 1)
         case .splitRight: splitColumns()
         case .splitDown: splitRows()

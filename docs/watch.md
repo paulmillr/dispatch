@@ -134,14 +134,16 @@ In the foreground the live sessions serve everything. In the background a reques
 
 - **Quiet, on the real session.** `HostSessions.hold(id)` connects the saved host's own session (so the whole chat
   stack sees its client) with the context background refresh uses: Keychain reads with `interactive: false`, only
-  already-trusted host keys, no keyboard-interactive. A Face ID key, an untrusted key or a login prompt fails at once
+  already-trusted host keys, no keyboard-interactive. A Secure Enclave key (or a software key an older build left
+  behind Face ID), an untrusted key or a login prompt fails at once
   and the reply is `openPhone`; the refusal is kept per host (`quietRefusals`) until it connects or the app comes to
   the foreground. A held run the foreground takes over asks as usual. `hold` returns once the link is connected,
   failed or retrying, after `holdBudget` (15 s) or when the request gives up; a held host already connected gets a
   `retryNow` (the app may have been suspended).
-- **Locked.** The lock refuses nothing: passwords and passphrases are `AfterFirstUnlockThisDeviceOnly` and the app's
-  files class C, so a password host connects while locked. Face ID and Secure Enclave keys fail the quiet read locked
-  or not. Before the first unlock since the phone started nothing connects.
+- **Locked.** The lock refuses nothing: passwords, passphrases and software keys are `AfterFirstUnlockThisDeviceOnly`
+  and the app's files class C, so a password or software key host connects while locked. Secure Enclave keys (and a
+  software key an older build left behind Face ID, until its first foreground use moves it) fail the quiet read
+  locked or not. Before the first unlock since the phone started nothing connects.
 - **How long.** A hold lasts 60 s (`holdLength`) after the host's last watch request, then disconnects if the app is
   still in the background. iOS suspends the app soon after the background task ends (0.3 s on the simulator); the
   hold's timer then fires on the next wake, and the next request reconnects. Coming to the foreground clears every
@@ -225,8 +227,8 @@ tab:<host>/<key>|host:<host>` opens a screen, `-DispatchWatchSheet question[:<op
   characters, oldest items first).
 - **Reachability.** The watch can ask only while `isReachable`; the phone app need not run, `sendMessage` wakes it. A
   reply takes up to the phone's 15 s budget when a host must connect first; the watch gives up after 20 s.
-- **Locked phone.** Password hosts connect; Face ID and Secure Enclave key hosts need the phone open, since those keys
-  never sign unattended.
+- **Locked phone.** Password and software key hosts connect; Secure Enclave key hosts need the phone open, since those
+  keys never sign unattended.
 - **Simulator.** A message takes 1 to 3.5 s each way. Not shown by simulators: a locked phone, forwarded
   notifications and their tap, Face ID keys, real SSH hosts, a face with the complication, a device. The watch cannot
   be tapped from `simctl`; the debug hooks and the UI tests stand in.

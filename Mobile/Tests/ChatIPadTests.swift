@@ -165,9 +165,10 @@ final class ChatIPadTests: XCTestCase {
     }
 
     func testTheKeyRowAndEditorHintFollowTheKeyboard() {
-        XCTAssertTrue(CodeComposer.showsKeyRow(editing: true, hardwareKeyboard: false))
-        XCTAssertFalse(CodeComposer.showsKeyRow(editing: true, hardwareKeyboard: true), "the keyboard has its keys")
-        XCTAssertFalse(CodeComposer.showsKeyRow(editing: false, hardwareKeyboard: false))
+        XCTAssertTrue(CodeComposer.showsKeyRow(enabled: true, editing: true, hardwareKeyboard: false))
+        XCTAssertFalse(CodeComposer.showsKeyRow(enabled: true, editing: true, hardwareKeyboard: true), "the keyboard has its keys")
+        XCTAssertFalse(CodeComposer.showsKeyRow(enabled: true, editing: false, hardwareKeyboard: false))
+        XCTAssertFalse(CodeComposer.showsKeyRow(enabled: false, editing: true, hardwareKeyboard: false), "only once asked for")
         XCTAssertTrue(CodeComposer.showsEditorHint(multiline: true, hardwareKeyboard: true))
         XCTAssertFalse(CodeComposer.showsEditorHint(multiline: true, hardwareKeyboard: false),
                        "a touch composer's Return always starts a line: nothing to say")

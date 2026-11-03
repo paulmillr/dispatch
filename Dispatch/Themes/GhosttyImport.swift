@@ -202,7 +202,8 @@ enum GhosttyImport {
             else if let n = UInt64(bytes) { plan.setScrollback(ImportMapping.scrollback(bytes: n >= UInt64(Int.max) ? nil : Int(n))) }
         } else if let lines = value("scrollback-limit-lines") {
             if lines == "unlimited" { plan.setScrollback(.unlimited) }
-            else if let n = Int(lines) { plan.setScrollback(ImportMapping.scrollback(lines: n)) }
+            // Dispatch's own line counts as themselves (its export writes them), others by their size.
+            else if let n = Int(lines) { plan.setScrollback(Scrollback.lineCounts.first { $0.lines == n } ?? ImportMapping.scrollback(lines: n)) }
         }
         if var command = value("command") {
             // Ghostty 1.2's `direct:` and `shell:` prefixes say how it starts the command.

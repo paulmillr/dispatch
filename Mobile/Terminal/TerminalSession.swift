@@ -105,9 +105,10 @@ final class TerminalSession: @unchecked Sendable {
         size.pad(Self.padding(config, scale), .off)
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)
         (o.blocks, o.kitty, o.maxScrollbackBytes, o.kittyImageStorageLimit) = (SharedPageBlocks.shared, .appleInline, config.scrollbackLimitBytes, 0)
+        o.maxScrollbackLines = config.scrollbackLimitLines
         (o.cursorStyle, o.cursorBlink) = (config.cursorStyle, config.cursorBlink)
         var options = HandlerOptions()
-        options.version = ghosttyVersion
+        (options.version, options.checksumReports) = (ghosttyVersion, config.checksumReports)
         surface = Surface(terminal: Terminal(o), options: options, size: size,
                           now: { DispatchTime.now().uptimeNanoseconds }, entropy: { n in (0..<n).map { _ in UInt8.random(in: .min ... .max) } })
         surface.setContentScale(x: scale, y: scale)
@@ -292,14 +293,19 @@ final class TerminalSession: @unchecked Sendable {
         frames?.request()
     }
 
-    /// Hidden: no frames (output is still parsed); shown: a whole frame.
+    /// Hidden: no frames (output is still parsed), and after a short retention the renderer's buffers and atlas
+    /// textures go back (the layer keeps its last frame); shown: a whole frame.
     func setVisible(_ visible: Bool) {
         exclusive {
             surface.occlusion(visible)
             if visible { state.dirty = .full }
         }
+        if visible { hiddenResources.show() } else { hiddenResources.hide(.afterRetention) }
         frames?.show(visible)
     }
+    private lazy var hiddenResources = HiddenResources { [weak self] _ in self?.metal.releaseResources() }
+    /// GPU memory the renderer holds between frames (checks).
+    var rendererBytes: Int { metal.heldBytes }
 
     /// The view's size in points: the drawable and the surface in pixels.
     @MainActor func setSize(width: Double, height: Double) {

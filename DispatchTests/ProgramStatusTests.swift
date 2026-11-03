@@ -36,7 +36,7 @@ final class ProgramStatusTests: XCTestCase {
         feed(s, "\u{1B}]7501;?\u{1B}\\")
         feed(s, "\u{1B}]7501;?\u{07}")
         s.drain(reply: { replies += $0 }, event: { _ in })
-        XCTAssertEqual(String(decoding: replies, as: UTF8.self), "\u{1B}]7501;?\u{1B}\\\u{1B}]7501;?\u{07}")
+        let reply = "\u{1B}]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth"; XCTAssertEqual(String(decoding: replies, as: UTF8.self), reply + "\u{1B}\\" + reply + "\u{07}")
         // Reports are never answered or read back.
         report(s, "state=working:app=brew:msg=\(b64("secret"))")
         replies = []

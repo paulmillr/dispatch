@@ -233,12 +233,13 @@ enum SSHBootstrap {
             guard remaining > .zero else { throw timedOut() }
             let seconds = Double(remaining.components.seconds) + Double(remaining.components.attoseconds) / 1e18
             guard !input.isEmpty else {
-                return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), timeout: seconds)
+                return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), timeout: seconds,
+                                                environment: master.processEnvironment)
             }
             let started = ContinuousClock.now
             defer { deadline = deadline.advanced(by: started.duration(to: .now)) }
             return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), input: input,
-                                            timeout: uploadTail(input.count), stall: uploadStall)
+                                            timeout: uploadTail(input.count), stall: uploadStall, environment: master.processEnvironment)
         }
         let helpers = try bundled(resources: resources)
         var launcher = Launcher(root: .home, runtimeDirectory: nil, helpers: helpers)
@@ -289,6 +290,7 @@ enum SSHBootstrap {
             let process = Process(), errors = Pipe()
             process.executableURL = URL(fileURLWithPath: master.executable)
             process.arguments = master.arguments(command: launcher.command(arguments))
+            if let environment = master.processEnvironment { process.environment = environment }
             process.standardError = errors
             let collected = SSHHelperErrors(errors.fileHandleForReading)
             defer { try? errors.fileHandleForWriting.close() }
@@ -538,10 +540,15 @@ enum SSHCommand {
     /// fails only when it takes none for `stall` seconds (ssh takes what it can buffer at once, then at the link's pace);
     /// `timeout` starts once it has taken the last byte. Neither is part of the recorded request: a replay answers with
     /// what the capture got, timed out or not.
+    ///
+    /// `environment`: the child's whole environment (a channel's session variables, `SSHMaster.processEnvironment`), not
+    /// recorded (its names are in the arguments); nil inherits the app's. `directory`: where it runs
+    /// (`SSHShell.directory`); nil, the app's own.
     static func run(executable: String, arguments: [String], input: Data = Data(), timeout: TimeInterval = 15,
-                    stall: TimeInterval? = nil, errors: Bool = false) async throws -> Result {
-        struct Input: Codable { let executable: String; let arguments: [String]; let input: Data; var errors: Bool? }
-        let request = Input(executable: executable, arguments: arguments, input: input, errors: errors ? true : nil)
+                    stall: TimeInterval? = nil, errors: Bool = false, environment: [String: String]? = nil,
+                    directory: String? = nil) async throws -> Result {
+        struct Input: Codable { let executable: String; let arguments: [String]; let input: Data; var errors: Bool?; var directory: String? }
+        let request = Input(executable: executable, arguments: arguments, input: input, errors: errors ? true : nil, directory: directory)
         let data = try await AppReplay.run(kind: "command", input: AppReplay.value(request)) {
             let lifetime = Lifetime()
             let result = try await withTaskCancellationHandler {
@@ -552,6 +559,8 @@ enum SSHCommand {
                         let log = errors ? System.temporary.appendingPathComponent("ssh-errors-" + System.uuid().uuidString) : nil
                         defer { if let log { try? FileManager.default.removeItem(at: log) } }
                         process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+                        if let environment { process.environment = environment }
+                        if let directory { process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true) }
                         process.standardInput = stdin; process.standardOutput = stdout; process.standardError = FileHandle.nullDevice
                         do {
                             guard fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {

@@ -79,10 +79,11 @@ final class SSHCoordinator {
     }
 
     private struct Write<Value: Encodable>: Encodable { let path: String; let value: Value }
-    private func publish<Value: Encodable>(_ value: Value, to file: URL) {
+    /// `recording`: what a capture journal keeps instead of `value` (secrets masked); the file gets `value`.
+    private func publish<Value: Encodable>(_ value: Value, recording: Value? = nil, to file: URL) {
         do {
             let data = try JSONEncoder().encode(value)
-            _ = try AppReplay.query(kind: "host.reply", input: AppReplay.value(Write(path: file.path, value: value))) {
+            _ = try AppReplay.query(kind: "host.reply", input: AppReplay.value(Write(path: file.path, value: recording ?? value))) {
                 try data.write(to: file, options: .atomic)
                 return .null
             }
@@ -226,7 +227,8 @@ final class SSHCoordinator {
             let timeout = Self.seconds(SSHLinkTimeout.reply(for: id))
             Task { _ = try? await SSHCommand.run(executable: request.master.executable,
                 arguments: request.master.arguments(command: SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil,
-                                                                  reason: "integration permission changed")), timeout: timeout) }
+                                                                  reason: "integration permission changed")), timeout: timeout,
+                environment: request.master.processEnvironment) }
         }
     }
 
@@ -310,7 +312,8 @@ final class SSHCoordinator {
                 SSHSetupLog.shared.fellBack(reason)
                 let release = SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil, reason: reason)
                 _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: release),
-                                              timeout: Self.seconds(SSHLinkTimeout.reply(for: request.connectionID)))
+                                              timeout: Self.seconds(SSHLinkTimeout.reply(for: request.connectionID)),
+                                              environment: request.master.processEnvironment)
             }
         }
     }
@@ -318,7 +321,7 @@ final class SSHCoordinator {
     private func decision(_ request: SSHLaunchRequest, _ value: SSHResumeDecision) {
         let directory = URL(fileURLWithPath: request.master.controlPath).deletingLastPathComponent().deletingLastPathComponent()
         let file = directory.appendingPathComponent(request.connectionID.rawValue.uuidString + ".sshresume")
-        publish(value, to: file)
+        publish(value, recording: value.recorded, to: file)
     }
 
     func channelClosed(_ id: SSHConnectionID, notice: SSHCloseNotice) {
@@ -337,7 +340,8 @@ final class SSHCoordinator {
                 // transport loss. Read it through this authenticated master.
                 let command = "exec " + HerdrLaunch.quote(helper) + " exit-status " + HerdrLaunch.quote(request.sessionID)
                 if let result = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: command),
-                                                          timeout: Self.seconds(SSHLinkTimeout.reply(for: id))), result.status == 0 {
+                                                          timeout: Self.seconds(SSHLinkTimeout.reply(for: id)),
+                                                          environment: request.master.processEnvironment), result.status == 0 {
                     status = Int32(String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             }
@@ -692,13 +696,7 @@ final class SSHCoordinator {
             return
         }
         guard HostProcessWatcher.alive(recipe.launcher) else { throw HerdrFailure("The SSH launcher has closed. Open a new terminal to connect.") }
-        let invocation = SSHInvocation(options: recipe.shell.options, destination: recipe.shell.destination, command: nil, forcedTTY: false)
-        let configuration = await Task.detached { [executable = recipe.shell.executable] in
-            SSHLauncherCommand.resolvedConfiguration(invocation, executable: executable)
-        }.value
-        guard let configuration, let scope = SSHIntegrationScope(executable: recipe.shell.executable, destination: recipe.shell.destination, configuration: configuration), scope == recipe.scope else {
-            throw HerdrFailure("The SSH account or configuration changed. Open a new connection for the changed identity.")
-        }
+        let (configuration, scope) = try await Self.verifyReconnect(recipe.shell, scope: recipe.scope, automatic: automatic)
         let window = recipe.surfaces.compactMap { runtime.views[$0]?.window }.first
             ?? runtime.workspace?.activeSurfaceID.flatMap { runtime.views[$0]?.window }
             ?? NSApp.windows.first { $0.isVisible && $0.canBecomeMain && $0.sheetParent == nil }
@@ -719,7 +717,9 @@ final class SSHCoordinator {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             return .null
         }
-        let master = SSHMaster(executable: recipe.shell.executable, controlPath: folder.appendingPathComponent("master").path, destination: recipe.shell.destination)
+        // Channels over the new master send the session environment the login's terminal had (the launcher resumes there).
+        let master = SSHMaster(executable: recipe.shell.executable, controlPath: folder.appendingPathComponent("master").path,
+                               destination: recipe.shell.destination, environment: old?.master.environment)
         var committed = false
         var replacement: SSHConnectionState?
         defer {
@@ -803,6 +803,39 @@ final class SSHCoordinator {
             if automatic, SSHAutomaticFailure.transient(error) { throw SSHAutomaticFailure.interrupted(error.localizedDescription) }
             throw error
         }
+    }
+
+    /// The configuration check a reconnect makes before anything logs in: the connection's `ssh -G`, run from the folder it
+    /// was typed in (`SSHShell.directory`), must still be the approved one (`scope`), and the reconnect's own login (`-f -N`,
+    /// as `SSHReconnectLogin` runs it: `automatic`, silently) must resolve to that same connection (`SSHResolvedConnection`):
+    /// `Match sessiontype none` or a Match on the command can send a master without a session elsewhere. Neither connects.
+    /// Returns the configuration (it decides the master's keepalive) and its scope.
+    nonisolated static func verifyReconnect(_ shell: SSHShell, scope expected: SSHIntegrationScope?, automatic: Bool) async throws
+        -> (configuration: String, scope: SSHIntegrationScope) {
+        let invocation = SSHInvocation(options: shell.options, destination: shell.destination, command: nil, forcedTTY: false)
+        let directory = shell.workingDirectory
+        let configuration = await Task.detached {
+            SSHLauncherCommand.resolvedConfiguration(invocation, executable: shell.executable, directory: directory)
+        }.value
+        guard let configuration, let scope = SSHIntegrationScope(executable: shell.executable, destination: shell.destination, configuration: configuration), scope == expected else {
+            throw HerdrFailure("The SSH account or configuration changed. Open a new connection for the changed identity.")
+        }
+        // The control path takes no part in resolving (it is no Match criterion); the real one is not made yet.
+        let probe = SSHMaster(executable: shell.executable, controlPath: "none", destination: shell.destination)
+        let login = automatic ? SSHReconnectLogin.silentArguments(shell: shell, master: probe, configuration: configuration)
+            : SSHReconnectLogin.interactiveArguments(shell: shell, master: probe, configuration: configuration)
+        let actual = await Task.detached {
+            SSHLauncherCommand.resolvedConfiguration(arguments: ["-G", "-o", "ClearAllForwardings=no"] + login,
+                                                     executable: shell.executable, directory: directory)
+        }.value
+        guard let actual else { throw HerdrFailure("The SSH configuration could not be read for the reconnect. Open a new connection.") }
+        let differences = SSHResolvedConnection.differences(approved: configuration, actual: actual,
+            ignoring: automatic ? SSHResolvedConnection.silentReconnect : SSHResolvedConnection.reconnect)
+        guard differences.isEmpty else {
+            let reason = SSHResolvedConnection.reason(differences)
+            throw HerdrFailure("Dispatch cannot reconnect this connection: " + reason + ". Open a new connection.")
+        }
+        return (configuration, scope)
     }
 
     /// An `SSHLinkTimeout` as `SSHCommand.run` takes it.

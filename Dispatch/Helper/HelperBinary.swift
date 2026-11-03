@@ -329,7 +329,8 @@ public enum HelperBinary {
 "integration",
 "attachments",
 "started_ms",
-"tokens"
+"tokens",
+"prefix2"
 ]
     public static let records: [[String]] = [
 ["page", "snapshot", "state"],
@@ -422,7 +423,8 @@ public enum HelperBinary {
 ["binding", "state"],
 ["terminal", "bytes"],
 ["backend", "key", "nodes", "layouts", "focus"],
-["id", "kind", "name", "tokens", "started_ms"]
+["id", "kind", "name", "tokens", "started_ms"],
+["key", "repeat_ms", "bindings", "prefix2"]
 ]
     public indirect enum Value: Hashable, Sendable {
         case null

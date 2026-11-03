@@ -532,6 +532,14 @@ final class MobileComposition {
     private lazy var sampleChat: (ChatConversations, ChatDemo.Peer) = ChatDemo.conversations(screen: "M4a")
     #endif
 
+    /// The conversation a Chat segment's header acts on (the Spaces sample's: the Chat demo's M4a thread).
+    private func headerSession(_ tab: MobileTab, _ pane: MobilePane, sample: Bool) -> MobileChatSession {
+        #if DEBUG
+        if sample { return sampleChat.0.session(for: ChatConversationKey(host: ChatDemo.host, node: "tmux:s:$0:%0")) }
+        #endif
+        return conversations.session(for: ChatConversationKey(host: tab.ref.host, node: pane.key))
+    }
+
     /// The Terminal and Chat segments of a tab (`TabScreen`).
     var content: TabsContent {
         let hosts = hosts, presences = presences, conversations = conversations, tabs = tabs, memory = modelMemory
@@ -543,7 +551,7 @@ final class MobileComposition {
         #else
         let sample = false
         #endif
-        return TabsContent(
+        var content = TabsContent(
             terminal: { tab, pane in
                 #if DEBUG
                 if sample {
@@ -589,18 +597,14 @@ final class MobileComposition {
                 let text = TerminalSubtitle.text(directory: presence?.directory ?? pane.cwd, shell: tab.program, homes: homes)
                 return text.isEmpty ? nil : text
             },
-            chatTrailing: { tab, pane, disc, keepsDisc in
-                #if DEBUG
-                if sample {
-                    let key = ChatConversationKey(host: ChatDemo.host, node: "tmux:s:$0:%0")
-                    return AnyView(ChatHeaderControls(session: self.sampleChat.0.session(for: key), keepsDisc: keepsDisc) { disc })
-                }
-                #endif
-                let key = ChatConversationKey(host: tab.ref.host, node: pane.key)
-                return AnyView(ChatHeaderControls(session: conversations.session(for: key), keepsDisc: keepsDisc) { disc })
+            terminalDirectory: { tab, pane in
+                if sample { return nil }
+                return presences.presence(.init(host: tab.ref.host, node: pane.key))?.directory
             },
             files: filesContent,
             gitFacts: gitFacts)
+        content.chatHeader { tab, pane in self.headerSession(tab, pane, sample: sample) }
+        return content
     }
 
     /// The Files segment's modes: the host actions here, each mode's slot from its area's own file

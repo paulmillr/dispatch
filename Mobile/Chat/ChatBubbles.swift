@@ -2,6 +2,8 @@ import SwiftUI
 
 /// iMessage's bubble (M4a, L2a): the user on the right in pink (the app tint with dark text in dark, a deeper pink with
 /// white text in light), the agent on the left in grey; 20 pt corners with a 6 pt one at the speaker's side. Text only.
+/// An agent's turn summary sits inside the bubble at its bottom right, where messengers put a message's time
+/// (`MobileChatMarkdownView.corner`).
 struct ChatBubble<Content: View>: View {
     enum Side { case user, agent }
     let side: Side
@@ -13,7 +15,7 @@ struct ChatBubble<Content: View>: View {
     @Environment(\.chatTypography) private var typography
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .bottom, spacing: 0) {
             if side == .user { Spacer(minLength: 0) }
             content
                 .font(typography.body)

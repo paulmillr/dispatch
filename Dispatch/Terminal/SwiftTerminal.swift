@@ -138,7 +138,7 @@ final class SwiftBackend: TerminalBackend {
 
     func close() { session.close() }
     func setFocus(_ focused: Bool) { session.setFocus(focused) }
-    func setOcclusion(_ visible: Bool) { session.setVisible(visible) }
+    func setOcclusion(_ visible: Bool, presented: Bool) { session.setVisible(visible, release: presented ? .onMemoryPressure : .afterRetention) }
     func setContentScale(_ scale: Double) { session.setScale(scale) }
     func setSize(width: UInt32, height: UInt32) {
         // The hosted layer lives in TerminalView's coordinates: a tmux renderer

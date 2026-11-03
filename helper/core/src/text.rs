@@ -30,3 +30,26 @@ pub fn control(c: char) -> bool {
                 | '\u{e0020}'..='\u{e007f}'
         )
 }
+
+/// The variables a shell command expands, in order: `$NAME` and `${NAME…}` (not `$1`, `$$`).
+pub fn expansions(command: &str) -> Vec<String> {
+    let bytes = command.as_bytes();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'$' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1 + usize::from(bytes.get(index + 1) == Some(&b'{'));
+        let mut end = start;
+        while end < bytes.len() && (bytes[end] == b'_' || bytes[end].is_ascii_alphanumeric()) {
+            end += 1;
+        }
+        if end > start && !bytes[start].is_ascii_digit() {
+            names.push(command[start..end].to_owned());
+        }
+        index = end.max(index + 1);
+    }
+    names
+}

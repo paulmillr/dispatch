@@ -21,7 +21,7 @@ extension FontCollection {
             constraint = GlyphConstraint()
             (constraint.size, constraint.alignHorizontal, constraint.alignVertical, constraint.padLeft, constraint.padRight) = (.cover, .center, .center, 0.025, 0.025)
         }
-        let sbix = color && !(Face.table(font, "sbix")?.isEmpty ?? true)
+        let sbix = color && Face.withTable(font, "sbix", { !$0.isEmpty }) == true
         if !sbix, let w = entry.syntheticBold {
             (rect.size.width, rect.size.height) = (rect.size.width + w, rect.size.height + w)
             (rect.origin.x, rect.origin.y) = (rect.origin.x - w / 2, rect.origin.y - w / 2)

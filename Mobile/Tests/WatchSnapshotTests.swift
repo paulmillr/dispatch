@@ -162,8 +162,10 @@ final class WatchSnapshotTests: XCTestCase {
         XCTAssertNil(builder.agent(ChatConversationKey(host: studio.id, node: Self.docs), binding: nil))
     }
 
-    /// In the background a host whose key is behind Face ID cannot connect (no prompt can show); the locked phone blocks
-    /// nothing more (passwords read after first unlock) and is only reported.
+    /// In the background a host whose key needs Face ID cannot connect (no prompt can show): a Secure Enclave key, or
+    /// a quiet attempt refused for it (`HostHoldTests` checks that one); a software key reads after first unlock and
+    /// blocks nothing.
+    /// The locked phone blocks nothing more (passwords and keys read after first unlock) and is only reported.
     func testBlockedHostsInTheBackground() throws {
         let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .biometry, secureEnclaveAvailable: false)
         let key = try keys.generateED25519(label: "phone")
@@ -175,16 +177,13 @@ final class WatchSnapshotTests: XCTestCase {
         let app = ResilienceFixture.composition(hosts)
         let background = WatchSnapshotBuilder(composition: app).build()
         XCTAssertFalse(background.phone.foreground)
-        XCTAssertEqual(background.hosts.map(\.blocked), [.faceID, nil])
+        XCTAssertEqual(background.hosts.map(\.blocked), [nil, nil], "a software key needs no Face ID")
         XCTAssertEqual(background.hosts.map(\.state), [.offline, .offline])
+        XCTAssertFalse(WatchSnapshotBuilder(composition: app).needsFaceID(pi))
 
         let locked = WatchSnapshotBuilder(composition: app, protectedDataAvailable: false).build()
         XCTAssertTrue(locked.phone.locked)
-        XCTAssertEqual(locked.hosts.map(\.blocked), [.faceID, nil], "never phoneLocked")
-
-        hosts.setActive(true)
-        XCTAssertEqual(WatchSnapshotBuilder(composition: app).build().hosts.map(\.blocked), [nil, nil],
-                       "in the foreground Face ID can ask")
+        XCTAssertEqual(locked.hosts.map(\.blocked), [nil, nil], "never phoneLocked")
     }
 
     /// Plain SSH hosts (docs/ios.md) are not the watch's: a host with its Helper switch off and one whose connection fell

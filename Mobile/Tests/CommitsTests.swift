@@ -445,11 +445,11 @@ final class CommitsTests: XCTestCase {
         XCTAssertEqual(CommitSignatureText.look(kind: .ssh, check: nil).tone, .plain, "while it is checked")
         XCTAssertEqual(CommitSignatureText.detail(GitSignatureCheck(verdict: .unknownKey, kind: .ssh, key: "SHA256:abc"), kind: .ssh),
                        "SSH signature from a key not in your allowed signers · SSH key: SHA256:abc")
-        // Someone else committed it, later: both rows.
+        // Someone else committed it, later: the Author and Date popovers say so (`testTheAuthorAndDatePopovers`).
         var commit = GitCommit(hash: CommitsFixture.hash("c81a2f4"), parents: [], subject: "s", body: "", author: "Alex Rivera",
                                email: "alex@example.com", date: today, refs: [])
         commit.committer = GitPerson(name: "Sam Example", email: "sam@example.com", date: today.addingTimeInterval(3600), zone: "+0000")
-        XCTAssertEqual(CommitFacts.rows(commit, now: today).map(\.label), ["Author", "Committer", "Date", "Committed", "Parent"])
+        XCTAssertEqual(CommitFacts.rows(commit, now: today).map(\.label), ["Author", "Date", "Parent"])
         XCTAssertEqual(CommitFacts.rows(commit, now: today).last?.value, "None, the first commit")
         XCTAssertEqual(CommitRow.spoken(commit, now: today.addingTimeInterval(3600)), "s, Alex Rivera, 1 hour ago")
     }
@@ -500,7 +500,8 @@ final class CommitsTests: XCTestCase {
         XCTAssertEqual(pushed, [FilesRoute(mode: .commits, revision: CommitsFixture.hash("2c9d8e0"))])
     }
 
-    /// C2 as VoiceOver reads it: the subject, the refs and the verdict, the facts, the files with their counts.
+    /// C2 as VoiceOver reads it: the subject, the refs, the facts with the verdict on Author (its popover holds the
+    /// signer), the files with their counts.
     func testTheDetailReadsItsCommit() async throws {
         AccessibilityLabelTests.enableAccessibility()
         let fixture = CommitsFixture.sample(now: Date())
@@ -521,14 +522,16 @@ final class CommitsTests: XCTestCase {
         var labels: [String] = []
         try await TestSupport.eventually {
             labels = accessibilityElements(host.view).compactMap(\.accessibilityLabel)
-            return labels.contains { $0.hasPrefix("alex@example.com · SSH key: SHA256:") }
+            return labels.contains("Author, Alex Rivera, Signed · SSH key")
         }
         for expected in ["Sidebar theme toggle and unread rows", "Branch dark-mode, checked out", "Back to Commits", "More",
                          "src/components/Sidebar.tsx, Modified, 14 added, 6 deleted",
                          "src/components/ThemeToggle.tsx, Added, 32 added"] {
             XCTAssertTrue(labels.contains(expected), "\(expected) in \(labels)")
         }
-        XCTAssertTrue(labels.contains { $0.hasPrefix("alex@example.com · SSH key: SHA256:") }, "the signature's signer: \(labels)")
+        let commit = try XCTUnwrap(log.commit(hash))
+        XCTAssertTrue(CommitFacts.facts(.author, commit: commit, check: log.checks[hash]).last?.text
+            .hasPrefix("alex@example.com · SSH key: SHA256:") == true, "the signature's signer, in the Author popover")
         XCTAssertTrue(labels.contains { $0.hasPrefix("Parent") && $0.contains("7d04e9b") }, "\(labels)")
     }
 
@@ -557,5 +560,48 @@ final class CommitsTests: XCTestCase {
     private func tap(_ label: String, in view: UIView) throws {
         let element = try XCTUnwrap(accessibilityElements(view).first { $0.accessibilityLabel == label }, "no \(label)")
         XCTAssertTrue(element.accessibilityActivate(), "\(label) did not activate")
+    }
+}
+
+/// Commit details (C2): Author and Date open popovers with the whole story; the signature is the Author row's badge.
+extension CommitsTests {
+    func testTheAuthorAndDatePopovers() throws {
+        let authored = Date(timeIntervalSince1970: 1_792_363_575)
+        var commit = GitCommit(hash: CommitsFixture.hash("c81a2f4"), parents: [], subject: "s", body: "", author: "Alex Rivera",
+                               email: "alex@example.com", date: authored, refs: [], signature: .gpg, zone: "+0200")
+        let rows = CommitFacts.rows(commit, now: authored)
+        XCTAssertEqual(rows.map(\.popover), [.author, .date, nil])
+
+        // The author alone: name and email, then the signature (checking, then its verdict and details).
+        typealias Fact = CommitFacts.Fact
+        XCTAssertEqual(CommitFacts.facts(.author, commit: commit, check: nil),
+                       [Fact(title: "Author", text: "Alex Rivera <alex@example.com>"),
+                        Fact(title: "Signed · GPG key", text: "Checking the GPG signature…")])
+        let good = GitSignatureCheck(verdict: .good(certified: true), kind: .gpg, signer: "Alex Rivera <alex@example.com>", key: "4AEE18F83AFDEB23")
+        XCTAssertEqual(CommitFacts.facts(.author, commit: commit, check: good).last,
+                       Fact(title: "Signed · GPG key", text: "Alex Rivera <alex@example.com> · GPG key ID: 4AEE18F83AFDEB23"))
+
+        // Only the author's time: one date, in the zone it was made in.
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US_POSIX")
+        let full = CommitsText.fullTime(authored, zone: "+0200", local: utc, locale: locale)
+        XCTAssertTrue(full.hasSuffix(" +0200"), full)
+        XCTAssertTrue(full.contains("2026"), full)
+        XCTAssertNotEqual(full, CommitsText.fullTime(authored, zone: nil, local: utc, locale: locale), "in its own zone, not the phone's")
+        XCTAssertTrue(CommitsText.fullTime(authored, zone: nil, local: utc, locale: locale).hasSuffix(" +0000"))
+        XCTAssertEqual(CommitFacts.facts(.date, commit: commit, check: nil).map(\.title), ["Authored"])
+
+        // Someone else committed it, an hour later: the committer under the author, the commit date under the author's.
+        commit.committer = GitPerson(name: "Sam Example", email: "sam@example.com", date: authored.addingTimeInterval(3600), zone: "+0000")
+        XCTAssertEqual(CommitFacts.facts(.author, commit: commit, check: good).map(\.title), ["Author", "Committer", "Signed · GPG key"])
+        XCTAssertEqual(CommitFacts.facts(.author, commit: commit, check: good)[1].text, "Sam Example <sam@example.com>")
+        XCTAssertEqual(CommitFacts.facts(.date, commit: commit, check: nil).map(\.title), ["Authored", "Committed"])
+        XCTAssertTrue(CommitFacts.facts(.date, commit: commit, check: nil)[1].text.hasSuffix(" +0000"))
+
+        // The same person committing later: no Committer line, but both dates; unsigned says so.
+        commit.committer = GitPerson(name: "Alex Rivera", email: "alex@example.com", date: authored.addingTimeInterval(60), zone: "+0200")
+        commit.signature = nil
+        XCTAssertEqual(CommitFacts.facts(.author, commit: commit, check: nil).map(\.title), ["Author", "Not signed"])
+        XCTAssertEqual(CommitFacts.facts(.date, commit: commit, check: nil).count, 2)
     }
 }

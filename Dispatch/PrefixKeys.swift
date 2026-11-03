@@ -147,6 +147,14 @@ struct PrefixTable: Equatable {
     var prefix: PrefixKey
     var bindings: [PrefixKey: PrefixBinding]
     var repeatTime: TimeInterval = 0.5
+    /// tmux's prefix2: a second key that arms the same table.
+    var prefix2: PrefixKey?
+    /// The server's bindings Dispatch cannot run as tmux would (key -> its command): the key completes the
+    /// sequence and is refused, never replaced by a different action.
+    var rejected: [PrefixKey: String] = [:]
+
+    /// True for the prefix and prefix2.
+    func arms(_ key: PrefixKey) -> Bool { key == prefix || key == prefix2 }
 }
 
 extension PrefixTable {
@@ -155,60 +163,129 @@ extension PrefixTable {
     private static let forwardable: Set<String> = [
         "select-pane", "selectp", "last-pane", "lastp", "select-window", "selectw", "last-window", "last",
         "select-layout", "selectl", "next-layout", "nextl", "previous-layout", "prevl", "resize-pane", "resizep",
-        "swap-pane", "swapp", "rotate-window", "rotatew", "swap-window", "swapw",
+        "swap-pane", "swapp", "rotate-window", "rotatew", "swap-window", "swapw", "send-prefix",
     ]
 
-    /// The action for a tmux binding's command: Dispatch's own for what it presents, the server's
-    /// for pane and layout commands, nil for what needs tmux's own client UI.
-    static func tmuxAction(_ command: String) -> PrefixAction? {
-        let words = command.split(separator: " ").map(String.init)
-        guard let name = words.first else { return nil }
-        // Dispatch asks before closing work itself, so tmux's prompt is not needed.
-        if name == "confirm-before" || name == "confirm" {
-            if command.hasSuffix(" kill-window") || command.hasSuffix(" killw") { return .closeTab }
-            if command.hasSuffix(" kill-pane") || command.hasSuffix(" killp") { return .closePane }
-            return nil
+    /// A tmux command's words as tmux's parser reads them: blanks split, '…' is literal, "…" and bare text take
+    /// backslash escapes. A lone `{` or `}`, and a `;` ending a word, are what mark blocks and command lists.
+    static func tmuxWords(_ command: String) -> [String] {
+        var words: [String] = [], word = "", started = false
+        var rest = Substring(command)
+        while let c = rest.popFirst() {
+            switch c {
+            case " ", "\t":
+                if started { words.append(word); word = ""; started = false }
+                continue
+            case "'":
+                while let q = rest.popFirst(), q != "'" { word.append(q) }
+            case "\"":
+                while let q = rest.popFirst(), q != "\"" { word.append(q == "\\" ? rest.popFirst() ?? q : q) }
+            case "\\":
+                word.append(rest.popFirst() ?? c)
+            default:
+                word.append(c)
+            }
+            started = true
         }
+        if started { words.append(word) }
+        return words
+    }
+
+    /// The action for a tmux binding's command, only where it does what tmux would: Dispatch's own for what it
+    /// presents, with no operand it would drop (a window's name, a program, a split's size, a target); the server's
+    /// own for pane and layout commands, run as they are. Nil for the rest (tmux's own client UI, command lists,
+    /// options Dispatch has no equivalent for): the table refuses that key.
+    static func tmuxAction(_ command: String) -> PrefixAction? {
+        let words = tmuxWords(command)
+        guard let name = words.first else { return nil }
+        let arguments = Array(words.dropFirst())
+        // Dispatch asks before closing work itself, so tmux's prompt is not needed: only the bare kill, with the
+        // prompt's own options before it.
+        if name == "confirm-before" || name == "confirm" {
+            switch options(arguments, values: ["-p", "-c", "-t"], flags: ["-b", "-y"]) {
+            case ["kill-window"]?, ["killw"]?: return .closeTab
+            case ["kill-pane"]?, ["killp"]?: return .closePane
+            default: return nil
+            }
+        }
+        // A prompt whose template only renames the window or session, or finds a window, with what is typed.
         if name == "command-prompt" {
-            if command.contains("rename-window") { return .renameTab }
-            if command.contains("rename-session") { return .renameSpace }
-            if command.contains("find-window") { return .searchSpaces }
-            return nil
+            guard var template = options(arguments, values: ["-I", "-p", "-T", "-t"], flags: ["-1", "-b", "-F", "-i", "-k", "-l", "-N", "-W"]),
+                  template.count == 1 || (template.first == "{" && template.last == "}") else { return nil }
+            if template.count == 1 { template = tmuxWords(template[0]) } else { template = Array(template.dropFirst().dropLast()) }
+            guard arguments.firstIndex(of: "-T").map({ arguments.indices.contains($0 + 1) && arguments[$0 + 1] == "command" }) ?? true
+            else { return nil }
+            switch template {
+            case ["rename-window", "%%"], ["renamew", "%%"]: return .renameTab
+            case ["rename-session", "%%"], ["rename", "%%"]: return .renameSpace
+            case ["find-window", "%%"], ["find-window", "-Z", "%%"], ["findw", "%%"], ["findw", "-Z", "%%"]: return .searchSpaces
+            default: return nil
+            }
         }
         // Command lists and blocks are separate tokens; `#{…}` formats are arguments.
         guard !words.contains(where: { $0 == "{" || $0 == "}" || $0.hasSuffix(";") }) else { return nil }
-        let flags = Set(words.dropFirst())
+        // Dispatch's new windows and splits start in the current pane's directory, as -c "#{pane_current_path}" asks.
+        let here = ["-c", "#{pane_current_path}"]
         switch name {
-        case "new-window", "neww": return .newTab
-        case "kill-window", "killw": return .closeTab
-        case "kill-pane", "killp": return .closePane
-        case "split-window", "splitw": return flags.contains("-h") ? .splitRight : .splitDown
-        case "break-pane", "breakp": return .breakPane
-        case "detach-client", "detach": return .detach
+        case "new-window", "neww": return arguments.isEmpty || arguments == here ? .newTab : nil
+        case "kill-window", "killw": return arguments.isEmpty ? .closeTab : nil
+        case "kill-pane", "killp": return arguments.isEmpty ? .closePane : nil
+        case "split-window", "splitw":
+            var rest = arguments
+            if let at = rest.indices.first(where: { rest.indices.contains($0 + 1) && Array(rest[$0...($0 + 1)]) == here }) {
+                rest.removeSubrange(at...(at + 1))
+            }
+            guard rest.allSatisfy({ $0 == "-h" || $0 == "-v" }) else { return nil }
+            return rest.last == "-h" ? .splitRight : .splitDown
+        case "break-pane", "breakp": return arguments.isEmpty ? .breakPane : nil
+        case "detach-client", "detach": return arguments.isEmpty ? .detach : nil
         case "switch-client", "switchc":
-            return flags.contains("-n") ? .nextSpace : flags.contains("-p") ? .previousSpace : nil
-        case "choose-tree", "choose-session", "choose-window": return .searchSpaces
-        case "next-window", "next": return flags.contains("-a") ? .nextAttention : .nextTab
-        case "previous-window", "prev": return flags.contains("-a") ? .previousAttention : .previousTab
-        case "copy-mode": return flags.contains("-u") ? .scrollPageUp : .find
-        case "paste-buffer", "pasteb": return .paste
-        case "list-keys", "lsk": return .shortcuts
+            return arguments == ["-n"] ? .nextSpace : arguments == ["-p"] ? .previousSpace : nil
+        // Their own presentation options only (zoom, sorting, the starting view): Dispatch's search shows the spaces.
+        case "choose-tree", "choose-session", "choose-window":
+            return arguments.allSatisfy({ $0.count > 1 && $0.hasPrefix("-") && $0.dropFirst().allSatisfy("GNrswZ".contains) })
+                ? .searchSpaces : nil
+        case "next-window", "next":
+            return arguments.isEmpty ? .nextTab : arguments == ["-a"] ? .nextAttention : nil
+        case "previous-window", "prev":
+            return arguments.isEmpty ? .previousTab : arguments == ["-a"] ? .previousAttention : nil
+        case "copy-mode": return arguments.isEmpty ? .find : arguments == ["-u"] ? .scrollPageUp : nil
+        case "paste-buffer", "pasteb": return arguments.isEmpty || arguments == ["-p"] ? .paste : nil
+        case "list-keys", "lsk": return arguments.isEmpty || arguments == ["-N"] ? .shortcuts : nil
+        case "send-prefix": return arguments.isEmpty || arguments == ["-2"] ? .tmux(command) : nil
         default: break
         }
-        if (name == "next-layout" || name == "nextl"), words.count == 1 { return .nextLayout }
-        if (name == "select-pane" || name == "selectp"), words.dropFirst() == ["-t", ":.+"] { return .nextPane }
-        if (name == "select-window" || name == "selectw"), words.count == 3, words[1] == "-t",
-           words[2].hasPrefix(":="), let index = Int(words[2].dropFirst(2)) { return .selectWindow(index) }
-        if name == "select-layout" || name == "selectl", words.count == 2,
-           let preset = LayoutPreset(tmuxLayout: words[1]) { return .layout(preset) }
+        if (name == "next-layout" || name == "nextl"), arguments.isEmpty { return .nextLayout }
+        if (name == "select-pane" || name == "selectp"), arguments == ["-t", ":.+"] { return .nextPane }
+        if (name == "select-window" || name == "selectw"), arguments.count == 2, arguments[0] == "-t",
+           arguments[1].hasPrefix(":="), let index = Int(arguments[1].dropFirst(2)) { return .selectWindow(index) }
+        if name == "select-layout" || name == "selectl", arguments.count == 1,
+           let preset = LayoutPreset(tmuxLayout: arguments[0]) { return .layout(preset) }
         return forwardable.contains(name) ? .tmux(command) : nil
+    }
+
+    /// What follows a command's options, when every option before it is one of these (`values` take one word).
+    private static func options(_ words: [String], values: Set<String>, flags: Set<String>) -> [String]? {
+        var rest = words[...]
+        while let word = rest.first, word.hasPrefix("-"), word != "-" {
+            rest = rest.dropFirst()
+            if word == "--" { break }
+            if values.contains(word) { guard rest.popFirst() != nil else { return nil } } else if !flags.contains(word) { return nil }
+        }
+        return Array(rest)
+    }
+
+    /// The server's table as the helper read it (`backends.prefix`): the node's session's prefix, prefix2 and
+    /// repeat time, and `list-keys -T prefix`; nil when the prefix is None or a key Dispatch cannot see.
+    static func tmux(server: HelperClient.Prefix) -> PrefixTable? {
+        tmux(prefix: server.key ?? "None", prefix2: server.prefix2, repeatTime: server.repeatMilliseconds.map(String.init) ?? "",
+             bindings: server.bindings.map { ($0.key, $0.command, $0.repeat) })
     }
 
     /// The prefix table from `show-options -gv prefix`, `show-options -gv repeat-time` and
     /// `list-keys -T prefix`; nil when the prefix is None or unreadable.
     static func tmux(prefix: String, repeatTime: String, keys: [String]) -> PrefixTable? {
-        guard let prefix = PrefixKey(tmux: prefix.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-        var bindings: [PrefixKey: PrefixBinding] = [:]
+        var parsed: [(key: String, command: String, repeats: Bool)] = []
         for line in keys {
             var rest = Substring(line)
             func word() -> Substring? {
@@ -227,12 +304,28 @@ extension PrefixTable {
                 default: key = next
                 }
             }
-            guard table == "prefix", let key, let parsed = PrefixKey(tmux: String(key)),
-                  let action = tmuxAction(rest.trimmingCharacters(in: .whitespaces)) else { continue }
-            bindings[parsed] = PrefixBinding(action: action, repeats: repeats)
+            guard table == "prefix", let key else { continue }
+            parsed.append((String(key), rest.trimmingCharacters(in: .whitespaces), repeats))
+        }
+        return tmux(prefix: prefix, prefix2: nil, repeatTime: repeatTime, bindings: parsed)
+    }
+
+    private static func tmux(prefix: String, prefix2: String?, repeatTime: String,
+                             bindings keys: [(key: String, command: String, repeats: Bool)]) -> PrefixTable? {
+        guard let prefix = PrefixKey(tmux: prefix.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        var bindings: [PrefixKey: PrefixBinding] = [:], rejected: [PrefixKey: String] = [:]
+        for (key, command, repeats) in keys {
+            guard let parsed = PrefixKey(tmux: key), !command.isEmpty else { continue }
+            if let action = tmuxAction(command) {
+                bindings[parsed] = PrefixBinding(action: action, repeats: repeats)
+            } else {
+                rejected[parsed] = command
+            }
         }
         let milliseconds = Double(repeatTime.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 500
-        return PrefixTable(prefix: prefix, bindings: bindings, repeatTime: milliseconds / 1000)
+        return PrefixTable(prefix: prefix, bindings: bindings, repeatTime: milliseconds / 1000,
+                           prefix2: prefix2.flatMap { PrefixKey(tmux: $0.trimmingCharacters(in: .whitespacesAndNewlines)) },
+                           rejected: rejected)
     }
 
     /// tmux 3.7's default prefix table, for native spaces and for a tmux server not yet read.
@@ -342,6 +435,10 @@ final class PrefixKeys {
     /// The table a terminal answers; nil when its prefix keys are off.
     @ObservationIgnored var table: (UUID) -> PrefixTable? = { _ in nil }
     @ObservationIgnored var perform: (PrefixAction, UUID) -> Void = { _, _ in }
+    /// A server binding Dispatch cannot run (`PrefixTable.rejected`): its command, for the refusal.
+    @ObservationIgnored var reject: (String, UUID) -> Void = { _, _ in }
+    /// A sequence ended (a binding ran or was refused, Escape, an unbound key, the prefix sent literally).
+    @ObservationIgnored var finished: (UUID) -> Void = { _ in }
     @ObservationIgnored private var swallowed: Set<UInt16> = []
     @ObservationIgnored private var repeating: (surface: UUID, until: TimeInterval)?
 
@@ -353,7 +450,7 @@ final class PrefixKeys {
         if event.isARepeat { if swallowed.contains(event.keyCode) { return true } } else { swallowed.remove(event.keyCode) }
         let key = PrefixKey(event)
         if let repeating, repeating.surface == surface, event.timestamp <= repeating.until, let key,
-           let table = table(surface), key != table.prefix, let binding = table.bindings[key], binding.repeats {
+           let table = table(surface), !table.arms(key), let binding = table.bindings[key], binding.repeats {
             perform(binding.action, surface)
             self.repeating = (surface, event.timestamp + table.repeatTime)
             return swallow(event)
@@ -361,15 +458,18 @@ final class PrefixKeys {
         repeating = nil
         guard armed == surface else {
             armed = nil
-            guard let key, let table = table(surface), key == table.prefix else { return false }
+            guard let key, let table = table(surface), table.arms(key) else { return false }
             armed = surface
             return swallow(event)
         }
         armed = nil
-        guard let key, let table = table(surface), key != table.prefix else { return false }
+        defer { finished(surface) }
+        guard let key, let table = table(surface), !table.arms(key) else { return false }
         if key != .escape, let binding = table.bindings[key] {
             perform(binding.action, surface)
             if binding.repeats { repeating = (surface, event.timestamp + table.repeatTime) }
+        } else if key != .escape, let command = table.rejected[key] {
+            reject(command, surface)
         }
         return swallow(event)
     }
@@ -377,7 +477,7 @@ final class PrefixKeys {
     /// True when the key is the surface's prefix or completes its armed sequence, so a text view
     /// passes it to `handle` before AppKit reads it as a text command.
     func claims(_ event: NSEvent, surface: UUID) -> Bool {
-        armed == surface || PrefixKey(event).map { $0 == table(surface)?.prefix } == true
+        armed == surface || PrefixKey(event).map { table(surface)?.arms($0) } == true
     }
 
     /// True for the release of a key whose press `handle` consumed.

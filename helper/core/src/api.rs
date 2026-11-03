@@ -267,6 +267,10 @@ pub enum Job {
     ///   pinned fd, metadata includes uid/mode/links/kind/size/device/inode/mtime_ns/ctime_ns.
     /// - "file.lstat": {path} -> same metadata (also socket/character-device kinds, tty).
     /// - "file.realpath": {path} -> {path}; canonical absolute path, symlinks resolved.
+    /// - "file.json.references": {paths:[path],keys:[string],env:[string]} -> {names:[string],
+    ///   env:{name:string}}; of each readable JSON file (at most 1 MB) only the variables the
+    ///   string values of `keys` expand (`$NAME`, `${NAME…}`) and the `env` object's `env`
+    ///   entries (later files win); nothing else of the files is answered or captured.
     /// - "peer": {fd} -> {uid,pid?:u32}; native Unix peer credentials.
     /// - "environment": {pid,names:[string],start?:[u64;2],executable?} -> {name:bytes}; only
     ///   requested native values; a given start/executable must still be the pid's.
@@ -892,12 +896,15 @@ pub struct Agent {
     pub started_ms: Option<u64>,
 }
 
-/// A backend's prefix key table (Multiplexer::prefix): raw native key and command strings.
+/// A backend's prefix key table (Multiplexer::prefix): raw native key and command strings, as
+/// the node's own session sees them (its options, else the global ones).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prefix {
     pub key: Option<String>,
     pub repeat_ms: Option<u64>,
     pub bindings: Vec<PrefixBinding>,
+    /// tmux's prefix2, a second key that also arms the table; None when unset (tmux `None`).
+    pub prefix2: Option<String>,
 }
 
 /// One prefix binding; `repeat` (tmux -r) repeats without the prefix within repeat_ms.
@@ -1533,6 +1540,21 @@ pub trait Multiplexer {
         size: Option<Grid>,
         done: Done<Id>,
     );
+    /// create for an ordinary new terminal (no launch, no command from the app): `command` is the
+    /// helper's prepared login shell. A multiplexer with defaults of its own for new panes (tmux's
+    /// default-command and default-shell) may start those instead, keeping the command's
+    /// environment, which carries Dispatch's shell integration; the rest start `command`.
+    fn create_shell(
+        &mut self,
+        io: &mut dyn Io,
+        parent: Id,
+        beside: Option<Id>,
+        command: Command,
+        size: Option<Grid>,
+        done: Done<Id>,
+    ) {
+        self.create(io, parent, beside, Some(command), size, done)
+    }
     /// Rename a workspace/tab/terminal; c1654cc Dispatch/AppDelegate.swift:406.
     fn rename(&mut self, io: &mut dyn Io, node: Id, name: &str, done: Done<()>);
     /// Focus a node; c1654cc Dispatch/Herdr/HerdrCoordinator.swift:152.

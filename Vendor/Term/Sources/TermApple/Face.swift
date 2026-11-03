@@ -31,25 +31,32 @@ public struct Face {
     }
 
     /// A table's bytes (nil: missing).
-    static func table(_ font: CTFont, _ tag: String) -> [UInt8]? {
+    static func table(_ font: CTFont, _ tag: String) -> [UInt8]? { withTable(font, tag) { Array($0) } }
+
+    /// `body` on a table's bytes where CoreText keeps them, no copy (nil: missing).
+    static func withTable<T>(_ font: CTFont, _ tag: String, _ body: (UnsafeBufferPointer<UInt8>) -> T) -> T? {
         guard let d = CTFontCopyTable(font, tag.utf8.reduce(0) { $0 << 8 | CTFontTableTag($1) }, []) else { return nil }
-        return Array(UnsafeBufferPointer(start: CFDataGetBytePtr(d), count: CFDataGetLength(d)))
+        return withExtendedLifetime(d) { body(UnsafeBufferPointer(start: CFDataGetBytePtr(d), count: CFDataGetLength(d))) }
     }
 
     /// Whether a glyph is drawn in color (Ghostty's ColorState): fonts with the color trait whose
     /// `sbix` table is non-empty (every glyph), or whose `SVG ` table lists the glyph.
+    /// The tables are read in place: copying them made every check allocate the whole table (Apple Color Emoji's
+    /// `sbix` is about 180 MB), which the allocator then kept as dirty memory.
     public static func isColorGlyph(_ font: CTFont, _ glyph: CGGlyph) -> Bool {
         guard CTFontGetSymbolicTraits(font).contains(.traitColorGlyphs) else { return false }
-        if let sbix = table(font, "sbix"), !sbix.isEmpty { return true }
-        guard let svg = table(font, "SVG "), svg.count >= 10 else { return false }
-        let u16 = { (at: Int) in Int(svg[at]) << 8 | Int(svg[at + 1]) }
-        let list = u16(2) << 16 | u16(4)
-        guard list + 2 <= svg.count else { return false }
-        for i in 0..<u16(list) where list + 2 + 12 * i + 4 <= svg.count {
-            let at = list + 2 + 12 * i
-            if u16(at) <= Int(glyph), Int(glyph) <= u16(at + 2) { return true }
-        }
-        return false
+        if let sbix = withTable(font, "sbix", { !$0.isEmpty }), sbix { return true }
+        return withTable(font, "SVG ") { svg in
+            guard svg.count >= 10 else { return false }
+            let u16 = { (at: Int) in Int(svg[at]) << 8 | Int(svg[at + 1]) }
+            let list = u16(2) << 16 | u16(4)
+            guard list + 2 <= svg.count else { return false }
+            for i in 0..<u16(list) where list + 2 + 12 * i + 4 <= svg.count {
+                let at = list + 2 + 12 * i
+                if u16(at) <= Int(glyph), Int(glyph) <= u16(at + 2) { return true }
+            }
+            return false
+        } ?? false
     }
 
     /// Ghostty's getMetrics: the OpenType tables plus CoreText's measurements.

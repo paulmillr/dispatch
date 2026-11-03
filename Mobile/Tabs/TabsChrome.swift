@@ -67,7 +67,7 @@ struct TabsMockupGlyph: View {
 
 /// The glass pills of the pushed screens' headers (M2c, M4a, M4d): 44 points high, the app tint for text.
 struct TabsHeaderPill<Label: View>: View {
-    /// The mockup's: 16 after a word, 14 after the back pill's count.
+    /// The mockup's: 16 after a word.
     var trailing: CGFloat = 16
     let action: () -> Void
     @ViewBuilder var label: Label
@@ -96,39 +96,67 @@ struct TabsHeaderPill<Label: View>: View {
     }
 }
 
-/// The back pill: a chevron and the previous screen's title, or the needs-you count in a tab (M4a: "‹ 1").
+/// The back pill: a chevron and the previous screen's title (a tab's is `TabsBackDisc`).
 struct TabsBackPill: View {
-    /// A tab's back pill: how many conversations elsewhere need the user, as a badge (Messages' unread count); with
-    /// none, the screen it returns to. A bare "0" read as nothing at all.
-    static func needsYou(_ count: Int, back title: String, action: @escaping () -> Void) -> TabsBackPill {
-        count > 0 ? TabsBackPill(label: "\(count)", count: true, action: action) : TabsBackPill(label: title, action: action)
-    }
-
     /// A screen's name truncates past this, so the bar keeps room for the title and the trailing pill: a long space
     /// or tab name pushed every item into the bar's "…" menu.
     static let labelWidth: CGFloat = 120
 
     let label: String
-    var count = false
     let action: () -> Void
 
     var body: some View {
-        TabsHeaderPill(trailing: count ? 14 : 16, action: action) {
-            HStack(spacing: count ? 5 : 4) {
+        TabsHeaderPill(action: action) {
+            HStack(spacing: 4) {
                 TabsBackChevron()
-                if count {
-                    // A badge, so the number reads as a count of waiting conversations.
-                    TabsCountBadge(label: label)
-                } else {
-                    TabsCappedWidth(max: Self.labelWidth) {
-                        Text(label)
-                            .font(.body)
-                            .lineLimit(1)
-                    }
+                TabsCappedWidth(max: Self.labelWidth) {
+                    Text(label)
+                        .font(.body)
+                        .lineLimit(1)
                 }
             }
         }
-        .accessibilityLabel(count ? "Back, \(label) \(label == "1" ? "conversation needs" : "conversations need") you" : "Back to \(label)")
+        .accessibilityLabel("Back to \(label)")
+    }
+}
+
+/// A tab's back button (X9b): the system's chevron circle without a label, so the title gets the bar; how many
+/// conversations elsewhere need the user is a badge on its corner (Messages' unread count). VoiceOver still names the
+/// screen it returns to, and reads the count as its value.
+struct TabsBackDisc: View {
+    /// The screen Back returns to.
+    let back: String
+    var needsYou = 0
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color.dispatchPink)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .overlay(alignment: .topTrailing) {
+            if needsYou > 0 {
+                TabsCountBadge(label: "\(needsYou)")
+                    .offset(x: 6, y: -4)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel("Back to \(back)")
+        .accessibilityValue(Self.value(needsYou))
+    }
+
+    /// "2 conversations need you"; nothing for none.
+    static func value(_ needsYou: Int) -> String {
+        needsYou > 0 ? "\(needsYou) \(needsYou == 1 ? "conversation needs" : "conversations need") you" : ""
     }
 }
 
@@ -149,8 +177,8 @@ private struct TabsBackChevron: View {
 /// at the start of the push, and the screen underneath jumped up for a frame (a screen recording showed it).
 struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarContent {
     /// The leading item's widest: the column (`tabsColumnWidth`; the window before it is measured) less the bar's
-    /// margins (20 each side), the trailing control (the 44 point host pill, or the split's Terminal / Chat switch) and
-    /// the 12 the bar leaves before it.
+    /// margins (20 each side), the trailing control (a tab's 44 point host disc, or the split's Terminal / Chat switch)
+    /// and the 12 the bar leaves before it.
     @MainActor static func leadingWidth(column: CGFloat?, trailing: CGFloat = 44, atTrailingEdge: Bool = true) -> CGFloat {
         let measured = MobileSplit.initialSize.width
         let width = column ?? (measured > 0 ? measured : 402)
@@ -176,6 +204,9 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     var branch: String? = nil
     /// The bar ends at the screen's trailing edge (the phone, the split's detail column), where `statusCorner` is.
     var atTrailingEdge = true
+    /// A tab on the phone (X9b): the title block two lines tall (`TabsTitleBlock`), the subtitle only under a title
+    /// that fits on one line.
+    var titleBlock = false
     @ViewBuilder var back: Back
     @ViewBuilder var subtitle: Subtitle
     @ViewBuilder var trailing: Trailing
@@ -186,29 +217,89 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
         // overflowed the bar, which then showed only its "…" menu, the back pill inside it.
         ToolbarItem(placement: .topBarLeading) {
             TabsHeaderLeading(width: Self.leadingWidth(column: column, trailing: trailingWidth, atTrailingEdge: atTrailingEdge),
-                              back: showsBack) {
+                              back: showsBack, fills: titleBlock) {
                 if showsBack { back }
-                VStack(alignment: .leading, spacing: 1) {
-                    // One text, the branch after the title: an HStack of the two made the bar measure the item wider
-                    // than it lays it out, and the bar overflowed into its "…" menu.
-                    SpacesBranchChip.title(title, branch: branch)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityAddTraits(.isHeader)
+                if titleBlock {
+                    TabsTitleBlock(title: title) { subtitle }
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        .padding(.leading, 4)
+                } else {
+                    titleColumn
+                }
+            }
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarItem(placement: .topBarTrailing) { trailing }
+            .sharedBackgroundVisibility(.hidden)
+    }
+
+    private var titleColumn: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            // One text, the branch after the title: an HStack of the two made the bar measure the item wider
+            // than it lays it out, and the bar overflowed into its "…" menu.
+            SpacesBranchChip.title(title, branch: branch)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            subtitle
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        // The bar's height is fixed: its title grows to xxxLarge, as the system's inline titles do.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .padding(.leading, 4)
+    }
+}
+
+/// A tab's title on the phone (X9b): two lines tall, top-aligned, subheadline semibold. A title that fits on one line
+/// keeps the subtitle (host · folder) under it; a longer one takes both lines and the subtitle goes (the host is the
+/// trailing disc). Only the title decides: the subtitle truncates in what the title leaves.
+struct TabsTitleBlock<Subtitle: View>: View {
+    let title: String
+    @ViewBuilder var subtitle: Subtitle
+    /// Two of the title's lines.
+    @ScaledMetric(relativeTo: .subheadline) private var height: CGFloat = 40
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                TabsOfferedWidth {
                     subtitle
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                // The bar's height is fixed: its title grows to xxxLarge, as the system's inline titles do.
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .padding(.leading, 4)
             }
+            Text(title)
+                .lineLimit(2, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
         }
-        .sharedBackgroundVisibility(.hidden)
-        ToolbarItem(placement: .topBarTrailing) { trailing }
-            .sharedBackgroundVisibility(.hidden)
+        .font(.subheadline.weight(.semibold))
+        .frame(minHeight: height, alignment: .topLeading)
+    }
+}
+
+/// Its content at the width it is offered and never wider; asked for its ideal width (`ViewThatFits`' measure), none.
+/// So a subtitle under a title neither widens the title's column nor decides whether the title fits.
+struct TabsOfferedWidth: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        guard let width = proposal.width, width.isFinite else {
+            return CGSize(width: 0, height: content.sizeThatFits(.unspecified).height)
+        }
+        let size = content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return CGSize(width: min(size.width, width), height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }
 
@@ -218,6 +309,9 @@ struct TabsHeaderLeading: Layout {
     let width: CGFloat
     /// Whether the first subview is the back pill; without it the title column is the only one.
     var back = true
+    /// The title column is offered all the room left, not its ideal width (`TabsTitleBlock`, whose subtitle may be
+    /// wider than its title).
+    var fills = false
     static let spacing: CGFloat = 12
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -252,7 +346,7 @@ struct TabsHeaderLeading: Layout {
         let ideal = column.sizeThatFits(.unspecified).width
         // A point of slack: a title of mixed fonts (P2's name and branch) measured a fraction wider than it drew, and
         // truncated to "…" at exactly its ideal width.
-        let title = column.sizeThatFits(ProposedViewSize(width: min(ideal + 1, room), height: nil))
+        let title = column.sizeThatFits(ProposedViewSize(width: fills ? room : min(ideal + 1, room), height: nil))
         // A fixed-size subtitle (the pane switcher's menu) may answer wider than offered: the item still stops at `width`.
         return (back, CGSize(width: min(title.width, room), height: title.height))
     }
@@ -282,8 +376,9 @@ extension EnvironmentValues {
     @Entry var tabsSelectSpace: ((SpaceRef) -> Void)? = nil
     /// The space whose tab the detail column shows: the sidebar marks its row.
     @Entry var tabsShownSpace: SpaceRef? = nil
-    /// Where a tab's host disc opens the space switcher over it (P3, `SpacesNavigator.switcher`); nil opens nothing.
-    @Entry var tabsSwitcher: SpacesNavigator? = nil
+    /// What a tab's menu (`TabHeaderMenu`) acts through: the Tabs actions (Rename, Close, Detach, Terminate) and the
+    /// host's stats sheet; nil offers neither.
+    @Entry var tabsNavigator: SpacesNavigator? = nil
 }
 
 /// The iPad split's sidebar, as the tab's header sees it: whether it is hidden, and what hides or shows it.

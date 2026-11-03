@@ -1,6 +1,9 @@
 // The ordered pages of one screen: scrollback + active area (Ghostty's
 // PageList.zig): growth and pruning at the byte/line limits, tracked pins,
 // the viewport, row erasing.
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// A position: row y (and column x) of a page. Pages own nothing through pins.
 public struct Pin: Equatable {
@@ -85,6 +88,27 @@ public protocol PageBlocks: AnyObject {
 /// The size of a standard page block (what PageBlocks hold).
 public let pageBlockBytes = Page.stdSize + Page.stateBytes
 
+/// Standard blocks out of use (in a list's pool or the process's PageBlocks): on Darwin their pages may go back to
+/// the system (MADV_FREE_REUSABLE), so cleared or closed history no longer counts in the footprint; a block's
+/// contents are undefined until `reuse`, which a page about to use it calls (formatting zeroes what it reads).
+public enum PageBlockMemory {
+    #if canImport(Darwin)
+    /// The system page size, and a block's whole system pages (the last bytes, the containers' counters, stay).
+    static let page = Int(getpagesize()), bytes = pageBlockBytes - pageBlockBytes % page
+    #endif
+    public static func release(_ block: UnsafeMutableRawPointer) {
+        #if canImport(Darwin)
+        // Lists allocate blocks page aligned; another host's blocks may not be (then nothing happens).
+        if Int(bitPattern: block) % page == 0 { madvise(block, bytes, MADV_FREE_REUSABLE) }
+        #endif
+    }
+    public static func reuse(_ block: UnsafeMutableRawPointer) {
+        #if canImport(Darwin)
+        if Int(bitPattern: block) % page == 0 { madvise(block, bytes, MADV_FREE_REUSE) }
+        #endif
+    }
+}
+
 /// How many standard pages a scrollback limit of `bytes` holds at most (the limit counts each as
 /// one standard page; the block's state bytes don't count).
 public func pageBlocks(scrollbackBytes bytes: Int) -> Int { bytes / Page.stdSize }
@@ -146,13 +170,15 @@ struct PageList {
 
         mutating func page(_ cap: Capacity) -> Page {
             let pooled = Page.layout(cap).totalSize <= Page.stdSize
-            let p = Page(cap, node: nodes.popLast(), block: pooled ? blocks.popLast() ?? source?.take() : nil)
+            var block: UnsafeMutableRawPointer?
+            if pooled { if let held = blocks.popLast() { PageBlockMemory.reuse(held); block = held } else { block = source?.take() } }
+            let p = Page(cap, node: nodes.popLast(), block: block)
             p.pooled = pooled
             return p
         }
 
         mutating func recycle(_ p: Page) {
-            if p.pooled { blocks.append(p.memory) } else { p.memory.deallocate() }
+            if p.pooled { PageBlockMemory.release(p.memory); blocks.append(p.memory) } else { p.memory.deallocate() }
             nodes.append(p)
         }
     }
@@ -196,7 +222,7 @@ struct PageList {
     func free() {
         freeAll()
         for p in pool.nodes { p.freeNode() }
-        for b in pool.blocks where pool.source?.give(b) != true { b.deallocate() }
+        for b in pool.blocks where pool.source?.give(b) != true { PageBlockMemory.reuse(b); b.deallocate() }
         for t in tracked + pool.pins { t.free() }
         state.deinitialize(count: 1)
         state.deallocate()

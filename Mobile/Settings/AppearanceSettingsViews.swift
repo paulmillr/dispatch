@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Settings › Terminal › Font (G2): the bundled monospaced fonts, each with a sample line in it, then bold colours and
-/// the cursor. Every choice reaches the open terminals at once (`TerminalStyle.changed`).
+/// Settings › Terminal › Font (G2): the Mac's terminal fonts in the Mac's order (the default and the system's, then
+/// Dispatch's own after its separator), each with a sample line in it, then Ligatures, bold colours and the cursor.
+/// Every choice reaches the open terminals at once (`TerminalStyle.changed`).
 struct TerminalFontSettingsView: View {
     @Bindable var settings: MobileSettings
 
@@ -11,40 +12,15 @@ struct TerminalFontSettingsView: View {
         List {
             Group {
                 Section {
-                    ForEach(TerminalFont.all) { font in
-                        Button {
-                            settings.terminalFont = font.name
-                        } label: {
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 6) {
-                                        Text(font.name).font(.body).foregroundStyle(.primary)
-                                        if font.ligatures { Text("ligatures").font(.caption).foregroundStyle(.secondary) }
-                                        if font.system { Text("system").font(.caption).foregroundStyle(.secondary) }
-                                    }
-                                    Text(TerminalFont.sample)
-                                        .font(.custom(font.name, size: 13, relativeTo: .footnote))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                                if settings.terminalFont == font.name {
-                                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.dispatchPink)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(font.name)
-                        .accessibilityValue(font.ligatures ? "ligatures" : font.system ? "system" : "")
-                        .accessibilityAddTraits(settings.terminalFont == font.name ? [.isButton, .isSelected] : .isButton)
-                    }
-                } footer: {
-                    Text("Fonts bundled with Dispatch. Ligatures follow the font.")
+                    rows(TerminalFont.leading)
                 }
                 Section {
+                    rows(TerminalFont.bundled)
+                } footer: {
+                    Text("Fonts bundled with Dispatch, as on the Mac.")
+                }
+                Section {
+                    Toggle("Ligatures", isOn: $settings.ligatures)
                     Toggle("Bold text as bright colors", isOn: $settings.boldIsBright)
                     Picker("Cursor", selection: $settings.cursor) {
                         ForEach(TerminalCursorStyle.allCases) { Text($0.title).tag($0) }
@@ -59,6 +35,38 @@ struct TerminalFontSettingsView: View {
         .background(Color.canvas)
         .navigationTitle("Terminal font")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func rows(_ fonts: [TerminalFont]) -> some View {
+        ForEach(fonts) { font in
+            Button {
+                settings.terminalFont = font.name
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(font.name).font(.body).foregroundStyle(.primary)
+                            if font.system { Text("system").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Text(TerminalFont.sample)
+                            .font(.custom(font.name, size: 13, relativeTo: .footnote))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if settings.terminalFont == font.name {
+                        Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.dispatchPink)
+                    }
+                }
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(font.name)
+            .accessibilityValue(font.system ? "system" : "")
+            .accessibilityAddTraits(settings.terminalFont == font.name ? [.isButton, .isSelected] : .isButton)
+        }
     }
 }
 

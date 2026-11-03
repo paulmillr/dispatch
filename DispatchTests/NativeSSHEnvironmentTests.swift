@@ -73,7 +73,7 @@ final class NativeSSHEnvironmentTests: XCTestCase {
     func testWrappersPreserveUserFunctionsAndAliases() async throws {
         for shell in ["/bin/bash", "/bin/zsh"] {
             for name in ["ssh", "codex", "herdr", "tmux"] {
-                let definition = ShellCommandWrapper(rawValue: name)?.definition() ?? NativeSSHEnvironment.tmuxFunction(fish: false)
+                let definition = name == "tmux" ? NativeSSHEnvironment.tmuxFunction(fish: false) : (ShellCommandWrapper(rawValue: name) ?? .helper(program: name, key: name)).definition()
                 for setup in ["function \(name) { printf custom; }",
                               "alias \(name)='printf custom'"] {
                     let script = (shell == "/bin/bash" ? "shopt -s expand_aliases\n" : "")

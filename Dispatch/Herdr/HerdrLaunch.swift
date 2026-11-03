@@ -161,7 +161,9 @@ final class HerdrLaunch {
         where ["sshconsent", "sshclosed", "sshrequest", "sshconnecting"].contains(url.pathExtension) {
             defer { try? FileManager.default.removeItem(at: url) }
             let data = try? Data(contentsOf: url)
-            do { try mailbox?.emit(kind: "file", value: AppReplay.value(File(path: url.path, data: data))) }
+            // A launch request's session variables (SendEnv values) stay out of the journal: replay spawns nothing.
+            let recorded = ["sshrequest", "sshconnecting"].contains(url.pathExtension) ? data.map(SSHLaunchRequest.recorded) : data
+            do { try mailbox?.emit(kind: "file", value: AppReplay.value(File(path: url.path, data: recorded))) }
             catch { AppReplay.fail(error) }
             receive(url, data)
         }

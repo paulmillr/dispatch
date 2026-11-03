@@ -77,10 +77,13 @@ final class HostHoldTests: XCTestCase {
         XCTAssertEqual(WatchSnapshotBuilder(composition: app).build().hosts.first?.blocked, .trustHostKey)
     }
 
-    /// A key behind Face ID fails a quiet attempt at once (no prompt is tried); the foreground reads it.
+    /// A key behind Face ID (as older builds stored software keys) fails a quiet attempt at once (no prompt is tried);
+    /// the foreground reads it, moving it out of Face ID with one prompt.
     func testAHoldNeverPromptsForFaceID() async throws {
-        let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .biometry, secureEnclaveAvailable: false)
+        let vault = MemoryVault()
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
         let key = try keys.generateED25519(label: "phone")
+        vault.protect(KeyStore.privateAccount(key.id), .biometry)
         var record = studio
         record.auth = .key(key.id)
         struct KeyReader: HostSessionDriver {
@@ -105,8 +108,11 @@ final class HostHoldTests: XCTestCase {
         XCTAssertEqual(session.link, .failed(SecretVaultError.interactionNotAllowed.localizedDescription))
         XCTAssertEqual(hosts.quietRefusals[record.id], .faceID)
         try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(vault.prompts, 0)
         hosts.setActive(true)
         try await TestSupport.eventually { session.link == .failed("read") }
+        XCTAssertEqual(vault.prompts, 1)
+        XCTAssertEqual(vault.protection(of: KeyStore.privateAccount(key.id)), KeyProtection.none, "moved out of Face ID")
     }
 
     /// Locked, a password still reads (after first unlock) and its host logs in; a key behind Face ID (when unlocked
@@ -115,7 +121,10 @@ final class HostHoldTests: XCTestCase {
         let vault = MemoryVault()
         let keys = KeyStore(url: nil, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
         var pi = ResilienceFixture.host("pi", order: 1)
-        pi.auth = .key(try keys.generateED25519(label: "phone").id)
+        let key = try keys.generateED25519(label: "phone")
+        pi.auth = .key(key.id)
+        // As an older build stored it.
+        vault.protect(KeyStore.privateAccount(key.id), .biometry)
         try keys.setPassword("hunter2", for: studio.id)
         vault.locked = true
         /// Reads the host's secret as the SSH driver does and reports what it got.

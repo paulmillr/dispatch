@@ -39,10 +39,17 @@ struct MobileChatMarkdownView: View {
     let text: String
     /// Text on the thread's muted tone (Claude's thinking).
     var muted = false
+    /// What the bubble says in its bottom-right corner (S6d, S6e). When the last block is text running the layout's
+    /// way and the corner fits one line, the text keeps its room (`ChatTurnCorner.room`, after the search has marked
+    /// the text, never read aloud) and the corner lies over it: on the last line when it leaves room, else on a short
+    /// line of its own. Otherwise (code, a table, a rule, a cut preview, text running the other way, a corner too
+    /// wide for one line) the corner takes trailing lines of its own below.
+    var corner: ChatCorner? = nil
     /// Settings' chat font: inline code and code blocks in the terminal's font.
     @Environment(\.chatTypography) private var typography
     @Environment(\.chatSearchMarks) private var marks
     @Environment(\.chatSearchCurrent) private var current
+    @Environment(\.layoutDirection) private var layoutDirection
 
     /// One block's runs of text, as drawn.
     enum Content {
@@ -76,38 +83,99 @@ struct MobileChatMarkdownView: View {
     var body: some View {
         var marker = ChatSearchMarker(marks, current: current) ?? ChatSearchMarker(query: "", current: nil)
         let contents = Self.contents(text, code: typography.inlineCode, marker: &marker)
+        let last = contents.blocks.indices.last
+        let inline = corner.map { Self.sharesLine($0, blocks: contents.blocks, truncated: contents.truncated, layout: layoutDirection) } ?? false
+        let room = inline ? corner?.room : nil
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(contents.blocks.enumerated()), id: \.offset) { _, block in
-                self.block(block)
+            ForEach(Array(contents.blocks.enumerated()), id: \.offset) { index, block in
+                self.block(block, room: index == last ? room : nil)
             }
             if contents.truncated {
                 Text("Rendered preview truncated for safety").font(.footnote).foregroundStyle(.secondary)
             }
+            if let corner, !inline {
+                // Trailing lines of the corner's own.
+                corner.view(true)
+                    .padding(.top, -4)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(corner.spoken ?? "")
+                    .accessibilityHint(corner.hint ?? "")
+                    .accessibilityHidden(corner.spoken?.isEmpty != false)
+            }
         }
         .foregroundStyle(muted ? Color.secondary : Color.primary)
+        .overlay(alignment: .bottomTrailing) {
+            if inline, let corner {
+                // 12 points in from the bubble's edge and 7 up (its padding is 14 and 9).
+                corner.view(false)
+                    .padding(.trailing, -2)
+                    .padding(.bottom, -2)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
-    @ViewBuilder private func block(_ content: Content) -> some View {
+    /// Whether `corner` lies over room kept in the last line: the last block is text that runs the layout's way (the
+    /// room follows the text's end, the corner the layout's trailing edge) and the corner fits one line.
+    static func sharesLine(_ corner: ChatCorner, blocks: [Content], truncated: Bool, layout: LayoutDirection) -> Bool {
+        guard corner.fits, !truncated, case .text(_, let text)? = blocks.last else { return false }
+        return (direction(of: String(text.characters)) ?? layout) == layout
+    }
+
+    /// A paragraph's direction as its first strong letter sets it; nil without one.
+    static func direction(of text: String) -> LayoutDirection? {
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            // Hebrew, Arabic, Syriac, Thaana, NKo, Samaritan, Mandaic, Arabic Extended, the presentation forms.
+            case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF, 0x10800...0x10FFF, 0x1E800...0x1EFFF:
+                if scalar.properties.isAlphabetic { return .rightToLeft }
+            default:
+                if scalar.properties.isAlphabetic { return .leftToRight }
+            }
+        }
+        return nil
+    }
+
+    /// A text block's runs with the corner's room after them (`ChatTurnCorner.room`): the text as the search marked it,
+    /// the room unmarked.
+    static func joined(_ text: AttributedString, room: String) -> AttributedString { text + ChatTurnCorner.room(room) }
+
+    /// A text block's runs, with the room after them: VoiceOver reads the text without it, and the corner as the value.
+    private func runs(_ text: AttributedString, room: String?) -> some View {
+        Group {
+            if let room {
+                let spoken = corner?.spoken ?? ""
+                Text(Self.joined(text, room: room))
+                    .accessibilityLabel(Text(text))
+                    .accessibilityValue(spoken)
+                    .accessibilityHint(spoken.isEmpty ? "" : corner?.hint ?? "")
+            } else {
+                Text(text)
+            }
+        }
+    }
+
+    @ViewBuilder private func block(_ content: Content, room: String? = nil) -> some View {
         switch content {
         case .text(.heading(let level), let text):
-            Text(text)
+            runs(text, room: room)
                 .font(level == 1 ? .title3.weight(.semibold) : level == 2 ? .headline : typography.body.weight(.semibold))
                 .padding(.top, 2)
                 .accessibilityAddTraits(.isHeader)
         case .text(.list(let marker, let depth), let text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(marker).foregroundStyle(.secondary).frame(minWidth: 12, alignment: .trailing)
-                Text(text).frame(maxWidth: .infinity, alignment: .leading)
+                runs(text, room: room).frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, CGFloat(depth) * 12)
         case .text(.quote, let text):
             HStack(spacing: 8) {
                 Rectangle().fill(Color.secondary.opacity(0.5)).frame(width: 2)
-                Text(text).foregroundStyle(.secondary)
+                runs(text, room: room).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .text(_, let text):
-            Text(text)
+            runs(text, room: room)
         case .code(let lines, let truncated):
             ScrollView(.horizontal, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {

@@ -115,6 +115,20 @@
     @ObservationIgnored private var focusing: [HelperBackend.Route: Int] = [:]
     @ObservationIgnored private var focusTargets: [UInt64: Int] = [:]
     @ObservationIgnored private var commanding: [HelperBackend.Route: Int] = [:]
+    /// A tmux session's own prefix table (`backends.prefix`) and its reads.
+    private struct PrefixRead {
+      /// nil: not answered yet; `.some(nil)`: the server's prefix is None (or a key Dispatch cannot see).
+      var table: PrefixTable?? = nil
+      /// The read in flight (its number), and whether another was asked for meanwhile.
+      var reading: Int?
+      var again = false
+      var failures = 0
+    }
+    /// Each tmux session's prefix state by route and session node: read when the session first shows (a failed read
+    /// again with the next topologies, up to three tries), after every ended prefix sequence, and anew after a
+    /// reopen. A session that leaves the topology leaves this too.
+    @ObservationIgnored private var prefixReads: [HelperBackend.Route: [UInt64: PrefixRead]] = [:]
+    @ObservationIgnored private var prefixRead = 0
     /// The focus each route's last topology reported: a change is the server's (another client's) selection.
     @ObservationIgnored private var lastFocus: [HelperBackend.Route: UInt64] = [:]
     /// Spaces shown while their creation is pending: created terminal -> the space it fills.
@@ -358,6 +372,45 @@
 
     /// The name of the multiplexer behind a backend id; nil before that backend opened.
     func multiplexer(of backend: UInt64) -> String? { kind(of: backend)?.name }
+
+    /// A tmux session's own prefix table as its server last answered; nil before it answered (the caller uses tmux's
+    /// defaults), `.some(nil)` when the server has no prefix Dispatch can see.
+    func prefixTable(session node: UInt64) -> PrefixTable?? {
+      prefixReads.values.lazy.compactMap { $0[node]?.table }.first
+    }
+
+    /// Reads a tmux session's prefix table (`backends.prefix`: its own prefix, prefix2 and repeat time, the server's
+    /// prefix bindings). One read per session at a time: one asked for meanwhile follows it, so a `set prefix` made
+    /// during a read is seen. A failed read keeps what was there and shows no error.
+    func readPrefixTable(session node: UInt64) {
+      guard !stopped, let route = prefixReads.first(where: { $0.value[node] != nil })?.key else { return }
+      guard prefixReads[route]?[node]?.reading == nil else {
+        prefixReads[route]?[node]?.again = true
+        return
+      }
+      prefixRead += 1
+      let read = prefixRead
+      prefixReads[route]?[node]?.reading = read
+      operations += 1
+      Task {
+        defer { operations -= 1; retire() }
+        var server: HelperClient.Prefix?
+        if let client = try? await client() { server = try? await client.prefix(.init(node: node)) }
+        // The session left, or the route reopened, meanwhile: this answer is nobody's.
+        guard prefixReads[route]?[node]?.reading == read else { return }
+        prefixReads[route]?[node]?.reading = nil
+        if let server {
+          prefixReads[route]?[node]?.table = .some(PrefixTable.tmux(server: server))
+          prefixReads[route]?[node]?.failures = 0
+        } else {
+          prefixReads[route]?[node]?.failures += 1
+        }
+        if prefixReads[route]?[node]?.again == true {
+          prefixReads[route]?[node]?.again = false
+          readPrefixTable(session: node)
+        }
+      }
+    }
 
     func source(_ route: HelperBackend.Route) -> String {
       backends.first { $0.route == route && $0.label != $0.key }?.label
@@ -725,6 +778,8 @@
     private func open(_ route: HelperBackend.Route) {
       // A claim can arrive on several subscriptions at once (backend and attach streams): one open.
       guard !stopped, observations[route] == nil, subscribing[route] == nil else { return }
+      // A (re)attach reads each session's prefix table again.
+      prefixReads[route] = nil
       let generation = System.uuid()
       operations += 1
       let task = Task {
@@ -1196,8 +1251,8 @@
     /// What an app-spawned shell gets, for a helper shell: the app's integration (ssh/launch wrappers,
     /// launch mailbox) and Ghostty's shell integration (prompt marks, title, cursor) as the terminal
     /// engine would launch it (Term Launch). Only variables that differ from this process are sent.
-    /// `integrated`: Ghostty's integration is in there (its ZDOTDIR or ENV), so the helper's own startup
-    /// files would go unread and it is told not to write them. `shell`: a command to run instead of the login
+    /// `integrated`: Ghostty's integration was injected (its ZDOTDIR, ENV or XDG_DATA_DIRS), so the helper's own
+    /// startup files would go unread and it is told not to write them; false where Ghostty injects nothing. `shell`: a command to run instead of the login
     /// shell, returned as `command` with the flags its integration adds.
     func environment(_ identifier: UInt64?, shell: String? = nil) -> (variables: [String], integrated: Bool, command: String?) {
       let process = System.inherited
@@ -1210,18 +1265,46 @@
       var integrated = false, command = shell
       if let config = TerminalRuntime.shared.config, let identifier,
         let launch = try? Launch(
-          command: shell, directory: nil, overrides: testing + (shell.map { [("SHELL", String($0.split(separator: " ", maxSplits: 1)[0]))] } ?? []),
+          command: shell, directory: nil, overrides: testing + (shell.flatMap(Self.shellExecutable).map { [("SHELL", $0)] } ?? []),
           config: config, environment: environment,
           machine: System.machine.launch, resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 },
           id: identifier)
       {
         environment = launch.env
-        integrated = true
+        // Only an injected integration reads the startup files: Ghostty leaves Apple's /bin/bash (and shells it does
+        // not know) alone, and then the helper's own startup files must load the user's profile.
+        integrated = launch.integrated
         if shell != nil { command = launch.command }
       }
       return (environment.filter { process[$0.key] != $0.value }
         .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }, integrated, command)
     }
+
+    /// The shell a Settings › New tabs › Shell command runs, for its SHELL: the executable after any leading `env`, its
+    /// options and `NAME=value` words, as Ghostty's parser reads the command; nil unless that executable is a shell (a
+    /// program such as `htop` is no $SHELL for what it starts).
+    static func shellExecutable(_ command: String) -> String? {
+        var words = Launch.words(command)[...]
+        let assignment = { (word: String) -> Bool in
+            guard let equals = word.firstIndex(of: "="), equals != word.startIndex else { return false }
+            let name = word[..<equals]
+            return name.first.map { $0 == "_" || $0.isLetter } == true && name.allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+        }
+        while let word = words.first, assignment(word) { words = words.dropFirst() }
+        if let word = words.first, (word as NSString).lastPathComponent == "env" {
+            words = words.dropFirst()
+            // Its options (those that take a value with it) and assignments.
+            while let word = words.first, word.hasPrefix("-") || assignment(word) {
+              words = words.dropFirst(["-u", "-C", "-P", "-S", "--unset", "--chdir"].contains(word) ? 2 : 1)
+            }
+        }
+        guard let executable = words.first, Self.shells.contains((executable as NSString).lastPathComponent) else { return nil }
+        return executable
+    }
+
+    private static let shells: Set<String> = [
+      "ash", "bash", "csh", "dash", "elvish", "fish", "ksh", "mksh", "nu", "oksh", "pwsh", "sh", "tcsh", "xonsh", "yash", "zsh",
+    ]
 
     /// A local terminal's Ghostty surface id, made when its creation is asked for: concurrent creations
     /// reach the journal in the order they were asked for, not in the order their tasks resume.
@@ -2005,6 +2088,24 @@
       }
     }
 
+    /// A prefix binding's window index (`select-window -t :=N`) on the server of `node`: an index the session has no
+    /// window at is refused with a beep, as tmux only shows a message for it, never an error.
+    func selectWindow(_ node: UInt64, index: Int) {
+      let route = snapshots.first { $0.value.nodes.contains { $0.id == node } }?.key
+      if let route { commanding[route, default: 0] += 1 }
+      perform { client in
+        defer { if let route { self.commanding[route, default: 1] -= 1 } }
+        do {
+          try await client.command(.init(node: node, command: "select-window -t :=\(index)"))
+        } catch let failure as HelperFailure where failure.message.hasPrefix("can't find window") {
+          NSSound.beep()
+          return
+        }
+        await self.published()
+        if let route, let topology = self.snapshots[route] { try self.apply(topology, route: route) }
+      }
+    }
+
     func rename(_ id: UUID, name: String) {
       guard let space = owned.first(where: { $0.id == id || $0.containers.contains { $0.id == id } || $0.tabs.contains { $0.id == id } })
       else { return }
@@ -2676,6 +2777,16 @@
       }
       routes[topology.backend] = route
       let herdr = multiplexer(of: topology.backend) == "herdr"
+      if multiplexer(of: topology.backend) == "tmux" {
+        let sessions = topology.nodes.filter { $0.kind == .workspace && !$0.detached }.map(\.id)
+        var reads = (prefixReads[route] ?? [:]).filter { sessions.contains($0.key) }
+        for session in sessions where reads[session] == nil { reads[session] = PrefixRead() }
+        prefixReads[route] = reads
+        for session in sessions {
+          guard let read = reads[session], read.table == nil, read.reading == nil, read.failures < 3 else { continue }
+          readPrefixTable(session: session)
+        }
+      }
       let nodes = Dictionary(uniqueKeysWithValues: topology.nodes.map { ($0.id, $0) })
       // Looked up once per snapshot, not scanned per space: a large session spent most of a snapshot here.
       let below = Dictionary(grouping: topology.nodes, by: \.parent)

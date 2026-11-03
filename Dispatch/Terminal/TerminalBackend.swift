@@ -34,7 +34,10 @@ protocol TerminalBackend: AnyObject {
     /// Ends the terminal now (its process, IO and frames); nothing may be called after it.
     func close()
     func setFocus(_ focused: Bool)
-    func setOcclusion(_ visible: Bool)
+    /// Shown or not. `presented`: its tab is shown and its view in a window, so a hidden terminal is only covered (its
+    /// window occluded or minimized) and may be revealed any moment; one whose tab or space is not shown (its view out
+    /// of the window, or covered by Chat or Files) gives back its GPU memory after a short retention.
+    func setOcclusion(_ visible: Bool, presented: Bool)
     func setContentScale(_ scale: Double)
     func setSize(width: UInt32, height: UInt32)
     /// The display the view is on (its NSScreenNumber): frames follow it when it changes.

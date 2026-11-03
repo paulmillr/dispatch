@@ -571,7 +571,8 @@ final class TabsCreateFallbackTests: XCTestCase {
     }
 
     /// Without a name the placed space keeps the helper's: its folder's, which the label names too (needed by the
-    /// helper); nothing is renamed.
+    /// helper); nothing is renamed. Its tab comes back only once it sits in the new space, not while it still shows in
+    /// the space it was made in (which would open as a tab added to an existing space).
     func testAmbiguousTmuxWithoutANameLabelsItWithTheFolder() async throws {
         let sketch = TabsFixtures.app(backend: 4)
         let grown = TabsFixtures.app(backend: 4, extraTab: true)
@@ -583,10 +584,173 @@ final class TabsCreateFallbackTests: XCTestCase {
         async let created = workspace.createSpace(name: " ", directory: "~/src/billing")
         try await TestSupport.eventually { helper.methods.count == 3 }
         workspace.apply(grown.topology)
-        _ = try await created
+        try await TestSupport.eventually { helper.methods.contains("memberships.place") }
+        workspace.apply(placed(grown, name: "billing").topology)
+        let tab = try await created
+        XCTAssertEqual(tab.space.key, "$1:group:new", "in the new space")
         XCTAssertEqual(helper.methods, ["backends.create", "terminals.create", "terminals.create", "memberships.place"])
         XCTAssertEqual(helper.requests[3].params as NSDictionary,
                        ["node": grown.ids["herdr:app:4"]!, "place": ["kind": "workspace", "label": "billing"]])
+    }
+}
+
+/// Extra 2: New space never ends as a tab in a space that was there before.
+extension TabsCreateFallbackTests {
+    /// A placement the host never shows (refused, or lost): the window made in the anchor space is closed again and
+    /// Create fails, instead of opening it as the new space.
+    func testAWindowLeftInAnExistingSpaceIsClosedNotOpened() async throws {
+        let sketch = TabsFixtures.app(backend: 4)
+        let grown = TabsFixtures.app(backend: 4, extraTab: true)
+        let terminal = grown.ids["p:new"]!
+        let helper = ScriptedHelper.scripted { request in
+            switch request.method {
+            case "backends.create": .value(UInt64(4))
+            case "terminals.create" where request.params["parent"] as? UInt64 == 4:
+                .failure(code: "invalid", message: "Tmux creation needs an unambiguous session")
+            case "terminals.create": .value(terminal)
+            case "memberships.place": .empty
+            case "close.request": .failure(code: "invalid", message: "gone")
+            default: nil
+            }
+        }
+        defer { helper.close() }
+        let workspace = TabsFixtures.workspace(client: helper.client)
+        workspace.apply(sketch.topology)
+        workspace.choice = MultiplexerChoice(mux: 0, name: "tmux", route: .init(mux: 0, key: "tmux"))
+        let anchor = try XCTUnwrap(workspace.spaces.first).ref.key
+        async let created = workspace.createSpace(name: "", directory: "~", timeout: .milliseconds(600))
+        try await TestSupport.eventually { helper.methods.count == 3 }
+        workspace.apply(grown.topology)
+        do {
+            let tab = try await created
+            XCTFail("opened \(tab.ref.key) in \(tab.space.key)")
+        } catch {
+            XCTAssertEqual(error as? TabsFailure, TabsFailure(message: "The space was created, but the host has not shown it yet."))
+        }
+        XCTAssertEqual(workspace.tab("herdr:app:4")?.space.key ?? anchor, anchor)
+        XCTAssertTrue(helper.methods.contains("close.request"), "the stray window is closed: \(helper.methods)")
+        XCTAssertEqual(helper.requests("close.request").first?.params["node"] as? UInt64, grown.ids["herdr:app:4"])
+    }
+
+    /// The tab bar's New in Spaces opens New space (on the recent space's host), never a tab in that space; a space
+    /// New space made opens with its tab on top of the space's own screen, in Terminal.
+    func testNewOnTheBarOpensNewSpaceAndTheSpaceOpensWithItsTab() throws {
+        let model = TabsSample.spacesMockup(variant: "P1")
+        let navigator = SpacesNavigator(model: model)
+        let tabs = model.workspaces.flatMap(\.tabs).count
+        navigator.newSpaceFromBar()
+        XCTAssertNotNil(navigator.newSpace, "New space's form")
+        XCTAssertEqual(navigator.newSpace?.host, model.recentSpace?.ref.host)
+        XCTAssertEqual(model.workspaces.flatMap(\.tabs).count, tabs, "no tab made")
+        XCTAssertFalse(navigator.picking)
+        let tab = try XCTUnwrap(model.workspaces.first?.tabs.first)
+        navigator.openNewSpace(tab)
+        XCTAssertEqual(navigator.path, [.space(tab.space), .tab(tab.ref)])
+        XCTAssertEqual(model.segments[tab.ref], .terminal)
+    }
+
+    /// tmux, ambiguous: a new space in the folder of an existing one, so labelled with its name ("app", in
+    /// ~/src/app). The window shows first in that space; it is not the new space until it moved into one of its own, and
+    /// the space it shares a name and folder with is never opened (the old code returned the window while it still sat
+    /// there).
+    func testATmuxSpaceWithTheSameNameAndFolderIsItsOwn() async throws {
+        let sketch = TabsFixtures.app(backend: 4)
+        let grown = TabsFixtures.app(backend: 4, extraTab: true)
+        let helper = scripted(grown.ids["p:new"]!)
+        defer { helper.close() }
+        let workspace = TabsFixtures.workspace(client: helper.client)
+        workspace.apply(sketch.topology)
+        workspace.choice = MultiplexerChoice(mux: 0, name: "tmux", route: .init(mux: 0, key: "tmux"))
+        let anchor = try XCTUnwrap(workspace.spaces.first)
+        XCTAssertEqual(anchor.name, "app")
+        async let created = workspace.createSpace(name: "", directory: "~/src/app")
+        try await TestSupport.eventually { helper.methods.count == 3 }
+        workspace.apply(grown.topology)
+        try await TestSupport.eventually { helper.methods.contains("memberships.place") }
+        XCTAssertEqual(helper.requests("memberships.place").first?.params["place"] as? NSDictionary,
+                       ["kind": "workspace", "label": "app"], "labelled as the space it is made beside")
+        // A snapshot later the window is still in "app": not done yet.
+        workspace.apply(grown.topology)
+        try await Task.sleep(for: .milliseconds(300))
+        workspace.apply(placed(grown, name: "app").topology)
+        let tab = try await created
+        XCTAssertEqual(tab.space.key, "$1:group:new")
+        XCTAssertNotEqual(tab.space, anchor.ref)
+        XCTAssertEqual(workspace.spaces.filter { $0.name == "app" }.count, 2)
+        XCTAssertEqual(workspace.space(of: tab)?.tabs.count, 1, "one shell tab")
+        XCTAssertFalse(helper.methods.contains("entities.rename"))
+    }
+
+    /// New space on another multiplexer whose server shows several sessions: the target's spaces arrive after the switch,
+    /// the window is made in one of them and placed. Until it moved, its tab sits in a space that only arrived with the
+    /// switch, which is still not new: the typed name goes to the new space, never to the anchor (the user's session).
+    func testASwitchToAmbiguousTmuxRenamesTheNewSpaceNotTheAnchor() async throws {
+        let herdr = TopologySketch(backend: 7, first: 500, spaces: [
+            .init(key: "h:notes", name: "notes", tabs: [.init(key: "h:notes:1", name: "zsh", panes: [.init(key: "p:h", cwd: "/Users/alex")])]),
+        ])
+        let sketch = TabsFixtures.app(backend: 4)
+        let grown = TabsFixtures.app(backend: 4, extraTab: true)
+        let helper = scripted(grown.ids["p:new"]!)
+        defer { helper.close() }
+        let workspace = TabsFixtures.workspace(client: helper.client)
+        let herdrChoice = MultiplexerChoice(mux: 2, name: "herdr", route: .init(mux: 2, key: "herdr"))
+        let tmux = MultiplexerChoice(mux: 0, name: "tmux", route: .init(mux: 0, key: "tmux"))
+        workspace.multiplexers = [herdrChoice, tmux]
+        workspace.choice = herdrChoice
+        workspace.apply(herdr.topology)
+        let followed = Followed()
+        async let created = workspace.createSpace(name: "billing", directory: "/srv/billing", on: tmux,
+                                                  follow: { followed.names.append($0) })
+        try await TestSupport.eventually { helper.methods.count == 2 }
+        // The host follows tmux now: herdr's spaces go, tmux's come.
+        workspace.remove(backend: 7)
+        workspace.apply(sketch.topology)
+        try await TestSupport.eventually { helper.methods.count == 3 }
+        workspace.apply(grown.topology)
+        try await TestSupport.eventually { helper.methods.contains("memberships.place") }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(helper.methods.contains("entities.rename"), "not while the window is in the anchor: \(helper.methods)")
+        let moved = placed(grown, name: "billing")
+        workspace.apply(moved.topology)
+        let tab = try await created
+        XCTAssertEqual(followed.names, ["tmux"])
+        XCTAssertEqual(tab.space.key, "$1:group:new")
+        XCTAssertEqual(helper.requests("entities.rename").map { $0.params["node"] as? UInt64 }, [moved.ids["$1:group:new"]])
+        XCTAssertNotEqual(moved.ids["$1:group:new"], moved.ids["herdr:app"])
+    }
+
+    /// The helper refuses the placement: the window made in the anchor's space is closed again and Create fails; nothing
+    /// is left as a tab in an existing space.
+    func testARefusedPlacementClosesTheWindow() async throws {
+        let sketch = TabsFixtures.app(backend: 4)
+        let grown = TabsFixtures.app(backend: 4, extraTab: true)
+        let terminal = grown.ids["p:new"]!
+        let helper = ScriptedHelper.scripted { request in
+            switch request.method {
+            case "backends.create": .value(UInt64(4))
+            case "terminals.create" where request.params["parent"] as? UInt64 == 4:
+                .failure(code: "invalid", message: "Tmux creation needs an unambiguous session")
+            case "terminals.create": .value(terminal)
+            case "memberships.place": .failure(code: "invalid", message: "Invalid tmux group name")
+            case "close.request": .failure(code: "invalid", message: "gone")
+            default: nil
+            }
+        }
+        defer { helper.close() }
+        let workspace = TabsFixtures.workspace(client: helper.client)
+        workspace.apply(sketch.topology)
+        workspace.choice = MultiplexerChoice(mux: 0, name: "tmux", route: .init(mux: 0, key: "tmux"))
+        async let created = workspace.createSpace(name: "billing", directory: "/srv/billing")
+        try await TestSupport.eventually { helper.methods.count == 3 }
+        workspace.apply(grown.topology)
+        do {
+            let tab = try await created
+            XCTFail("opened \(tab.ref.key) in \(tab.space.key)")
+        } catch {
+            XCTAssertEqual((error as? HelperFailure)?.message, "Invalid tmux group name", "\(error)")
+        }
+        XCTAssertEqual(helper.requests("close.request").first?.params["node"] as? UInt64, terminal, "\(helper.methods)")
+        XCTAssertFalse(helper.methods.contains("entities.rename"))
     }
 }
 

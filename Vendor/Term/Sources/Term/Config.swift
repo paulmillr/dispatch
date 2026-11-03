@@ -45,6 +45,15 @@ public struct Config {
     public var term = "xterm-ghostty"
     /// Each new terminal's scrollback, in bytes of pages; nil: `unlimited`.
     public var scrollbackLimitBytes: Int? = 50_000_000
+    /// scrollback-limit-lines: rows of scrollback each new terminal keeps besides the screen (soft-wrapped rows count
+    /// each); the oldest whole page goes once it is exceeded, so up to a page fewer remain. nil: `unlimited` (the
+    /// default). With both limits, the first one reached drops the oldest rows.
+    public var scrollbackLimitLines: Int?
+    /// vt-xt-checksum-report (Ghostty 1.4): programs may ask for checksums of the screen (DECRQCRA). Off: a program
+    /// could read the screen back cell by cell.
+    public var checksumReports = false
+    /// Keys newer than the pinned Ghostty's Config.zig that Term reads.
+    static let newerKeys: Set<String> = ["vt-xt-checksum-report"]
     /// Kitty image storage. Zero disables Kitty graphics before its commands are buffered.
     public var imageStorageLimitBytes = ImageStorage.defaultTotalLimit
     public var shellIntegration = ShellIntegration()
@@ -153,19 +162,22 @@ public struct Config {
             case "clipboard-write": clipboardWrite = d.clipboardWrite
             case "term": term = d.term
             case "scrollback-limit-bytes": scrollbackLimitBytes = d.scrollbackLimitBytes
+            case "scrollback-limit-lines": scrollbackLimitLines = d.scrollbackLimitLines
+            case "vt-xt-checksum-report": checksumReports = d.checksumReports
             case "image-storage-limit": imageStorageLimitBytes = d.imageStorageLimitBytes
             case "shell-integration-features": shellIntegration = d.shellIntegration
             case "keybind": keybinds = []
             case "theme": theme = nil
-            default: if !ghosttyConfigKeys.contains(key) { diagnostics.append((key, "unknown field")) }
+            default: if !ghosttyConfigKeys.contains(key), !Self.newerKeys.contains(key) { diagnostics.append((key, "unknown field")) }
             }
             return
         }
-        guard ghosttyConfigKeys.contains(key) else { diagnostics.append((key, "unknown field")); return }
+        guard ghosttyConfigKeys.contains(key) || Self.newerKeys.contains(key) else { diagnostics.append((key, "unknown field")); return }
         let modeled = ["background", "foreground", "cursor-color", "cursor-text", "selection-background", "selection-foreground", "palette",
                        "font-family", "font-feature", "font-size", "minimum-contrast", "background-opacity", "window-padding-x", "window-padding-y", "macos-option-as-alt",
-                       "cursor-style", "cursor-style-blink", "adjust-cell-height", "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
+                       "cursor-style", "cursor-style-blink", "adjust-cell-height", "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "scrollback-limit-lines", "vt-xt-checksum-report", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
         guard modeled.contains(key) else { return }
+        if key == "vt-xt-checksum-report", value == nil { checksumReports = true; return }   // a bare bool key is true
         guard let v = value else { return required(&self) }
         let bytes = Array(v.utf8)
         func color() -> RGB? { parseRGB(bytes) }
@@ -221,11 +233,16 @@ public struct Config {
             }
             if key == "clipboard-read" { clipboardRead = c } else { clipboardWrite = c }
         case "term": term = v
-        case "scrollback-limit-bytes":
+        case "vt-xt-checksum-report":
+            switch v { case "true": checksumReports = true; case "false": checksumReports = false; default: bad(&self) }
+        case "scrollback-limit-bytes", "scrollback-limit-lines":
             // Limit(usize).parseCLI: `unlimited` or parseInt(_, 0); usize's maximum is unlimited too.
-            if v == "unlimited" { scrollbackLimitBytes = nil }
-            else if case let n?? = Self.int(bytes[...], max: .max) { scrollbackLimitBytes = n == .max ? nil : Int(clamping: n) }
-            else { bad(&self) }
+            let limit: Int??
+            if v == "unlimited" { limit = .some(nil) }
+            else if case let n?? = Self.int(bytes[...], max: .max) { limit = .some(n == .max ? nil : Int(clamping: n)) }
+            else { limit = nil }
+            guard let limit else { return bad(&self) }
+            if key == "scrollback-limit-bytes" { scrollbackLimitBytes = limit } else { scrollbackLimitLines = limit }
         case "image-storage-limit":
             if case let n?? = Self.int(bytes[...], max: UInt64(ImageStorage.defaultTotalLimit)) { imageStorageLimitBytes = Int(n) }
             else { bad(&self) }

@@ -35,16 +35,15 @@ extension TabScreen where Terminal == AnyView, Chat == AnyView {
     /// With the injected segment views (`TabsContent`).
     init(model: MobileTabs, ref: TabRef, path: Binding<[TabsRoute]>, content: TabsContent) {
         self.init(model: model, ref: ref, path: path, terminal: content.terminal, chat: content.chat,
-                  terminalSubtitle: content.terminalSubtitle, chatTrailing: content.chatTrailing, files: content.files,
+                  terminalSubtitle: content.terminalSubtitle, terminalDirectory: content.terminalDirectory,
+                  chatTrailing: content.chatTrailing, chatMenu: content.chatMenu, files: content.files,
                   gitFacts: content.gitFacts)
     }
 }
 
-/// One tab, shared by Terminal, Chat and Files (M4a, M5a, M6a top area, H0): the back pill with the needs-you count, the
-/// title, the subtitle (host · cwd in Chat and Files; host · cwd · shell in Terminal) that becomes the pane switcher
-/// when the window has splits, the host disc that opens space details, and the capsule (Terminal · Chat · Files) over
-/// the injected views. The views get the pane to show: Terminal the active pane, Chat the pane running the agent; Files
-/// shows the modes (`TabFilesSegment`) in the active pane's folder.
+/// One tab, shared by Terminal, Chat and Files (M4a, M5a, M6a top area, H0, X9b): the header (`TabScreenHeader`) and
+/// the capsule (Terminal · Chat · Files) over the injected views. The views get the pane to show: Terminal the active
+/// pane, Chat the pane running the agent; Files shows the modes (`TabFilesSegment`) in the active pane's folder.
 struct TabScreen<Terminal: View, Chat: View>: View {
     let model: MobileTabs
     let ref: TabRef
@@ -53,9 +52,13 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     let chat: @MainActor (MobileTab, MobilePane) -> Chat
     /// The Terminal segment's subtitle after the host (`TabsContent.terminalSubtitle`).
     var terminalSubtitle: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
+    /// The Terminal segment's folder as the shell reports it (`TabsContent.terminalDirectory`); nil: the topology's.
+    var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
     /// The Chat segment's trailing header controls around the host disc (`TabsContent.chatTrailing`); nil: the disc.
     /// `keepsDisc`: the given view is the Duo header's switch, which stays.
     var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView, _ keepsDisc: Bool) -> AnyView)? = nil
+    /// The Chat segment's items in the tab's menu (`TabsContent.chatMenu`).
+    var chatMenu: (@MainActor (MobileTab, MobilePane) -> AnyView)? = nil
     /// The Files segment's modes (`FilesModeContent`): placeholders until the areas fill them.
     var files = FilesModeContent()
     /// The tab's repository and branch; nil reads nothing (the modes' bar stays hidden).
@@ -69,8 +72,6 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     /// The iPad split's detail column: the strip above (`PadStrip`) owns the switch; this screen shows the mode's body,
     /// its context row and banner, and Review and Commits beside their panes.
     @Environment(\.tabsPadStrip) private var strip
-    /// The host disc's space switcher (P3): `SpacesNavigator.switcher`, set where the stack is.
-    @Environment(\.tabsSwitcher) private var switcher
     /// The switch sits in the header beside the Duo's sidebar, where the column is a phone's; an iPad's detail column
     /// keeps it under the header, at its own width (`TabSegmentCapsule.maxWidth`), and the host pill in the header.
     private var segmentInHeader: Bool { splitDetail && UIDevice.current.userInterfaceIdiom == .phone }
@@ -137,15 +138,16 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                 TabScreenHeader(tab: tab, title: model.label(of: tab, host: workspace.host), host: workspace.host,
                                 space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref), backTitle: backTitle,
                                 segment: current(tab), terminalSubtitle: tab.activePane.flatMap { terminalSubtitle(tab, $0) },
+                                terminalDirectory: tab.activePane.flatMap { terminalDirectory(tab, $0) },
                                 column: column, showsBack: !splitDetail,
                                 segmentSelection: segmentInHeader ? Binding(get: { current(tab) }, set: { choose($0) }) : nil,
                                 segments: TabSegment.available(for: tab), filesBadge: filesBadge,
                                 sidebar: splitDetail ? sidebar : nil,
                                 chatTrailing: chatControls(tab, host: workspace.host),
-                                back: back, details: { switcher?.switcher = ref })
+                                back: back)
             } else if !strip, !splitDetail {
                 ToolbarItem(placement: .topBarLeading) {
-                    TabsBackPill.needsYou(model.needsYou(), back: backTitle, action: back)
+                    TabsBackDisc(back: backTitle, needsYou: model.needsYou(), action: back)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -184,8 +186,9 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         }
     }
 
-    /// The Chat segment's header controls around the host disc (`chatTrailing`), nil elsewhere.
-    /// Beside the Duo's sidebar the switch is the header's trailing control: the menu goes before it.
+    /// The Chat segment's header controls around the host disc (`chatTrailing`), nil elsewhere: the tab's menu holding
+    /// the conversation's items, which conversation mode's waveform replaces while on. Beside the Duo's sidebar the
+    /// switch is the header's trailing control: the conversation's ⋯ menu goes before it.
     private func chatControls(_ tab: MobileTab, host: TabsHost) -> AnyView? {
         guard current(tab) == .chat, let pane = tab.agentPane, let chatTrailing else { return nil }
         if segmentInHeader {
@@ -195,8 +198,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                 .frame(width: TabSegmentCapsule.headerWidth(segments.count))
             return chatTrailing(tab, pane, AnyView(capsule), true)
         }
-        let disc = TabScreenHeader.disc(host: host) { switcher?.switcher = ref }
-        return chatTrailing(tab, pane, AnyView(disc), false)
+        let menu = TabHeaderMenu(tab: tab, host: host, segment: .chat, chat: chatMenu?(tab, pane))
+        return chatTrailing(tab, pane, AnyView(menu), false)
     }
 
     private func current(_ tab: MobileTab) -> TabSegment {
@@ -379,7 +382,10 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     }
 }
 
-/// The top of a tab (M4a): back pill "‹ 1", title, subtitle or pane switcher, host disc.
+/// The top of a tab. On the phone (X9b): the chevron Back with the needs-you count, the title block (`TabsTitleBlock`:
+/// host · folder under a title that fits one line, else the title on two), and the host disc that is the tab's menu
+/// (`TabHeaderMenu`). Beside the Duo's sidebar (M4a): no Back, the title over its subtitle or pane switcher, and the
+/// glyph switch in the disc's place.
 struct TabScreenHeader: ToolbarContent {
     let tab: MobileTab
     /// The tab's shown name (`MobileTabs.label(of:)`).
@@ -387,11 +393,13 @@ struct TabScreenHeader: ToolbarContent {
     let host: TabsHost
     let space: MobileSpace?
     let needsYou: Int
-    /// What Back returns to, shown when nothing needs the user elsewhere.
+    /// What Back returns to: its VoiceOver label.
     var backTitle = "Back"
     let segment: TabSegment
-    /// Terminal's "~/src/app · zsh" from the terminal itself, when it knows.
+    /// Terminal's "~/src/app · zsh" from the terminal itself, when it knows (beside the Duo's sidebar).
     var terminalSubtitle: String? = nil
+    /// Terminal's folder from the terminal itself, when it knows (the phone's subtitle).
+    var terminalDirectory: String? = nil
     /// The column the bar is in (`TabsScreenHeader.column`).
     var column: CGFloat? = nil
     var showsBack = true
@@ -403,40 +411,36 @@ struct TabScreenHeader: ToolbarContent {
     var filesBadge = 0
     /// The iPad split's sidebar button, in the back pill's place (`TabsSidebarPill`).
     var sidebar: TabsSidebarToggle? = nil
-    /// The Chat segment's controls around the host disc (the ⋯ menu, conversation mode's disc), in its place.
+    /// The Chat segment's controls in the disc's place (the tab's menu with the conversation's items, conversation
+    /// mode's waveform; beside the Duo's sidebar the ⋯ menu before the switch).
     var chatTrailing: AnyView? = nil
     let back: () -> Void
-    let details: () -> Void
 
-    /// The trailing slot's width: the split's switch, the chat's menu and disc, or the disc alone.
+    /// The phone's header (X9b): Back, the title block and the tab's menu.
+    private var stack: Bool { segmentSelection == nil && sidebar == nil }
+
+    /// The trailing slot's width: the split's switch (with the chat's ⋯ before it), else the 44 point disc.
     private var trailingWidth: CGFloat {
+        guard segmentSelection != nil else { return 44 }
         let switchWidth = TabSegmentCapsule.headerWidth(segments.count)
-        if chatTrailing != nil { return ChatHeaderControls<EmptyView>.width(disc: segmentSelection == nil ? 44 : switchWidth) }
-        return segmentSelection != nil ? switchWidth : 44
+        return chatTrailing != nil ? ChatHeaderControls<EmptyView>.width(disc: switchWidth) : switchWidth
     }
 
     var body: some ToolbarContent {
         TabsScreenHeader(title: title ?? tab.name, column: column, showsBack: showsBack || sidebar != nil,
                          trailingWidth: trailingWidth,
-                         atTrailingEdge: column == nil || segmentSelection != nil) {
+                         atTrailingEdge: column == nil || segmentSelection != nil, titleBlock: stack) {
             if let sidebar {
                 TabsSidebarPill(toggle: sidebar, needsYou: needsYou)
             } else {
-                TabsBackPill.needsYou(needsYou, back: backTitle, action: back)
+                TabsBackDisc(back: backTitle, needsYou: needsYou, action: back)
             }
         } subtitle: {
-            if tab.panes.count > 1 {
+            if stack {
+                folderSubtitle
+            } else if tab.panes.count > 1 {
                 Menu {
-                    Section("Panes") {
-                        Picker("Pane", selection: Binding(get: { tab.activePane?.key ?? "" }, set: { key in
-                            if let pane = tab.panes.first(where: { $0.key == key }) { tab.pick(pane) }
-                        })) {
-                            ForEach(Array(tab.panes.enumerated()), id: \.element.key) { index, pane in
-                                Text(Self.paneTitle(pane, index: index, host: host)).tag(pane.key)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                    }
+                    Section("Panes") { Self.panePicker(tab, host: host) }
                 } label: {
                     HStack(spacing: 3) {
                         subtitle
@@ -457,28 +461,33 @@ struct TabScreenHeader: ToolbarContent {
                 TabSegmentCapsule(selection: segmentSelection, segments: segments, badge: filesBadge, compact: true)
                     .frame(width: TabSegmentCapsule.headerWidth(segments.count))
             } else {
-                Self.disc(host: host, details: details)
+                TabHeaderMenu(tab: tab, host: host, segment: segment)
             }
         }
     }
 
-    /// The host disc's identifier (P3's switcher; the iPad stream's tests find it by this).
-    static let switcherIdentifier = "space-switcher"
-
-    /// The host disc: the space switcher (P3).
-    static func disc(host: TabsHost, details: @escaping () -> Void) -> some View {
-        Button(action: details) { HostGlyph(host: host.glyphRecord, size: 22).foregroundStyle(host.tint) }
-            .buttonStyle(.plain)
-            .accessibilityHint("Shows the space’s tabs, its host and its Close")
-            .frame(width: 44, height: 44)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .contentShape(.hoverEffect, Circle())
-            .hoverEffect(.highlight)
-            .accessibilityLabel("Space switcher")
-            .accessibilityIdentifier(switcherIdentifier)
+    /// The tab's panes, the shown one checked: a pick shows that pane. On `segment` (the tab's menu) only the panes it
+    /// can show: Chat shows the pane running an agent (`MobileTab.agentPane`), so a pane without one is not offered.
+    /// Without a segment (beside the Duo's sidebar) every pane, the active one checked.
+    static func panePicker(_ tab: MobileTab, host: TabsHost, segment: TabSegment? = nil) -> some View {
+        let choices = segment.map { panes(tab, segment: $0) } ?? tab.panes
+        let shown = segment == .chat ? tab.agentPane : tab.activePane
+        return Picker("Pane", selection: Binding(get: { shown?.key ?? "" }, set: { key in
+            if let pane = tab.panes.first(where: { $0.key == key }) { tab.pick(pane) }
+        })) {
+            ForEach(choices, id: \.key) { pane in
+                Text(paneTitle(pane, index: tab.panes.firstIndex { $0.key == pane.key } ?? 0, host: host)).tag(pane.key)
+            }
+        }
+        .pickerStyle(.inline)
     }
 
-    /// Chat and Files: host · cwd (mono). Terminal: host · cwd · shell (M6a).
+    /// The panes a pick can show on `segment`: on Chat those running an agent, else all.
+    static func panes(_ tab: MobileTab, segment: TabSegment) -> [MobilePane] {
+        segment == .chat ? tab.panes.filter { $0.agent != nil } : tab.panes
+    }
+
+    /// Beside the Duo's sidebar. Chat and Files: host · cwd (mono). Terminal: host · cwd · shell (M6a).
     private var subtitle: some View {
         if segment == .terminal, let terminalSubtitle {
             return TabsHostPath(host: host, path: terminalSubtitle, trailing: nil, mono: false)
@@ -488,9 +497,100 @@ struct TabScreenHeader: ToolbarContent {
         return TabsHostPath(host: host, path: cwd, trailing: segment == .terminal ? tab.program : nil, mono: segment != .terminal)
     }
 
+    /// The phone's (X9b): host · folder, and the shell's name in Terminal ("mba2 · app · zsh").
+    private var folderSubtitle: some View {
+        let pane = segment == .chat ? (tab.agentPane ?? tab.activePane) : tab.activePane
+        let directory = (segment == .terminal ? terminalDirectory : nil) ?? pane?.cwd ?? space?.cwd
+        let shell = segment == .terminal ? tab.program.map(TerminalSubtitle.name(ofShell:)).flatMap { $0.isEmpty ? nil : $0 } : nil
+        return TabsHostPath(host: host, path: Self.folder(directory, host: host), trailing: shell, mono: false)
+    }
+
+    /// A folder's name: its path's last component, "~" for the home folder, "/" for the root.
+    static func folder(_ path: String?, host: TabsHost) -> String? {
+        guard let short = host.abbreviate(path), !short.isEmpty else { return nil }
+        return short.split(separator: "/").last.map(String.init) ?? short
+    }
+
     static func paneTitle(_ pane: MobilePane, index: Int, host: TabsHost) -> String {
         let place = host.abbreviate(pane.cwd).map { " · " + $0 } ?? ""
         return "Pane \(index + 1)" + place
+    }
+}
+
+/// The phone's tab menu (X9b): the host's glyph on a 44 point glass disc, a ⋯ badge on its lower trailing edge, as on
+/// an avatar that opens a menu. One menu for the conversation (Chat's items, on the Chat segment), the tab's panes
+/// when it has splits (the subtitle that switched them may be gone), the tab (its row's menu: Rename…, Close,
+/// Detach, Terminate…) and the host (Stats).
+struct TabHeaderMenu: View {
+    let tab: MobileTab
+    let host: TabsHost
+    /// The segment shown: its panes are the ones the picker offers (`TabScreenHeader.panes`).
+    let segment: TabSegment
+    /// The Chat segment's items (`ChatThreadMenuItems`).
+    var chat: AnyView? = nil
+    @Environment(\.tabsNavigator) private var navigator
+
+    static let identifier = "tab-menu"
+
+    private var picksPane: Bool { TabScreenHeader.panes(tab, segment: segment).count > 1 }
+
+    var body: some View {
+        if chat == nil && !picksPane && navigator == nil {
+            // Nothing to offer (a preview without the stack): the host's disc alone, no empty menu.
+            disc.glassEffect(.regular, in: Circle())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(host.name)
+        } else {
+            menu
+        }
+    }
+
+    private var disc: some View {
+        HostGlyph(host: host.glyphRecord, size: 22)
+            .foregroundStyle(host.tint)
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+    }
+
+    private var menu: some View {
+        Menu {
+            if let chat { chat }
+            if picksPane {
+                Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
+            }
+            if let navigator {
+                Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
+                Section(host.name) {
+                    Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = host.id }
+                }
+            }
+        } label: {
+            disc
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .tint(Color.primary)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .overlay(alignment: .bottomTrailing) { TabHeaderMenuBadge().offset(x: 2, y: 2) }
+        .accessibilityLabel("Tab menu")
+        .accessibilityValue(host.name)
+        .accessibilityIdentifier(Self.identifier)
+    }
+}
+
+/// The disc's ⋯ badge: a small grey circle ringed in the canvas, so it reads as a separate mark on the glass.
+private struct TabHeaderMenuBadge: View {
+    var body: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 8, weight: .heavy))
+            .foregroundStyle(.primary)
+            .frame(width: 17, height: 17)
+            .background(Color(uiColor: .systemGray4), in: Circle())
+            .overlay { Circle().stroke(Color.canvas, lineWidth: 2) }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

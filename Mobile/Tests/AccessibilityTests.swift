@@ -102,17 +102,6 @@ final class DynamicTypeTests: XCTestCase {
 /// VoiceOver: what the main rows, the thinking row and the queue say.
 @MainActor
 final class AccessibilityLabelTests: XCTestCase {
-    /// A tab's back pill counts the conversations that need the user elsewhere; with none it names where Back goes,
-    /// never a bare "0".
-    func testATabsBackPillCountsWaitingConversationsOrNamesTheScreenBehind() {
-        let none = TabsBackPill.needsYou(0, back: "app") {}
-        XCTAssertEqual(none.label, "app")
-        XCTAssertFalse(none.count)
-        let two = TabsBackPill.needsYou(2, back: "app") {}
-        XCTAssertEqual(two.label, "2")
-        XCTAssertTrue(two.count)
-    }
-
     func testRowsReadNameDetailTimeAndLineWithTheDotAsValue() {
         let row = MobileRow(dot: .unread, tint: .blue, name: "e2e", detail: "mba2", time: "9:31",
                             subtitle: "Run playwright test --headed? It opens a browser on the host.", lines: 2) { EmptyView() }
@@ -218,7 +207,7 @@ final class ReduceMotionTests: XCTestCase {
     }
 
     /// Twelve chosen instants 0.2 s apart (no clock, so no load can make two samples fall on the same frame): 2.2 s
-    /// covers every loop's period but the shimmer's 2.4 s, whose gradient is flat for only about 0.95 s of it.
+    /// covers every loop's period.
     private func frames(_ view: some View, reduceMotion: Bool, scheme: ColorScheme) -> Set<Data> {
         let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
         return Set((0..<12).compactMap { step in

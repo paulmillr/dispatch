@@ -250,8 +250,9 @@ final class TerminalView: NSView {
         }
         guard let surface else { return }
         // Chat keeps the view mounted. Pause rendering while hidden, but leave
-        // terminal IO running so the same session is current when revealed.
-        surface.setOcclusion(shown)
+        // terminal IO running so the same session is current when revealed. A view out of its window is a tab or
+        // space not shown (only the selected one is mounted): hidden, unlike one whose window is merely covered.
+        surface.setOcclusion(shown, presented: isPresented && window != nil)
     }
 
     override func becomeFirstResponder() -> Bool {

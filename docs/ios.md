@@ -112,7 +112,7 @@ Mac views built on the Mac chat stack are ported, not shared.
 | Area | Directory | Owns |
 | --- | --- | --- |
 | Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, plain SSH shell tabs (`ShellSessions`), New host, host detail, trust sheet |
-| Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, Spaces tree, a space's tabs, the switcher, `TabScreen`, the iPad split and strip, the menu bar (`MobileCommands`) |
+| Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, Spaces tree, a space's tabs, `TabScreen` and its header menu, the iPad split and strip (with the space switcher), the menu bar (`MobileCommands`) |
 | Chat | `Mobile/Chat`, `Mobile/Agents` | `MobileChatSession`, Agents list, thread, approvals, queue, side conversations, New chat |
 | Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed` (`PlainShellFeed` for plain SSH), `TerminalPresence`, key capsule, search |
 | Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec and shell (PTY) channels, bootstrap, plain SSH fallback, reconnect |
@@ -248,10 +248,13 @@ The policies below are the ones a change must keep; the screens themselves are d
 (each view's header comment names its mockup).
 
 - **Hosts and trust.** Trust on first use per host and port; a changed key is a hard stop with only Remove and retry.
-  An unreadable `known_hosts.json` fails closed, never read as empty. New keys are ED25519 behind
-  `biometryCurrentSet`, or Secure Enclave P-256; neither signs unattended. Passwords and passphrases are
-  `AfterFirstUnlockThisDeviceOnly` and the app's files class C, so background refresh and watch requests log in with a
-  password while the phone is locked. A new host takes the colour the fewest hosts show and keeps it; colours are
+  An unreadable `known_hosts.json` fails closed, never read as empty. New keys are ED25519 or Secure Enclave P-256.
+  Software keys (ED25519, imported), passwords and passphrases are `AfterFirstUnlockThisDeviceOnly` and the app's files
+  class C, so connecting, reconnecting, background refresh and watch requests log in without a prompt, also while the
+  phone is locked; only a Secure Enclave key asks Face ID (the enclave's access control, at each signature) and never
+  signs unattended. Software keys older builds kept behind `biometryCurrentSet` move once, at their first use in the
+  foreground, with one Face ID prompt for all of them (`KeyStore.moveFaceIDKeys`, copy first so a cut-short move loses
+  nothing). A new host takes the colour the fewest hosts show and keeps it; colours are
   drawn per machine (`HostColorStore`). Two hosts reaching one machine and account show its spaces and agents once,
   under the first in the list (`sameMachine`), as the Mac keys a host by machine and uid.
 - **Windows.** A window at least 600 points both ways (the unfolded iPhone Duo) or an iPad window from 655.5 points
@@ -267,10 +270,25 @@ The policies below are the ones a change must keep; the screens themselves are d
   Close follows the Mac's policy: Close Tab sends `close.request` `check` and terminates only verified idle work,
   otherwise detaches; a space offers Detach and Terminate… and never ends by itself. Tab names, space names
   (`usesDirectoryName`, kept on the server) and the Activity sort follow the Mac. New tab sends no folder, so the
-  multiplexer opens it in its focused pane's directory. Reorders go to the server (`memberships.move`) and the rows
+  multiplexer opens it in its focused pane's directory. New space (the tab bar's New in Spaces, the host's line and
+  its quick menu) always makes a space of its own with one shell tab and opens it over the space's screen; its tab
+  counts only once it shows in a space that was not there before (a tmux window placed into a new space is waited
+  for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A
+  space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close. Reorders go to the server (`memberships.move`) and the rows
   keep the new order until the answer or a snapshot naming the moved tab. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
+- **A tab's header** (phone stack, X9b). Back is a 44-point chevron circle carrying the needs-you count as a badge;
+  VoiceOver reads "Back to <screen>" and the count as its value (other pushed screens keep their labelled pill). The
+  title block is two lines tall and top-aligned: a title that fits one line keeps `host · folder` under it (the
+  folder's last component; Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The trailing
+  44-point host disc with a ⋯ badge is the tab's one menu: the conversation's items on Chat (Search, Conversation
+  mode, Manage goal, side conversations), the pane picker when the segment can show more than one pane (on Chat only
+  the panes running an agent, the shown one checked), the tab's row menu (Rename…, Close, Detach, Terminate…) and the
+  host's Stats; conversation mode's waveform takes the disc's place while it is on. The
+  header never overflows into the bar's "…" menu (`TabsScreenHeader.leadingWidth`). The phone has no space
+  switcher (Back returns to the space); the iPad strip's space capsule opens it. Beside the unfolded Duo's sidebar
+  the header keeps its glyph switch, the conversation's ⋯ menu and the subtitle's pane picker.
 - **Times.** A tab's time is the later of the server's (`terminals.activity`, read on each live snapshot and every
   30 s) and the last change the phone saw between two live snapshots of one connection; kept per host and topology
   key (`TabActivityStore`). Changes found across a gap (cache against live, a reconnect) happened at an unknown time
@@ -294,7 +312,34 @@ The policies below are the ones a change must keep; the screens themselves are d
   helper lists; a lost link ends one on the phone and the next verified connection closes the orphaned fork
   (`closeOrphanedSides`). Attachments are offered only while the helper accepted `chat.attachments` and the
   conversation is verified; images lose their metadata before upload, uploads are session state, and a queued
-  message counts as delivered after a reconnect only with as many attachments. Conversation mode
+  message counts as delivered after a reconnect only with as many attachments. An ended turn's last agent bubble
+  carries the turn's summary in its bottom-right corner, where messengers put a message's time (S6d,
+  `ChatTurnSummary.corner`): the changed file's name or the file count with the added and removed lines, else "Read 12
+  files" or "40 steps" for three or more unchanged steps, then when the turn ended ("10:17", "Yesterday 10:17", "Thu
+  10:17", "Oct 12"); a plain answer has none, and message details keep "12 steps · 2m 4s". The text keeps the corner's
+  room on its last line, or on a short line of its own; a file name too long for the line loses its middle, and after
+  code, a table or a rule, beside a last paragraph running against the layout's direction, or when the corner is
+  wider than a line (the largest text sizes), it takes trailing lines of its own. While a turn runs and has agent text, its newest bubble (a
+  message or Claude's thinking) carries a spinner, the step and the turn's time in its corner ("step 4 · 38s", "step 4
+  · approve" or "· answer" while it waits for the user, S6e) and the working row stays away unless its step list is
+  unfolded. The room is fixed for the turn and holds the summary it would settle into. Records and busy state arrive
+  apart: for 3 s after the agent stops the corner keeps its progress, and after the turn ends a busy state that ran
+  through it keeps the working row away, so neither a blank corner nor the row flashes; busy work that starts after the
+  end (another device's prompt) shows the row at once, and a turn left open by an idle agent keeps only its room.
+  The thread follows its end until something other than the app scrolls it toward older rows (`ChatFollow`): a drag
+  stops following as it starts, and VoiceOver's scroll, the status bar's tap or Page Up leave it too; rows, the keyboard
+  and the composer changing height never do (the thread goes back to the end), a drag that only took the keyboard down
+  keeps following, a send or the pill returns to the end, and "Jump to latest" shows only while not following with
+  newer rows below, never at the end. Send's tap sends as the draft goes now; its long press only presents what the tap
+  can do: Send; Send now and Queue while the agent works; Queue alone while the tap queues and the agent cannot take it
+  into its turn (terminal not attached, not verified, a command waiting for an idle agent: "Send" would promise what
+  the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. The code keys above
+  the field show only once picked under "+" (Show code keys, `MobileSettings.composerCodeKeysKey`, kept app-wide; not
+  offered with a hardware keyboard). Dragging the thread down onto the composer, or on into the keyboard, takes a
+  software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
+  light on "thinking": one 2.2 s ease-in-out sweep, leading to trailing, the label lit where and while the glint passes
+  over it (`ChatThinkingSweep`, `ChatSweepTrack`).
+  Conversation mode
   (`MobileVoiceConversation`) is half-duplex as the Mac's and never grants permission by voice. Composers are
   `ChatEditorTextView`-based, as on the Mac.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line; the
@@ -320,7 +365,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   host and waits at most 10 s. Each host's last update (`HostSession.updated`) is shown for an offline host and read by
   VoiceOver.
 - **Background refresh.** A `BGAppRefreshTask` (`<bundle id>.refresh`), off by default. It connects hosts with Chat
-  and the helper on through a session that asks nothing (Face ID key hosts and parked hosts are skipped), reads
+  and the helper on through a session that asks nothing (Secure Enclave key hosts, a key an older build left behind
+  Face ID, and parked hosts are skipped), reads
   `chat.list`, notifies as Settings allows (`AgentAlerts`), sets the badge, and ends within 25 s. It never touches
   seen markers.
 - **Notifications** (`AgentAlerts`). Events between two looks at a conversation: newly needs you, Finished (was busy,
@@ -330,7 +376,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   within 10 s. Permission is asked once a run. There is no Allow or Deny in a banner: an approval belongs to a live
   subscription.
 - **Settings.** Everything is `MobileSettings` in UserDefaults. Per host: Chat, Files & git, multiplexer. Terminal
-  font (`TerminalFont.all`: the Mac's bundled fonts in `TermFonts` plus Menlo), colour scheme (Ghostty's bundled
+  font (`TerminalFont.all`: the Mac's list in its order, Source Code Pro, Menlo, then every font the Mac bundles, in
+  `TermFonts`), Ligatures (on, the Mac's `fontLigatures`: off writes `font-feature = -calt, -liga, -dlig`), colour scheme (Ghostty's bundled
   themes, `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
   (`LineSpacing`, shared, one key for terminal and chat); each change posts `TerminalStyle.changed` and every open
   presence restyles at once, keeping its own size. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
@@ -344,7 +391,8 @@ The policies below are the ones a change must keep; the screens themselves are d
 
 **Debug hooks** (compiled out of Release). Environment through `SIMCTL_CHILD_`: `DISPATCH_MOBILE_STORE=memory`
 (nothing saved, no Face ID), `DISPATCH_MOBILE_SCRIPTED=1|empty|trust|mismatch|nomux` (scripted hosts, no SSH),
-`DISPATCH_MOBILE_DEMO=1` (the demo hosts), `DISPATCH_MOBILE_CHAT_DEMO=<screen>`, `DISPATCH_MOBILE_AUTHORIZE_KEYS`,
+`DISPATCH_MOBILE_DEMO=1` (the demo hosts), `DISPATCH_MOBILE_CHAT_DEMO=<screen>` (with
+`DISPATCH_MOBILE_CHAT_DEMO_ECHO=<seconds>` its peer answers what is sent, streamed after that long), `DISPATCH_MOBILE_AUTHORIZE_KEYS`,
 `DISPATCH_MOBILE_HOST_ENV`. Launch arguments open screens and pin state for tests and screenshots: `-DispatchTabsSample`
 and `-DispatchTabsShow …` (`SpacesRoot`), `-DispatchSpacesMockup`, `-DispatchTabsSegment`, `-DispatchTabsFilesMode`,
 `-DispatchFilesFolder`, `-DispatchFilesPreview`, `-DispatchTabsFilesRoute`, `-DispatchReviewDiff`, `-DispatchReviewSheet`,
@@ -472,14 +520,14 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
 Release build on a real iPhone, by hand. Nothing below has been run on a device yet.
 
 1. Launch opens Spaces' empty state.
-2. ED25519 key: Face ID on first use; Cancel fails the login. Re-enrolling Face ID invalidates the key with a clear
-   message, and so does a phone without Face ID.
+2. ED25519 key: no Face ID on connect or reconnect, also with the phone locked. A key made by a build before
+   2026-10-31: one Face ID prompt at its first connect moves every such key, then none again; Cancel fails that login.
 3. Secure Enclave key: one Face ID prompt per signature.
 4. Copy and Share public key give the exact `authorized_keys` line.
 5. Local Network prompt on the first LAN host; Don't Allow fails LAN hosts only.
 6. Lock or switch apps for a minute: sessions drop and reconnect within seconds; agents kept running.
-7. Background refresh with a password host and a Face ID host both waiting, the phone locked: only the password host
-   notifies.
+7. Background refresh with a password host, an ED25519 key host and a Secure Enclave key host all waiting, the phone
+   locked: the password and ED25519 hosts notify, the Secure Enclave one does not.
 8. Wi-Fi off while connected: reconnects over cellular in about 4 s.
 9. A backup restored onto another phone brings no host, key or password.
 10. Free account: after 7 days the app stops opening until reinstalled, with data intact.
