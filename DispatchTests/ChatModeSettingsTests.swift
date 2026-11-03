@@ -1,20 +1,21 @@
 import XCTest
 @testable import DispatchApp
 
-/// Settings › Features › Chat mode's options: Open agents in, Esc stops the agent, Tool steps, Double ⌃D.
+/// Settings › Features › Chat mode's options and the fixed double-Escape stop shortcut.
 @MainActor final class ChatModeSettingsTests: XCTestCase {
-    func testOlderSettingsKeepTodaysBehaviourAndChoicesRoundTrip() throws {
+    func testRemovedKeyboardSettingsAreIgnoredAndCurrentChoicesRoundTrip() throws {
         let old = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
         XCTAssertEqual(old.chatAgentStart, .chat)
-        XCTAssertEqual(old.chatEscapeStop, .once)
         XCTAssertEqual(old.chatToolSteps, .current)
-        XCTAssertTrue(old.chatControlDExits)
         var changed = Preferences()
         changed.chatAgentStart = .terminal
-        changed.chatEscapeStop = .twice
         changed.chatToolSteps = .all
-        changed.chatControlDExits = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed)), changed)
+        let removed = try JSONDecoder().decode(Preferences.self, from: Data(#"{"chatEscapeStop":"once","chatControlDExits":false}"#.utf8))
+        XCTAssertEqual(removed, old)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(removed)) as? [String: Any])
+        XCTAssertNil(encoded["chatEscapeStop"])
+        XCTAssertNil(encoded["chatControlDExits"])
     }
 
     func testTerminalStartKeepsTheLaunchCoverAway() {
@@ -30,10 +31,11 @@ import XCTest
 
     func testEscapeTwiceArmsTheStopFirst() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: nil)
+        defer { chat.stop() }
         let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
         session.helper = HelperChat(terminal: 0)
-        chat.escapeStop = .twice
+        session.draft = "Keep this draft"
         XCTAssertTrue(chat.escapeStop(session, at: 10))
         XCTAssertEqual(session.stopArmedAt, 10)
         XCTAssertNil(session.interruptionID, "the first Esc stops nothing")
@@ -43,6 +45,12 @@ import XCTest
         session.busy = false
         XCTAssertFalse(chat.escapeStop(session, at: 12), "nothing to stop: Esc goes on as usual")
         XCTAssertNil(session.stopArmedAt)
+        session.busy = true
+        XCTAssertTrue(chat.escapeStop(session, at: 13))
+        XCTAssertTrue(chat.escapeStop(session, at: 13.5))
+        XCTAssertNotNil(session.interruptionID, "A second press within a second stops the turn")
+        XCTAssertNil(session.stopArmedAt)
+        XCTAssertEqual(session.draft, "Keep this draft")
     }
 
     func testToolStepsSetHowGroupsStartUntilTheUserChooses() {

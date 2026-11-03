@@ -6,7 +6,7 @@ struct ChatDraft: Codable, Identifiable, Equatable {
     var title: String?
     var text = ""
     /// Editor mode: Return inserts a newline and ⌘⏎ sends. On by ⌘E, a multi-line paste, or for every new draft with
-    /// Settings' Editor mode by default (`editorByDefault`); a newline typed with ⇧⏎ leaves it as it is.
+    /// Settings' Editor mode by default (`editorByDefault`); a newline typed with ⌥⏎ or ⇧⏎ leaves it as it is.
     var multiline = ChatDraft.editorByDefault
     var selection = NSRange(location: 0, length: 0)
     var modified = Date()

@@ -126,10 +126,6 @@ struct SettingsView: View {
                             ForEach(ChatAgentStart.allCases) { Text($0.title).tag($0) }
                         }
                         .accessibilityIdentifier("settings-chat-agent-start")
-                        Picker("Esc stops the agent", selection: $settings.chatEscapeStop) {
-                            ForEach(ChatEscapeStop.allCases) { Text($0.title).tag($0) }
-                        }
-                        .accessibilityIdentifier("settings-chat-escape-stop")
                         NavigationLink {
                             DictationSettingsView(settings: settings)
                         } label: {

@@ -13,7 +13,7 @@ struct ChatView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var availableChatHeight: CGFloat = 800
     @State private var chatWidth: CGFloat = 0
-    @State private var optionHeld = false
+    @State private var alternateSendHeld = false
     @State private var queueTipPresented = false
     @State private var floatingInputHeight: CGFloat = 0
 
@@ -84,11 +84,11 @@ struct ChatView: View {
         .onChange(of: session.queuedMessages.count) { old, count in
             if count > old && !coordinator.queueTipShown { queueTipPresented = true; coordinator.queueTipShown = true }
         }
-        .onAppear { optionHeld = NSEvent.modifierFlags.contains(.option) }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in optionHeld = false }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in optionHeld = false }
+        .onAppear { alternateSendHeld = ChatEditorTextView.usesAlternateSend(NSEvent.modifierFlags) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in alternateSendHeld = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in alternateSendHeld = false }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
-            optionHeld = NSEvent.modifierFlags.contains(.option)
+            alternateSendHeld = ChatEditorTextView.usesAlternateSend(NSEvent.modifierFlags)
         }
         .accessibilityIdentifier("chat-\(session.id)")
         .transaction { transaction in
@@ -193,7 +193,7 @@ struct ChatView: View {
                     HStack(alignment: .top, spacing: 8) {
                         Text(coordinator.sendWhileWorking == .steer
                              ? "Queued messages run after this turn. ⏎ steers: it interrupts and redirects the current turn."
-                             : "Queued messages run after this turn. Use ⌥⏎ to steer: interrupt and redirect the current turn.")
+                             : "Queued messages run after this turn. Use ⌥⌘⏎ to steer: interrupt and redirect the current turn.")
                             .fixedSize(horizontal: false, vertical: true)
                         Button { queueTipPresented = false } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).accessibilityLabel("Dismiss queue tip")
@@ -215,7 +215,7 @@ struct ChatView: View {
                         ChatInputFold(present: attachmentsShown, spacing: 6, reduceMotion: reduceMotion) {
                             ChatComposerAttachments(session: session, coordinator: coordinator)
                         }
-                        ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session, option: false) },
+                        ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session, alternate: false) },
                             interrupt: { time in
                                 if session.editingQueuedID != nil { coordinator.cancelQueuedEdit(session); return true }
                                 return coordinator.escapeStop(session, at: time)
@@ -226,14 +226,14 @@ struct ChatView: View {
                                     : "Press Ctrl+D again to close tab and quit \(session.agentTitle)"
                             },
                             pickModel: { coordinator.openModelPicker(session, column: $0, cycle: $1) }, workspace: workspace,
-                            sendNow: { coordinator.sendFromComposer(session, option: true) },
+                            sendNow: { coordinator.sendFromComposer(session, alternate: true) },
                             queueAction: { id, action in
                                 switch action {
                                 case "send": coordinator.sendNow(session, queuedID: id)
                                 case "edit": coordinator.editQueued(id, in: session)
                                 default: coordinator.removeQueued(id, from: session)
                                 }
-                            }, optionChanged: { optionHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() },
+                            }, alternateSendChanged: { alternateSendHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() },
                             canAttach: { coordinator.canAttach(session) }, attach: { coordinator.attach($0, to: session) },
                             chooseAttachments: { ChatAttachButton.choose(session: session, coordinator: coordinator, window: $0) })
                             .background(ChatFlightAnchor(place: .composer, frames: session.flightFrames))
@@ -490,21 +490,21 @@ struct ChatView: View {
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!coordinator.canInterrupt(session))
                 .help(session.interruptionID == nil
-                      ? "\(theme.radioLog ? "All stop" : "Stop agent") · \(coordinator.escapeStop == .twice ? "⎋⎋" : "⎋") · Draft kept" : "Stopping…")
+                      ? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋⎋ · Draft kept" : "Stopping…")
                 .accessibilityLabel(theme.radioLog ? "All stop" : "Stop agent").accessibilityIdentifier("chat-stop")
         }
     }
 
     private var shortcutsControl: some View {
-        ChatComposerShortcuts(session: session, steers: coordinator.sendWhileWorking == .steer, escapeTwice: coordinator.escapeStop == .twice,
-                              quits: coordinator.controlDExits, presented: $session.shortcutsPresented)
+        ChatComposerShortcuts(session: session, steers: coordinator.sendWhileWorking == .steer,
+                              presented: $session.shortcutsPresented)
     }
 
     private func replyButton(showsKey: Bool) -> some View {
-        ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy, steers: coordinator.returnSteers(session),
+        ChatReplyButton(canSubmit: canSubmit, alternateSendHeld: alternateSendHeld, busy: session.busy, steers: coordinator.returnSteers(session),
                         editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
                         command: session.draftIsCommand, showsKey: showsKey) {
-            coordinator.sendFromComposer(session, option: optionHeld)
+            coordinator.sendFromComposer(session, alternate: alternateSendHeld)
         }
     }
 

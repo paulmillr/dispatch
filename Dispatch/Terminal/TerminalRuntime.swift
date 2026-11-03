@@ -88,9 +88,7 @@ final class TerminalRuntime {
         chat.sendWhileWorking = preferences.chatSendWhileWorking
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
-        chat.escapeStop = preferences.chatEscapeStop
         chat.toolSteps = preferences.chatToolSteps
-        chat.controlDExits = preferences.chatControlDExits
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         if !System.testing {
@@ -170,9 +168,7 @@ final class TerminalRuntime {
         chat.sendWhileWorking = preferences.chatSendWhileWorking
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
-        chat.escapeStop = preferences.chatEscapeStop
         chat.toolSteps = preferences.chatToolSteps
-        chat.controlDExits = preferences.chatControlDExits
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }

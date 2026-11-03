@@ -1255,7 +1255,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(slider.doubleValue, external.fontSize)
         let dropdowns = PresentationTestSupport.views(of: NSPopUpButton.self, in: content)
         // Settings' controls keep their own typography, not the content size being edited.
-        let controlSize = SettingsView.typography.size(offset: -0.5)
+        let controlSize = AppFont.native(size: SettingsView.typography.size(.label)).pointSize
         XCTAssertFalse(dropdowns.isEmpty)
         XCTAssertTrue(dropdowns.allSatisfy { $0.font?.pointSize == controlSize }, dropdowns.map { "\($0.font?.pointSize ?? 0)" }.description)
         XCTAssertTrue(window.makeFirstResponder(slider))
@@ -1297,14 +1297,15 @@ private struct RemoteTabHighlightPreview: View {
 }
 
 extension SettingsSynchronizationTests {
-    /// Settings › Font's interface font: Source Code Pro by default, San Francisco (SF Rounded, as chat's) at its
-    /// lowercase height on request.
-    func testInterfaceFontDefaultsToSourceCodeProAndSwitchesToSystem() throws {
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).interfaceFont, .sourceCodePro)
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"interfaceFont":"Unknown"}"#.utf8)).interfaceFont,
-                       .sourceCodePro)
-        var preferences = Preferences(); preferences.interfaceFont = .system
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).interfaceFont, .system)
+    /// Settings › Font's interface font: San Francisco (SF Rounded, as chat's) at Source Code Pro's lowercase height by
+    /// default, Source Code Pro on request. The key was renamed with the default, so an old saved choice is dropped.
+    func testInterfaceFontDefaultsToSystemAndSwitchesToSourceCodePro() throws {
+        let decode = { (json: String) in try JSONDecoder().decode(Preferences.self, from: Data(json.utf8)).interfaceFont }
+        XCTAssertEqual(try decode("{}"), .system)
+        XCTAssertEqual(try decode(#"{"interfaceTypeface":"Unknown"}"#), .system)
+        XCTAssertEqual(try decode(#"{"interfaceFont":"Source Code Pro"}"#), .system)
+        var preferences = Preferences(); preferences.interfaceFont = .sourceCodePro
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).interfaceFont, .sourceCodePro)
 
         let store = InterfaceFontStore.shared, previous = store.current
         defer { store.current = previous }
@@ -1317,7 +1318,20 @@ extension SettingsSynchronizationTests {
         XCTAssertEqual(AppFont.native(size: 14, semibold: true).familyName, system.familyName)
         let digits = ["1111", "0000"].map { ($0 as NSString).size(withAttributes: [.font: system]).width }
         XCTAssertEqual(digits[0], digits[1], "monospaced digits")
-        XCTAssertEqual(system.xHeight, code.xHeight, accuracy: 0.05, "the same lowercase height")
+        XCTAssertEqual(try XCTUnwrap(TerminalFontScale.lowercaseHeight(system as CTFont)),
+                       try XCTUnwrap(TerminalFontScale.lowercaseHeight(code as CTFont)), accuracy: 0.05, "the same lowercase height")
         XCTAssertNotEqual(AppFont.ui(size: 14), Font.custom("SourceCodePro-Regular", size: 14))
+        // A selected title turns semibold at its regular width, so it neither shifts nor truncates sooner.
+        for title in ["billing", "api-refactor", "claude · fix the flaky retry test"] {
+            let tracking = AppFont.semiboldTracking(title, size: 13.5)
+            XCTAssertLessThan(tracking, 0, title)
+            // Tracking adds to the font's pair kerning; an explicit kern of 0 would turn that kerning off instead.
+            let width = { (font: NSFont, tracking: CGFloat?) in
+                NSAttributedString(string: title, attributes: [.font: font].merging(tracking.map { [.tracking: $0] } ?? [:]) { $1 })
+                    .size().width
+            }
+            XCTAssertEqual(width(AppFont.native(size: 13.5, semibold: true), tracking), width(AppFont.native(size: 13.5), nil),
+                           accuracy: 0.5, title)
+        }
     }
 }

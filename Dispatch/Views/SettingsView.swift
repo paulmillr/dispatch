@@ -5,9 +5,10 @@ import CoreText
 /// Compact settings grouped into General (text, the window and terminals, notifications), Theme, Features, Keyboard,
 /// Extra (imports, export and troubleshooting), and Hosts.
 struct SettingsView: View {
-    // Keep the controls stable while the user adjusts content typography: a point under the app's default.
+    // Keep the controls stable while the user adjusts content typography: half a point under the app's default, so
+    // most of its text (the body role, 12 points) stays above macOS's small controls beside it.
     private let typography = SettingsView.typography
-    static let typography = AppTypography(contentSize: 13)
+    static let typography = AppTypography(contentSize: 13.5)
     let store: SettingsStore
     let workspace: Workspace
     var updater: AppUpdater? = nil
@@ -109,7 +110,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             // Nautical's settings are the ship's bridge.
             Text(SidebarThemeStore.shared.current == .nautical ? "Bridge" : "Settings")
-                .font(typography.font(offset: 0.5, design: .monospaced))
+                .font(typography.font(.title))
                 .foregroundStyle(Chrome.muted)
                 .frame(maxWidth: .infinity).frame(minHeight: typography.expanded(38))
                 .background(Chrome.sidebar)
@@ -117,7 +118,7 @@ struct SettingsView: View {
             HStack(spacing: 2) {
                 ForEach(SettingsTab.allCases, id: \.self) { tab in
                     Button { selectedTab = tab } label: {
-                        Text(tab.rawValue).font(typography.font(offset: -0.5))
+                        Text(tab.rawValue).font(typography.font(.label))
                             .foregroundStyle(selectedTab == tab ? SettingsControlStyle.selectedText : Chrome.muted)
                             .padding(.horizontal, 14).padding(.vertical, 5)
                             .background(selectedTab == tab ? Chrome.palette.control : .clear,
@@ -147,20 +148,20 @@ struct SettingsView: View {
                 Spacer()
                 Button("restore defaults", action: restoreDefaults)
                     .buttonStyle(.plain)
-                    .font(typography.font(offset: -1.5))
+                    .font(typography.font(.body))
                     .foregroundStyle(SettingsControlStyle.detail)
                     .padding(.vertical, 4)
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let error {
                 separator
-                Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
+                Text(error).font(typography.font(.body)).foregroundStyle(.red)
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12)
             }
         }
         .frame(minWidth: min(900, typography.expanded(560)), maxWidth: min(900, typography.expanded(560)), minHeight: 440)
         .background(Chrome.window)
         .foregroundStyle(Chrome.ink)
-        .font(typography.font(offset: 0))
+        .font(typography.font(.content))
         .environment(\.appTypography, typography)
         .controlSize(.small)
         .tint(accent)
@@ -235,29 +236,6 @@ struct SettingsView: View {
     /// included, are under Features; troubleshooting is under Extra.
     private var generalSettings: some View {
         VStack(spacing: 8) {
-            if let updater {
-                settingsGroup("Updates") {
-                    row("Automatic updates", detail: "downloads new releases; asks before restarting",
-                        privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
-                        settingToggle("Automatic updates", isOn: Binding(
-                            get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
-                            .accessibilityIdentifier("settings-automatic-updates")
-                    }
-                    row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
-                        if updater.state == .ready {
-                            Button("Restart and install") { updater.restart() }
-                                .accessibilityIdentifier("settings-install-update")
-                        } else if updater.state == .available {
-                            Button("Download update") { updater.download() }
-                                .accessibilityIdentifier("settings-download-update")
-                        } else {
-                            Button("Check for updates") { updater.check() }
-                                .disabled(updater.busy)
-                                .accessibilityIdentifier("settings-check-updates")
-                        }
-                    }
-                }
-            }
             settingsGroup("Text") {
                 fontRow
                 sizeRow
@@ -273,16 +251,34 @@ struct SettingsView: View {
             }
             settingsGroup("Terminal") {
                 launchRow
-                row("Scrollback", detail: draft.scrollback == .automatic ? "sized to this Mac’s RAM · new tabs"
-                        : draft.scrollback.lines != nil ? "lines each new tab keeps · within this Mac’s RAM size" : "history each new tab keeps") {
-                    dropdown("Scrollback", selection: Binding(get: { draft.scrollback.title }, set: { title in
-                        if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }
-                    }), choices: Scrollback.sizes.map(\.title) + [SettingsDropdown.separator] + Scrollback.lineCounts.map(\.title))
-                        .help("Unlimited keeps every line until the tab closes, in memory. A number of lines also keeps the automatic size limit: the first one reached drops the oldest lines.")
-                }
                 windowOptions
                 newTabOptions
                 securityOptions
+                updateOptions
+            }
+        }
+    }
+
+    @ViewBuilder private var updateOptions: some View {
+        if let updater {
+            row("Automatic updates", detail: "downloads new releases; asks before restarting",
+                privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
+                settingToggle("Automatic updates", isOn: Binding(
+                    get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
+                    .accessibilityIdentifier("settings-automatic-updates")
+            }
+            row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
+                if updater.state == .ready {
+                    Button("Restart and install") { updater.restart() }
+                        .accessibilityIdentifier("settings-install-update")
+                } else if updater.state == .available {
+                    Button("Download update") { updater.download() }
+                        .accessibilityIdentifier("settings-download-update")
+                } else {
+                    Button("Check for updates") { updater.check() }
+                        .disabled(updater.busy)
+                        .accessibilityIdentifier("settings-check-updates")
+                }
             }
         }
     }
@@ -320,7 +316,7 @@ struct SettingsView: View {
             if store.values.enableDiagnostics {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(diagnostics.directory.path)
-                        .font(typography.font(offset: -1.5, design: .monospaced))
+                        .font(typography.code(.body))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("diagnostics-log-path")
@@ -329,18 +325,18 @@ struct SettingsView: View {
                         NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
                     }.accessibilityIdentifier("diagnostics-copy-path")
                     if let error = diagnostics.error {
-                        Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
+                        Text(error).font(typography.font(.body)).foregroundStyle(.red)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
             }
         }
     }
 
-    /// Text's first row: the terminal's font, with chat's, the interface's and text contrast folded under its options button. Only the
-    /// button opens it: a tap on the row would reach the dropdown too.
+    /// Text's first row: the terminal's font, with chat's, the interface's and ligatures folded under its options button. Only
+    /// the button opens it: a tap on the row would reach the dropdown too.
     @ViewBuilder private var fontRow: some View {
-        let fold = Fold(title: "Ligatures, chat and interface fonts, contrast",
-                        changed: changed { [AnyHashable($0.fontLigatures), $0.chatFont, $0.interfaceFont, $0.textContrast] },
+        let fold = Fold(title: "Chat and interface fonts, ligatures",
+                        changed: changed { [AnyHashable($0.chatFont), $0.interfaceFont, $0.fontLigatures] },
                         isExpanded: $fontExpanded)
         row("Font", detail: "installed fonts too · chat: \(chatFontName) · interface: \(interfaceFontName)") {
             // The button beside a dropdown as wide as every other, so the column lines up, folds included.
@@ -352,10 +348,6 @@ struct SettingsView: View {
         }
         if fontExpanded {
             foldedOptions {
-                cardOption("Ligatures", detail: "-> and != drawn as one symbol, in fonts that have them", detailBelow: true) {
-                    settingToggle("Ligatures", isOn: $draft.fontLigatures)
-                        .accessibilityIdentifier("settings-font-ligatures")
-                }
                 cardOption("Chat font", detail: "Same as code follows the font above", detailBelow: true) {
                     dropdown("Chat font", selection: Binding(get: { draft.chatFont.rawValue }, set: {
                         if let choice = ChatFont(rawValue: $0) { draft.chatFont = choice }
@@ -377,12 +369,9 @@ struct SettingsView: View {
                     })
                         .accessibilityIdentifier("settings-interface-font")
                 }
-                cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
-                    dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
-                        if let contrast = TextContrast.allCases.first(where: { $0.title == title }) { draft.textContrast = contrast }
-                    }), choices: TextContrast.allCases.map(\.title))
-                        .accessibilityIdentifier("improve-text-contrast")
-                        .help("Raises faint terminal text to 4.5:1 against its background. Applies at once to open terminals.")
+                cardOption("Ligatures", detail: "-> and != drawn as one symbol, in fonts that have them", detailBelow: true) {
+                    settingToggle("Ligatures", isOn: $draft.fontLigatures)
+                        .accessibilityIdentifier("settings-font-ligatures")
                 }
             }
         }
@@ -414,7 +403,7 @@ struct SettingsView: View {
                         .help("8–22 pt · 0.5 pt steps")
                     (Text(draft.fontSize.formatted(.number.precision(.fractionLength(0...1))))
                         .foregroundColor(Chrome.ink) + Text(" pt").foregroundColor(Chrome.muted))
-                        .font(typography.font(offset: -0.5)).monospacedDigit().fixedSize()
+                        .font(typography.font(.label)).monospacedDigit().fixedSize()
                         .frame(width: sliderValueWidth, alignment: .trailing)
                 }.frame(width: pickerWidth)
             }
@@ -431,7 +420,7 @@ struct SettingsView: View {
                                        identifier: "settings-line-spacing", stops: true, describe: { spacing($0).title })
                             .frame(height: 20)
                         Text(draft.lineSpacing.title).foregroundColor(Chrome.ink)
-                            .font(typography.font(offset: -0.5)).fixedSize()
+                            .font(typography.font(.label)).fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
@@ -443,15 +432,16 @@ struct SettingsView: View {
     private static let blinkingCursor = "Blinking"
 
     /// Terminal's row above Security: the window around the terminals, folded like it; its title opens it too. The
-    /// labels first (tab names, git branches), then the sidebar's options, then the chrome's. The detail leads with tab
-    /// names and git branches, the options most come looking for.
+    /// labels first (tab names, git branches), then the sidebar's options, then the chrome's and text contrast. The detail
+    /// leads with tab names and git branches, the options most come looking for.
     @ViewBuilder private var windowOptions: some View {
         // Switches that can't be changed here (git off, no Liquid Glass on this system) aren't counted.
         let fold = Fold(title: "Window", changed: changed {
-            [$0.automaticTabNames, $0.sidebarStyle, $0.hideSingleSpace, $0.tabsOnly, $0.showHostColors] + (draft.gitEnabled ? [$0.showGitBranches] : [])
+            [$0.automaticTabNames, $0.sidebarStyle, $0.hideSingleSpace, $0.tabsOnly, $0.showHostColors, $0.textContrast]
+                + (draft.gitEnabled ? [$0.showGitBranches] : [])
                 + (LiquidGlassStore.supported ? [$0.liquidGlass] : [])
         }, isExpanded: $windowExpanded)
-        row("Window", detail: "tab names, git branches, host colors and glass") { foldButton(fold, card: "Window") }
+        row("Window", detail: "tab names, git branches, host colors, glass and contrast") { foldButton(fold, card: "Window") }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
         if windowExpanded {
             foldedOptions {
@@ -476,7 +466,7 @@ struct SettingsView: View {
                                        describe: { order[min(order.count - 1, max(0, Int($0.rounded())))].label })
                             .frame(height: 20)
                         Text(draft.sidebarStyle.label).foregroundColor(Chrome.ink)
-                            .font(typography.font(offset: -0.5)).fixedSize()
+                            .font(typography.font(.label)).fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
@@ -501,6 +491,13 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-host-colors")
                         .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
                 }
+                cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
+                    dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
+                        if let contrast = TextContrast.allCases.first(where: { $0.title == title }) { draft.textContrast = contrast }
+                    }), choices: TextContrast.allCases.map(\.title))
+                        .accessibilityIdentifier("improve-text-contrast")
+                        .help("Raises faint terminal text to 4.5:1 against its background. Applies at once to open terminals.")
+                }
             }
         }
     }
@@ -521,7 +518,7 @@ struct SettingsView: View {
                         SettingsSlider(value: $draft.terminalOpacity, range: Preferences.terminalOpacityRange, step: 0.05,
                                        label: "Terminal opacity", identifier: "settings-terminal-opacity").frame(height: 20)
                         Text(draft.terminalOpacity.formatted(.percent.precision(.fractionLength(0))))
-                            .foregroundColor(Chrome.ink).font(typography.font(offset: -0.5)).monospacedDigit().fixedSize()
+                            .foregroundColor(Chrome.ink).font(typography.font(.label)).monospacedDigit().fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
@@ -589,7 +586,7 @@ struct SettingsView: View {
             integrationCard("Chat mode", detail: "coding agent CLIs as chat",
                             privacy: "Adds hooks to the agents' own config and reads their transcripts, in memory only.",
                             enabled: chatEnabled, fold: chatFold) {
-                cardOption("While the agent works", detail: "⏎ queues the message for after the turn, or steers it into the turn; ⌥⏎ does the other",
+                cardOption("While the agent works", detail: "⏎ queues the message for after the turn, or steers it into the turn; ⌥⌘⏎ does the other",
                            detailBelow: true) {
                     choice("While the agent works", $draft.chatSendWhileWorking)
                         .accessibilityIdentifier("settings-chat-send-while-working")
@@ -604,24 +601,14 @@ struct SettingsView: View {
                     choice("Open agents in", $draft.chatAgentStart)
                         .accessibilityIdentifier("settings-chat-agent-start")
                 }
-                cardOption("Esc stops the agent", detail: "twice: a second press within a second stops, so a stray Esc never interrupts",
-                           detailBelow: true) {
-                    choice("Esc stops the agent", $draft.chatEscapeStop)
-                        .accessibilityIdentifier("settings-chat-escape-stop")
-                }
                 cardOption("Tool steps", detail: "how a turn's tool groups show until you open or close one", detailBelow: true) {
                     choice("Tool steps", $draft.chatToolSteps)
                         .accessibilityIdentifier("settings-chat-tool-steps")
                 }
-                cardOption("Double ⌃D closes the tab", detail: "in an empty draft: quits the agent, or shows Terminal while it works",
-                           detailBelow: true) {
-                    settingToggle("Double ⌃D closes the tab", isOn: $draft.chatControlDExits)
-                        .accessibilityIdentifier("settings-chat-control-d")
-                }
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
             }.accessibilityIdentifier("settings-agents")
             if let chatError = TerminalRuntime.shared.chat.error {
-                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
+                Text(chatError).font(typography.font(.body)).foregroundStyle(.red).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             // One switch for every multiplexer: on while any is, and it turns them all on or off.
@@ -636,7 +623,7 @@ struct SettingsView: View {
                     }
                 }
                 Text("the original tab closes after attach.")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 7)
             }
             // Git (review mode, the commit log and the sidebar's branch names) is one of Files' options.
@@ -699,7 +686,7 @@ struct SettingsView: View {
                 }
             }.accessibilityIdentifier("settings-notifications")
             if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
-                Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
+                Text(error).font(typography.font(.body)).foregroundStyle(Chrome.muted)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
             }
             remoteHelperSettings
@@ -760,7 +747,7 @@ struct SettingsView: View {
                        detailBelow: true) {
                 if draft.dictationWakeWords != VoiceCommand.defaultWakeWords {
                     Button("Restore default") { draft.dictationWakeWords = VoiceCommand.defaultWakeWords }
-                        .buttonStyle(.plain).font(typography.font(offset: -1.5)).foregroundStyle(accent)
+                        .buttonStyle(.plain).font(typography.font(.body)).foregroundStyle(accent)
                         .accessibilityIdentifier("settings-wake-words-restore")
                 }
             }
@@ -779,23 +766,23 @@ struct SettingsView: View {
                     }
                 }
                 Text("from huggingface.co, kept on this Mac · click a downloaded one to use it")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
             } else if draft.dictationEngine == .parakeet {
                 separator
                 DictationModelRow(model: .parakeet, selected: true) {}
                     .padding(.vertical, 7)
                 Text("NVIDIA's Parakeet TDT 0.6B v3 (CC BY 4.0) as Core ML models converted by FluidInference,\nfrom huggingface.co, kept on this Mac · runs on the Neural Engine")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
             }
         }.accessibilityIdentifier("settings-dictation")
     }
 
-    /// Where new spaces start, what new local tabs run and what they type first, folded like Window; the detail reads
-    /// out the folder, the shell and the command, so folding hides the controls but not where they stand.
+    /// New tabs' starting folder, shell, initial command and scrollback, folded like Window. The detail summarizes
+    /// the launch settings; the badge counts all choices that differ from defaults.
     @ViewBuilder private var newTabOptions: some View {
-        let fold = Fold(title: "New tabs", changed: changed { [$0.startingDirectory, $0.shell, $0.startupCommand] }, isExpanded: $newTabsExpanded)
+        let fold = Fold(title: "New tabs", changed: changed { [$0.startingDirectory, $0.shell, $0.startupCommand, $0.scrollback.rawValue] }, isExpanded: $newTabsExpanded)
         let folder = draft.startingDirectory == "/" ? "/" : draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~")
         let shell = draft.shellProgram.map { ($0 as NSString).lastPathComponent } ?? "login shell"
         let command = draft.startupCommand.trimmingCharacters(in: .whitespaces)
@@ -809,6 +796,14 @@ struct SettingsView: View {
                 startingFolderOption
                 shellOption
                 startupCommandOption
+                cardOption("Scrollback", detail: draft.scrollback == .automatic ? "sized to this Mac’s RAM"
+                        : draft.scrollback.lines != nil ? "lines each new tab keeps · within this Mac’s RAM size" : "history each new tab keeps",
+                           detailBelow: true) {
+                    dropdown("Scrollback", selection: Binding(get: { draft.scrollback.title }, set: { title in
+                        if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }
+                    }), choices: Scrollback.sizes.map(\.title) + [SettingsDropdown.separator] + Scrollback.lineCounts.map(\.title))
+                        .help("Unlimited keeps every line until the tab closes, in memory. A number of lines also keeps the automatic size limit: the first one reached drops the oldest lines.")
+                }
             }
         }
     }
@@ -835,7 +830,7 @@ struct SettingsView: View {
     @ViewBuilder private var startupCommandOption: some View {
         cardOption("Startup command", detail: "typed into each new local shell; empty types nothing", detailBelow: true) {
             TextField("tmux new -A -s main", text: Binding(get: { startupDraft ?? draft.startupCommand }, set: { startupDraft = $0 }))
-                .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5, design: .monospaced))
+                .textFieldStyle(.roundedBorder).font(typography.code(.label))
                 .frame(width: pickerWidth)
                 .onSubmit {
                     if let startupDraft { draft.startupCommand = startupDraft.trimmingCharacters(in: .whitespaces) }
@@ -931,12 +926,12 @@ struct SettingsView: View {
         if custom {
             HStack(spacing: 8) {
                 TextField("/opt/homebrew/bin/fish -l", text: Binding(get: { customShell ?? draft.shell }, set: { customShell = $0 }))
-                    .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5, design: .monospaced))
+                    .textFieldStyle(.roundedBorder).font(typography.code(.label))
                     .onSubmit { if let customShell { draft.shell = customShell.trimmingCharacters(in: .whitespaces) } }
                     .accessibilityIdentifier("settings-custom-shell")
             }.padding(.bottom, 9)
             Text("A program by its full path, then its arguments. Press Return to use it.")
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
         }
     }
@@ -959,7 +954,7 @@ struct SettingsView: View {
                     // What the modifier symbols on this page stand for, in the order macOS writes them.
                     Text(KeyGroups.names.map { "\($0.symbol) \($0.name.capitalized)" }.joined(separator: "   "))
                         .accessibilityIdentifier("settings-key-symbols")
-                }.font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                }.font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                 // Worded as in the ⌘/ shortcut sheet.
                 row("Spaces", detail: ShortcutRow.spaceDigits) { keyRecorder("Spaces", \.spaces, digits: "1…9") }
@@ -969,7 +964,7 @@ struct SettingsView: View {
                 row("Splits", detail: ShortcutRow.splitDigits) { keyRecorder("Splits", \.splits, digits: "1…4") }
                 screenshotWarning(\.splits, digits: 4)
                 if let keyError {
-                    Text(keyError).font(typography.font(offset: -1)).foregroundStyle(.red)
+                    Text(keyError).font(typography.font(.body)).foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                         .accessibilityIdentifier("settings-keys-error")
                 }
@@ -980,7 +975,7 @@ struct SettingsView: View {
                 }
                 if !conflicts.isEmpty {
                     Text("\(conflicts.flatMap(\.1).joined(separator: ", ")) also switch macOS Desktops, which takes them before Dispatch. Choose other modifiers for \(conflicts.map(\.0).joined(separator: " and ")), or turn those off in System Settings › Keyboard › Keyboard Shortcuts › Mission Control.")
-                        .font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
+                        .font(typography.font(.body)).foregroundStyle(Chrome.muted)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                         .accessibilityIdentifier("settings-desktop-shortcut-conflict")
                 }
@@ -1002,7 +997,7 @@ struct SettingsView: View {
                 }
                 if draft.dictationEnabled, draft.dictationKey == .function {
                     Text("macOS answers 🌐 too. To leave it to Dispatch, choose Do Nothing in System Settings › Keyboard › Press 🌐 key to.")
-                        .font(typography.font(offset: -1.5)).foregroundStyle(Chrome.palette.warning)
+                        .font(typography.font(.body)).foregroundStyle(Chrome.palette.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                         .accessibilityIdentifier("settings-voice-key-globe")
@@ -1032,7 +1027,7 @@ struct SettingsView: View {
             let keys = [3, 4, 5].filter { $0 <= digits }.map { "⇧⌘\($0)" }
             let list = keys.count > 1 ? keys.dropLast().joined(separator: ", ") + " and " + keys.last! : keys.joined()
             Text("macOS takes \(list) for screenshots first. To use them here, turn those off in System Settings › Keyboard › Keyboard Shortcuts › Screenshots.")
-                .font(typography.font(offset: -1.5)).foregroundStyle(Chrome.palette.warning)
+                .font(typography.font(.body)).foregroundStyle(Chrome.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                 .accessibilityIdentifier("settings-screenshot-shortcut-conflict")
@@ -1083,8 +1078,7 @@ struct SettingsView: View {
         let chat = TerminalRuntime.shared.chat
         // Every agent is on unless turned off here.
         return Fold(title: "Options", changed: chat.listedLaunches.filter { chat.disabledIntegrations.contains($0.key) }.count
-                        + changed { [$0.chatSendWhileWorking, $0.chatEditorByDefault, $0.chatAgentStart, $0.chatEscapeStop,
-                                     $0.chatToolSteps, $0.chatControlDExits] },
+                        + changed { [$0.chatSendWhileWorking, $0.chatEditorByDefault, $0.chatAgentStart, $0.chatToolSteps] },
                     isExpanded: $agentsExpanded)
     }
 
@@ -1129,7 +1123,7 @@ struct SettingsView: View {
         return Button { toggle(fold) } label: {
             HStack(spacing: 5) {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 11, weight: .medium))
-                if fold.changed > 0 { Text("\(fold.changed)").font(typography.font(offset: -2.5)).monospacedDigit() }
+                if fold.changed > 0 { Text("\(fold.changed)").font(typography.font(.caption)).monospacedDigit() }
             }
             .foregroundStyle(open ? Chrome.ink : SettingsControlStyle.detail)
             .padding(.horizontal, 8).frame(height: 24)
@@ -1187,7 +1181,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         SettingsTitle(title: title, privacy: privacy).fontWeight(.semibold)
                             .foregroundStyle(SettingsControlStyle.selectedText)
-                        Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     }
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle()).onTapGesture { if let fold { toggle(fold) } }
@@ -1217,16 +1211,16 @@ struct SettingsView: View {
         HStack(spacing: 12) {
             if detailBelow {
                 VStack(alignment: .leading, spacing: 2) {
-                    SettingsTitle(title: title, privacy: privacy).font(typography.font(offset: -0.5))
+                    SettingsTitle(title: title, privacy: privacy).font(typography.font(.label))
                     if let detail {
-                        Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    SettingsTitle(title: title, privacy: privacy).font(typography.font(offset: -0.5))
-                    if let detail { Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1) }
+                    SettingsTitle(title: title, privacy: privacy).font(typography.font(.label))
+                    if let detail { Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1) }
                 }
             }
             Spacer(minLength: 0)
@@ -1457,13 +1451,13 @@ struct SettingsDropdown: NSViewRepresentable {
         let button = PopupButton(frame: .zero, pullsDown: false)
         button.cell = PopupCell(textCell: "", pullsDown: false)
         button.target = context.coordinator; button.action = #selector(Coordinator.changed(_:))
-        button.font = AppFont.native(size: typography.size(offset: -0.5))
+        button.font = AppFont.native(size: typography.size(.label))
         return button
     }
     func updateNSView(_ button: NSPopUpButton, context: Context) {
         button.isEnabled = isEnabled
         button.appearance = NSAppearance(named: Chrome.palette.isDark ? .darkAqua : .aqua)
-        button.font = AppFont.native(size: typography.size(offset: -0.5))
+        button.font = AppFont.native(size: typography.size(.label))
         button.needsDisplay = true
         context.coordinator.selection = $selection
         let items = choices.contains(selection) ? choices : choices + [selection]

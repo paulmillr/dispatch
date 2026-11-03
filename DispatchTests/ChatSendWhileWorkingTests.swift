@@ -1,7 +1,7 @@
 import XCTest
 @testable import DispatchApp
 
-/// Settings › Features › Chat mode › While the agent works: Return queues (⌥⏎ steers) or steers (⌥⏎ queues).
+/// Settings › Features › Chat mode › While the agent works: Return queues (⌥⌘⏎ steers) or steers (⌥⌘⏎ queues).
 @MainActor final class ChatSendWhileWorkingTests: XCTestCase {
     func testTheChoiceRoundTripsAndOlderSettingsQueue() throws {
         let old = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))

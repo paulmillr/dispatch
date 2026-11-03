@@ -38,7 +38,7 @@ struct SettingsRow<Control: View>: View {
                     SettingsTitle(title: title, privacy: privacy, info: info)
                     // Wraps rather than truncates beside a wide control.
                     if let detail {
-                        Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(.leading, indented ? 18 : 0)

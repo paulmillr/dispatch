@@ -461,11 +461,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   into its turn (terminal not attached, not verified, a command waiting for an idle agent: "Send" would promise what
   the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. Settings › Chat ›
   While the agent works (`MobileSettings.chatSendWhileWorkingKey`, the Mac's Chat mode option) can make the tap Send
-  now while the agent can take the draft into its turn; Queue in the long press (and ⌥Return) then queues it. Settings ›
+  now while the agent can take the draft into its turn; Queue in the long press (and ⌥⌘Return) then queues it.
+  Hardware keyboards follow the Mac: Return sends in compact mode, Option-Return and Shift-Return insert a newline,
+  Command-Return and Control-Return send in either mode, and Command-Option-Return takes the alternate send action
+  (steer by default, queue when ordinary send steers). A typed newline leaves editor mode as it is. Settings ›
   Chat's other options, as the Mac's Chat mode: Editor mode by default (new drafts start in editor mode; a multi-line
   paste or ⌘E turns it on, a typed newline never does), Open agents in (an agent tab's first segment,
-  `TabSegment.initial`; a pick on the tab sticks) and Esc stops the agent (twice: a hardware keyboard's first Esc only
-  arms the stop for a second, shown above the field). The code keys above
+  `TabSegment.initial`; a pick on the tab sticks). A hardware keyboard's first Esc arms the stop for a second, shown
+  above the field; a second Esc stops the agent. There is no Escape setting, and its removed saved choice is ignored. The code keys above
   the field show only once picked under "+" (Show code keys, `MobileSettings.composerCodeKeysKey`, kept app-wide; not
   offered with a hardware keyboard). Dragging the thread down onto the composer, or on into the keyboard, takes a
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the

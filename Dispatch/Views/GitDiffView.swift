@@ -112,7 +112,7 @@ struct GitDiffView: View {
             // The file's counts as the Review list draws them.
             GitCounts(additions: isBinary ? nil : presentation.additions, deletions: isBinary ? nil : presentation.deletions,
                       binary: isBinary ? GitChangesText.binary(old: diff.oldSize, new: diff.newSize, kind: kind) : nil)
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .accessibilityIdentifier("git-diff-meta")
             Spacer(minLength: 0)
             Button { wrap.toggle() } label: {

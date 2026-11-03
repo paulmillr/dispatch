@@ -95,13 +95,24 @@ final class ChatScrollPosition {
     private var afterTracking: [() -> Void] = []
     var userScrolled: (() -> Void)?
     var realizeAnchor: ((String) -> Void)?
+    /// The last real message, not an eager spacer after the lazy stack. Its frame is the measured bottom;
+    /// the document's estimated height can extend far beyond every realized row while a chat opens.
+    var bottomRowID: (() -> String?)?
+    var realizeBottom: ((String) -> Void)?
+    var bottomContentInset: CGFloat = 0
+    private var bottomRealizationID: String?
+    private var bottomRealizationAttempts = 0
+    private var bottomRealizationScheduled = false
+    private var bottomRealizationGeneration = 0
+    private var bottomJumpPending = false
+    private var hasFollowedMeasuredBottom = false
     var followsBottom: (() -> Bool)?
     private(set) var saved: Anchor?
     /// Returns true only when the coordinator actually starts a request.
     var loadEarlier: ((Bool) -> Bool)?
     private var automaticHistoryLoadsRemaining = 0
     var positionChanged: ((Anchor) -> Void)?
-    var isRestoring: Bool { pending != nil }
+    var isRestoring: Bool { pending != nil || bottomJumpPending }
     private var earlierVelocity: CGFloat = 0
     private var earlierReadLatency: TimeInterval = 0.1
     private var velocityTime: TimeInterval?
@@ -170,6 +181,8 @@ final class ChatScrollPosition {
         if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
         stopViewportChecks()
         scroll = value
+        hasFollowedMeasuredBottom = false
+        resetBottomRealization()
         recordDiagnostic(.attached, force: true)
         scrollbar?.removeFromSuperview()
         // A separate overlay owns visibility. AppKit's automatic overlay would
@@ -561,6 +574,8 @@ final class ChatScrollPosition {
         // The first scroll after mounting shows what the reader was looking at.
         recordDiagnostic(.userScroll, force: firstScrollPending || mountBlank)
         firstScrollPending = false
+        bottomJumpPending = false
+        resetBottomRealization()
         emptyViewportChecks = 0; lastEmptyViewportCheck = -Double.infinity
         scrollbar?.reveal()
         interactionRevision &+= 1
@@ -646,6 +661,8 @@ final class ChatScrollPosition {
         }
     }
     func restoreOnAppearance() {
+        bottomJumpPending = false
+        resetBottomRealization()
         pending = saved; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false
         geometryChanged()
     }
@@ -708,7 +725,10 @@ final class ChatScrollPosition {
         realizeAnchor?(id)
     }
     func restore(_ anchor: Anchor?) { saved = anchor; restoreOnAppearance() }
-    func clear() { saved = nil; automaticHistoryLoadsRemaining = 0; cancelPreservation() }
+    func clear() {
+        saved = nil; bottomJumpPending = false; hasFollowedMeasuredBottom = false; automaticHistoryLoadsRemaining = 0
+        resetBottomRealization(); cancelPreservation()
+    }
     func cancelPreservation() { pending = nil; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false }
     /// A view connecting takes over the session's callbacks; the token is what it disconnects with, and
     /// `reconnect` wires that view again (with its token) if it outlasts a later one.
@@ -750,6 +770,8 @@ final class ChatScrollPosition {
         scrollbar?.removeFromSuperview(); scrollbar = nil
         observation = nil; wheelMonitor = nil; scroll = nil; markers.removeAll()
         documentObservation = nil; frameObservation = nil; realizeAnchor = nil; followsBottom = nil
+        bottomRowID = nil; realizeBottom = nil; bottomJumpPending = false
+        resetBottomRealization()
         isLiveScrolling = false; lastWheelTime = -Double.infinity
         finishScrollerTracking()
         // The next view of this chat shows its current rows (callbacks are gone: no rebuild from here).
@@ -759,6 +781,13 @@ final class ChatScrollPosition {
     }
     func jumpToLatest() {
         cancelPreservation(); cancelGlide(); saved = nil
+        bottomJumpPending = true
+        hasFollowedMeasuredBottom = false
+        resetBottomRealization()
+        pinToBottom()
+    }
+    func followLatest() {
+        guard pending == nil, followsBottom?() == true else { return }
         pinToBottom()
     }
     /// A live row without an entrance (in a burst): layout pins it at once, as a glide would, so no later item
@@ -772,19 +801,86 @@ final class ChatScrollPosition {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         arrivalExpectedAt = ProcessInfo.processInfo.systemUptime
     }
-    /// The document's padding below its "bottom" marker. Item scrolling to that marker leaves the padding under the
-    /// viewport, so following stops there too: aiming at the document's end put a streamed reply that many points
-    /// too high for a frame, until the next item scroll brought it back down.
+    /// The document's trailing padding stays below the followed viewport. It is excluded from the estimate used
+    /// while history's last row is not realized; a measured row uses `bottomContentInset` instead.
     var bottomPadding: CGFloat = 0
-    /// The scroll offset that shows the "bottom" marker's edge at the viewport's, as item scrolling to it does.
+    /// Follow the last row's measured edge, including the floating input. A native-only viewport (and history
+    /// whose last row is not realized) can still estimate proximity from the document height.
     private func bottomOffset(_ scroll: NSScrollView, _ document: NSView) -> CGFloat {
-        max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
+        if let frame = bottomRowFrame(document) {
+            return max(0, frame.maxY + bottomContentInset - scroll.contentView.bounds.height)
+        }
+        return max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
+    }
+    private func bottomRowFrame(_ document: NSView) -> NSRect? {
+        guard let id = bottomRowID?(), let view = markers[id]?.view,
+              view.window != nil, view.enclosingScrollView === scroll,
+              !view.isHiddenOrHasHiddenAncestor, view.bounds.height > 1 else { return nil }
+        return view.convert(view.bounds, to: document)
+    }
+    private func requestBottomRealization() {
+        guard let id = bottomRowID?(), realizeBottom != nil, let scroll else { return }
+        if bottomRealizationID != id { bottomRealizationID = id; bottomRealizationAttempts = 0 }
+        guard bottomRealizationAttempts < Self.bottomRealizationLimit, !bottomRealizationScheduled else { return }
+        bottomRealizationScheduled = true
+        let interaction = interactionRevision
+        let generation = bottomRealizationGeneration
+        // Ask SwiftUI after the current layout returns. Keep this queued work cancellable when the reader
+        // scrolls or another view takes over the connection.
+        DispatchQueue.main.async { [weak self, weak scroll] in
+            guard let self, let scroll, self.scroll === scroll, self.bottomRealizationGeneration == generation else { return }
+            guard self.pending == nil, self.interactionRevision == interaction,
+                  self.bottomJumpPending || self.followsBottom?() == true else {
+                self.bottomRealizationScheduled = false
+                return
+            }
+            // Layout may have supplied the row while this was queued, or a newer message may now be last.
+            // Do not send an obsolete item scroll after the native correction has already placed the viewport.
+            if self.bottomRowID?() != id || scroll.documentView.flatMap(self.bottomRowFrame) != nil {
+                self.bottomRealizationScheduled = false
+                self.pinToBottom()
+                return
+            }
+            self.bottomRealizationAttempts += 1
+            self.recordDiagnostic(.followRequested)
+            self.realizeBottom?(id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self, weak scroll] in
+                guard let self, let scroll, self.scroll === scroll, self.bottomRealizationGeneration == generation else { return }
+                self.bottomRealizationScheduled = false
+                guard self.pending == nil, self.interactionRevision == interaction,
+                      self.bottomJumpPending || self.followsBottom?() == true else { return }
+                self.pinToBottom()
+            }
+        }
+    }
+    /// Item scrolls to the last row before following stops asking: each lands on SwiftUI's estimate for the rows not yet
+    /// measured, and replacing a tall reply's estimate can take several (a 3,400-point reply among short rows needed more
+    /// than 4 once chat text was 14.2 points).
+    static let bottomRealizationLimit = 12
+    private func resetBottomRealization() {
+        bottomRealizationGeneration &+= 1
+        bottomRealizationScheduled = false; bottomRealizationID = nil; bottomRealizationAttempts = 0
     }
     private func pinToBottom() {
         guard !adjusting else { return }
         guard let scroll, let document = scroll.documentView else { return }
+        // Moving to an estimated document end can leave SwiftUI's lazy rows hidden at their earlier positions.
+        // Realize the actual destination first; retries allow its item lookup and layout to settle separately.
+        // Once following is established, a resize or live insertion can recycle the final row while other rows
+        // still show. Follow that layout's extent as before; a fresh or wholly blank viewport must realize first.
+        let measuredBottom = bottomRowFrame(document)
+        if bottomRowID?() != nil, measuredBottom == nil, !(hasFollowedMeasuredBottom && showsRows()) {
+            requestBottomRealization()
+            return
+        }
+        if measuredBottom != nil { hasFollowedMeasuredBottom = true; bottomRealizationAttempts = 0 }
         let destination = bottomOffset(scroll, document)
-        guard abs(destination - scroll.contentView.bounds.minY) > 0.25 else { return }
+        let jumping = bottomJumpPending
+        bottomJumpPending = false
+        guard abs(destination - scroll.contentView.bounds.minY) > 0.25 else {
+            if jumping { scrolled() }
+            return
+        }
         // Each glide frame re-reads the bottom, so later growth joins the running glide.
         if glide != nil { return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -853,7 +949,7 @@ final class ChatScrollPosition {
         scheduleSettledCheck()
         // Item scrolling can precede a streamed row's final measured height.
         // Follow the document's actual bottom through subsequent layout passes.
-        if pending == nil && followsBottom?() == true { pinToBottom() }
+        if pending == nil && (bottomJumpPending || followsBottom?() == true) { pinToBottom() }
         // Correct during layout/bounds notifications, before painting. SwiftUI
         // may subsequently finish its item scroll; retain the anchor through a
         // quiet layout cycle so that final adjustment cannot erase the offset.

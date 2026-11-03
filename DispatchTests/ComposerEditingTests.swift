@@ -139,13 +139,13 @@ import XCTest
         var actions: [(UUID, String)] = []
         text.queueAction = { actions.append(($0, $1)) }
         text.keyDown(with: key(14, "e"))
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(actions.map(\.0), [hovered.id, hovered.id])
         XCTAssertEqual(actions.map(\.1), ["edit", "send"])
         XCTAssertTrue(text.string.isEmpty)
 
         session.queuedMessages[1].pause = .stopped
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(actions.count, 2, "A paused row's disabled Steer action must not send")
         session.queuedSubmissionID = hovered.id
         XCTAssertTrue(text.performKeyEquivalent(with: key(51, "\u{7f}", .command)))
@@ -171,7 +171,7 @@ import XCTest
         var sends = 0
         text.queueAction = { actions.append(($0, $1)) }
         text.sendNow = { sends += 1 }
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(sends, 0)
         text.keyDown(with: key(14, "e"))
         XCTAssertTrue(text.string.isEmpty)
@@ -181,7 +181,7 @@ import XCTest
         XCTAssertEqual(actions.map(\.1), ["send", "edit", "delete"])
 
         session.hoveredQueuedID = nil
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(sends, 1)
         text.keyDown(with: key(14, "e"))
         XCTAssertEqual(text.string, "e")
@@ -203,7 +203,7 @@ import XCTest
             text.keyDown(with: key(code, String(UnicodeScalar(character)!)))
             XCTAssertNotEqual(text.selectedRange().location, 8)
         }
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(sends, 1)
         text.selectAll(nil)
         text.insertText("", replacementRange: text.selectedRange())
@@ -212,7 +212,7 @@ import XCTest
         text.keyDown(with: key(126, String(UnicodeScalar(NSUpArrowFunctionKey)!)))
         XCTAssertNil(session.selectedQueuedID, "Empty multiline drafts must retain editor navigation")
         session.selectedQueuedID = queued.id
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", .option)))
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(sends, 2)
         XCTAssertEqual(actions, 0)
     }
@@ -245,6 +245,50 @@ import XCTest
         text.keyDown(with: key(51, "\u{7f}", repeating: true))
         text.keyDown(with: key(51, "\u{7f}"))
         XCTAssertEqual(actions, 0, "An empty compact composer must not discard queued messages either")
+    }
+
+    func testOptionReturnInsertsAnUndoableNewlineEvenWithAQueuedMessageSelected() {
+        defer { close() }
+        let text = editor()
+        let queued = ChatQueuedMessage(text: "queued", process: nil)
+        session.queuedMessages = [queued]
+        var sends = 0, actions = 0
+        text.submit = { sends += 1 }; text.sendNow = { sends += 1 }
+        text.queueAction = { _, _ in actions += 1 }
+        for multiline in [false, true] {
+            for code: UInt16 in [36, 76] {
+                for equivalent in [false, true] {
+                    session.drafts.edit(multiline: multiline)
+                    session.selectedQueuedID = queued.id; session.hoveredQueuedID = queued.id
+                    let event = key(code, "\r", .option)
+                    if equivalent { XCTAssertTrue(text.performKeyEquivalent(with: event)) }
+                    else { text.keyDown(with: event) }
+                    XCTAssertEqual(session.draft, "\n")
+                    XCTAssertEqual(session.drafts.current.multiline, multiline)
+                    XCTAssertEqual(sends, 0); XCTAssertEqual(actions, 0)
+                    text.undoManager?.undo()
+                    XCTAssertEqual(text.string, "")
+                    XCTAssertEqual(session.draft, "")
+                }
+            }
+        }
+    }
+
+    func testCommandOptionReturnSendsFromEitherEditorModeAndRespectsComposition() {
+        defer { close() }
+        let text = editor("draft")
+        var sends = 0, alternates = 0
+        text.submit = { sends += 1 }; text.sendNow = { alternates += 1 }
+        for multiline in [false, true] {
+            session.drafts.edit(multiline: multiline)
+            text.keyDown(with: key(76, "\r", [.command, .option]))
+            XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
+        }
+        XCTAssertEqual(alternates, 4); XCTAssertEqual(sends, 0)
+        XCTAssertEqual(text.string, "draft")
+        text.setMarkedText("入力", selectedRange: NSRange(location: 2, length: 0), replacementRange: text.selectedRange())
+        _ = text.performKeyEquivalent(with: key(36, "\r", [.command, .option]))
+        XCTAssertEqual(alternates, 4, "Confirming an input method must not send")
     }
 
     func testReturnKeypadAndStickyMultiline() {
@@ -560,21 +604,5 @@ extension ComposerEditingTests {
         text.keyDown(with: key(36, "\r"))
         XCTAssertEqual(submits, 1, "Return sends a one-line command in editor mode")
         XCTAssertEqual(session.draft, "/compact")
-    }
-}
-
-extension ComposerEditingTests {
-    func testDoubleControlDDoesNothingWhenTurnedOff() {
-        defer { close() }
-        let chat = TerminalRuntime.shared.chat, before = chat.controlDExits
-        defer { chat.controlDExits = before }
-        chat.controlDExits = false
-        let text = editor()
-        var exits = 0
-        text.exitChat = { exits += 1 }
-        text.keyDown(with: key(2, "\u{4}", .control, ignoringModifiers: "d", timestamp: 10))
-        text.keyDown(with: key(2, "\u{4}", .control, ignoringModifiers: "d", timestamp: 10.5))
-        XCTAssertEqual(exits, 0)
-        XCTAssertEqual(text.string, "")
     }
 }

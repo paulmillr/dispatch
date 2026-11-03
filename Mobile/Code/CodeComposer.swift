@@ -14,8 +14,8 @@ import UniformTypeIdentifiers
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. With "Show code keys" picked
 /// under "+" (off by default, kept app-wide: `MobileSettings.composerCodeKeysKey`), while the field is focused a glass key row above the field
 /// offers the backtick, the fence and code pairs. With a hardware
-/// keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends and Shift-Return starts a new line;
-/// in editor mode (⌘E, a multi-line paste, Settings' default) Return inserts newlines and ⌘Return sends; ⌥Return steers, ⌘E toggles
+/// keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends; Option/Shift-Return starts a new line;
+/// in editor mode (⌘E, a multi-line paste, Settings' default) Return inserts newlines and ⌘Return sends; ⌥⌘Return steers, ⌘E toggles
 /// editor mode, Esc leaves editor mode, else stops a running turn, else leaves the field. The key row stays away then:
 /// the keyboard has every key it offers. With `attachments`, "+" picks photos or
 /// files, an image pasted into the field or a drop on the composer attaches, and a strip above the field shows them
@@ -74,7 +74,7 @@ struct CodeComposer: View {
     var focus: FocusState<Bool>.Binding
     var send: () -> Void
     var steer: (() -> Void)?
-    /// Given when `send` steers (Settings › Chat, While the agent works: Steer): what Queue and ⌥Return do then.
+    /// Given when `send` steers (Settings › Chat, While the agent works: Steer): what Queue and ⌥⌘Return do then.
     var queue: (() -> Void)? = nil
     var stop: () -> Void
     /// What send's long press offers (`sendOptions`, or completing a command, opening Terminal); a tap does what the
@@ -97,8 +97,7 @@ struct CodeComposer: View {
     @State private var dropTargeted = false
     @State private var visible = false
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
-    /// Settings › Chat › Esc stops the agent: pressed twice, the first Esc only arms the stop (`stopArmed`).
-    @AppStorage(MobileSettings.chatEscapeStopKey) private var escapeStop = ChatEscapeStop.once
+    /// The first Esc only arms the stop; another within a second stops the turn.
     @State private var stopArmed: Date?
     @ReduceMotion private var reduceMotion
 
@@ -131,8 +130,8 @@ struct CodeComposer: View {
     private func perform(_ action: ComposerKeyAction) {
         switch action {
         case .send: send()
-        // ⌥Return goes the other way from Return: steers, or queues when Return steers.
-        case .steer: (queue ?? steer ?? send)()
+        // ⌥⌘Return goes the other way from Return: steers, or queues when Return steers.
+        case .alternateSend: (queue ?? steer ?? send)()
         case .stop: escape()
         case .toggleEditor: multiline.wrappedValue.toggle()
         case .leaveEditor: multiline.wrappedValue = false
@@ -140,10 +139,9 @@ struct CodeComposer: View {
         }
     }
 
-    /// Esc while the agent works: stops, or with Esc twice arms the stop for `ChatEscapeStop.window` and stops on the
+    /// Esc while the agent works: arms the stop for `ChatEscapeStop.window` and stops on the
     /// second press.
     private func escape() {
-        guard escapeStop == .twice else { return stop() }
         let now = Date()
         if let armed = stopArmed, now.timeIntervalSince(armed) <= ChatEscapeStop.window {
             stopArmed = nil

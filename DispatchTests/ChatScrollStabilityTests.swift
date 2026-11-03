@@ -7,6 +7,81 @@ import os
 
 @MainActor
 final class ChatScrollStabilityTests: XCTestCase {
+    func testAnEmptyTranscriptCanPreloadHistoryAfterOpeningAtTheBottom() async throws {
+        let fixture = try NativeScrollFixture(rows: 0)
+        defer { fixture.close() }
+        fixture.position.registerViewport(fixture.document)
+        fixture.position.bottomRowID = { nil }
+        fixture.position.hasContent = { false }
+        fixture.position.jumpToLatest()
+        XCTAssertFalse(fixture.position.isRestoring, "An empty page has no last row to realize")
+        var requests = 0
+        fixture.position.loadEarlier = { _ in requests += 1; return true }
+        fixture.position.beginOpeningHistoryPreload()
+        try await TestSupport.eventually(timeout: .seconds(1)) { requests > 0 }
+    }
+
+    func testFollowingUsesTheMeasuredLastRowInsteadOfAnInflatedDocumentEstimate() throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        fixture.position.bottomRowID = { "row-7" }
+        fixture.position.bottomContentInset = 97
+        fixture.position.followsBottom = { true }
+        // The lazy stack's estimate grows before its final row moves. Following that estimate would leave
+        // every message above the viewport, even though the last row already supplies an exact destination.
+        fixture.document.frame.size.height = 12_000
+        fixture.position.jumpToLatest()
+        let measuredBottom = fixture.markers[7].frame.maxY + 97
+        XCTAssertEqual(fixture.scroll.contentView.bounds.maxY, measuredBottom, accuracy: 0.5)
+        XCTAssertTrue(fixture.position.showsRows())
+        XCTAssertEqual(fixture.position.isAtBottom(tolerance: 1), true)
+    }
+
+    func testPendingBottomRealizationYieldsToUserScrolling() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        fixture.position.bottomRowID = { "row-7" }
+        var following = true
+        fixture.position.followsBottom = { following }
+        fixture.position.userScrolled = { following = false }
+        fixture.markers[7].removeFromSuperview()
+        var requests = 0
+        fixture.position.realizeBottom = { _ in requests += 1 }
+        fixture.position.jumpToLatest()
+        fixture.position.userWillScroll(deltaY: 20)
+        fixture.move(to: 450)
+        let start = ProcessInfo.processInfo.systemUptime
+        try await TestSupport.eventually { ProcessInfo.processInfo.systemUptime - start > 0.1 }
+        XCTAssertEqual(requests, 0, "The queued item scroll must not override the reader")
+        XCTAssertEqual(fixture.scroll.contentView.bounds.minY, 450, accuracy: 0.5)
+    }
+
+    func testExplicitJumpAfterCancellingAQueuedJumpStillRealizesTheLastRow() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        fixture.position.bottomRowID = { "row-7" }
+        fixture.position.followsBottom = { false }
+        let last = fixture.markers[7]
+        last.removeFromSuperview()
+        var requests = 0
+        fixture.position.realizeBottom = { id in
+            XCTAssertEqual(id, last.id)
+            requests += 1
+            fixture.document.addSubview(last)
+        }
+        fixture.position.jumpToLatest()
+        fixture.position.userWillScroll(deltaY: 20)
+        fixture.move(to: 450)
+        // This new explicit intent must survive the cancelled request's queued callback, even though normal
+        // following is still off. No wheel or watchdog tick should be needed to finish it.
+        fixture.position.jumpToLatest()
+        try await TestSupport.eventually(timeout: .seconds(1)) {
+            !fixture.position.isRestoring && fixture.position.isAtBottom(tolerance: 1) == true
+        }
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(fixture.position.showsRows())
+    }
+
     func testDiagnosticsOptInDiscardsQueuedSamplesOnDisableAndCanReenable() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
         defer { fixture.close() }
@@ -233,7 +308,11 @@ final class ChatScrollStabilityTests: XCTestCase {
         defer { session.scrollPosition.disconnect(); window.orderOut(nil); window.contentView = nil; window.close() }
         window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
         window.makeKeyAndOrderFront(nil)
-        try await TestSupport.eventually(timeout: .seconds(3)) { samples.contains { $0.event == .mountCheck } }
+        // A settled mount check (0.8 s): the first ones can precede SwiftUI's next geometry report while rows replace
+        // their estimated heights.
+        try await TestSupport.eventually(timeout: .seconds(3)) {
+            samples.contains { $0.event == .mountCheck && ($0.sinceAttach ?? 0) >= 0.7 }
+        }
         let sample = try XCTUnwrap(samples.last { $0.event == .mountCheck })
         let clip = try XCTUnwrap(sample.clip)
         if #available(macOS 15, *) {

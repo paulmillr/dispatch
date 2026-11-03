@@ -209,7 +209,7 @@ struct WorkspaceShortcutSheet: View {
 
     var body: some View {
         ShortcutSheet(style: .init(ink: Chrome.ink, muted: Chrome.muted, background: Chrome.sidebar,
-                                   colorScheme: Chrome.colorScheme, font: AppFont.ui(size: typography.size(offset: -1.5)),
+                                   colorScheme: Chrome.colorScheme, font: typography.font(.body),
                                    keyFont: typography.shortcut()),
                       primary: [.init(rows: ShortcutRow.navigation)],
                       more: [.init(rows: ShortcutRow.window)])

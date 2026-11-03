@@ -22,7 +22,7 @@ struct ChatGoalControls: View {
                         if goal.status == "paused" {
                             Image(systemName: "pause.fill")
                         } else {
-                            Text("◆").foregroundStyle(goal.status == "active" ? theme.accent : theme.muted)
+                            Image(systemName: "diamond.fill").imageScale(.small).foregroundStyle(goal.status == "active" ? theme.accent : theme.muted)
                         }
                         Text(pendingAction == "pause" ? "pausing goal…" : pendingAction == "resume" ? "resuming goal…"
                              : pendingAction == "clear" ? "stopping goal…"

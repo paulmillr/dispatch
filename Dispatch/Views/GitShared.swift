@@ -16,7 +16,7 @@ struct GitChangeBadge: View {
     var body: some View {
         let color = Self.color(kind)
         Text(verbatim: kind.rawValue)
-            .font(AppFont.ui(size: typography.size(offset: plain ? -1.5 : -2), weight: plain ? .semibold : .regular))
+            .font(typography.font(plain ? .body : .caption, weight: plain ? .semibold : .regular))
             .foregroundStyle(color)
             .frame(width: side, height: side)
             .background(RoundedRectangle(cornerRadius: corner).fill(plain ? .clear : color.opacity(kind == .deleted ? 0.14 : 0.12)))
@@ -77,7 +77,7 @@ struct GitCentredNote: View {
 
     var body: some View {
         Text(verbatim: text)
-            .font(AppFont.ui(size: typography.size(offset: -1)))
+            .font(typography.font(.body))
             .foregroundStyle(Chrome.palette.detail)
             .multilineTextAlignment(.center)
             .textSelection(.enabled)

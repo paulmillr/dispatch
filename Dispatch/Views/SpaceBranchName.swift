@@ -47,7 +47,7 @@ struct SpaceBranchName: View {
     }
 
     private func branchText(_ branch: String) -> some View {
-        Text(branch).font(AppFont.ui(size: branchFontSize ?? max(8, fontSize - 2), design: .monospaced))
+        Text(branch).font(AppFont.ui(size: branchFontSize ?? max(8, fontSize - 2)))
             .foregroundStyle(branchColor).lineLimit(1).truncationMode(.middle)
             .accessibilityLabel("Git branch: \(branch)")
             .accessibilityIdentifier("space-branch-\(id)")

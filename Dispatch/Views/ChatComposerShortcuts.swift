@@ -3,12 +3,8 @@ import SwiftUI
 struct ChatComposerShortcuts: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
-    /// Settings' Return steers while the agent works (⌥⏎ queues).
+    /// Settings' Return steers while the agent works (⌥⌘⏎ queues).
     var steers = false
-    /// Settings' Esc stops the agent when pressed twice.
-    var escapeTwice = false
-    /// Settings' double ⌃D closes the tab.
-    var quits = true
     @Binding var presented: Bool
 
     var body: some View {
@@ -32,12 +28,13 @@ struct ChatComposerShortcuts: View {
         let multiline = session.drafts.shape.multiline
         return (multiline ? [.init("⏎", "newline · insert a new line")] : []) + [
             .init(multiline ? "⌘⏎" : "⏎", !session.busy ? "send · start a new turn" : steers ? steer : queue),
-            .init("⌥⏎", steers ? queue : steer),
+            .init("⌥⌘⏎", steers ? queue : steer),
+            .init("⌥⏎ / ⇧⏎", "insert a newline"),
             .init("⌘E", multiline ? "editor · return to single-line mode" : "editor · Return inserts a newline"),
             .init("⌘S", "save draft"),
             .init("/", "commands · type / to browse agent commands"),
             multiline ? .init("⎋", "exit editor · keep your draft")
-                : .init(escapeTwice ? "⎋ twice" : "⎋", "stop · end the current turn, keeping your draft"),
+                : .init("⎋ twice", "stop · end the current turn, keeping your draft"),
         ] + (DictationStore.shared.shortcut.map { key in [
             .init("hold \(key.name)", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
             .init("tap \(key.name)", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
@@ -53,8 +50,7 @@ struct ChatComposerShortcuts: View {
     }
 
     private var moreComposer: [ShortcutRow] { [
-        .init("⌘⏎ / ⌃⏎", "send or queue from either editor mode"),
-        .init("⇧⏎", "insert a newline · ⏎ still sends"),
+        .init("⌘⏎ / ⌃⏎", "send from either editor mode · follows your queue/steer setting"),
         .init("⏎", "jump to new messages · empty single-line draft"),
         .init("⇧⌘M", "choose model · in single-line mode"),
         .init("⇧⌘E", "choose effort · in single-line mode"),
@@ -64,10 +60,11 @@ struct ChatComposerShortcuts: View {
         .init("⌘[ / ⌘]", "outdent / indent lines in editor mode"),
         .init("↑ / ↓", "select queued messages when the draft is empty"),
         .init("E", "edit the selected or hovered queued message"),
-        .init("⌥⏎", "send the selected or hovered queued message now"),
+        .init("⌥⌘⏎", "send the selected or hovered queued message now"),
         .init("⌘⌫", "remove the selected or hovered queued message"),
         .init("⎋", "clear queue selection or cancel a queued edit first"),
-    ] + (quits ? [.init("⌃D twice", "close tab and quit agent, or show Terminal if busy · empty single-line draft only")] : []) }
+        .init("⌃D twice", "close tab and quit agent, or show Terminal if busy · empty single-line draft only"),
+    ] }
 }
 
 /// The agent's running subagents beside its activity, while they run (they can outlive their turn): their
@@ -250,7 +247,7 @@ struct ChatComposerActivity: View {
                 HStack(spacing: 8) {
                     if theme.radioLog {
                         // Nautical: the vessel's status, as the radar plots it.
-                        Text("◆").foregroundStyle(state.waiting ? theme.yellow : theme.accent)
+                        Image(systemName: "diamond.fill").imageScale(.small).foregroundStyle(state.waiting ? theme.yellow : theme.accent)
                         if showsLabel || state.waiting {
                             Text(state.waiting ? "calling" : "under way").foregroundStyle(theme.ink)
                         }

@@ -43,21 +43,17 @@ final class SettingsTests: XCTestCase {
                        "the long press offers both ways, Send now first")
     }
 
-    func testAgentStartAndEscapeStopKeepTodaysBehaviourUntilChosen() {
+    func testAgentStartKeepsTheSavedChoice() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
         defer { TabSegment.agentStart = .chat }
         XCTAssertEqual(settings.chatAgentStart, .chat)
-        XCTAssertEqual(settings.chatEscapeStop, .once)
         settings.chatAgentStart = .terminal
-        settings.chatEscapeStop = .twice
         XCTAssertEqual(TabSegment.agentStart, .terminal, "agent tabs now open on their terminal")
-        XCTAssertEqual(store.string(forKey: MobileSettings.chatEscapeStopKey), "twice", "the key the composer reads")
         TabSegment.agentStart = .chat
         let reopened = MobileSettings(defaults: store)
         XCTAssertEqual(reopened.chatAgentStart, .terminal)
         XCTAssertEqual(TabSegment.agentStart, .terminal, "a launch applies the saved choice")
-        XCTAssertEqual(reopened.chatEscapeStop, .twice)
     }
 
     func testDictationDefaultsToAppleAndRemembersWhisper() {

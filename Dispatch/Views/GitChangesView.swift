@@ -88,7 +88,7 @@ private struct GitChangesList: View {
                         if !shown.changes.isEmpty { summary }
                         if shown.changes.isEmpty {
                             Text("No changed file matches “\(session.changesFilter)”")
-                                .font(AppFont.ui(size: typography.size(offset: -1)))
+                                .font(typography.font(.body))
                                 .foregroundStyle(Chrome.palette.detail)
                                 .padding(.leading, FilesColumns.leading).padding(.top, 14)
                                 .accessibilityIdentifier("git-changes-no-match")
@@ -164,7 +164,7 @@ private struct GitChangesList: View {
             Spacer(minLength: 0)
         }
         .lineLimit(1)
-        .font(AppFont.ui(size: typography.size(offset: -1.5)))
+        .font(typography.font(.body))
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)
         .frame(height: typography.expanded(28))
@@ -179,7 +179,7 @@ private struct GitChangesList: View {
             Spacer(minLength: 8)
             Text(verbatim: FilesFormatting.count(count)).foregroundStyle(Chrome.palette.detail)
         }
-        .font(AppFont.ui(size: typography.size(offset: -1.5)))
+        .font(typography.font(.body))
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)
         .frame(height: typography.expanded(26))
@@ -223,13 +223,13 @@ private struct GitChangeRow: View {
             GitChangeBadge(kind: change.kind, side: 14, plain: true)
             HStack(spacing: 8) {
                 Text(verbatim: change.name)
-                    .font(AppFont.ui(size: typography.size()))
+                    .font(typography.font(.content))
                     .foregroundStyle(palette.ink)
                     .truncationMode(.middle)
                     .layoutPriority(1)
                 // The folder gives way first, keeping its end: the folder the file is in.
                 Text(verbatim: GitChangesText.folder(change))
-                    .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                    .font(typography.font(.body))
                     .foregroundStyle(palette.detail)
                     .truncationMode(.head)
             }
@@ -240,7 +240,7 @@ private struct GitChangeRow: View {
                     Image(systemName: "text.bubble.fill").font(.system(size: 9))
                     Text(verbatim: FilesFormatting.count(comments))
                 }
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .foregroundStyle(ChatThemeStore.shared.current.blue)
                 .help(ReviewText.count(comments))
                 .accessibilityLabel(ReviewText.count(comments))
@@ -250,7 +250,7 @@ private struct GitChangeRow: View {
                       binary: change.binary ? GitChangesText.binary(old: change.oldSize ?? diff?.oldSize,
                                                                     new: change.newSize ?? diff?.newSize, kind: change.kind)
                           : nil)
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
         }
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)

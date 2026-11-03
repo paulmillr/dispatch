@@ -125,7 +125,7 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(defaults.fontSize, 14)
         let typography = ChatTypography(preferences: defaults)
         XCTAssertEqual(typography.codeFontName, "SourceCodePro-Regular")
-        XCTAssertEqual(typography.sizeScale, 1)
+        XCTAssertEqual(typography.sizeScale, ChatFont.system.sizeScale, "San Francisco draws at Source Code Pro's lowercase height")
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)), defaults)
         let old = try JSONDecoder().decode(Preferences.self, from: Data(#"{"fontFamily":"0xProto"}"#.utf8))
         XCTAssertEqual(old.chatFont, .system)
@@ -225,8 +225,8 @@ final class ChatTests: XCTestCase {
             preferences.chatFont = choice
             let chat = ChatTypography(preferences: preferences)
             if let design = choice.systemDesign {
-                XCTAssertEqual(chat.reply, choice.systemFont(ofSize: preferences.fontSize + 1))
-                XCTAssertEqual(chat.body, .system(size: preferences.fontSize, weight: .regular,
+                XCTAssertEqual(chat.reply, choice.systemFont(ofSize: (preferences.fontSize + 1) * choice.sizeScale))
+                XCTAssertEqual(chat.body, .system(size: preferences.fontSize * choice.sizeScale, weight: .regular,
                                                   design: design == .serif ? .serif : design == .rounded ? .rounded : .default))
             } else {
                 XCTAssertEqual(chat.fontName, choice.postScriptName)
@@ -235,8 +235,8 @@ final class ChatTests: XCTestCase {
             XCTAssertEqual(chat.codeFontName, code.codeFontName)
             XCTAssertEqual(chat.codeDetailLineHeight, code.codeDetailLineHeight)
             XCTAssertEqual(chat.codeReply.pointSize, code.reply.pointSize)
-            if choice.systemDesign != nil { XCTAssertEqual(chat.reply.pointSize, code.reply.pointSize) }
-            else { XCTAssertNotEqual(chat.reply.pointSize, code.reply.pointSize) }
+            // Every face at Source Code Pro's lowercase height: the code font's size, scaled by the face's own measure.
+            XCTAssertEqual(chat.reply.pointSize, code.reply.pointSize * choice.sizeScale, accuracy: 0.001, "\(choice)")
             XCTAssertEqual(chat.size, preferences.fontSize)
             preferences.fontFamily = "Source Code Pro"
             let changedCode = ChatTypography(preferences: preferences)

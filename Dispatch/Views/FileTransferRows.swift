@@ -89,7 +89,7 @@ struct FileTransferRow: View {
     private func failure(_ text: FileTransferText) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Text("◆").foregroundStyle(palette.warning)
+                Image(systemName: "diamond.fill").imageScale(.small).foregroundStyle(palette.warning)
                 Text(text.title).foregroundStyle(palette.secondary).lineLimit(2)
                 Spacer(minLength: 0)
                 if let retry = transfer.retry {

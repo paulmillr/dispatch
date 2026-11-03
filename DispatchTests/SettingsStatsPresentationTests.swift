@@ -782,7 +782,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal", "Window", "tab names, git branches, host colors and glass",
+            ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal", "Window", "tab names, git branches, host colors, glass and contrast",
                          "On launch", "Reopen spaces", "Scrollback", "New tabs", "login shell",
                          "Security", "programs can copy"]),
             ("Theme", ["Colors", "App theme", "app, terminal and chat", "Terminal opacity", "Colorblind-friendly",
@@ -813,7 +813,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertFalse(text.contains("Option as Alt"), "Keyboard behaviour lives under Keyboard")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
                 XCTAssertFalse(text.contains("Colorblind-friendly"), "Colors live under Theme")
-                XCTAssertFalse(text.contains("Improve text contrast"), "Text contrast starts folded under Font")
+                XCTAssertFalse(text.contains("Improve text contrast"), "Text contrast starts folded under Window")
                 XCTAssertFalse(text.contains("Liquid Glass"), "Window starts collapsed")
                 XCTAssertFalse(text.contains("a program's own"), "Tab names start folded under Window")
                 XCTAssertFalse(text.contains("Same as code follows"), "Chat font starts folded under Font")

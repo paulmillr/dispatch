@@ -50,10 +50,6 @@ final class ChatCoordinator {
     var sendWhileWorking = ChatSendWhileWorking.queue
     /// Settings › Chat mode: a tab whose terminal starts an agent shows Chat, or stays on its terminal.
     var agentStart = ChatAgentStart.chat
-    /// Settings › Chat mode: Esc stops the running turn at once or only when pressed twice (`escapeStop(_:at:)`).
-    var escapeStop = ChatEscapeStop.once
-    /// Settings › Chat mode: double Ctrl+D in an empty draft closes the tab and quits the agent (`quitFromChat`).
-    var controlDExits = true
     /// Settings › Chat mode: how tool groups show until opened or closed; every chat takes it.
     var toolSteps = ChatToolGroupDisclosure.current {
         didSet { for session in sessions.values where session.toolSteps != toolSteps { session.toolSteps = toolSteps } }
@@ -458,15 +454,15 @@ final class ChatCoordinator {
     }
 
     /// Return (and Send) steers the draft into the running turn instead of queueing it: Settings chose Steer, the agent
-    /// works, and the draft is a message rather than a command or a queued message's edit. ⌥⏎ then queues.
+    /// works, and the draft is a message rather than a command or a queued message's edit. ⌥⌘⏎ then queues.
     func returnSteers(_ session: ChatSession) -> Bool {
         sendWhileWorking == .steer && session.busy && session.editingQueuedID == nil && !session.draftIsCommand
     }
 
-    /// The composer's Return (`option`: ⌥⏎ or Send with ⌥ held): the draft's usual way, or the other one, steering
+    /// The composer's Return (`alternate`: ⌥⌘⏎ or Send with ⌥⌘ held): the draft's usual way, or the other one, steering
     /// (`sendNow`) or queueing as Settings' `sendWhileWorking` and the draft say (`returnSteers`).
-    func sendFromComposer(_ session: ChatSession, option: Bool) {
-        if option != returnSteers(session) { sendNow(session) } else { sendFromComposer(session) }
+    func sendFromComposer(_ session: ChatSession, alternate: Bool) {
+        if alternate != returnSteers(session) { sendNow(session) } else { sendFromComposer(session) }
     }
 
     private func directSubmissionReady(_ session: ChatSession) -> Bool {
@@ -725,12 +721,11 @@ final class ChatCoordinator {
         return interruptHelper(session)
     }
 
-    /// Esc in the composer (`time`: the key event's timestamp). With Settings' Pressed twice, the first press only
+    /// Esc in the composer (`time`: the key event's timestamp). The first press only
     /// arms the stop, which the composer shows, and a second within `ChatEscapeStop.window` stops; false when nothing
     /// can be stopped (Esc then goes on as usual).
     func escapeStop(_ session: ChatSession, at time: TimeInterval) -> Bool {
         guard canInterrupt(session) else { session.stopArmedAt = nil; return false }
-        guard escapeStop == .twice else { return interrupt(session) }
         if let armed = session.stopArmedAt, time >= armed, time - armed <= ChatEscapeStop.window { return interrupt(session) }
         session.stopArmedAt = time
         DispatchQueue.main.asyncAfter(deadline: .now() + ChatEscapeStop.window) { [weak session] in

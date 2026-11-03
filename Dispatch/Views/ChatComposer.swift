@@ -15,7 +15,7 @@ struct ChatComposer: NSViewRepresentable {
     var workspace: Workspace?
     var sendNow: (() -> Void)?
     var queueAction: ((UUID, String) -> Void)?
-    var optionChanged: ((Bool) -> Void)?
+    var alternateSendChanged: ((Bool) -> Void)?
     var showShortcuts: (() -> Void)?
     /// Attachments (ChatCoordinator.attach): whether the draft takes them now, files or image data to upload, and the
     /// open panel (⇧⌘A).
@@ -49,17 +49,17 @@ struct ChatComposer: NSViewRepresentable {
         text.setAccessibilityIdentifier("chat-composer-\(session.id)")
         scroll.documentView = text; scroll.drawsBackground = false; scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
-        context.coordinator.optionChanged = optionChanged
+        context.coordinator.alternateSendChanged = alternateSendChanged
         context.coordinator.modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak text, weak coordinator = context.coordinator] event in
             guard let text, let window = text.window,
                   event.window === window || (event.window == nil && window.isKeyWindow) else { return event }
-            coordinator?.optionChanged?(event.modifierFlags.contains(.option))
+            coordinator?.alternateSendChanged?(ChatEditorTextView.usesAlternateSend(event.modifierFlags))
             return event
         }
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        context.coordinator.optionChanged = optionChanged
+        context.coordinator.alternateSendChanged = alternateSendChanged
         guard let text = scroll.documentView as? ComposerTextView else { return }
         let drafts = session.drafts
         // The editor's own keystrokes are already in it; observe only changes made elsewhere.
@@ -151,7 +151,7 @@ struct ChatComposer: NSViewRepresentable {
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
         let session: ChatSession
-        var optionChanged: ((Bool) -> Void)?
+        var alternateSendChanged: ((Bool) -> Void)?
         var modifierMonitor: Any?
         var focusRequest: UUID?
         var wasFocused = false
@@ -290,7 +290,7 @@ struct ChatComposer: NSViewRepresentable {
         }
         private func exitShortcut(_ event: NSEvent) -> Bool {
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard event.keyCode == 2, flags == .control, string.isEmpty, TerminalRuntime.shared.chat.controlDExits,
+            guard event.keyCode == 2, flags == .control, string.isEmpty,
                   session?.drafts.current.multiline != true, !hasMarkedText(), let exitChat else {
                 resetExitShortcut(); return false
             }
@@ -333,7 +333,7 @@ struct ChatComposer: NSViewRepresentable {
             // Match the shortcuts to the row whose hover actions are visible.
             if let id = session.hoveredQueuedID ?? session.selectedQueuedID,
                let message = session.queuedMessages.first(where: { $0.id == id }), session.editingQueuedID != id {
-                if flags == .option, event.keyCode == 36 || event.keyCode == 76 {
+                if Self.usesAlternateSend(flags), event.keyCode == 36 || event.keyCode == 76 {
                     if session.queuedSubmissionID != id, message.pause == nil, message.matches(session) { queueAction?(id, "send") }
                     return true
                 }

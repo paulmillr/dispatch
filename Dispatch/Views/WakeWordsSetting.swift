@@ -20,7 +20,7 @@ struct WakeWordsSetting: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 TextField("Dispatch, Captain", text: $text)
-                    .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5))
+                    .textFieldStyle(.roundedBorder).font(typography.font(.label))
                     .onChange(of: text) { _, value in apply(value) }
                     .accessibilityIdentifier("settings-wake-words")
                 Button(trying ? "Stop" : "Try it") { trying ? Dictation.shared.cancel() : tryIt() }
@@ -28,23 +28,23 @@ struct WakeWordsSetting: View {
                     .accessibilityIdentifier("settings-wake-words-try")
             }
             ForEach(checked.problems + checked.warnings, id: \.self) { line in
-                Label(line, systemImage: "exclamationmark.triangle").font(typography.font(offset: -1.5))
+                Label(line, systemImage: "exclamationmark.triangle").font(typography.font(.body))
                     .foregroundStyle(SettingsControlStyle.detail)
             }
             if checked.words.isEmpty, !text.trimmingCharacters(in: .whitespaces).isEmpty {
                 Text("No usable word: commands keep starting with “\(Self.title(words.first ?? "dispatch"))”.")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
             }
             if trying {
                 Text(heard.isEmpty ? "Listening · say “\(Self.title(checked.words.first ?? "dispatch")), send”" : heard)
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .accessibilityIdentifier("settings-wake-words-heard")
             } else if let error = Dictation.shared.error(for: Self.owner) {
-                Label(error, systemImage: "exclamationmark.triangle").font(typography.font(offset: -1.5))
+                Label(error, systemImage: "exclamationmark.triangle").font(typography.font(.body))
                     .foregroundStyle(SettingsControlStyle.detail)
             } else if let outcome {
                 Label(outcome.text, systemImage: outcome.ok ? "checkmark.circle" : "xmark.circle")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .accessibilityIdentifier("settings-wake-words-outcome")
             }
         }

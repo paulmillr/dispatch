@@ -11,7 +11,7 @@ struct FileConflictPrompt: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Text("◆").foregroundStyle(palette.warning)
+                Image(systemName: "diamond.fill").imageScale(.small).foregroundStyle(palette.warning)
                 Text(text.title).foregroundStyle(palette.secondary).lineLimit(2)
             }
             HStack(spacing: 6) {

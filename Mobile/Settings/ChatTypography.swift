@@ -28,8 +28,8 @@ extension ChatFontChoice {
         }
     }
 
-    /// Latin Modern's small lowercase drawn at the Mac's calibrated size (`ChatFont.sizeScale`).
-    var sizeScale: CGFloat { CGFloat(scale(on: .iOS)) }
+    /// Latin Modern's small lowercase lifted to the system font's (`ChatFontChoice.iOSScale`).
+    var sizeScale: CGFloat { CGFloat(iOSScale) }
 }
 
 /// Chat's text size relative to Dynamic Type (G3): one text style smaller or larger than the bubbles' callout.

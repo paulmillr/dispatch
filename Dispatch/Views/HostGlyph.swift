@@ -156,7 +156,7 @@ struct HostInformationView: View {
             } else {
                 ForEach(actions) { footerButton($0) }
             }
-        }.font(typography.font(offset: -0.5)).foregroundStyle(Chrome.ink)
+        }.font(typography.font(.label)).foregroundStyle(Chrome.ink)
             .padding(.horizontal, 18).padding(.vertical, 16).frame(width: typography.expanded(356))
             .statsPopoverBackground().preferredColorScheme(Chrome.colorScheme)
             .accessibilityIdentifier("host-information-popover")
@@ -220,7 +220,7 @@ struct HostInformationView: View {
                 // The system's capsule buttons; Forget host takes the destructive role's red.
                 Button(role: action.destructive ? .destructive : nil, action: action.action) {
                     // The popover's inherited ink would otherwise override the role's red.
-                    Text(action.title).font(typography.font(offset: -0.5)).frame(maxWidth: .infinity)
+                    Text(action.title).font(typography.font(.label)).frame(maxWidth: .infinity)
                         .foregroundStyle(action.destructive ? Color(nsColor: .systemRed) : Chrome.ink)
                 }.buttonStyle(.bordered).controlSize(.large).padding(.top, 4)
             } else {
@@ -234,7 +234,7 @@ struct HostInformationView: View {
     private func flatFooterButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(typography.font(offset: -0.5))
+                .font(typography.font(.label))
                 .foregroundStyle(Chrome.ink)
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity)
@@ -297,7 +297,7 @@ struct HostConnectionDetails: View {
             if let tint {
                 row("color", alignment: .center) { HostColorPicker(tint: tint) }
             }
-        }.font(typography.font(offset: -0.5)).frame(maxWidth: .infinity, alignment: .leading)
+        }.font(typography.font(.label)).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// One fact: its label in a column as wide as the widest label, so every value starts on the same edge.
@@ -307,7 +307,7 @@ struct HostConnectionDetails: View {
             ZStack(alignment: .leading) {
                 Text("backends").hidden()
                 if let label { Text(label) }
-            }.font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.muted)
+            }.font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
             value().frame(maxWidth: .infinity, alignment: .leading)
         }.frame(minHeight: typography.expanded(22))
     }
@@ -421,9 +421,9 @@ struct HostIdentityHeader: View {
                 .background((host.tint?.foreground ?? Chrome.muted).opacity(0.15),
                             in: StatsStyle.glass ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 7)))
             VStack(alignment: .leading, spacing: 2) {
-                Text(host.id == .local ? "local" : host.name).font(typography.font(offset: 0.5, weight: .semibold))
+                Text(host.id == .local ? "local" : host.name).font(typography.font(.title, weight: .semibold))
                 Text(host.system?.label ?? "Operating system unavailable")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.muted)
+                    .font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
             }
             Spacer(minLength: 4)
             HStack(spacing: 6) {
@@ -439,7 +439,7 @@ struct HostIdentityHeader: View {
                 } else {
                     Text(host.id == .local ? "local" : state.shownLabel)
                 }
-            }.font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.secondary)
+            }.font(typography.font(.body)).foregroundStyle(StatsStyle.secondary)
                 .frame(width: visibleLatency != nil ? typography.expanded(112) : nil, alignment: .trailing)
         }
     }
@@ -477,7 +477,7 @@ struct HostInformationButton<Label: View>: View {
                     TerminalRuntime.shared.hosts.forget(host.id)
                 } label: {
                     Image(systemName: "xmark")
-                        .font(typography.font(offset: -3)).foregroundStyle(Chrome.muted)
+                        .font(typography.font(.micro)).foregroundStyle(Chrome.muted)
                         .frame(width: 24, height: 24).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

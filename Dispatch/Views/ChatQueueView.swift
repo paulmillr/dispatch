@@ -306,7 +306,7 @@ struct ChatQueueView: View {
         let shortcuts = session.drafts.shape.isEmpty && !session.drafts.shape.multiline && session.editingQueuedID == nil
         return HStack(spacing: 6) {
             Button { coordinator.sendNow(session, queuedID: message.id) } label: {
-                QueueActionLabel(title: "Send now", shortcut: shortcuts ? "⌥⏎" : nil, role: .primary, height: buttonHeight)
+                QueueActionLabel(title: "Send now", shortcut: shortcuts ? "⌥⌘⏎" : nil, role: .primary, height: buttonHeight)
             }
             .disabled(steerDisabled(message))
             .help("Steer: interrupt the current turn and send this now")

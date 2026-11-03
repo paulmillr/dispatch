@@ -438,11 +438,11 @@ private struct GitUncommittedRow: View {
             GitGraphCell(row: row, lanes: lanes, hollow: true, width: graphWidth, height: height)
             HStack(spacing: 8) {
                 Text("Uncommitted changes")
-                    .font(AppFont.ui(size: typography.size()))
+                    .font(typography.font(.content))
                     .foregroundStyle(selected ? palette.ink : palette.sidebarHostLabel)
                 Spacer(minLength: 8)
                 Text(verbatim: GitCommitsText.files(files))
-                    .font(AppFont.ui(size: typography.size(offset: -2)))
+                    .font(typography.font(.caption))
                     .foregroundStyle(palette.detail)
             }
             .lineLimit(1)
@@ -506,7 +506,7 @@ private struct GitCommitRow: View {
             HStack(spacing: 8) {
                 // The subject gives way first: the chips (up to their share of the row) and the age keep their width.
                 Text(verbatim: commit.subject)
-                    .font(AppFont.ui(size: typography.size()))
+                    .font(typography.font(.content))
                     .foregroundStyle(selected ? palette.ink : palette.secondary)
                     .truncationMode(.tail)
                 if !commit.refs.isEmpty {
@@ -519,7 +519,7 @@ private struct GitCommitRow: View {
                 if author != .hidden {
                     // A column, like Files' Modified: the same width on every row, and the ages after it line up too.
                     Text(verbatim: author == .name ? GitAuthorColumn.name(commit.author) : GitAuthorColumn.initials(commit.author))
-                        .font(AppFont.ui(size: typography.size(offset: -2)))
+                        .font(typography.font(.caption))
                         .foregroundStyle(selected ? palette.muted : palette.detail)
                         .frame(width: GitAuthorColumn.width(author, typography: typography), alignment: .leading)
                         .help(commit.email.isEmpty ? commit.author : "\(commit.author) <\(commit.email)>")
@@ -528,7 +528,7 @@ private struct GitCommitRow: View {
                 // The age moves on by the minute with nothing reloaded.
                 TimelineView(.periodic(from: .now, by: 60)) { _ in
                     Text(verbatim: FilesFormatting.age(commit.date, at: System.date()))
-                        .font(AppFont.ui(size: typography.size(offset: -2)))
+                        .font(typography.font(.caption))
                         .foregroundStyle(selected ? palette.muted : palette.detail)
                         .fixedSize()
                         .frame(minWidth: author == .hidden ? nil : GitAuthorColumn.ageWidth(typography), alignment: .trailing)
@@ -712,7 +712,7 @@ struct GitRefChip: View {
         let palette = Chrome.palette
         let filled = Self.filled(ref)
         Text(verbatim: ref.name)
-            .font(AppFont.ui(size: typography.size(offset: -2.5)))
+            .font(typography.font(.caption))
             .foregroundStyle(filled ? palette.green : ref.kind == .tag ? palette.warning : palette.muted)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -765,7 +765,7 @@ private struct GitRefOverflow: View {
     var body: some View {
         let palette = Chrome.palette
         Text(verbatim: "+\(refs.count)")
-            .font(AppFont.ui(size: typography.size(offset: -2.5)))
+            .font(typography.font(.caption))
             .foregroundStyle(palette.muted)
             .padding(.horizontal, 6)
             .frame(height: typography.expanded(16))
@@ -813,7 +813,7 @@ private struct GitCommitsFooter: View {
         .padding(.leading, 14)
         .padding(.trailing, 12)
         .frame(height: typography.expanded(24))
-        .font(AppFont.ui(size: typography.size(offset: -2)))
+        .font(typography.font(.caption))
         .foregroundStyle(palette.detail)
         .background(Chrome.window)
         .overlay(alignment: .top) { palette.separator.frame(height: 1) }
@@ -839,7 +839,7 @@ private struct GitCommitsFooter: View {
             // One text, so the menu keeps the chevron after the title and draws both in the footer's ink.
             (Text(verbatim: title + " ") + Text(Image(systemName: "chevron.down")).font(.system(size: typography.size(offset: -5),
                                                                                                weight: .semibold)))
-                .font(AppFont.ui(size: typography.size(offset: -2)))
+                .font(typography.font(.caption))
                 .foregroundStyle(Chrome.palette.muted)
         }
         .menuStyle(.borderlessButton)
@@ -935,7 +935,7 @@ private struct GitCommitSummary: View {
                     VStack(alignment: .leading, spacing: 8) {
                         metaLine(refs: false)
                         GitRefChips(refs: commit.refs)
-                            .font(AppFont.ui(size: typography.size(offset: -1)))
+                            .font(typography.font(.body))
                     }
                 }
             }
@@ -947,7 +947,7 @@ private struct GitCommitSummary: View {
                         .help("\(committer.name) <\(committer.email)> · "
                               + GitCommitsText.fullTime(committer.date, zone: committer.zone))
                 }
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .foregroundStyle(palette.detail)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -1012,7 +1012,7 @@ private struct GitCommitSummary: View {
             }
             Spacer(minLength: 0)
         }
-        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .font(typography.font(.body))
         .foregroundStyle(palette.muted)
         .lineLimit(1)
     }
@@ -1049,10 +1049,10 @@ private struct GitCommitFiles: View {
                 if detail != nil {
                     GitCounts(additions: files.reduce(0) { $0 + ($1.additions ?? 0) },
                               deletions: files.reduce(0) { $0 + ($1.deletions ?? 0) })
-                        .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                        .font(typography.font(.body))
                 }
             }
-            .font(AppFont.ui(size: typography.size(offset: -2)))
+            .font(typography.font(.caption))
             .foregroundStyle(palette.detail)
             .padding(.horizontal, 16)
             .frame(height: typography.expanded(28))
@@ -1071,12 +1071,12 @@ private struct GitCommitFiles: View {
                         .accessibilityIdentifier("git-commit-files-retry")
                     Spacer(minLength: 0)
                 }
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .padding(.horizontal, 16)
                 .frame(minHeight: typography.expanded(32))
             } else if detail == nil {
                 Text("Loading files…")
-                    .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                    .font(typography.font(.body))
                     .foregroundStyle(palette.detail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -1140,14 +1140,14 @@ struct GitCommitFileRow: View {
         HStack(spacing: 10) {
             GitChangeBadge(kind: file.kind)
             Text(verbatim: file.oldPath.map { "\($0) → \(file.path)" } ?? file.path)
-                .font(AppFont.ui(size: typography.size()))
+                .font(typography.font(.content))
                 .foregroundStyle(palette.ink)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             GitCounts(additions: file.additions, deletions: file.deletions,
                       binary: file.binary ? GitChangesText.binary(old: file.oldSize ?? diff?.oldSize,
                                                                   new: file.newSize ?? diff?.newSize, kind: file.kind) : nil)
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
         }
         .lineLimit(1)
         .padding(.leading, 16)

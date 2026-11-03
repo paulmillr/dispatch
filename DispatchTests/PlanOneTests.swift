@@ -278,10 +278,28 @@ final class PlanOneTests: XCTestCase {
         }
         XCTAssertGreaterThan(TerminalFontScale.factor("Inconsolata"), 1.05)
         XCTAssertLessThan(TerminalFontScale.factor("Victor Mono"), 0.8)
+        // Chat's faces and the interface's San Francisco draw at Source Code Pro's lowercase height too, at every size
+        // (the system font changes optical size with it), measured the same way.
+        let heightOf = { (font: NSFont) in try XCTUnwrap(TerminalFontScale.lowercaseHeight(font as CTFont)) }
+        let interface = InterfaceFontStore.shared.current
+        defer { InterfaceFontStore.shared.current = interface }
+        for size in [10.0, 14, 18, 24] {
+            let target = try heightOf(try XCTUnwrap(NSFont(name: "SourceCodePro-Regular", size: size)))
+            for choice in ChatFont.allCases where choice != .sameAsCode {
+                let scaled = size * choice.sizeScale
+                let font = try XCTUnwrap(choice.systemFont(ofSize: scaled) ?? choice.postScriptName.flatMap { NSFont(name: $0, size: scaled) })
+                XCTAssertEqual(try heightOf(font), target, accuracy: target * 0.005, "\(choice) at \(size)")
+            }
+            InterfaceFontStore.shared.current = .system
+            XCTAssertEqual(try heightOf(AppFont.native(size: size)), target, accuracy: target * 0.005, "San Francisco at \(size)")
+        }
+        XCTAssertEqual(ChatFont.sameAsCode.sizeScale, 1)
+        XCTAssertLessThan(ChatFont.system.sizeScale, 0.96, "SF Rounded's lowercase is taller than Source Code Pro's")
         // Chat's New York and San Francisco (drawn in SF Rounded): the system font's designs, never looked up by name.
         for (choice, design) in [(ChatFont.newYork, Font.Design.serif), (.system, .rounded)] {
             var chat = Preferences(); chat.chatFont = choice
-            XCTAssertEqual(ChatTypography(preferences: chat).font(), Font.system(size: chat.fontSize, weight: .regular, design: design))
+            let typography = ChatTypography(preferences: chat)
+            XCTAssertEqual(typography.font(), Font.system(size: typography.pointSize(), weight: .regular, design: design))
             XCTAssertNotEqual(choice.systemFont(ofSize: 12)?.familyName, NSFont.systemFont(ofSize: 12).familyName, "\(choice)")
         }
         var preferences = Preferences(); preferences.spaceOrder = .tree

@@ -595,7 +595,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard termination == nil, let window, window.attachedSheet == nil else { return }
         let alert = NSAlert()
         alert.messageText = "Dispatch \(updater.release?.version ?? "") is ready"
-        alert.informativeText = "Restart Dispatch to install the update. You can also do this later in Settings › General › Updates."
+        alert.informativeText = "Restart Dispatch to install the update. You can also do this later in Settings › General › Terminal."
         alert.addButton(withTitle: "Later")
         alert.addButton(withTitle: "Restart and install")
         alert.beginSheetModal(for: window) { [weak self] response in

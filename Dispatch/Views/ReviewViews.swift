@@ -196,7 +196,7 @@ struct ReviewCommentCard: View {
     }
 }
 
-/// The comment being written: what it is on, the editor (⏎ saves, ⇧⏎ a new line, esc cancels), Cancel and Comment.
+/// The comment being written: what it is on, the editor (⏎ saves, ⌥⏎ or ⇧⏎ a new line, esc cancels), Cancel and Comment.
 struct ReviewComposer: View {
     let review: GitDiffReview
     let draft: ReviewDraft
@@ -224,7 +224,7 @@ struct ReviewComposer: View {
                 .background(theme.terminal, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.border))
             HStack(spacing: 8) {
-                Text("⏎ \(editing ? "saves" : "comments") · ⇧⏎ new line · esc cancels")
+                Text("⏎ \(editing ? "saves" : "comments") · ⌥⏎ / ⇧⏎ new line · esc cancels")
                     .font(theme.typography.font(offset: -2))
                     .foregroundStyle(theme.muted)
                     .lineLimit(1)
@@ -288,7 +288,7 @@ struct ReviewHeaderButton: View {
                     }
                 }
             }
-            .font(AppFont.ui(size: typography.size(offset: -1)))
+            .font(typography.font(.label))
             // The button and the note crossfade: copying, Undo and the note's timeout change the repository outside
             // any animation.
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: reviews.copied[scope] != nil)
@@ -296,7 +296,7 @@ struct ReviewHeaderButton: View {
             // A remote host's comments are kept by the host's own id (`ReviewScope`): without one, none are taken.
             Label("No comments", systemImage: "text.bubble")
                 .labelStyle(.titleAndIcon)
-                .font(AppFont.ui(size: typography.size(offset: -1)))
+                .font(typography.font(.body))
                 .foregroundStyle(.secondary)
                 .help("Comments are kept per host, and \(source.hostLabel ?? "this host") isn’t identified yet. "
                       + "They can be written once its connection is.")
@@ -568,7 +568,7 @@ private struct ReviewFinish: View {
 
 // MARK: Editor
 
-/// A comment's editor: the chat composer's text view (its own caret, ⏎ submits, ⇧⏎ a new line, esc cancels), growing
+/// A comment's editor: the chat composer's text view (its own caret, ⏎ submits, ⌥⏎ or ⇧⏎ a new line, esc cancels), growing
 /// with its text. `text` is read when it is made; a new `focus` gives it the keyboard.
 struct ReviewTextEditor: NSViewRepresentable {
     @Environment(\.chatTheme) private var theme

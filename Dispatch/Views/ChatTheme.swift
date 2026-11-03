@@ -233,7 +233,8 @@ struct ChatTypography: Equatable, Sendable {
     var stepTitleWidth: CGFloat = 64
     var replyLineHeight: CGFloat = 18
     var detailLineHeight: CGFloat = 14
-    /// Between the lines of chat's prose: 4 points at Settings' Normal line spacing.
+    /// Between the lines of chat's prose: 4 points at Settings' Normal line spacing, less for a face whose own line is
+    /// taller than Source Code Pro's.
     var lineSpacing: CGFloat = 4
     init() {}
     static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Locate"]
@@ -261,6 +262,11 @@ struct ChatTypography: Equatable, Sendable {
         codeDetailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: code.fontDescriptor, size: codeDetailSize)
             ?? .monospacedSystemFont(ofSize: codeDetailSize, weight: .regular))
         replyLineHeight = layout.defaultLineHeight(for: reply)
+        // A face whose own line is taller than Source Code Pro's at the same apparent size (Latin Modern's, by a quarter)
+        // gives up spacing first, so its lines aren't farther apart than the other fonts'. Shorter lines keep theirs.
+        if let reference = NSFont(name: "SourceCodePro-Regular", size: size + 1) {
+            lineSpacing = max(0, lineSpacing - max(0, replyLineHeight - layout.defaultLineHeight(for: reference)))
+        }
         detailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: selected.fontDescriptor, size: detailSize)
             ?? .monospacedSystemFont(ofSize: detailSize, weight: .regular))
     }

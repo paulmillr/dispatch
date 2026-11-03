@@ -75,7 +75,7 @@ struct ThemeMakerView: View {
         }
         .background(Chrome.window)
         .foregroundStyle(Chrome.ink)
-        .font(typography.font(offset: 0))
+        .font(typography.font(.content))
         .environment(\.appTypography, typography)
         .controlSize(.small)
         .tint(Chrome.accent)
@@ -91,19 +91,19 @@ struct ThemeMakerView: View {
                 Text(title).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText).lineLimit(1)
                 Text(vision == .typical ? "Grow a readable scheme from one color."
                      : "Grow a readable scheme from one color, for \(vision.title.lowercased()) color blindness.")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
             }
             Spacer()
             ModeSwitch(light: $recipe.light)
             // "P3" fits beside Dark and Light; the help and VoiceOver say Display P3 in full.
-            Toggle(isOn: $recipe.displayP3) { Text("P3").font(typography.font(offset: -1)) }
+            Toggle(isOn: $recipe.displayP3) { Text("P3").font(typography.font(.label)) }
                 .toggleStyle(.checkbox)
                 .help("Display P3: colors beyond sRGB for wide-color displays. Ghostty and other apps get the nearest sRGB colors.")
                 .accessibilityLabel("Display P3")
                 .accessibilityIdentifier("theme-maker-display-p3")
             Button(action: surprise) {
                 Label("Random", systemImage: "dice")
-                    .font(typography.font(offset: -1))
+                    .font(typography.font(.label))
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(SettingsControlStyle.fill, in: RoundedRectangle(cornerRadius: 6))
                     .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(SettingsControlStyle.border) }
@@ -151,7 +151,7 @@ struct ThemeMakerView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(recipe.seed.displayP3.map { "P3 \($0.hex)" } ?? recipe.seed.hex)
                     Text(recipe.seed.oklchText).accessibilityIdentifier("theme-maker-oklch")
-                }.font(typography.font(offset: -1.5, design: .monospaced)).foregroundStyle(Chrome.muted)
+                }.font(typography.code(.body)).foregroundStyle(Chrome.muted)
                     .lineLimit(1).minimumScaleFactor(0.8).textSelection(.enabled)
                 Spacer(minLength: 0)
             }
@@ -160,7 +160,7 @@ struct ThemeMakerView: View {
                 harmonyMenu.help(recipe.harmony.detail)
             } else {
                 Text("accent hues stay fixed so \(vision.title.lowercased()) color blindness can tell them apart")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("theme-maker-colorblind")
             }
@@ -181,7 +181,7 @@ struct ThemeMakerView: View {
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(SettingsControlStyle.detail)
-            }.font(typography.font(offset: -0.5))
+            }.font(typography.font(.label))
                 .padding(.horizontal, 9).frame(height: typography.expanded(26))
                 .background(SettingsControlStyle.fill, in: RoundedRectangle(cornerRadius: 6))
                 .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(SettingsControlStyle.border) }
@@ -195,9 +195,9 @@ struct ThemeMakerView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Chrome.palette.separator).frame(height: 1)
             HStack(spacing: 10) {
-                Text("Name").font(typography.font(offset: -0.5)).foregroundStyle(Chrome.muted)
+                Text("Name").font(typography.font(.label)).foregroundStyle(Chrome.muted)
                 TextField(automaticName, text: Binding(get: { name }, set: { typedName = $0.isEmpty ? nil : $0 }))
-                    .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5, design: .monospaced))
+                    .textFieldStyle(.roundedBorder).font(typography.font(.label))
                     .frame(width: 200)
                     .disabled(nameFixed)
                     .onSubmit(commit)
@@ -544,7 +544,7 @@ private struct ModeSwitch: View {
 
     private func option(_ title: String, light value: Bool) -> some View {
         Button { light = value } label: {
-            Text(title).font(typography.font(offset: -1))
+            Text(title).font(typography.font(.label))
                 .foregroundStyle(light == value ? SettingsControlStyle.selectedText : Chrome.muted)
                 .padding(.horizontal, 9).padding(.vertical, 3)
                 .background(light == value ? SettingsControlStyle.selected : .clear, in: RoundedRectangle(cornerRadius: 5))
@@ -564,9 +564,9 @@ struct GradientSlider: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(title).font(typography.font(offset: -1))
+                Text(title).font(typography.font(.label))
                 Spacer()
-                Text("\(Int((value * 100).rounded()))").font(typography.font(offset: -1.5)).monospacedDigit()
+                Text("\(Int((value * 100).rounded()))").font(typography.font(.body)).monospacedDigit()
                     .foregroundStyle(SettingsControlStyle.detail)
             }
             GeometryReader { proxy in
@@ -616,7 +616,7 @@ private struct StyleChip: View {
                 }.padding(.horizontal, 5).frame(height: 14)
                     .background(theme.background.swiftUI, in: Capsule())
                     .overlay { Capsule().strokeBorder(theme.foreground.swiftUI.opacity(0.15)) }
-                Text(name).font(typography.font(offset: -1))
+                Text(name).font(typography.font(.label))
                     .foregroundStyle(selected ? SettingsControlStyle.selectedText : Chrome.muted)
             }.padding(.leading, 5).padding(.trailing, 9).padding(.vertical, 4)
                 .background(selected ? SettingsControlStyle.selected : SettingsControlStyle.fill, in: RoundedRectangle(cornerRadius: 6))

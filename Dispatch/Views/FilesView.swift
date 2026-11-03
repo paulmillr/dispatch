@@ -188,7 +188,7 @@ private struct FilesBackBar: View {
             .accessibilityIdentifier("files-split-back")
             Spacer(minLength: 0)
         }
-        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .font(typography.font(.label))
         .padding(.horizontal, 14)
         .frame(height: typography.expanded(28))
         .background(Chrome.window)
@@ -363,7 +363,7 @@ private struct FilesRootErrorLine: View {
             Text(verbatim: message).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .font(AppFont.ui(size: typography.size(offset: -2)))
+        .font(typography.font(.body))
         .foregroundStyle(palette.detail)
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)
@@ -402,7 +402,7 @@ private struct FilesListState: View {
 
     private func centred(_ text: String, identifier: String) -> some View {
         Text(text)
-            .font(AppFont.ui(size: typography.size(offset: -1)))
+            .font(typography.font(.body))
             .foregroundStyle(Chrome.palette.detail)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)

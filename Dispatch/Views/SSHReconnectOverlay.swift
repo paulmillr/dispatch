@@ -203,7 +203,7 @@ struct SSHReconnectControl: NSViewRepresentable {
     func updateNSView(_ view: Control, context: Context) {
         view.update(state: state, reconnect: reconnect, cancel: cancel, wheel: wheel,
                     hostName: hostName, close: close, reduceMotion: reduceMotion)
-        view.appearance(theme: themes.current, font: AppFont.native(size: typography.size(offset: -1)))
+        view.appearance(theme: themes.current, font: AppFont.native(size: typography.size(.label)))
     }
     final class Control: NSView {
         private let button = NSButton()

@@ -176,7 +176,7 @@ final class AppUpdater {
     static func onboardingAlert() -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "Keep Dispatch up to date"
-        alert.informativeText = "Dispatch can check for new releases and download updates automatically. You choose when to restart and install.\n\nYou can change this later in Settings › General › Updates."
+        alert.informativeText = "Dispatch can check for new releases and download updates automatically. You choose when to restart and install.\n\nYou can change this later in Settings › General › Terminal."
         let choice = NSButton(checkboxWithTitle: "Enable automatic updates", target: nil, action: nil)
         choice.state = .off
         choice.setAccessibilityIdentifier("onboarding-automatic-updates")

@@ -88,7 +88,7 @@ struct PaneView: View {
         .hostTintBorder(!space.structured ? hostTint : nil, surfaceID: pane.activeTab?.focusedSurfaceID,
                         stripHeight: showTabs ? tabBarHeight : 0)
         .frame(minWidth: 180, maxWidth: .infinity, minHeight: 120, maxHeight: .infinity)
-        .font(typography.font(offset: -1))
+        .font(typography.font(.label))
         .foregroundStyle(Chrome.ink)
         .onPreferenceChange(PaneShortcutBadgeShown.self) { shortcutBadgeShown = $0 }
         // The strip's accent-colored shortcut badge marks the focused pane when it shows; otherwise this border does.

@@ -7,11 +7,11 @@ struct AttentionBanner: View {
         if let entry = controller.attention.banner {
             Button { controller.attention.focus(entry.id) } label: {
                 HStack {
-                    Text(entry.urgency.symbol)
+                    ActivityMark(entry.urgency).view(size: typography.size(.label))
                     Text(entry.title + " is waiting for input").lineLimit(1)
                     Spacer()
                     Text("⌘J").foregroundStyle(Chrome.muted)
-                }.font(typography.font(offset: -1)).padding(.horizontal, 14).padding(.vertical, 7)
+                }.font(typography.font(.label)).padding(.horizontal, 14).padding(.vertical, 7)
                     .foregroundStyle(Chrome.palette.green)
                     // On glass a floating capsule inset under the strip; otherwise a full-width sidebar-colored bar.
                     .liquidGlass(in: Capsule(), interactive: true)

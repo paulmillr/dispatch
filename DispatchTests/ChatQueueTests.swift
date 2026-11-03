@@ -510,25 +510,26 @@ final class ChatQueueTests: XCTestCase {
         XCTAssertEqual(session.draft, "")
         XCTAssertEqual(session.queuedMessages.map(\.text), ["first", "second", "from Send"])
         session.draft = "send immediately"
-        func option(_ pressed: Bool) throws {
+        func modifiers(_ flags: NSEvent.ModifierFlags) throws {
             NSApp.postEvent(try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero,
-                modifierFlags: pressed ? .option : [], timestamp: 0, windowNumber: window.windowNumber,
+                modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
                 context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58)), atStart: false)
         }
-        try option(true)
+        try modifiers([.command, .option])
         try await Task.sleep(for: .milliseconds(150))
-        let held = try await PresentationTestSupport.capture(window, named: "option-held", in: "chat-queue-validation")
+        let held = try await PresentationTestSupport.capture(window, named: "alternate-send-held", in: "chat-queue-validation")
         XCTAssertTrue(try held.text().contains("Steer"))
         try clickReply("Steer", in: held)
         try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(session.queuedMessages.count, 3, "Option-click must bypass the queue")
+        XCTAssertEqual(session.queuedMessages.count, 3, "Command-Option-click must bypass the queue")
         XCTAssertEqual(session.draft, "send immediately", "This fixture has no terminal, so immediate delivery preserves the draft")
         XCTAssertNotNil(session.submissionFailure, "The button must attempt immediate delivery")
-        try option(false)
+        try modifiers(.option)
         try await Task.sleep(for: .milliseconds(150))
-        let released = try await PresentationTestSupport.capture(window, named: "option-released", in: "chat-queue-validation")
+        let released = try await PresentationTestSupport.capture(window, named: "alternate-send-released", in: "chat-queue-validation")
         XCTAssertTrue(try released.text().contains("Queue"))
         XCTAssertFalse(try released.text().contains("Steer"))
+        try modifiers([])
         session.busy = false; session.loadingHistory = true
         session.draft = "third"; chat.sendFromComposer(session)
         XCTAssertEqual(session.queuedMessages.map(\.text), ["first", "second", "from Send", "third"])

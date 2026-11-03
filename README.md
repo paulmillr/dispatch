@@ -75,8 +75,9 @@ Dispatch is a normal terminal. If you've used terminals, it should be intuitive.
     - For local usage: Settings => Hosts => This Mac => Install (next to codex, claude etc)
     - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
     - While the agent works, sent messages are queued - not steered (Settings => Features => Chat mode can make ⏎ steer instead)
-    - There is a separate key combo (⌥⏎) for the other way; also it's possible to steer queued message
-    - shift+enter adds a line; editor mode (Return adds lines, cmd+enter sends) turns on with cmd+E or a multi-line paste, or by default in Settings. It highlights markdown code brackets
+    - Command+Option+Enter (⌥⌘⏎) takes the other send action; it can also send a selected or hovered queued message now
+    - Option+Enter and Shift+Enter add a line; editor mode (Return adds lines, Command+Enter sends) turns on with Command+E or a multi-line paste, or by default in Settings. It highlights markdown code brackets
+    - Press Escape twice within a second to stop the agent and keep the draft
     - Recommended: codex-cli 0.166.0, claude 2.1.316 or pi 1.5.0
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 

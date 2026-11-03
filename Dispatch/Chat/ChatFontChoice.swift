@@ -1,6 +1,7 @@
 import Foundation
 
-/// Persisted chat font identities, with explicit native substitutions and lowercase-height calibration.
+/// Persisted chat font identities, with explicit native substitutions. The Mac measures each face against Source Code
+/// Pro (`ChatFont.sizeScale`); the iPhone sizes from Dynamic Type and only lifts Latin Modern's small lowercase.
 enum ChatFontChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     case system = "San Francisco"
     case sameAsCode = "Same as code"
@@ -11,13 +12,8 @@ enum ChatFontChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     enum Platform { case macOS, iOS }
     var id: Self { self }
 
-    func scale(on platform: Platform) -> Double {
-        switch self {
-        case .latinModernRoman: 1.126
-        case .comicSans: platform == .macOS ? 0.907 : 1
-        case .sameAsCode, .system, .newYork: 1
-        }
-    }
+    /// The iPhone's scale on its Dynamic Type size, against the system font.
+    var iOSScale: Double { self == .latinModernRoman ? 1.126 : 1 }
 
     func namedFace(on platform: Platform) -> String? {
         switch self {

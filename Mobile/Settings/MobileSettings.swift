@@ -46,8 +46,6 @@ final class MobileSettings {
     nonisolated static let chatEditorByDefaultKey = "chat.editorByDefault"
     /// What an agent tab opens on (`TabSegment.initial`), as the Mac's Settings › Chat mode.
     nonisolated static let chatAgentStartKey = "chat.agentStart"
-    /// A hardware keyboard's Esc stops the turn once or twice pressed; the composer reads it (`@AppStorage`).
-    nonisolated static let chatEscapeStopKey = "chat.escapeStop"
     /// The composer's code keys row ("+" › Show code keys), off by default; the composer reads it (`@AppStorage`).
     nonisolated static let composerCodeKeysKey = "composer.codeKeys"
     nonisolated static let notifyNeedsYouKey = "notify.needsYou"
@@ -162,11 +160,6 @@ final class MobileSettings {
         }
     }
 
-    /// Esc from a hardware keyboard stops the running turn at once, or only pressed twice.
-    var chatEscapeStop: ChatEscapeStop {
-        didSet { if chatEscapeStop != oldValue { defaults.set(chatEscapeStop.rawValue, forKey: Self.chatEscapeStopKey) } }
-    }
-
     /// New drafts start in editor mode: a hardware keyboard's Return adds a line and ⌘Return sends.
     var chatEditorByDefault: Bool {
         didSet {
@@ -277,7 +270,6 @@ final class MobileSettings {
         chatSendWhileWorking = defaults.string(forKey: Self.chatSendWhileWorkingKey).flatMap(ChatSendWhileWorking.init(rawValue:)) ?? .queue
         chatEditorByDefault = defaults.bool(forKey: Self.chatEditorByDefaultKey)
         chatAgentStart = defaults.string(forKey: Self.chatAgentStartKey).flatMap(ChatAgentStart.init(rawValue:)) ?? .chat
-        chatEscapeStop = defaults.string(forKey: Self.chatEscapeStopKey).flatMap(ChatEscapeStop.init(rawValue:)) ?? .once
         notifyNeedsYou = defaults.object(forKey: Self.notifyNeedsYouKey) as? Bool ?? true
         notifyFinished = defaults.object(forKey: Self.notifyFinishedKey) as? Bool ?? true
         notifyFailed = defaults.object(forKey: Self.notifyFailedKey) as? Bool ?? true
@@ -339,7 +331,6 @@ final class MobileSettings {
         take(\.chatSendWhileWorking)
         take(\.chatEditorByDefault)
         take(\.chatAgentStart)
-        take(\.chatEscapeStop)
         take(\.notifyNeedsYou)
         take(\.notifyFinished)
         take(\.notifyFailed)

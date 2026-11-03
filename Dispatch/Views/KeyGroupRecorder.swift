@@ -18,7 +18,7 @@ struct KeyGroupRecorder: NSViewRepresentable {
         view.digits = digits
         view.record = record
         view.isEnabled = isEnabled
-        view.font = AppFont.native(size: typography.size(offset: -0.5))
+        view.font = AppFont.native(size: typography.size(.label))
         // Key legends match the shortcut sheet and sidebar; the prompt stays in the UI font.
         view.keyFont = AppFont.nativeShortcut(size: typography.size(offset: -0.5))
         view.setAccessibilityLabel(title)

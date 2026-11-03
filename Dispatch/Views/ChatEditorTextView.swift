@@ -1,6 +1,11 @@
 import AppKit
 
 class ChatEditorTextView: ChatCaretTextView {
+    /// The alternate send action uses the same modifiers on Return and on the send button.
+    static func usesAlternateSend(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        modifiers.intersection([.command, .control, .option, .shift]) == [.command, .option]
+    }
+
     var multiline = false
     var submit: (() -> Void)?
     var sendNow: (() -> Void)?
@@ -78,13 +83,13 @@ class ChatEditorTextView: ChatCaretTextView {
            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
             if !multiline { cancel?() }; return
         }
-        if submitShortcut(event) { return }
+        if modifiedReturnShortcut(event) { return }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if event.keyCode == 48, !hasMarkedText(), flags.isEmpty || flags == .shift {
             indent(outdent: flags == .shift); return
         }
         if (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText() {
-            // ⇧⏎ adds a line without entering editor mode: Return still sends.
+            // A typed newline leaves editor mode as it is.
             if flags.contains(.shift) || multiline {
                 insertNewlineIgnoringFieldEditor(nil)
             } else { submit?() }
@@ -99,7 +104,7 @@ class ChatEditorTextView: ChatCaretTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self else { return super.performKeyEquivalent(with: event) }
         if multilineEditingShortcut(event) || saveShortcut(event) { return true }
-        if submitShortcut(event) { return true }
+        if modifiedReturnShortcut(event) { return true }
         if event.keyCode == 53, multiline, !hasMarkedText(),
            event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty { return true }
         let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
@@ -125,10 +130,16 @@ class ChatEditorTextView: ChatCaretTextView {
         }
         return true
     }
-    private func submitShortcut(_ event: NSEvent) -> Bool {
-        guard !hasMarkedText(), event.keyCode == 36 || event.keyCode == 76,
-              [.command, .control, .option].contains(event.modifierFlags.intersection([.command, .control, .option, .shift])) else { return false }
-        if event.modifierFlags.contains(.option) { sendNow?() } else { submit?() }
+    private func modifiedReturnShortcut(_ event: NSEvent) -> Bool {
+        guard !hasMarkedText(), event.keyCode == 36 || event.keyCode == 76 else { return false }
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if flags == .option || flags == .shift {
+            insertNewlineIgnoringFieldEditor(nil)
+        } else if Self.usesAlternateSend(flags) {
+            sendNow?()
+        } else if flags == .command || flags == .control {
+            submit?()
+        } else { return false }
         return true
     }
     private func saveShortcut(_ event: NSEvent) -> Bool {

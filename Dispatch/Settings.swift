@@ -178,10 +178,14 @@ extension ChatFontChoice {
         return CTFontCreateCopyWithSymbolicTraits(upright, CTFontGetSize(font), nil, .traitItalic, .traitItalic)
     }
 
-    // Match median rendered lowercase height, not font-reported x-height, to Source Code Pro at 14 pt.
-    // Named fonts keep this calibration when the code font changes; Same as code stays unscaled.
-    // Recalibrate after font replacements with `swift scripts/measure-chat-fonts.swift`.
-    var sizeScale: CGFloat { CGFloat(scale(on: .macOS)) }
+    /// Draws the face at Source Code Pro's lowercase height, measured from its outlines as terminal fonts are
+    /// (`TerminalFontScale`); the reference stays Source Code Pro whatever the code font. Same as code stays unscaled,
+    /// and a face that isn't installed keeps 1. `swift scripts/measure-fonts.swift` prints every role's result.
+    var sizeScale: CGFloat {
+        if self == .sameAsCode { return 1 }
+        guard let font = systemFont(ofSize: 16) ?? postScriptName.flatMap({ NSFont(name: $0, size: 16) }) else { return 1 }
+        return CGFloat(TerminalFontScale.factor(font as CTFont))
+    }
 
     var postScriptName: String? { namedFace(on: .macOS) }
 
@@ -198,8 +202,8 @@ extension ChatFontChoice {
 
 /// The app's own text: tabs, the sidebar, Files, Git and Settings. Terminals and chat keep their own fonts.
 enum InterfaceFont: String, Codable, CaseIterable {
-    case sourceCodePro = "Source Code Pro"
     case system = "San Francisco"
+    case sourceCodePro = "Source Code Pro"
 }
 
 struct Preferences: Codable, Equatable {
@@ -210,7 +214,7 @@ struct Preferences: Codable, Equatable {
     /// The code font's ligatures (`->` as an arrow, in Hasklig, Fira Code…) in terminals, code and the file preview.
     var fontLigatures = true
     var chatFont = ChatFont.system
-    var interfaceFont = InterfaceFont.sourceCodePro
+    var interfaceFont = InterfaceFont.system
     /// Terminal and interface text: Source Code Pro at 14 has the lowercase height of the system's 13-point text, and
     /// every terminal font draws at that apparent size (`TerminalFontScale`). Layouts grow from a 12.5 design base
     /// (`AppTypography.expanded`).
@@ -337,18 +341,14 @@ struct Preferences: Codable, Equatable {
     var filesWrapLines = false
     /// Git in files mode (the Review and Commits tabs) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
     var gitEnabled = true
-    /// Chat's Return while the agent works: queue the message (⌥⏎ steers) or steer it into the turn (⌥⏎ queues).
+    /// Chat's Return while the agent works: queue the message (⌥⌘⏎ steers) or steer it into the turn (⌥⌘⏎ queues).
     var chatSendWhileWorking = ChatSendWhileWorking.queue
     /// New chat drafts start in editor mode (`ChatDraft.editorByDefault`): Return inserts a newline, ⌘⏎ sends.
     var chatEditorByDefault = false
     /// A tab whose terminal starts an agent shows Chat, or stays on the terminal (`ChatCoordinator.agentStart`).
     var chatAgentStart = ChatAgentStart.chat
-    /// Esc stops the running turn when pressed once, or only twice within a second (`ChatCoordinator.escapeStop`).
-    var chatEscapeStop = ChatEscapeStop.once
     /// How tool groups show in the transcript until opened or closed (`ChatSession.toolSteps`).
     var chatToolSteps = ChatToolGroupDisclosure.current
-    /// Double ⌃D in an empty draft closes the tab and quits the agent, or shows Terminal while it works.
-    var chatControlDExits = true
     /// Chat dictation's engine, and the Whisper model it uses when Whisper is chosen (DictationModelStore downloads it,
     /// and Parakeet's).
     /// Chat's microphone beside Send. Off, the composer shows none.
@@ -384,7 +384,7 @@ struct Preferences: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case automaticUpdates
         case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, autoApproveUnsafePastes, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
-        case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, interfaceFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
+        case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
         case keyGroups
         case hideSingleSpace, tabsOnly, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
         case enableDiagnostics, outputWindow
@@ -392,11 +392,13 @@ struct Preferences: Codable, Equatable {
         case textContrast, colorVision, terminalOpacity
         case spaces, enableKittyGraphics
         case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, gitEnabled
-        case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatEscapeStop, chatToolSteps, chatControlDExits
+        case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatToolSteps
         case dictationEnabled, dictationKey, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
         case filesShowHidden = "filesShowHiddenFiles"
+        // Renamed when San Francisco became the default: every save had written the old default under the old key.
+        case interfaceFont = "interfaceTypeface"
         case allowClipboardWrites = "allowRemoteClipboardWrites"
         case optionAsAlt = "optionKeysAsAlt"
         case prefixKeys = "prefixSpaces"
@@ -474,10 +476,8 @@ struct Preferences: Codable, Equatable {
             .flatMap(ChatSendWhileWorking.init(rawValue:)) ?? chatSendWhileWorking
         chatEditorByDefault = try fields.decodeIfPresent(Bool.self, forKey: .chatEditorByDefault) ?? chatEditorByDefault
         chatAgentStart = try fields.decodeIfPresent(String.self, forKey: .chatAgentStart).flatMap(ChatAgentStart.init(rawValue:)) ?? chatAgentStart
-        chatEscapeStop = try fields.decodeIfPresent(String.self, forKey: .chatEscapeStop).flatMap(ChatEscapeStop.init(rawValue:)) ?? chatEscapeStop
         chatToolSteps = try fields.decodeIfPresent(String.self, forKey: .chatToolSteps)
             .flatMap(ChatToolGroupDisclosure.init(rawValue:)) ?? chatToolSteps
-        chatControlDExits = try fields.decodeIfPresent(Bool.self, forKey: .chatControlDExits) ?? chatControlDExits
         dictationEnabled = try fields.decodeIfPresent(Bool.self, forKey: .dictationEnabled) ?? dictationEnabled
         dictationKey = try fields.decodeIfPresent(String.self, forKey: .dictationKey).flatMap(VoiceKey.init(rawValue:))
             ?? dictationKey

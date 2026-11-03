@@ -36,7 +36,7 @@ struct FilesSegments<ID: Hashable>: View {
                         }
                         if let count = segment.count {
                             Text("\(count)")
-                                .font(AppFont.ui(size: typography.size(offset: -2.5)))
+                                .font(typography.font(.caption))
                                 .foregroundStyle(segment.countTint ?? (on ? palette.sidebarHostLabel : palette.detail))
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Capsule().fill(segment.countTint.map { $0.opacity(0.16) } ?? palette.ink.opacity(0.06)))
@@ -58,7 +58,7 @@ struct FilesSegments<ID: Hashable>: View {
             }
         }
         .glassSegmentTrack(fallback: palette.control)
-        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .font(typography.font(.label))
         .fixedSize()
     }
 }
@@ -125,7 +125,7 @@ struct FilesHeader: View {
         .padding(.trailing, 12 + trailingInset)
         .frame(height: typography.expanded(34))
         .frame(maxWidth: .infinity)
-        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .font(typography.font(.label))
         .foregroundStyle(palette.muted)
         .background(Chrome.window)
         // Glass controls carry the bar themselves; the flat bar keeps its rule.
@@ -180,7 +180,7 @@ struct FilesHeader: View {
             // Too narrow even for "… / api": the folder's name alone, else nothing, rather than a row clipped to a dot.
             if let last = all.last {
                 Text(verbatim: last.title)
-                    .font(AppFont.ui(size: typography.size(offset: -0.5)))
+                    .font(typography.font(.label))
                     .foregroundStyle(Chrome.palette.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -241,7 +241,7 @@ struct FilesHeader: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(root.map { FilesPath.crumbLine(root: $0, home: session.home, host: session.hostLabel) } ?? "")
         .accessibilityIdentifier("files-crumbs")
-        .font(AppFont.ui(size: typography.size(offset: -0.5)))
+        .font(typography.font(.label))
         .lineLimit(1)
         .fixedSize()
     }
@@ -283,7 +283,7 @@ struct FilesHeader: View {
                 if status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
             }
         }
-        .font(AppFont.ui(size: typography.size(offset: -0.5)))
+        .font(typography.font(.label))
         .lineLimit(1)
         .help(session.git.repository?.root ?? "")
         .accessibilityElement(children: .ignore)
@@ -503,7 +503,7 @@ struct FilesColumnHeader: View {
         }
         // As tall as the preview's header beside it, its rule included.
         .frame(height: FilesColumns.headerHeight(typography) + 1)
-        .font(AppFont.ui(size: typography.size(offset: -2)))
+        .font(typography.font(.caption))
         .foregroundStyle(palette.detail)
         .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
         .accessibilityElement(children: .contain)

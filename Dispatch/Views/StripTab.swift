@@ -72,12 +72,12 @@ struct StripTab: View {
         // Nautical's tabs carry their channel instead of a shortcut legend.
         let legend = width >= 110 && !nautical ? shortcut.flatMap(Self.legendText) : nil
         let side = max(Self.closeButtonWidth, Self.legendWidth(legend, typography: typography)) + 4
-        // Glass marks the selected tab with its own pill and a semibold title, as macOS's tab bar does; Source Code
-        // Pro keeps one advance width across weights, so the title neither shifts nor truncates differently.
+        // Glass marks the selected tab with its own pill and a semibold title, as macOS's tab bar does, spaced to its
+        // regular width (`AppFont.semiboldTracking`) so the title neither shifts nor truncates differently.
         let glassSelected = selected && style == .outlined && !alone && LiquidGlassStore.shared.active
         return ZStack {
             Button(action: select) {
-                channelTitle.font(Font(AppFont.native(size: typography.tabSize, semibold: glassSelected)))
+                channelTitle(semibold: glassSelected).font(Font(AppFont.native(size: typography.tabSize, semibold: glassSelected)))
                     .lineLimit(1).truncationMode(.middle)
                     .padding(.horizontal, width >= 100 ? side : Self.closeButtonWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -119,10 +119,11 @@ struct StripTab: View {
     private var nautical: Bool { SidebarThemeStore.shared.current == .nautical }
 
     /// Nautical tunes each tab to a VHF channel, named before its title.
-    private var channelTitle: Text {
-        guard nautical, let surface = activityIDs.first else { return Text(title) }
+    private func channelTitle(semibold: Bool) -> Text {
+        let name = Text(title).tracking(semibold ? AppFont.semiboldTracking(title, size: typography.tabSize) : 0)
+        guard nautical, let surface = activityIDs.first else { return name }
         return Text(HarbourRadio.channel(for: surface) + "  ").font(HarbourType.heading(typography.tabSize)).tracking(1.4)
-            .foregroundColor(selected ? Chrome.accent : Chrome.muted) + Text(title)
+            .foregroundColor(selected ? Chrome.accent : Chrome.muted) + name
     }
 
     private func legendView(_ legend: String) -> some View {
@@ -464,7 +465,7 @@ struct StripSpacePicker: View {
             }
             .padding(8)
         }
-        .font(typography.font(offset: -0.5)).foregroundStyle(Chrome.ink)
+        .font(typography.font(.label)).foregroundStyle(Chrome.ink)
         .frame(width: typography.expanded(280))
         // On glass the popover's own system glass shows through instead of the sidebar fill.
         .background(glass ? Color.clear : Chrome.sidebar).preferredColorScheme(Chrome.colorScheme)

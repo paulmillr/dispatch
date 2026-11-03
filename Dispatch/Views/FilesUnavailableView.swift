@@ -43,9 +43,9 @@ struct FilesUnavailableView: View {
         let palette = Chrome.palette
         return VStack(spacing: 10) {
             title.foregroundStyle(palette.secondary)
-                .font(AppFont.ui(size: typography.size(offset: -0.5)))
+                .font(typography.font(.label))
             Text(detail)
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .foregroundStyle(palette.detail)
                 .lineSpacing(3)
             HStack(spacing: 8) { actions() }
@@ -87,7 +87,7 @@ struct FilesOfflineBar: View {
         let hostID = TerminalRuntime.shared.workspace?.hosts.terminals[session.id]?.host
         let reconnecting = controller.presentationState(for: session.id)?.reconnecting == true
         HStack(spacing: 10) {
-            Text("◆").foregroundStyle(Color(nsColor: amber))
+            Image(systemName: "diamond.fill").imageScale(.small).foregroundStyle(Color(nsColor: amber))
             // The age moves on by the minute without a listing to refresh it.
             TimelineView(.everyMinute) { _ in
                 Text(label(at: System.date()))
@@ -103,7 +103,7 @@ struct FilesOfflineBar: View {
             .help("Reconnect to \(host)")
             .accessibilityIdentifier("files-reconnect")
         }
-        .font(AppFont.ui(size: typography.size(offset: -1.5)))
+        .font(typography.font(.body))
         .padding(.horizontal, 12)
         .frame(height: typography.expanded(34))
         .frame(maxWidth: .infinity)
@@ -126,7 +126,7 @@ struct FilesLoadingView: View {
 
     var body: some View {
         Text("Loading…")
-            .font(AppFont.ui(size: typography.size(offset: -1)))
+            .font(typography.font(.body))
             .foregroundStyle(Chrome.palette.detail)
             .opacity(shown ? 1 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -163,7 +163,7 @@ struct FilesButtonStyle: ButtonStyle {
             let ink: Color = if let tint { tint } else if primary { Color(nsColor: SSHReconnectControl.actionInk) }
                 else { palette.secondary }
             configuration.label
-                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .font(typography.font(.body))
                 .lineLimit(1)
                 .foregroundStyle(ink)
                 .padding(.horizontal, 10)

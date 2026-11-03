@@ -256,8 +256,10 @@ struct SidebarSpaceCard: View {
             orb
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // Semibold while selected, at its regular width (`AppFont.semiboldTracking`): it truncates the same.
                     Text(entry.name)
                         .font(Font(AppFont.native(size: metrics.nameSize, semibold: selected)))
+                        .tracking(selected ? AppFont.semiboldTracking(entry.name, size: metrics.nameSize) : 0)
                         .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
                         .lineLimit(1).truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -493,7 +493,7 @@ protocol TitledChoice: CaseIterable, Identifiable, Equatable {
 }
 
 /// What the composer's send (Return, the send button's tap) does with a message while the agent works: queue it for
-/// after the turn, or steer it into the turn. The other way stays one key away (⌥⏎, send's long press). Mac:
+/// after the turn, or steer it into the turn. The other way stays one key away (⌥⌘⏎, send's long press). Mac:
 /// Settings › Features › Chat mode; iPhone: Settings › Chat.
 enum ChatSendWhileWorking: String, Codable, TitledChoice, Sendable {
     case queue, steer
@@ -509,12 +509,9 @@ enum ChatAgentStart: String, Codable, TitledChoice, Sendable {
     var title: String { self == .chat ? "Chat" : "Terminal" }
 }
 
-/// Esc in a single-line draft while the agent works (a hardware keyboard on iPhone): stop the turn at once, or only
-/// when pressed again within a second, so a stray Esc never interrupts. The Stop button always stops at once.
-enum ChatEscapeStop: String, Codable, TitledChoice, Sendable {
-    case once, twice
-    var id: Self { self }
-    var title: String { self == .once ? "Pressed once" : "Pressed twice" }
+/// Esc in a single-line draft while the agent works (a hardware keyboard on iPhone) stops only when pressed again
+/// within a second, so a stray Esc never interrupts. The Stop button always stops at once.
+enum ChatEscapeStop {
     /// How long the first press waits for the second.
     static let window: TimeInterval = 1
 }
@@ -1258,7 +1255,7 @@ final class ChatSession: Identifiable {
     /// Why the last attach was refused (too many, too large); shown beside the attachment chips.
     var attachmentError: String?
     var editingQueuedID: UUID?
-    /// Esc was pressed once to stop (Settings: Esc stops the agent when pressed twice): the composer says to press it
+    /// Esc was pressed once to stop: the composer says to press it
     /// again; the time of that press, from the key event.
     var stopArmedAt: TimeInterval?
     var editingQueuedDraftID: UUID?

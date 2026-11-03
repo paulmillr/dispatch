@@ -53,7 +53,7 @@ either changes what it stores.
 
 The Mac app has its own updater, using Foundation, CryptoKit, Security and macOS tools; there is no updater dependency.
 Onboarding offers an unchecked **Enable automatic updates** choice, including once for existing installations that
-have not answered it. Settings › General › Updates can change the choice and check manually without enabling it.
+have not answered it. Settings › General › Terminal can change the choice and check manually without enabling it.
 Off (also the default for older settings files), there are no automatic requests. On, Dispatch checks once a day
 while running and downloads newer versions, then offers **Restart and install**. Restart goes through the normal
 running-process confirmation and session cleanup. An ordinary quit never installs a pending update.

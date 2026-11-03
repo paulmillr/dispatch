@@ -58,6 +58,40 @@ struct AgentActivity: Equatable {
     }
 }
 
+/// An activity status's mark: SF Symbols, the same shapes and sizes in every interface font. San Francisco has none of
+/// ◌ ◆ ◐ itself and would draw them from three unrelated fallback fonts, oversized; quiet is a small dot.
+enum ActivityMark: Hashable {
+    case quiet, working, blocked, finished, offline
+
+    init(_ urgency: PaneUrgency) {
+        switch urgency { case .waiting: self = .blocked; case .unread: self = .finished; case .running: self = .working; case .idle: self = .quiet }
+    }
+
+    var symbol: String? {
+        switch self {
+        case .quiet: nil
+        case .working: "circle.lefthalf.filled"
+        case .blocked: "circle.fill"
+        case .finished: "diamond.fill"
+        case .offline: "circle.dotted"
+        }
+    }
+
+    /// The symbol's point size for text at `size`: about the ink of a lowercase letter, the filled circle a little less.
+    func symbolSize(_ size: CGFloat) -> CGFloat { size * (self == .blocked ? 0.55 : 0.62) }
+
+    /// The mark beside text at `size` points.
+    @ViewBuilder func view(size: CGFloat) -> some View {
+        if let symbol { Image(systemName: symbol).font(.system(size: symbolSize(size))) }
+        else { Circle().frame(width: size * 0.2, height: size * 0.2) }
+    }
+
+    /// The mark inside a line of text at `size` points.
+    func text(size: CGFloat) -> Text {
+        symbol.map { Text(Image(systemName: $0)).font(.system(size: symbolSize(size))) } ?? Text("·")
+    }
+}
+
 /// Only show activity the attached local agent, or a program through OSC 7501, has actually
 /// reported. Shell screens and native permission prompts are never scraped to invent status.
 struct AgentActivityGlyph: View {
@@ -68,20 +102,23 @@ struct AgentActivityGlyph: View {
     /// Draw the "·" when nothing is reported; without it the slot stays, empty, so rows keep their alignment.
     var showsQuiet = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTypography) private var typography
     var body: some View {
         let activity = AgentActivity(tabIDs: tabIDs, connecting: connecting)
         let (blocked, working, finished, failed) = (activity.blocked, activity.working, activity.finished, activity.failed)
         let (offline, reconnecting) = (activity.offline, activity.reconnecting)
-        let state = offline ? "◌" : blocked ? "●" : finished ? "◆" : working ? "◐" : "·"
+        let state: ActivityMark = offline ? .offline : blocked ? .blocked : finished ? .finished : working ? .working : .quiet
         let tint = offline ? Chrome.muted : blocked ? (tile ? Chrome.palette.warning : Chrome.palette.green)
             : failed ? Chrome.palette.warning : finished ? Chrome.accent : working ? Chrome.ink : Chrome.muted
         Group {
             if reconnecting {
                 // Match a monospace status glyph's visible width, not its font point size.
                 SSHConnectingIndicator(reduceMotion: reduceMotion, size: tile ? size * 0.75 : size == 10 ? 9 : size)
-            } else { Text(tile && blocked && !offline ? "◌" : state).opacity(state == "·" && !showsQuiet ? 0 : 1) }
+            } else {
+                (tile && blocked && !offline ? ActivityMark.offline : state).view(size: tile ? 14 : typography.size(.label))
+                    .opacity(state == .quiet && !showsQuiet ? 0 : 1)
+            }
         }
-            .transformEnvironment(\.font) { if tile { $0 = AppFont.ui(size: 14) } }
             .contentTransition(.opacity)
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: state)
             .modifier(ActivityPop(state: state, reduce: reduceMotion))
@@ -107,10 +144,10 @@ struct SSHConnectingIndicator: View {
 }
 
 private struct ActivityPop: ViewModifier {
-    let state: String
+    let state: ActivityMark
     let reduce: Bool
     @State private var popped = false
-    @State private var previousState: String?
+    @State private var previousState: ActivityMark?
     func body(content: Content) -> some View {
         content.scaleEffect(popped && !reduce ? 1.6 : 1)
             .animation(InterfaceMotion.animation(reduce: reduce, duration: 0.18), value: popped)

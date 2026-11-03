@@ -84,17 +84,17 @@ struct ColorSchemeGallery: View {
                         .accessibilityIdentifier("settings-import-schemes")
                     Spacer(minLength: 8)
                     Button("Show in Finder") { showFolder() }.buttonStyle(.plain)
-                        .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                 }.padding(.vertical, 9)
                 if allCustom > schemes.custom.count {
                     Text(draft.colorVision == .typical
                          ? "\(allCustom - schemes.custom.count) made for color blindness, shown in colorblind mode"
                          : "\(allCustom - schemes.custom.count) not made for \(draft.colorVision.title.lowercased()) color blindness, hidden")
-                        .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                        .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                 }
                 if let message {
-                    Text(message).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    Text(message).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                         .accessibilityIdentifier("settings-themes-message")
                 }
@@ -132,7 +132,7 @@ struct ColorSchemeGallery: View {
             SettingsSeparator()
             HStack(spacing: 12) {
                 Text(missing ? "“\(chosen)” not found; using Dispatch’s own" : chosen == "Default" ? "Dispatch" : SchemeGroup.title(chosen))
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1)
                     .accessibilityIdentifier("settings-scheme-in-use-\(light ? "light" : "dark")")
                 Spacer(minLength: 8)
                 Button { surprise(light) } label: { Label("Surprise me", systemImage: "dice") }
@@ -141,7 +141,7 @@ struct ColorSchemeGallery: View {
             }.padding(.vertical, 9)
             ForEach(sections(light), id: \.title) { section in
                 if !section.title.isEmpty {
-                    Text(section.title).font(typography.font(offset: -1.5)).fontWeight(.semibold)
+                    Text(section.title).font(typography.font(.body)).fontWeight(.semibold)
                         .foregroundStyle(SettingsControlStyle.detail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.bottom, 6)
                 }
@@ -181,7 +181,8 @@ struct ColorSchemeGallery: View {
         return Button { selection(light).wrappedValue = name } label: {
             SchemeDemo(title: name == "Default" ? "Dispatch" : SchemeGroup.title(name),
                        theme: name == "Default" ? matching(light) : schemes.themes[name],
-                       selected: selected, fontFamily: draft.fontFamily, classic: history != nil, problems: problems)
+                       selected: selected, fontFamily: draft.fontFamily, fontSize: draft.fontSize,
+                       classic: history != nil, problems: problems)
         }
         .buttonStyle(.plain)
         .onHover { inside in
@@ -216,7 +217,7 @@ struct ColorSchemeGallery: View {
     private func actions(_ entry: CustomThemes.Entry, light: Bool) -> some View {
         HStack(spacing: 8) {
             if !entry.ghostty && SurpriseScheme.isSurprise(entry.name) {
-                Button("Keep") { keep(entry) }.buttonStyle(.plain).font(typography.font(offset: -2)).fontWeight(.semibold)
+                Button("Keep") { keep(entry) }.buttonStyle(.plain).font(typography.font(.caption)).fontWeight(.semibold)
                     .help("Keep this scheme when the next random one comes").accessibilityLabel("Keep \(entry.name)")
                     .accessibilityIdentifier("settings-theme-keep-\(entry.name)")
             }
@@ -387,8 +388,9 @@ struct SchemeDemo: View {
     let title: String
     let theme: TerminalTheme?
     let selected: Bool
-    /// The terminal's font.
+    /// The terminal's font, and Settings' font size (the terminal draws it at `TerminalFontScale`'s size).
     let fontFamily: String
+    var fontSize = 14.0
     /// A classic (SchemeGroup.classics): a star after the title.
     var classic = false
     /// What SchemeAudit found: a warning sign after the title (the tile's tooltip says what).
@@ -417,9 +419,12 @@ struct SchemeDemo: View {
                 if selected { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Chrome.accent) }
                 Spacer(minLength: 0)
             }.padding(.bottom, 5)
-            // One text, so its lines scale together: the longest fills the tile's width, up to 18 points.
+            // One text, so its lines scale together: at the terminal's own size up to Settings' body text, and shrunk
+            // only as far as the longest line needs to fit the tile, so two tiles keep a row with any font.
             Text(lines(theme).reduce(AttributedString()) { $0.characters.isEmpty ? $1 : $0 + AttributedString("\n") + $1 })
-                .font(.custom(fontFamily, fixedSize: 18)).lineSpacing(1).lineLimit(4).minimumScaleFactor(0.5)
+                .font(.custom(fontFamily, fixedSize: TerminalFontScale.size(min(fontSize, SettingsView.typography.size(.body)),
+                                                                            family: fontFamily)))
+                .lineSpacing(1).lineLimit(4).minimumScaleFactor(0.3)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 10).padding(.vertical, 9)

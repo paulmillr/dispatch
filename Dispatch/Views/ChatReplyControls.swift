@@ -3,9 +3,9 @@ import SwiftUI
 struct ChatReplyButton: View {
     @Environment(\.chatTheme) private var theme
     let canSubmit: Bool
-    var optionHeld = false
+    var alternateSendHeld = false
     var busy = false
-    /// Return steers while the agent works (`ChatCoordinator.returnSteers`): ⌥ then queues.
+    /// Return steers while the agent works (`ChatCoordinator.returnSteers`): ⌥⌘ then queues.
     var steers = false
     var editingQueued = false
     var multiline = false
@@ -16,8 +16,8 @@ struct ChatReplyButton: View {
     let action: () -> Void
 
     private var title: String {
-        steers ? (optionHeld ? "Queue" : "Steer")
-            : optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send"
+        steers ? (alternateSendHeld ? "Queue" : "Steer")
+            : alternateSendHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send"
     }
     private var label: String {
         switch title {
@@ -27,7 +27,7 @@ struct ChatReplyButton: View {
         default: title
         }
     }
-    private var key: String { optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎" }
+    private var key: String { alternateSendHeld ? "⌥⌘⏎" : multiline ? "⌘⏎" : "⏎" }
 
     var body: some View {
         if theme.radioLog { radioBody } else { standardBody }
@@ -67,7 +67,7 @@ struct ChatReplyButton: View {
                 }
                 if showsKey {
                     ZStack {
-                        Text("⌥⏎").hidden().accessibilityHidden(true)
+                        Text("⌥⌘⏎").hidden().accessibilityHidden(true)
                         Text("⌘⏎").hidden().accessibilityHidden(true)
                         Text(key)
                     }.font(AppFont.shortcut(size: theme.typography.codeDetailSize)).opacity(0.7)

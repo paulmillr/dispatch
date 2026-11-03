@@ -24,7 +24,7 @@ struct SettingsExtraPage: View {
             importGroup
             exportGroup
             if let message {
-                Text(message).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                Text(message).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
                     .accessibilityIdentifier("settings-extra-message")
             }
@@ -197,7 +197,7 @@ struct ImportReviewSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Import from \(plan.source)").font(typography.font(offset: 2)).fontWeight(.semibold)
                 Text("Choose what to bring over. Nothing changes until you import.")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -244,13 +244,13 @@ struct ImportReviewSheet: View {
         .frame(width: 460, height: 440)
         .background(Chrome.window)
         .foregroundStyle(Chrome.ink)
-        .font(typography.font(offset: -0.5))
+        .font(typography.font(.label))
         .onAppear { chosen = Set(plan.changes.map(\.id)) }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title.uppercased()).font(typography.font(offset: -2.5)).tracking(1).foregroundStyle(SettingsControlStyle.detail)
+            Text(title.uppercased()).font(typography.font(.caption)).tracking(1).foregroundStyle(SettingsControlStyle.detail)
             content()
         }
     }

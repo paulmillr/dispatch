@@ -281,13 +281,13 @@ final class ChatPresentationTests: XCTestCase {
             var theme = ChatTheme.standard
             theme.typography = ChatTypography(preferences: preferences)
             var expected: NSSize?
-            for (optionHeld, busy, editingQueued, multiline) in [
+            for (alternateSendHeld, busy, editingQueued, multiline) in [
                 (false, false, false, false), (true, false, false, false),
                 (false, true, false, false), (false, true, true, false),
                 (false, false, false, true), (true, true, true, true),
             ] {
                 let host = NSHostingView(rootView:
-                    ChatReplyButton(canSubmit: true, optionHeld: optionHeld, busy: busy,
+                    ChatReplyButton(canSubmit: true, alternateSendHeld: alternateSendHeld, busy: busy,
                                     editingQueued: editingQueued, multiline: multiline) {}
                         .environment(\.chatTheme, theme))
                 let size = host.fittingSize

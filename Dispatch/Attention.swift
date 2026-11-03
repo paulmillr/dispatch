@@ -8,9 +8,6 @@ import Term
 
 enum PaneUrgency: Int, CaseIterable {
     case waiting, unread, running, idle
-    var symbol: String {
-        switch self { case .waiting: "●"; case .unread: "◆"; case .running: "◐"; case .idle: "·" }
-    }
 
     /// The precedence the Mac and the iPhone share: needs you, then working, then an unseen result.
     init(waiting: Bool, working: Bool, unread: Bool) {

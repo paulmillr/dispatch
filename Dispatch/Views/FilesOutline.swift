@@ -54,8 +54,8 @@ struct FilesOutlineStyle: Equatable {
 
     @MainActor init(typography: AppTypography) {
         let palette = Chrome.palette
-        nameFont = AppFont.native(size: typography.size())
-        metaFont = AppFont.native(size: typography.size(offset: -1.5))
+        nameFont = AppFont.native(size: typography.size(.content))
+        metaFont = AppFont.native(size: typography.size(.body))
         text = NSColor(palette.secondary)
         selectedText = NSColor(palette.ink)
         icon = NSColor(palette.muted)

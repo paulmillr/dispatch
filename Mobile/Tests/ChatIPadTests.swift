@@ -25,6 +25,11 @@ final class ChatIPadTests: XCTestCase {
                        "while the agent works it queues, as the Mac's Return does (send routes it)")
         XCTAssertEqual(Keys.action(.returnKey, modifiers: .shift, multiline: false, working: false), .newline)
         XCTAssertEqual(Keys.action(.returnKey, modifiers: .shift, multiline: true, working: false), .newline)
+        for multiline in [false, true] {
+            for working in [false, true] {
+                XCTAssertEqual(Keys.action(.returnKey, modifiers: .alternate, multiline: multiline, working: working), .newline)
+            }
+        }
     }
 
     func testInEditorModeReturnInsertsANewlineAndCommandReturnSends() {
@@ -33,8 +38,8 @@ final class ChatIPadTests: XCTestCase {
             XCTAssertEqual(Keys.action(.returnKey, modifiers: modifiers, multiline: true, working: false), .send)
             XCTAssertEqual(Keys.action(.returnKey, modifiers: modifiers, multiline: false, working: false), .send)
         }
-        XCTAssertEqual(Keys.action(.returnKey, modifiers: .alternate, multiline: false, working: true), .steer)
-        XCTAssertEqual(Keys.action(.returnKey, modifiers: .alternate, multiline: true, working: true), .steer)
+        XCTAssertEqual(Keys.action(.returnKey, modifiers: [.command, .alternate], multiline: false, working: true), .alternateSend)
+        XCTAssertEqual(Keys.action(.returnKey, modifiers: [.command, .alternate], multiline: true, working: true), .alternateSend)
         XCTAssertEqual(Keys.action(.returnKey, modifiers: [.command, .shift], multiline: false, working: false), .system)
     }
 
@@ -54,7 +59,7 @@ final class ChatIPadTests: XCTestCase {
 
     func testAnOpenCompositionKeepsReturnAndEscape() {
         for key: Keys.Key in [.returnKey, .escape, .e] {
-            for modifiers: UIKeyModifierFlags in [[], .shift, .command, .alternate] {
+            for modifiers: UIKeyModifierFlags in [[], .shift, .command, .alternate, [.command, .alternate]] {
                 XCTAssertEqual(Keys.action(key, modifiers: modifiers, multiline: false, working: true, composing: true), .system)
             }
         }
@@ -64,7 +69,7 @@ final class ChatIPadTests: XCTestCase {
         let commands = Keys.commands(action: #selector(CodeTextView.hardwareKey(_:)))
         let titled = commands.filter { !$0.title.isEmpty }.map { "\($0.title) \($0.modifierFlags.rawValue)" }
         XCTAssertEqual(titled, ["Send \(UIKeyModifierFlags.command.rawValue)",
-                                "Send into Running Turn \(UIKeyModifierFlags.alternate.rawValue)",
+                                "Alternate Send (Steer / Queue) \(UIKeyModifierFlags([.command, .alternate]).rawValue)",
                                 "Editor Mode \(UIKeyModifierFlags.command.rawValue)"])
         XCTAssertTrue(commands.allSatisfy(\.wantsPriorityOverSystemBehavior), "the text view's own Return never wins")
         XCTAssertTrue(commands.allSatisfy { Keys.key($0) != nil })
@@ -96,6 +101,44 @@ final class ChatIPadTests: XCTestCase {
         init(multiline: Bool, working: Bool) { self.multiline = multiline; self.working = working }
     }
 
+    private struct ComposerHost: View {
+        let recorder: Recorder
+        @State private var text = "Keep this draft"
+        @FocusState private var focused: Bool
+
+        var body: some View {
+            CodeComposer(text: $text, placeholder: "Message", working: true, focus: $focused,
+                         send: { recorder.actions.append(.send) },
+                         stop: { recorder.actions.append(.stop) })
+        }
+    }
+
+    func testComposerRequiresDoubleEscapeAndIgnoresRemovedSetting() async throws {
+        let name = "composer-escape-" + System.uuid().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("once", forKey: "chat.escapeStop")
+        let recorder = Recorder(multiline: false, working: true)
+        let scene = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(scene))
+        window.rootViewController = UIHostingController(rootView: ComposerHost(recorder: recorder).defaultAppStorage(defaults))
+        window.makeKeyAndVisible()
+        self.window = window
+        func field(in view: UIView) -> CodeTextView? {
+            if let text = view as? CodeTextView { return text }
+            return view.subviews.lazy.compactMap { field(in: $0) }.first
+        }
+        var text: CodeTextView?
+        try await TestSupport.eventually { text = field(in: window); return text?.keyAction != nil }
+        let view = try XCTUnwrap(text)
+        let escape = command(UIKeyCommand.inputEscape, [], in: view)
+        view.hardwareKey(escape)
+        XCTAssertTrue(recorder.actions.isEmpty, "The first Escape only arms the stop, even with the removed setting saved")
+        view.hardwareKey(escape)
+        XCTAssertEqual(recorder.actions, [.stop])
+        XCTAssertEqual(view.textStorage.string, "Keep this draft")
+    }
+
     private func command(_ input: String, _ modifiers: UIKeyModifierFlags, in view: CodeTextView) -> UIKeyCommand {
         view.keyCommands!.first { $0.input == input && $0.modifierFlags == modifiers }!
     }
@@ -108,9 +151,12 @@ final class ChatIPadTests: XCTestCase {
 
         view.hardwareKey(command("\r", .shift, in: view))
         XCTAssertEqual(view.textStorage.string, "Hello\n", "Shift-Return starts a line in the field itself")
+        view.hardwareKey(command("\r", .alternate, in: view))
+        XCTAssertEqual(view.textStorage.string, "Hello\n\n", "Option-Return inserts text without sending")
+        XCTAssertFalse(recorder.multiline, "Typing a newline leaves editor mode as it is")
         recorder.multiline = true
         view.hardwareKey(command("\r", [], in: view))
-        XCTAssertEqual(view.textStorage.string, "Hello\n\n", "in editor mode Return starts a line")
+        XCTAssertEqual(view.textStorage.string, "Hello\n\n\n", "in editor mode Return starts a line")
         view.hardwareKey(command("\r", .command, in: view))
         view.hardwareKey(command("e", .command, in: view))
         view.hardwareKey(command(UIKeyCommand.inputEscape, [], in: view))
@@ -119,8 +165,8 @@ final class ChatIPadTests: XCTestCase {
         recorder.multiline = false
         recorder.working = true
         view.hardwareKey(command(UIKeyCommand.inputEscape, [], in: view))
-        view.hardwareKey(command("\r", .alternate, in: view))
-        XCTAssertEqual(recorder.actions.suffix(2), [.stop, .steer])
+        view.hardwareKey(command("\r", [.command, .alternate], in: view))
+        XCTAssertEqual(recorder.actions.suffix(2), [.stop, .alternateSend])
         XCTAssertTrue(view.isFirstResponder)
 
         recorder.working = false
@@ -133,7 +179,7 @@ final class ChatIPadTests: XCTestCase {
         let (view, _) = editor("a")
         var drafts: [String] = []
         view.changed = { drafts.append($0) }
-        view.perform(.newline)
+        view.hardwareKey(command("\r", .alternate, in: view))
         XCTAssertEqual(drafts.last, "a\n")
         view.undoManager?.undo()
         XCTAssertEqual(view.textStorage.string, "a")

@@ -8,8 +8,8 @@ import UIKit
 enum ComposerKeyAction: Equatable {
     /// Sends (or queues, while the agent works) the draft.
     case send
-    /// Sends into the running turn (the Mac's ⌥⏎, the phone's long press on send); sends when nothing runs.
-    case steer
+    /// The alternate send action (⌥⌘⏎): steers by default, or queues when the send preference steers.
+    case alternateSend
     /// Inserts a newline as typing would.
     case newline
     /// ⌘E: editor mode on or off.
@@ -37,9 +37,9 @@ enum ComposerHardwareKeys {
         case .returnKey:
             switch flags {
             case []: return multiline ? .newline : .send
-            case .shift: return .newline
+            case .shift, .alternate: return .newline
             case .command, .control: return .send
-            case .alternate: return .steer
+            case [.command, .alternate]: return .alternateSend
             default: return .system
             }
         case .escape:
@@ -52,7 +52,7 @@ enum ComposerHardwareKeys {
     }
 
     /// The key commands the composer answers. Only the ones worth discovering carry a title, so holding ⌘ lists Send,
-    /// Send into Turn and Editor Mode and not every Return variant.
+    /// Alternate Send and Editor Mode and not every Return variant.
     static func commands(action: Selector) -> [UIKeyCommand] {
         func command(_ input: String, _ modifiers: UIKeyModifierFlags, title: String? = nil) -> UIKeyCommand {
             let command = title.map { UIKeyCommand(title: $0, action: action, input: input, modifierFlags: modifiers) }
@@ -66,7 +66,8 @@ enum ComposerHardwareKeys {
             command("\r", .shift),
             command("\r", .command, title: "Send"),
             command("\r", .control),
-            command("\r", .alternate, title: "Send into Running Turn"),
+            command("\r", .alternate),
+            command("\r", [.command, .alternate], title: "Alternate Send (Steer / Queue)"),
             command(UIKeyCommand.inputEscape, []),
             command("e", .command, title: "Editor Mode"),
         ]

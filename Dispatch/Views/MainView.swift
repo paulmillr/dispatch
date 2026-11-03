@@ -97,7 +97,7 @@ struct MainView: View {
                         secondMinimumSize: minimumTerminalSize)
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.sidebarDuration), value: sidebarVisible)
         }
-        .font(typography.font(offset: -0.5, design: .monospaced))
+        .font(typography.font(.label))
         .environment(\.appTypography, typography)
         .foregroundStyle(Chrome.ink)
         .backgroundPreferenceValue(MainBackdrop.ContentFrame.self) { content in
@@ -184,7 +184,7 @@ struct MainView: View {
             Color.clear.frame(width: sidebarToggleLeadingSpace)
             SidebarToggle(controller: controller)
             Spacer(minLength: 0)
-            MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography.font(offset: 0.5)).lineLimit(1).truncationMode(.middle)
+            MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography.font(.title)).lineLimit(1).truncationMode(.middle)
                 .id(workspace.selectedSpace)
                 .transition(reduceMotion ? .identity : .asymmetric(insertion: .offset(y: 8).combined(with: .opacity), removal: .offset(y: -8).combined(with: .opacity)))
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: workspace.selectedSpace)
@@ -263,7 +263,7 @@ struct MainView: View {
                                               set: { controller.windowState.shortcutsPresented = $0 }),
                          arrowEdge: .top) { WorkspaceShortcutSheet() }
         }
-        .font(typography.font(offset: -0.5, design: .monospaced))
+        .font(typography.font(.label))
         .foregroundStyle(Chrome.ink)
         .preferredColorScheme(Chrome.colorScheme)
     }
@@ -383,7 +383,7 @@ private struct HelperErrorBar: View {
         }
     }
 
-    private var message: some View { Text(error).font(typography.font(offset: -1.5)).textSelection(.enabled) }
+    private var message: some View { Text(error).font(typography.font(.body)).textSelection(.enabled) }
 }
 
 /// A tab strip in the title row. `leading` carries the traffic-light inset, sidebar toggle, and space

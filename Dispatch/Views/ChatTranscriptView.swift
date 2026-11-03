@@ -39,15 +39,14 @@ struct ChatTranscriptView: View {
             ScrollViewReader { scroll in
                 // Helpers split this chain: as one expression it took seconds to type-check.
                 followingLatest(searchAndLifecycle(transcript(geometry, directory: directory), query: query,
-                                                   request: request, scroll: scroll), scroll: scroll)
+                                                   request: request, scroll: scroll))
             }
         }.environment(\.chatSearchQuery, query)
     }
 
     private func transcript(_ geometry: GeometryProxy, directory: String) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
-            // A fixed scroll target inside the lazy rows can make
-            // accessibility prefetch alternate their visibility forever.
+            // Keep the floating input's space outside the lazy rows.
             VStack(alignment: .leading, spacing: 0) {
                 if theme.radioLog { ChatRadioLogHeader(surface: session.id) }
                 // While its window is off screen, the rows it showed then (`presentedTranscriptRows`).
@@ -84,7 +83,6 @@ struct ChatTranscriptView: View {
                         }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
                     }
                 }
-                // Scrolling to the bottom aligns this marker's bottom edge, so it spans a floating input.
                 Color.clear.frame(height: 1 + bottomContentInset).id("bottom")
             }
             .padding(Self.padding).frame(maxWidth: .infinity)
@@ -92,6 +90,8 @@ struct ChatTranscriptView: View {
             .id(viewportGeneration)
             .background(ChatScrollViewport(position: session.scrollPosition))
         }
+        // The initial anchor and eager target position the first frame. Measured following takes over afterward;
+        // waiting for a lazy row's item scroll here can first paint the beginning of the conversation.
         .modifier(ChatInitialScrollAnchor(atBottom: session.atBottom))
         .modifier(ChatScrollGeometryTrace(position: session.scrollPosition,
             enabled: ChatViewportTrace.enabled || session.scrollPosition.diagnosticSink != nil))
@@ -195,7 +195,7 @@ struct ChatTranscriptView: View {
             }
             .onChange(of: theme) { _, _ in updateScrollbarTheme() }
             .onChange(of: session.scrollToLatestRequest) { _, _ in
-                scroll.scrollTo("bottom", anchor: .bottom)
+                session.scrollPosition.jumpToLatest()
             }
             .onDisappear {
                 openedAt = .infinity
@@ -205,7 +205,7 @@ struct ChatTranscriptView: View {
             }
     }
 
-    private func followingLatest(_ content: some View, scroll: ScrollViewProxy) -> some View {
+    private func followingLatest(_ content: some View) -> some View {
         content
             .onChange(of: session.historyGeneration) { _, _ in
                 session.scrollPosition.beginOpeningHistoryPreload()
@@ -218,11 +218,12 @@ struct ChatTranscriptView: View {
                 session.scrollPosition.restoreAfterPrepend()
             }
             .onChange(of: session.approvals.count) { _, _ in
-                if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
+                if session.atBottom { session.scrollPosition.followLatest() }
             }
             .onChange(of: bottomContentInset) { _, _ in
+                session.scrollPosition.bottomContentInset = 1 + bottomContentInset
                 // A floating input that grows on focus would otherwise cover the latest message.
-                if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
+                if session.atBottom { session.scrollPosition.followLatest() }
             }
             .onChange(of: session.presentedRevision) { _, revision in
                 session.scrollPosition.recordDiagnostic(.transcript)
@@ -235,7 +236,7 @@ struct ChatTranscriptView: View {
                               session.atBottom || session.followRevision == revision,
                               !session.scrollPosition.glidesToBottom else { return }
                         session.scrollPosition.recordDiagnostic(.followRequested)
-                        scroll.scrollTo("bottom", anchor: .bottom)
+                        session.scrollPosition.followLatest()
                     }
                 }
             }
@@ -267,7 +268,7 @@ struct ChatTranscriptView: View {
             })
     }
 
-    /// The transcript's padding, around its rows and below the "bottom" marker.
+    /// The transcript's padding, around its rows and below the floating input's spacer.
     static let padding: CGFloat = 22
 
     private func connectScrollPosition(_ scroll: ScrollViewProxy, reusing token: UUID? = nil) -> UUID {
@@ -275,6 +276,9 @@ struct ChatTranscriptView: View {
             _ = connectScrollPosition(scroll, reusing: token)
         }
         session.scrollPosition.bottomPadding = Self.padding
+        session.scrollPosition.bottomContentInset = 1 + bottomContentInset
+        session.scrollPosition.bottomRowID = { [weak session] in session?.presentedTranscriptRows.last?.id }
+        session.scrollPosition.realizeBottom = { id in scroll.scrollTo(id, anchor: .bottom) }
         session.scrollPosition.diagnosticState = { [weak session] in
             guard let session else { return nil }
             return .init(revision: session.revision, historyRevision: session.historyRevision,
@@ -322,7 +326,6 @@ struct ChatTranscriptView: View {
                     scroll.scrollTo(target.id, anchor: .top)
                     session.scrollPosition.restore(target)
                 } else {
-                    scroll.scrollTo("bottom", anchor: .bottom)
                     session.scrollPosition.jumpToLatest()
                 }
             }
@@ -360,8 +363,8 @@ struct ChatTranscriptView: View {
         if session.atBottom {
             // A previous view may still be restoring an earlier row. Explicit latest-output intent wins;
             // otherwise that pending restoration can undo this jump and keep native bottom pinning paused.
-            session.scrollPosition.jumpToLatest()
             scroll.scrollTo("bottom", anchor: .bottom)
+            session.scrollPosition.jumpToLatest()
         } else if let anchor = session.scrollPosition.saved?.id ?? session.scrollAnchor {
             scroll.scrollTo(anchor, anchor: .top)
             session.scrollPosition.restoreOnAppearance()
@@ -849,14 +852,13 @@ private struct ChatScrollGeometryTrace: ViewModifier {
     }
 }
 
-/// Apply the initial position during layout. An onAppear scrollTo can run before
-/// a large lazy stack has established the destination's geometry.
+/// Position the first layout before native measured following takes over.
 private struct ChatInitialScrollAnchor: ViewModifier {
     let atBottom: Bool
     func body(content: Content) -> some View {
         if #available(macOS 15, *) {
             content.defaultScrollAnchor(atBottom ? .bottom : nil, for: .initialOffset)
-                .defaultScrollAnchor(atBottom ? .bottom : nil, for: .sizeChanges)
+                .defaultScrollAnchor(nil, for: .sizeChanges)
         } else {
             content.defaultScrollAnchor(atBottom ? .bottom : nil)
         }

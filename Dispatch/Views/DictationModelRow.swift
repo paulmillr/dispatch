@@ -24,9 +24,9 @@ struct DictationModelRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(model.title)
-                            Text(model.sizeLabel).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                            Text(model.sizeLabel).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                         }
-                        Text(detail(state)).font(typography.font(offset: -1.5))
+                        Text(detail(state)).font(typography.font(.body))
                             .foregroundStyle(isFailed(state) ? Color.red : SettingsControlStyle.detail)
                             .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     }
@@ -59,14 +59,14 @@ struct DictationModelRow: View {
             HStack(spacing: 8) {
                 ProgressView(value: fraction).frame(width: 90)
                 Text(fraction.formatted(.percent.precision(.fractionLength(0)))).monospacedDigit()
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(width: 34, alignment: .trailing)
                 Button("Cancel") { store.cancel(model) }
             }
         case .verifying:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
-                Text("Verifying…").font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                Text("Verifying…").font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
             }
         case .installed:
             Button("Delete") { store.delete(model) }

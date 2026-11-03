@@ -267,7 +267,7 @@ struct SpaceSidebar: View {
             }
             Text("⌘P").font(typography.shortcut()).foregroundStyle(Chrome.palette.detail).fixedSize()
         }
-        .font(typography.font(offset: -1.5))
+        .font(typography.font(.body))
         .padding(.horizontal, 8)
         .frame(height: max(20, headerHeight - 6))
         .background(Chrome.palette.field, in: RoundedRectangle(cornerRadius: 6))
@@ -1005,8 +1005,15 @@ struct SpaceSidebar: View {
             HStack(spacing: 4) {
                 Text(below.isEmpty ? "↑" : "↓")
                 Text("\(hidden.count) more")
-                if !pending.isEmpty { Text("· ● \(pending.count) needs you").foregroundStyle(Chrome.palette.green) }
-                if !finished.isEmpty { Text("· ◆ \(finished.count) ready").foregroundStyle(Chrome.accent) }
+                // The activity marks AgentActivityGlyph draws.
+                if !pending.isEmpty {
+                    (Text("· ") + ActivityMark.blocked.text(size: metrics.detailSize) + Text(" \(pending.count) needs you"))
+                        .foregroundStyle(Chrome.palette.green)
+                }
+                if !finished.isEmpty {
+                    (Text("· ") + ActivityMark.finished.text(size: metrics.detailSize) + Text(" \(finished.count) ready"))
+                        .foregroundStyle(Chrome.accent)
+                }
                 Spacer(minLength: 0)
             }.font(sidebarDetailFont).lineLimit(1).padding(.horizontal, 10).padding(.vertical, metrics.large ? 6 : 4)
                 .frame(maxWidth: .infinity).contentShape(Rectangle())

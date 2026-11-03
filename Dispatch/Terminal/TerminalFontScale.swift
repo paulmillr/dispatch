@@ -2,11 +2,12 @@ import CoreText
 import Foundation
 import os
 
-/// Every terminal font drawn at Source Code Pro's apparent size: the size Settings shows is multiplied by the ratio of
-/// Source Code Pro's lowercase height to the font's, so switching fonts keeps the text the same size (Inconsolata
-/// draws larger, Victor Mono smaller). Lowercase height is the median outline height of "acemnorsuvwxz", as chat's
-/// calibration measures it (`scripts/measure-chat-fonts.swift`), read from the glyphs' bounds rather than rendered.
-/// Shared with the iPhone app; both register the bundled fonts before a terminal opens.
+/// Every font drawn at Source Code Pro's apparent size: the size Settings shows is multiplied by the ratio of Source
+/// Code Pro's lowercase height to the font's, so switching fonts keeps the text the same size (Inconsolata draws
+/// larger, Victor Mono smaller). Terminal fonts by family; on the Mac also chat's faces (`ChatFont.sizeScale`) and the
+/// interface's San Francisco (`AppFont.systemScale`). Lowercase height is the median outline height of
+/// "acemnorsuvwxz", read from the glyphs' bounds rather than rendered (`scripts/measure-fonts.swift` prints every
+/// role's). Shared with the iPhone app; both register the bundled fonts before a terminal opens.
 enum TerminalFontScale {
     static let reference = TerminalFontCatalog.defaultFamily
     private static let cache = OSAllocatedUnfairLock(initialState: [String: Double]())
@@ -27,6 +28,19 @@ enum TerminalFontScale {
         return value
     }
 
+    /// Source Code Pro's lowercase height over `font`'s, to three places; 1 when either can't be measured. For faces
+    /// not reached by family name: the system font's designs (SF Rounded, New York) and named chat faces. Measured at
+    /// 16 points, a text size, so the system font's optical size is the one text draws in.
+    static func factor(_ font: CTFont) -> Double {
+        let key = "font:" + (CTFontCopyPostScriptName(font) as String)
+        if let known = cache.withLock({ $0[key] }) { return known }
+        guard let base = lowercaseHeight(reference),
+              let height = lowercaseHeight(CTFontCreateCopyWithAttributes(font, 16, nil, nil)), height > 0 else { return 1 }
+        let value = (base / (height * 1000 / 16) * 1000).rounded() / 1000
+        cache.withLock { $0[key] = value }
+        return value
+    }
+
     /// The median lowercase outline height of `family`'s regular face at 1000 points; nil without the family.
     static func lowercaseHeight(_ family: String) -> Double? {
         let attributes: [CFString: Any] = [kCTFontFamilyNameAttribute: family]
@@ -37,6 +51,11 @@ enum TerminalFontScale {
         guard let regular = matches.first(where: { style($0) == "Regular" }) ?? matches.first else { return nil }
         let font = CTFontCreateWithFontDescriptor(regular, 1000, nil)
         guard CTFontCopyFamilyName(font) as String == family else { return nil }
+        return lowercaseHeight(font)
+    }
+
+    /// The median lowercase outline height of `font` at its own size; nil when it lacks the letters.
+    static func lowercaseHeight(_ font: CTFont) -> Double? {
         let characters = Array("acemnorsuvwxz".utf16)
         var glyphs = [CGGlyph](repeating: 0, count: characters.count)
         guard CTFontGetGlyphsForCharacters(font, characters, &glyphs, characters.count) else { return nil }

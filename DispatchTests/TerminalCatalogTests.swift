@@ -46,9 +46,9 @@ final class TerminalCatalogTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([ChatFontChoice].self, from: JSONEncoder().encode(choices)), choices)
         XCTAssertEqual(ChatFontChoice.comicSans.namedFace(on: .macOS), "ComicSansMS")
         XCTAssertEqual(ChatFontChoice.comicSans.namedFace(on: .iOS), "Chalkboard SE")
-        XCTAssertEqual(ChatFontChoice.comicSans.scale(on: .macOS), 0.907)
-        XCTAssertEqual(ChatFontChoice.comicSans.scale(on: .iOS), 1)
-        XCTAssertEqual(ChatFontChoice.latinModernRoman.scale(on: .macOS), ChatFontChoice.latinModernRoman.scale(on: .iOS))
+        // The Mac measures its faces (FontCalibrationTests); the iPhone lifts only Latin Modern on Dynamic Type.
+        XCTAssertEqual(ChatFontChoice.comicSans.iOSScale, 1)
+        XCTAssertEqual(ChatFontChoice.latinModernRoman.iOSScale, 1.126)
         let families = TerminalFontCatalog.bundled.map(\.family)
         XCTAssertEqual(families.count, Set(families).count)
         XCTAssertTrue(families.contains(TerminalFontCatalog.defaultFamily))
