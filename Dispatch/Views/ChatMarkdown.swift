@@ -162,6 +162,28 @@ struct ChatMarkdown: View {
     }
 }
 
+@MainActor enum ChatTextStorageEdit {
+    /// Edits only what follows the characters the shown text shares with the new one, when those keep their
+    /// attributes too (a streamed block growing at its end); otherwise replaces it all. One comparison of the shared
+    /// part in Foundation: walking its runs bridged every run's attributes to Swift, which cost more than the edit.
+    static func replace(_ storage: NSTextStorage, with text: NSAttributedString) {
+        let old = storage.string as NSString, new = text.string as NSString
+        let shared = min(old.length, new.length)
+        var prefix = 0
+        while prefix < shared, old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+        var start = 0
+        if prefix > 0 {
+            let range = NSRange(location: 0, length: prefix)
+            if storage.attributedSubstring(from: range).isEqual(to: text.attributedSubstring(from: range)) { start = prefix }
+        }
+        guard start < old.length || start < new.length else { return }
+        storage.beginEditing()
+        storage.replaceCharacters(in: NSRange(location: start, length: old.length - start),
+                                  with: text.attributedSubstring(from: NSRange(location: start, length: new.length - start)))
+        storage.endEditing()
+    }
+}
+
 /// What message text views cost, for tests: views made, texts built, sizes measured.
 @MainActor enum ChatTextMetrics {
     static var views = 0
@@ -246,29 +268,39 @@ private struct ChatSelectableText: NSViewRepresentable {
         (view as? SelectableTextView)?.builds += 1
         let text = NSMutableAttributedString(attributedString: NSAttributedString(value))
         let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = theme.typography.lineSpacing
-        text.addAttributes([.paragraphStyle: paragraph, .foregroundColor: NSColor(theme.ink)],
+        text.addAttributes([.paragraphStyle: paragraph, .foregroundColor: coordinator.color(theme.ink)],
                            range: NSRange(location: 0, length: text.length))
         var offset = 0
-        for run in value.runs {
-            let count = String(value[run.range].characters).utf16.count
+        // One slice over the five attributes read here: each `run.attribute` instantiates its key path again, and
+        // that cost most of a streamed block's update.
+        let fontKey: KeyPath<AttributeDynamicLookup, AttributeScopes.SwiftUIAttributes.FontAttribute> = \.font
+        let intentKey: KeyPath<AttributeDynamicLookup, AttributeScopes.FoundationAttributes.InlinePresentationIntentAttribute> = \.inlinePresentationIntent
+        let foregroundKey: KeyPath<AttributeDynamicLookup, AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute> = \.foregroundColor
+        let backgroundKey: KeyPath<AttributeDynamicLookup, AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute> = \.backgroundColor
+        let linkKey: KeyPath<AttributeDynamicLookup, AttributeScopes.FoundationAttributes.LinkAttribute> = \.link
+        for (runFont, intent, foreground, background, link, runRange) in value.runs[fontKey, intentKey, foregroundKey, backgroundKey, linkKey] {
+            let count = String(value[runRange].characters).utf16.count
             let range = NSRange(location: offset, length: count)
-            var font = run.font ?? base
-            if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { font = font.bold() }
-            if run.inlinePresentationIntent?.contains(.emphasized) == true { font = font.italic() }
+            var font = runFont ?? base
+            if intent?.contains(.stronglyEmphasized) == true { font = font.bold() }
+            if intent?.contains(.emphasized) == true { font = font.italic() }
             var resolved = font.resolve(in: fontContext).ctFont
-            if run.inlinePresentationIntent?.contains(.emphasized) == true, let italic = ChatFont.italic(for: resolved) { resolved = italic }
-            if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true,
+            if intent?.contains(.emphasized) == true, let italic = ChatFont.italic(for: resolved) { resolved = italic }
+            if intent?.contains(.stronglyEmphasized) == true,
                let bold = ChatFont.boldPostScriptName(CTFontCopyPostScriptName(resolved) as String) {
                 resolved = CTFontCreateWithName(bold as CFString, CTFontGetSize(resolved), nil)
             }
             text.addAttribute(.font, value: resolved, range: range)
-            if let color = run.foregroundColor { text.addAttribute(.foregroundColor, value: NSColor(color), range: range) }
-            if let color = run.backgroundColor { text.addAttribute(.backgroundColor, value: NSColor(color), range: range) }
-            if run.link != nil { text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
-            if run.inlinePresentationIntent?.contains(.strikethrough) == true { text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
+            if let foreground { text.addAttribute(.foregroundColor, value: coordinator.color(foreground), range: range) }
+            if let background { text.addAttribute(.backgroundColor, value: coordinator.color(background), range: range) }
+            if link != nil { text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
+            if intent?.contains(.strikethrough) == true { text.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
             offset += count
         }
-        if view.attributedString() != text { view.textStorage?.setAttributedString(text) }
+        // Its fonts are set above. Left in, TextKit's attribute fixing derives a font from each intent again on every
+        // edit, the largest part of a streamed block's update.
+        text.removeAttribute(.inlinePresentationIntent, range: NSRange(location: 0, length: text.length))
+        if let storage = view.textStorage { ChatTextStorageEdit.replace(storage, with: text) }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
         let width = proposal.width ?? .greatestFiniteMagnitude
@@ -375,6 +407,16 @@ private struct ChatSelectableText: NSViewRepresentable {
         var key: Key?
         /// Measured sizes by proposed width, for the shown text.
         var sizes: [CGFloat: CGSize] = [:]
+        /// The same color object for the same color, build after build: a dynamic color made again compares unequal,
+        /// and `replace` would then edit the whole text.
+        private var colors: [Color: NSColor] = [:]
+        func color(_ color: Color) -> NSColor {
+            if let made = colors[color] { return made }
+            if colors.count >= 16 { colors.removeAll(keepingCapacity: true) }
+            let made = NSColor(color)
+            colors[color] = made
+            return made
+        }
         init(open: OpenURLAction) { self.open = open }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let view = notification.object as? SelectableTextView,

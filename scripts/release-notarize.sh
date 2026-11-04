@@ -1,5 +1,5 @@
 #!/bin/bash
-# Release, step 2 (signer). Self-contained: needs only this file, Xcode's command line tools, a
+# The Mac part of scripts/release-publish.sh, on the signing machine (docs/releasing.md). Self-contained: needs only this file, Xcode's command line tools, a
 # Developer ID Application identity and a notarytool keychain profile, stored once with
 #   xcrun notarytool store-credentials dispatch-notary --apple-id APPLE_ID --team-id TEAMID
 #
@@ -9,14 +9,14 @@
 # own folder (Dispatch-Pilot-signed/, Dispatch-signed/). A signer for both accounts stores the second account's
 # credentials under another name and adds --profile NAME.
 #
-# First it shows the zip's SHA-256: continue only if it matches the hash the maintainer sent over a
-# separate channel. With --sha256 HASH it compares instead of asking (release-publish.sh, docs/releasing.md). Everything it makes goes to Dispatch-signed/, next to the zip.
-# Re-signs the maintainer's build (never rebuilds it): every Mach-O, deepest first, then the app,
+# First it shows the zip's SHA-256: on its own, continue only if it matches the hash you got over a separate
+# channel. With --sha256 HASH it compares instead of asking (release-publish.sh passes the VM build's). Everything it makes goes to Dispatch-signed/, next to the zip.
+# Re-signs the given build (never rebuilds it): every Mach-O, deepest first, then the app,
 # with the hardened runtime, a secure timestamp and each binary's own identifier (yachts.dispatch.app,
 # yachts.dispatch.helper); the app alone gets one entitlement, written below (the microphone, for dictation). Notarizes and staples the app,
 # so it launches offline once copied out, then packs it into an LZMA DMG with an Applications link,
-# signs, notarizes and staples that. Send back Dispatch-signed/Dispatch-<version>.dmg exactly as it is: it is
-# the release download, and repacking it (a Finder zip, say) adds junk and discards nothing useful.
+# signs, notarizes and staples that. Dispatch-signed/Dispatch-<version>.dmg is the release download as it is:
+# repacking it (a Finder zip, say) adds junk and discards nothing useful.
 #
 # Each Apple submission is uploaded once and its ID saved in Dispatch-signed/ before waiting. If anything is
 # interrupted, run the same command again: it resumes, and never uploads a step twice.
@@ -45,7 +45,7 @@ identity_hash() {
 }
 
 # The app's only entitlement: the hardened runtime blocks the microphone (chat dictation) without it. Written here,
-# not taken from the maintainer's signature, so the signer's identity vouches for exactly this.
+# not taken from the build's signature, so the signer's identity vouches for exactly this.
 ENTITLEMENTS='<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.device.audio-input</key><true/></dict></plist>'
@@ -103,8 +103,8 @@ echo "SHA-256 of $(basename "$ARCHIVE"): $digest"
 if [[ -n "$EXPECTED" ]]; then
   [[ "$digest" == "$EXPECTED" ]] || fail "stopped: the zip is not the build whose hash is $EXPECTED"
 else
-  read -r -p "Does it match the hash the maintainer sent separately? Type yes to continue: " answer < /dev/tty
-  [[ "$answer" == yes ]] || fail "stopped: sign only the build whose hash the maintainer sent"
+  read -r -p "Does it match the hash you got separately? Type yes to continue: " answer < /dev/tty
+  [[ "$answer" == yes ]] || fail "stopped: sign only a build whose hash you know"
 fi
 # Credentials work before anything is signed; no password or key on the command line.
 xcrun notarytool history --keychain-profile "$PROFILE" --output-format json > /dev/null ||
@@ -115,7 +115,7 @@ OUTPUT="$(cd "$(dirname "$ARCHIVE")" && pwd)/${name%-unsigned}-signed"
 mkdir -p "$OUTPUT"
 app="$OUTPUT/Dispatch.app"
 
-# 1. Sign a fresh copy of the maintainer's app. Published only once completely signed.
+# 1. Sign a fresh copy of the build's app. Published only once completely signed.
 if [[ ! -d "$app" ]]; then
   rm -rf "$OUTPUT/unpacked" "$app.signing"
   mkdir "$OUTPUT/unpacked"
@@ -167,4 +167,4 @@ echo "$digest  $(basename "$dmg")" > "$OUTPUT/SHA256SUMS"
 echo
 echo "Notarized and stapled: $dmg"
 echo "SHA-256 $digest"
-echo "Send back $(basename "$dmg") as is. Keep the *-notarization.json receipts."
+echo "Publish $(basename "$dmg") as is. Keep the *-notarization.json receipts."

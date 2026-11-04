@@ -77,22 +77,28 @@ final class ChatScrollbar: NSView {
         if newSuperview == nil { hideAt = nil }
         super.viewWillMove(toSuperview: newSuperview)
     }
+    /// The knob `update` last computed. A hidden thumb takes it only when it shows again: every clip movement and
+    /// streamed row calls `update`, and a knob moved under alpha 0 still redraws.
+    private var knob: (proportion: CGFloat, fraction: Double) = (1, 0)
     func update(total: CGFloat, visible: CGFloat, offset: CGFloat) {
         canScroll = total > visible + 1
         if thumb.isEnabled != canScroll { thumb.isEnabled = canScroll }
-        let proportion = total > 0 ? min(1, visible / total) : 1
-        if thumb.knobProportion != proportion { thumb.knobProportion = proportion }
-        let fraction = Double(max(0, min(1, offset / max(1, total - visible))))
-        if !dragging && thumb.doubleValue != fraction { thumb.doubleValue = fraction }
+        knob = (total > 0 ? min(1, visible / total) : 1, Double(max(0, min(1, offset / max(1, total - visible)))))
         if !canScroll {
             hideAt = nil
             revealed = false; thumb.alphaValue = 0
         }
-        thumb.needsDisplay = true
+        if revealed || dragging { applyKnob() }
+    }
+    /// The scroller's setters redraw it when a value changes; nothing else needs to.
+    private func applyKnob() {
+        if thumb.knobProportion != knob.proportion { thumb.knobProportion = knob.proportion }
+        if !dragging && thumb.doubleValue != knob.fraction { thumb.doubleValue = knob.fraction }
     }
     func reveal() {
         guard canScroll else { return }
         hideAt = nil
+        applyKnob()
         if !revealed || thumb.alphaValue != 1 {
             revealed = true
             NSAnimationContext.runAnimationGroup { context in
@@ -129,9 +135,10 @@ final class ChatScrollbar: NSView {
     }
     @objc private func scrolled() {
         guard canScroll else { return }
-        reveal()
+        // The scroller's own value, before revealing it applies the knob `update` last computed.
         var fraction = CGFloat(thumb.doubleValue)
         let page = thumb.knobProportion / max(0.001, 1 - thumb.knobProportion)
+        reveal()
         switch thumb.hitPart {
         case .decrementPage: fraction -= page
         case .incrementPage: fraction += page

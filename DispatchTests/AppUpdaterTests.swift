@@ -31,14 +31,32 @@ final class AppUpdaterTests: XCTestCase {
         }
     }
 
-    func testOnboardingStartsUncheckedAndSettingsShowsUpdateControls() async throws {
-        let alert = AppUpdater.onboardingAlert()
-        let checkbox = try XCTUnwrap(alert.accessoryView as? NSButton)
-        XCTAssertEqual(checkbox.state, .off)
-        alert.layout()
-        _ = try PresentationTestSupport.render(XCTUnwrap(alert.window.contentView), named: "update-onboarding", in: "update-audit")
-        alert.window.close()
+    /// The setup sheet (LocalAgentsConsent) offers updates checked, yet saves nothing, so makes no request, until
+    /// Continue; Ask later leaves the question unanswered. Existing installations get the updates section alone.
+    func testSetupSheetOffersUpdatesCheckedAndSavesOnlyOnContinue() async throws {
+        let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: nil)
+        for agents in [true, false] {
+            let directory = System.temporary.appendingPathComponent("update-onboarding-" + System.uuid().uuidString)
+            defer { try? System.remove(directory) }
+            let settings = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+            let sheet = LocalAgentsConsent.Sheet(chat: chat, settings: settings, agents: agents)
+            defer { sheet.close() }
+            XCTAssertEqual(sheet.updates.state, .on)
+            XCTAssertNil(settings.values.automaticUpdates, "Showing the sheet answers nothing")
+            _ = try PresentationTestSupport.render(XCTUnwrap(sheet.contentView), named: agents ? "setup" : "setup-updates", in: "update-audit")
+            let escape = TerminalTestSupport.keyEvent(53, "\u{1b}", in: sheet)
+            XCTAssertTrue(sheet.performKeyEquivalent(with: escape))
+            XCTAssertNil(settings.values.automaticUpdates, "Ask later saves nothing")
+            if agents { continue }
+            sheet.updates.performClick(nil)
+            XCTAssertEqual(sheet.updates.state, .off)
+            sheet.updates.performClick(nil)
+            XCTAssertTrue(sheet.performKeyEquivalent(with: TerminalTestSupport.keyEvent(36, "\r", in: sheet)))
+            XCTAssertEqual(settings.values.automaticUpdates, true)
+        }
+    }
 
+    func testSettingsShowUpdateControls() async throws {
         let directory = System.temporary.appendingPathComponent("update-settings-" + System.uuid().uuidString)
         defer { try? System.remove(directory) }
         let updater = AppUpdater(operations: operations(try UpdateRelease(cask: cask)), defaults: nil)

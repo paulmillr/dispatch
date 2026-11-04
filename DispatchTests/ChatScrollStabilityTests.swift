@@ -789,6 +789,22 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertNil(bar.superview)
     }
 
+    /// The thumb draws only while it shows: a hidden one keeps its knob until revealed, however the clip moves.
+    func testAHiddenScrollbarMovesItsKnobOnlyOnceItShows() {
+        let bar = ChatScrollbar()
+        bar.update(total: 1000, visible: 100, offset: 0)
+        let proportion = bar.thumb.knobProportion, value = bar.thumb.doubleValue
+        bar.update(total: 2000, visible: 100, offset: 950)
+        XCTAssertFalse(bar.revealed)
+        XCTAssertEqual(bar.thumb.knobProportion, proportion, "A hidden knob keeps its size")
+        XCTAssertEqual(bar.thumb.doubleValue, value, "A hidden knob stays where it was")
+        bar.reveal()
+        XCTAssertEqual(bar.thumb.knobProportion, 0.05, accuracy: 0.001)
+        XCTAssertEqual(bar.thumb.doubleValue, 0.5, accuracy: 0.001)
+        bar.update(total: 2000, visible: 100, offset: 1900)
+        XCTAssertEqual(bar.thumb.doubleValue, 1, accuracy: 0.001, "A shown knob follows the clip")
+    }
+
     func testExpandedToolsKeepMessagesStableWhileScrollingBothDirections() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)

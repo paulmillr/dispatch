@@ -289,6 +289,7 @@
     "DispatchTests/ChatScrollStabilityTests/testHistoryPrefetchAnticipatesFastScrollingButStaysBounded": "full",
     "DispatchTests/ChatScrollStabilityTests/testKeyboardNavigationRearmsExhaustedHistoryPreloadAndIgnoresComposer": "full",
     "DispatchTests/ChatScrollStabilityTests/testLiveScrollingCancelsStalePreservationAndFollowIntent": "full",
+    "DispatchTests/ChatTabSwitchMotionTests/testSwitchingToAChatTabMovesNoText": "full",
     "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadContinuesAfterRestorationAndStopsWithoutProgress": "full",
     "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadCountsAcceptedLoadsAndCapsInvisibleProgress": "full",
     "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadFillsShortContentAndStopsAtItsViewportTarget": "full",

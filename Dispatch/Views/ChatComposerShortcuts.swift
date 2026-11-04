@@ -226,11 +226,42 @@ struct ChatShellList: View {
     }
 }
 
+/// The composer footer's copy of the agent's activity, shared by every variant of the footer's `ViewThatFits`. It is
+/// computed again after each change to what it reads, but publishes only a different value: a record that only adds
+/// output to the turn re-renders no variant, so `ViewThatFits` measures none of them again. Bound by the view that
+/// shows the footer, and tracked only while that view lives.
+@MainActor @Observable final class ChatComposerActivityState {
+    private(set) var current: AgentWorkingState?
+    @ObservationIgnored private weak var session: ChatSession?
+
+    func bind(_ session: ChatSession) {
+        guard self.session !== session else { return }
+        self.session = session
+        refresh()
+    }
+
+    private func refresh() {
+        guard let session else { current = nil; return }
+        let value = withObservationTracking {
+            AgentWorkingState(session, details: false)
+        } onChange: { [weak self] in
+            // Before the change is stored; read it after, before the run loop next waits. A block on the loop it runs
+            // on, not the main queue: that would wake the loop again for every streamed record.
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        }
+        if value != current { current = value }
+    }
+}
+
 /// Keep animation ticks in the footer, outside the transcript and native editor.
 struct ChatComposerActivity: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: ChatSession
+    /// The footer's shared state, once bound; without it the view reads the session itself.
+    var activity: ChatComposerActivityState? = nil
     var active = true
     /// Without it, a tight footer shows the orbit and time only; the label stays in the help and details.
     var showsLabel = true
@@ -239,7 +270,7 @@ struct ChatComposerActivity: View {
     @State private var visible = false
 
     var body: some View {
-        let state = AgentWorkingState(session)
+        let state = activity?.current ?? AgentWorkingState(session, details: false)
         if state.visible && !state.loading {
             // Motion runs in the compositor (ChatComposerMotion.swift); SwiftUI updates only the whole seconds.
             let moving = active && visible && !reduceMotion && !state.waiting && session.showChat
@@ -258,9 +289,13 @@ struct ChatComposerActivity: View {
                     }
                     if !state.waiting {
                         TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
-                            Text((showsLabel ? "· " : "") + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
-                                                                                         reduceMotion: reduceMotion))
-                                .monospacedDigit().fixedSize()
+                            let time = (showsLabel ? "· " : "") + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
+                                                                                               reduceMotion: reduceMotion)
+                            // Sized by its template, which a tick changes only when the clock gains a digit: the
+                            // time itself is an overlay, so a tick changes no size and the footer's `ViewThatFits`
+                            // does not measure its variants again every second.
+                            ChatClockSlot(template: ChatClockSlot.template(time)).equatable()
+                                .overlay(alignment: .leading) { Text(time).monospacedDigit().fixedSize() }
                         }
                     }
                 }.foregroundStyle(theme.muted).contentShape(Rectangle())
@@ -283,5 +318,18 @@ struct ChatComposerActivity: View {
                         .preferredColorScheme(theme.isDark ? .dark : .light)
                 }
         }
+    }
+}
+
+/// A running clock's footprint: its text with every digit a zero, digits being monospaced.
+struct ChatClockSlot: View, Equatable {
+    let template: String
+
+    static func template(_ time: String) -> String {
+        String(time.map { $0.isASCII && $0.isNumber ? "0" : $0 })
+    }
+
+    var body: some View {
+        Text(template).monospacedDigit().fixedSize().hidden().accessibilityHidden(true)
     }
 }

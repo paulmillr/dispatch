@@ -158,30 +158,4 @@ final class AppUpdater {
         work = nil
         if let prepared { await operations.discard(prepared); self.prepared = nil }
     }
-
-    /// An onboarding screen for both fresh installs and users receiving the updater for the first time.
-    /// The unchecked choice stays off unless Continue explicitly saves it.
-    static func onboard(over window: NSWindow, settings: SettingsStore) async {
-        guard settings.values.automaticUpdates == nil else { return }
-        let alert = onboardingAlert()
-        await alert.beginSheetModal(for: window)
-        // A setting changed while the sheet was open takes precedence.
-        guard settings.values.automaticUpdates == nil, let choice = alert.accessoryView as? NSButton else { return }
-        var values = settings.values
-        values.automaticUpdates = choice.state == .on
-        do { try settings.save(values) }
-        catch { settings.error = error.localizedDescription }
-    }
-
-    static func onboardingAlert() -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = "Keep Dispatch up to date"
-        alert.informativeText = "Dispatch can check for new releases and download updates automatically. You choose when to restart and install.\n\nYou can change this later in Settings › General › Terminal."
-        let choice = NSButton(checkboxWithTitle: "Enable automatic updates", target: nil, action: nil)
-        choice.state = .off
-        choice.setAccessibilityIdentifier("onboarding-automatic-updates")
-        alert.accessoryView = choice
-        alert.addButton(withTitle: "Continue")
-        return alert
-    }
 }

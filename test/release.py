@@ -96,7 +96,7 @@ def main():
         home = Path(directory)
         settings = home / 'Library/Application Support/Dispatch/Local/settings.json'
         settings.parent.mkdir(parents=True)
-        # The smoke test exercises launch and quit after onboarding. An unanswered updater sheet blocks quit.
+        # The smoke test exercises launch and quit after onboarding. An unanswered setup sheet blocks quit.
         settings.write_text(json.dumps({'startingDirectory': str(home), 'automaticUpdates': False}))
         # The regular login-shell path sources this private startup file. The
         # receipt proves terminal creation and command execution, not just a PID.

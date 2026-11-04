@@ -1,25 +1,57 @@
 #!/bin/bash
-# One-time setup of the signing machine for one account (README.md, a copy of docs/releasing.md):
+# One-time setup of the signing machine (docs/releasing.md, Signing machine), from its clone of paulmillr/dispatch:
 #
-#   bin/release-signer-setup.sh pilot|stable KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID
+#   scripts/release-signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT
+#   scripts/release-signer-setup.sh pilot|stable KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID
 #
-# KEYS_DIR is the unzipped dispatch-keys.zip: one .p12 (the private key with its Developer ID Application and Apple
-# Distribution certificates; macOS asks for its password) and Apple's intermediate certificates (*CA*.cer). The .p8 is
-# the account's App Store Connect API key (App Manager role); the issuer id is shown above the keys list.
+# trust: the OpenPGP public key that signs release commits and tags (gpg --export --armor KEYID on the machine that
+# signs commits), and its primary key's fingerprint as that machine shows it (gpg --fingerprint KEYID), compared here,
+# not taken from the file. Imports it into ~/.config/dispatch-release/gnupg, a keyring holding only that key, and pins
+# the fingerprint as DISPATCH_COMMIT_KEY in ~/.config/dispatch-release/release.env: scripts/release-publish.sh signs
+# nothing whose tag or commit another key signed. Run it again after the key changes.
 #
-# The iPhone app is signed manually, with App Store profiles made in the developer portal and kept in
-# ~/.config/dispatch-release/<variant>-profiles (this creates the folder): the API key needs no Admin role.
-#
+# pilot|stable: KEYS_DIR is the unzipped dispatch-keys.zip: one .p12 (the private key with its Developer ID Application
+# and Apple Distribution certificates; macOS asks for its password) and Apple's intermediate certificates (*CA*.cer).
+# The .p8 is the account's App Store Connect API key (App Manager role); the issuer id is shown above the keys list.
 # Imports the identities into the login keychain (codesign, productsign and xcodebuild may use them without asking),
 # copies the API key to ~/.config/dispatch-release (0600), stores notarytool credentials from it under
-# dispatch-<variant>-notary, writes ~/.config/dispatch-release/<variant>.env for bin/release-publish.sh, and checks Xcode.
-# Running it again replaces the settings; certificates already in the keychain are kept.
+# dispatch-<variant>-notary, writes ~/.config/dispatch-release/<variant>.env for scripts/release-publish.sh, creates
+# the folders for the iPhone profiles (<variant>-profiles for TestFlight, <variant>-adhoc-profiles for Ad Hoc), and
+# checks Xcode. Running it again replaces the settings; certificates already in the keychain are kept.
 set -euo pipefail
 CONFIG="${DISPATCH_RELEASE_CONFIG:-$HOME/.config/dispatch-release}"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 fail() { echo "error: $*" >&2; exit 1; }
-usage="usage: bin/release-signer-setup.sh pilot|stable KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID"
+
+if [[ "${1:-}" == trust ]]; then
+  [[ $# == 3 && -f "$2" ]] || fail "usage: scripts/release-signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT"
+  fingerprint="$(tr -d ' ' <<< "$3" | tr a-f A-F)"
+  [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]] || fail "'$3' is not a 40-digit OpenPGP fingerprint (gpg --fingerprint KEYID)"
+  command -v gpg > /dev/null || fail "no gpg: brew install gnupg"
+  rm -rf "$CONFIG/gnupg.next"
+  mkdir -p "$CONFIG"
+  chmod 700 "$CONFIG"
+  mkdir -m 700 "$CONFIG/gnupg.next"
+  GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --quiet --import "$2"
+  keys="$(GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --with-colons --fingerprint 2> /dev/null | awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }')"
+  [[ "$keys" == "$fingerprint" ]] || fail "$2 holds ${keys:-no key}${keys:+ (primary fingerprints)}, not exactly $fingerprint"
+  echo "$fingerprint:6:" | GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --quiet --import-ownertrust
+  rm -rf "$CONFIG/gnupg"
+  mv "$CONFIG/gnupg.next" "$CONFIG/gnupg"
+  touch "$CONFIG/release.env"
+  grep -v '^DISPATCH_COMMIT_KEY=' "$CONFIG/release.env" > "$CONFIG/release.env.next" || true
+  echo "DISPATCH_COMMIT_KEY=$fingerprint" >> "$CONFIG/release.env.next"
+  chmod 600 "$CONFIG/release.env.next"
+  mv "$CONFIG/release.env.next" "$CONFIG/release.env"
+  GNUPGHOME="$CONFIG/gnupg" gpg --batch --fingerprint "$fingerprint"
+  echo "Pinned the commit key $fingerprint in $CONFIG/release.env."
+  for tool in gh tart; do
+    command -v "$tool" > /dev/null || echo "note: $tool is not installed (docs/releasing.md, Signing machine)"
+  done
+  exit 0
+fi
+usage="usage: scripts/release-signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT | pilot|stable KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID"
 [[ $# == 4 ]] || fail "expected 4 arguments, got $#: $*
 $usage"
 variant="$1" keys="$2" key="$3" issuer="$4"
@@ -83,7 +115,7 @@ xcrun notarytool store-credentials "$profile" --key "$CONFIG/AuthKey_$key_id.p8"
 
 umask 077
 cat > "$CONFIG/$variant.env" <<EOF
-# bin/release-publish.sh's settings for the $variant account, written by bin/release-signer-setup.sh.
+# scripts/release-publish.sh's settings for the $variant account, written by scripts/release-signer-setup.sh.
 DISPATCH_TEAM=$team
 DISPATCH_MAC_IDENTITY='$mac_identity'
 DISPATCH_NOTARY_PROFILE=$profile
@@ -94,8 +126,8 @@ EOF
 mkdir -p "$CONFIG/$variant-profiles" "$CONFIG/$variant-adhoc-profiles"
 echo "Wrote $CONFIG/$variant.env."
 case "$variant" in pilot) prefix=yachts.dispatch.pilot ;; *) prefix=yachts.dispatch ;; esac
-echo "For TestFlight, put the App Store profiles of $prefix.mobile, $prefix.mobile.watchkitapp and"
-echo "$prefix.mobile.watchkitapp.widgets in $CONFIG/$variant-profiles (README.md, Signing machine)."
-echo "For Ad Hoc builds (--ad-hoc), put the Ad Hoc profiles of the same three in $CONFIG/$variant-adhoc-profiles and"
-echo "DISPATCH_ADHOC_URL (and DISPATCH_ADHOC_SITE) in $CONFIG/$variant-adhoc.env."
-echo "Publish with: bin/release-publish.sh"
+echo "For Ad Hoc builds, put the Ad Hoc profiles of $prefix.mobile, $prefix.mobile.watchkitapp and"
+echo "$prefix.mobile.watchkitapp.widgets in $CONFIG/$variant-adhoc-profiles, and DISPATCH_ADHOC_URL (with"
+echo "DISPATCH_ADHOC_SITE or DISPATCH_ADHOC_DEPLOY) in $CONFIG/$variant-adhoc.env. For TestFlight, the App Store"
+echo "profiles of the same three in $CONFIG/$variant-profiles (docs/releasing.md, Signing machine)."
+echo "Publish with: scripts/release-publish.sh X.Y.Z"

@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 import XCTest
+import Observation
+import os
 @testable import DispatchApp
 
 @MainActor
@@ -214,6 +216,60 @@ extension ChatPerformanceTests {
         let session = coordinator.session(for: System.uuid())
         session.sessionID = name; session.showChat = true; session.atBottom = true
         return session
+    }
+
+    /// A streamed block is edited from where it changed, not replaced: TextKit lays out again from that paragraph.
+    func testTextStorageIsEditedFromItsFirstChange() {
+        final class Edits: NSObject, NSTextStorageDelegate {
+            var ranges: [NSRange] = []
+            func textStorage(_ storage: NSTextStorage, didProcessEditing actions: NSTextStorageEditActions,
+                             range: NSRange, changeInLength: Int) { ranges.append(range) }
+        }
+        let font = NSFont.systemFont(ofSize: 13), bold = NSFont.boldSystemFont(ofSize: 13)
+        func text(_ parts: [(String, NSFont)]) -> NSAttributedString {
+            let text = NSMutableAttributedString()
+            for (string, font) in parts { text.append(NSAttributedString(string: string, attributes: [.font: font])) }
+            return text
+        }
+        let storage = NSTextStorage(), edits = Edits()
+        storage.delegate = edits
+        ChatTextStorageEdit.replace(storage, with: text([("The reconnect waits", font)]))
+        ChatTextStorageEdit.replace(storage, with: text([("The reconnect waits for the lease", font)]))
+        XCTAssertEqual(edits.ranges.last, NSRange(location: 19, length: 14), "Appended text is the only edit")
+        ChatTextStorageEdit.replace(storage, with: text([("The ", font), ("reconnect", bold), (" waits for the lease", font)]))
+        XCTAssertEqual(edits.ranges.last, NSRange(location: 0, length: 33), "An attribute changed in the shared text replaces it all")
+        let count = edits.ranges.count
+        ChatTextStorageEdit.replace(storage, with: text([("The ", font), ("reconnect", bold), (" waits for the lease", font)]))
+        XCTAssertEqual(edits.ranges.count, count, "The same text is no edit")
+        ChatTextStorageEdit.replace(storage, with: text([("The ", font), ("reconnect", bold), (" waits", font)]))
+        XCTAssertEqual(storage.string, "The reconnect waits")
+        XCTAssertEqual(storage.attribute(.font, at: 5, effectiveRange: nil) as? NSFont, bold)
+        XCTAssertEqual(edits.ranges.last, NSRange(location: 19, length: 0))
+    }
+
+    /// The footer's activity is shared by its variants and publishes only what changed: output streaming into a turn
+    /// re-renders none of them, a tool starting does.
+    func testFooterActivityPublishesOnlyAChangedActivity() async throws {
+        let coordinator = ChatCoordinator(enabled: false)
+        defer { coordinator.stop() }
+        let session = chatSession(coordinator, "footer-activity")
+        session.active = true; session.busy = true; session.activeTurnID = "live"
+        session.insert(ChatItem(id: "prompt", kind: .user, text: "Check the queue"), turnID: "live")
+        let activity = ChatComposerActivityState()
+        activity.bind(session)
+        XCTAssertEqual(activity.current?.label, "thinking")
+        XCTAssertEqual(activity.current?.details, [], "The footer never shows the tool details")
+        let changes = OSAllocatedUnfairLock(initialState: 0)
+        withObservationTracking { _ = activity.current } onChange: { changes.withLock { $0 += 1 } }
+        for part in 1...5 {
+            session.insert(ChatItem(id: "reply", kind: .assistant, text: String(repeating: "Streamed output. ", count: part)),
+                           turnID: "live")
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(changes.withLock { $0 }, 0, "Output that changes no activity publishes nothing")
+        session.insert(ChatItem(id: "tool", kind: .tool, text: #"{"cmd":"rg lease Sources"}"#, title: "exec_command"), turnID: "live")
+        try await TestSupport.eventually { activity.current?.label == "searching" }
+        XCTAssertEqual(changes.withLock { $0 }, 1)
     }
 
     func testFinishingMessageKeepsItsTextViews() async throws {

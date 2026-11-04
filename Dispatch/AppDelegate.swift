@@ -203,8 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             NSApp.terminate(nil)
         }
         Task {
-            await LocalAgentsConsent.start(over: window, chat: runtime.chat)
-            await AppUpdater.onboard(over: window, settings: settings)
+            await LocalAgentsConsent.start(over: window, chat: runtime.chat, settings: settings)
             updater.setAutomaticUpdates(settings.values.automaticUpdates == true)
         }
     }

@@ -1,0 +1,81 @@
+# One of the two release builders (docs/releasing.md, Two builders): builds a signed version tag with
+# scripts/release-build.sh, attests the files (GitHub's signed build provenance) and keeps them as a workflow artifact.
+# The signing machine downloads them, checks the attestation, builds the same commit again in its own VM and signs only
+# if both builds match. No secret is used or reachable here.
+name: Release build
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  # The stable account's apps, or a rerun: "Use workflow from" must be the version tag.
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Apps to build
+        type: choice
+        options: [pilot, stable]
+        default: pilot
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.variant || 'pilot' }}
+
+jobs:
+  build:
+    # Xcode 27 is on this image only (a public preview, actions/runner-images#14404).
+    runs-on: xcode-27
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VARIANT: ${{ inputs.variant || 'pilot' }}
+      SOURCE: /private/tmp/dispatch-build
+    steps:
+      - name: Source of the tagged commit
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::run this on a version tag, not $GITHUB_REF"; exit 1; }
+          # The tree as `git archive` gives it, at the fixed path both builders use (scripts/release-build.sh).
+          git init -q "$RUNNER_TEMP/git"
+          git -C "$RUNNER_TEMP/git" fetch -q --depth=1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          mkdir "$SOURCE"
+          git -C "$RUNNER_TEMP/git" archive "$GITHUB_SHA" | tar -x -C "$SOURCE"
+          number="$(TZ=UTC git -C "$RUNNER_TEMP/git" show -s --format=%cd --date=format-local:%Y%m%d.%H%M "$GITHUB_SHA")"
+          version="$(sed -nE 's/^ *MARKETING_VERSION: "([0-9.]+)"$/\1/p' "$SOURCE/project.yml" | sort -u)"
+          [[ "$version" == "$GITHUB_REF_NAME" ]] || { echo "::error::tag $GITHUB_REF_NAME, but project.yml says $version"; exit 1; }
+          xcode="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["xcode"])' "$SOURCE/scripts/release.lock.json")"
+          [[ -d "/Applications/Xcode_$xcode.app" ]] || { echo "::error::no Xcode $xcode on this image: $(ls -d /Applications/Xcode_* | tr '\n' ' ')"; exit 1; }
+          {
+            echo "DEVELOPER_DIR=/Applications/Xcode_$xcode.app/Contents/Developer"
+            echo "BUILD_NUMBER=$number"
+            echo "VERSION=$version"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          stable=()
+          [[ "$VARIANT" == pilot ]] || stable=(--stable)
+          cd "$SOURCE"
+          DISPATCH_BUILDER=github scripts/release-build.sh "$RUNNER_TEMP/out" --commit "$GITHUB_SHA" \
+            --build-number "$BUILD_NUMBER" "${stable[@]}"
+
+      - name: Attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/out/*
+
+      - name: Keep
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dispatch-${{ env.VARIANT }}-${{ env.VERSION }}
+          path: ${{ runner.temp }}/out/*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Build log
+        if: failure()
+        run: tail -200 "$SOURCE"/build/logs/latest.log || true

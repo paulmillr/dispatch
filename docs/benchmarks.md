@@ -378,6 +378,36 @@ document's own samples), which a reader who switches away again never sees. Noth
 document, its hosts and its measured heights go with the view. A tab that is not shown costs the same in both: its rows
 are not mounted.
 
+**After the fixes (same day, same harness).** The footer's variants share one `ChatComposerActivityState`, which
+publishes the activity only when it changes, and the clock sits in a slot sized by a template (digits as zeros), so a
+tick changes no size. A hidden scrollbar thumb takes the clip's position only when it shows. A message text view reads
+its attribute runs through one slice (`run.font` and friends instantiated a key path per run), drops the inline
+presentation intents once it has set their fonts (TextKit re-derived a font from each on every edit), and edits only
+what follows an unchanged prefix. A document that just entered a window builds no lookahead for 0.3 s unless its clip
+moves.
+
+| Main-thread CPU per 10 s | before | after |
+|---|---:|---:|
+| Busy, no output | 0.31–0.33 s | 0.07–0.12 s |
+| Streaming, following | 8.3–8.4 s | 5.4–5.8 s |
+| Streaming, reading history | 6.1–6.2 s | 1.5–1.6 s |
+| Wheel scrolling (3 s) | 0.61–0.67 s | 0.61–0.66 s |
+| Idle (all three states) | 0.03–0.05 s | 0.02–0.05 s |
+| Tab switching, 20 switches | 2.93–2.95 s | 3.01–3.08 s |
+| Switch latency, median / p90 | 109 / 131–133 ms | 96 / 105–106 ms |
+
+The thumb no longer draws during a stream (248 draws per ten seconds following, 187 reading, now 0 and 1). Following
+now takes about twice as many busy turns over 8.33 ms (300–380 against 145–170) and run-loop wakeups (630–720 against
+220–260) for the same number of transcript updates, and draws the streaming text more often (1,450 against 1,090):
+the main thread is no longer saturated, so display-link frames (the arrival glide, typed reveal) run instead of being
+skipped. A switch shows its chat about 14 ms sooner (the lookahead is out of its way) at the same CPU: the lookahead
+still runs once the chat has shown 0.3 s, as it does in this harness's half-second dwell. Keeping a transcript alive
+across switches (its hosts and heights, the newest three for 60 s) was tried and dropped: hosts that enter a window
+again lay out about as expensively as new ones, so it saved 8% of switching CPU but showed each chat 15 ms later.
+Measuring text with the view's own layout manager instead of `boundingRect` would save a second typesetting per change,
+but its line heights differ by up to 2 points from `boundingRect`'s for lines mixing fonts with emoji or CJK, so it was
+left alone.
+
 ## SSH traffic of a remote host
 
 Measured on the SSH host, not the Mac (the app cannot be sampled from there): `nettop -P -x -L 12 -s 5 -J

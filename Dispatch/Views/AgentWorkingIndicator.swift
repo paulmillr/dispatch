@@ -31,7 +31,8 @@ struct AgentWorkingState: Equatable {
             || session.waitingForAnswer || (session.questions.isEmpty && session.nativePrompt != nil))
     }
 
-    init(_ session: ChatSession) {
+    /// `details: false` leaves `details` empty, for views that never show them (the composer footer).
+    init(_ session: ChatSession, details includesDetails: Bool = true) {
         // Discovering the first rollout can start a history read after Submit.
         // Keep that submitted turn visible while its acknowledgement is loading.
         loading = session.loadingHistory && !session.awaitingPromptAck
@@ -49,7 +50,7 @@ struct AgentWorkingState: Equatable {
         started = loading ? nil : (session.submittedThinkingAt ?? reported ?? session.workingSince)
         usesLocalClock = loading || reported == nil || session.submittedThinkingAt != nil
         let items = visible && current && !loading ? (turn?.items ?? []) : []
-        details = items.lazy.filter { $0.kind == .tool }.suffix(3).map { item in
+        details = !includesDetails ? [] : items.lazy.filter { $0.kind == .tool }.suffix(3).map { item in
             Detail(id: item.id, title: item.completed ? "Completed tool" : "Tool activity",
                    text: Self.toolDescription(item).text)
         }

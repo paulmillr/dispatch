@@ -555,6 +555,24 @@ final class NativeChatTranscriptTests: XCTestCase {
     /// points above AppKit's edge) started a fight that kept the live scroll running and flung the clip thousands of
     /// points past the document (a reported trace: rows 1758.6 → 4614 → 1758.6 → 9933, with no input, for seconds).
     /// Following waits for the live scroll's end, then settles once.
+    /// Rows above a followed bottom measured shorter than their estimate (the lookahead after a tab switch) leave the
+    /// clip past the new follow offset without AppKit moving it: every pass ends at the follow offset, never at AppKit's
+    /// edge with the text `bottomPadding` lower.
+    func testRowsAboveAFollowedBottomMeasuringShorterKeepTheFollowOffset() async throws {
+        let short = Dictionary(uniqueKeysWithValues: (0..<100).map { ("row-\($0)", CGFloat(40)) })
+        let fixture = try Fixture(following: true, heights: short, elastic: true)
+        defer { fixture.close() }
+        let clip = fixture.scroll.contentView
+        var gaps: [CGFloat] = []
+        fixture.position.positionChanged = { _ in
+            gaps.append(fixture.document.frame.height - clip.bounds.height - clip.bounds.minY)
+        }
+        XCTAssertTrue(fixture.document.lookaheadPending)
+        try await TestSupport.eventually(timeout: .seconds(3)) { !fixture.document.lookaheadPending }
+        XCTAssertFalse(gaps.isEmpty)
+        XCTAssertTrue(gaps.allSatisfy { abs($0 - 22) < 0.5 }, "Every pass ends at the follow offset: \(gaps)")
+    }
+
     func testFollowingWaitsForAppKitsLiveScrollToEnd() throws {
         // Rows at their estimate: no measurement moves the reader here (that correction is wanted, and tested above).
         let fixture = try Fixture(following: true, heights: Dictionary(uniqueKeysWithValues: (0..<100).map { ("row-\($0)", 100) }),
@@ -666,4 +684,44 @@ final class NativeChatTranscriptTests: XCTestCase {
 private struct GrowingRow: View {
     let model: GrowingRowModel
     var body: some View { Color.clear.frame(height: model.height) }
+}
+
+extension NativeChatTranscriptTests {
+    /// A transcript that just entered a window (a tab switched to) builds no lookahead until it has shown a moment or
+    /// the reader scrolls: switching through tabs builds only what each one shows.
+    func testAFreshMountDefersTheLookaheadUntilItShowsAMomentOrScrolls() async throws {
+        let fixture = try Fixture(heights: Self.varied)
+        defer { fixture.close() }
+        fixture.move(to: "row-40")
+        try await TestSupport.eventually(timeout: .seconds(3)) { !fixture.document.lookaheadPending }
+        func remount(at id: String) -> CFTimeInterval {
+            fixture.window.contentView = nil
+            fixture.window.contentView = fixture.scroll
+            let mounted = CACurrentMediaTime()
+            fixture.rendered.removeAll()
+            // Far from the rows built so far: placing the clip there is the mount's own first pass, not movement.
+            fixture.move(to: id)
+            return mounted
+        }
+        var mounted = remount(at: "row-70")
+        assertPresentedRowsAreMeasured(fixture)
+        let shown = Set(fixture.rendered)
+        XCTAssertTrue(fixture.document.lookaheadPending)
+        try await Task.sleep(for: .milliseconds(150))
+        if CACurrentMediaTime() - mounted < ChatTranscriptDocument.lookaheadAfterMount {
+            XCTAssertEqual(Set(fixture.rendered), shown, "Nothing beyond the clip is built in the mount's first moment")
+        }
+        try await TestSupport.eventually(timeout: .seconds(3)) { !fixture.document.lookaheadPending }
+        XCTAssertGreaterThan(Set(fixture.rendered).count, shown.count, "The lookahead is built once the chat has shown")
+        XCTAssertGreaterThanOrEqual(CACurrentMediaTime() - mounted, ChatTranscriptDocument.lookaheadAfterMount)
+        assertPresentedRowsAreMeasured(fixture)
+
+        mounted = remount(at: "row-15")
+        let before = Set(fixture.rendered)
+        fixture.scrollBy(30)
+        try await TestSupport.eventually(timeout: .seconds(3)) { Set(fixture.rendered).count > before.count + 1 }
+        XCTAssertLessThan(CACurrentMediaTime() - mounted, ChatTranscriptDocument.lookaheadAfterMount,
+                          "A scroll starts the lookahead at once")
+        assertPresentedRowsAreMeasured(fixture)
+    }
 }

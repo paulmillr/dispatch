@@ -141,8 +141,14 @@ final class ChatTranscriptDocument: NSView {
     static let cacheHeight: CGFloat = 1.5
     static let cacheCount = 16
     static let cacheDistance: CGFloat = 3
+    /// A followed clip below the follow offset stays where AppKit put it for this long after AppKit last moved it (a
+    /// bounce's frames are this close).
+    static let appKitClipInterval: CFTimeInterval = 0.5
     /// Hidden hosts are released after this long without the clip moving.
     static let idleRetirement: TimeInterval = 1.5
+    /// A document that just entered a window builds no lookahead until it has shown this long or its clip moves: a
+    /// reader switching through tabs passes it in a moment, and it was a third of each switch's work.
+    static let lookaheadAfterMount: CFTimeInterval = 0.3
 
     override var isFlipped: Bool { true }
     let position: ChatScrollPosition
@@ -182,6 +188,8 @@ final class ChatTranscriptDocument: NSView {
     /// Smoothed clip speed (points per second) of recent user movement.
     private var speed: CGFloat = 0
     private var buildingLookahead = false
+    private var mountedAt = -CFTimeInterval.infinity
+    private var mountWaitScheduled = false
     private var lookaheadObserver: CFRunLoopObserver?
     private var lookaheadQueued = false
     private var retirementScheduled = false
@@ -237,6 +245,10 @@ final class ChatTranscriptDocument: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { stopLookahead(); return }
+        mountedAt = CACurrentMediaTime()
+        // Where the clip was before is no movement: placing it here would otherwise count as one and start the
+        // lookahead at once.
+        lastClipY = nil
         position.registerViewport(self)
         dirty = true
         layoutTranscript()
@@ -398,8 +410,12 @@ final class ChatTranscriptDocument: NSView {
                 // document or past it, is AppKit's: a momentum scroll, or a bounce returning to its edge. Pulling it
                 // back to `bottom` on every bounds change fights that animation, which then never ends and flings the
                 // clip thousands of points past the document. Following there only moves further down, for new content.
+                // Only a clip something else moved lately is AppKit's: one where the passes left it is below the new
+                // `bottom` because rows above it measured shorter (the lookahead after a tab switch), and keeping it
+                // there showed the text `bottomPadding` lower until a later pass.
                 let bottom = max(0, maximum - position.bottomPadding)
-                guard !requestedBottom, bouncing, overscrollTop < 0 || originalY > bottom else { return bottom }
+                let appKits = CACurrentMediaTime() - lastMovement < Self.appKitClipInterval
+                guard !requestedBottom, bouncing, appKits, overscrollTop < 0 || originalY > bottom else { return bottom }
                 return overscrollTop < 0 ? originalY : min(upper, originalY)
             }
             if let anchor, let index = indices[anchor.id] {
@@ -540,6 +556,18 @@ final class ChatTranscriptDocument: NSView {
 
     private func scheduleLookahead() {
         guard lookaheadObserver == nil, window != nil, nextLookaheadRow() != nil else { return }
+        let wait = mountedAt + Self.lookaheadAfterMount - CACurrentMediaTime()
+        if wait > 0, lastMovement < mountedAt {
+            guard !mountWaitScheduled else { return }
+            mountWaitScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.mountWaitScheduled = false
+                    self?.scheduleLookahead()
+                }
+            }
+            return
+        }
         let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true,
                                                           Self.lookaheadOrder) { [weak self] observer, _ in
             MainActor.assumeIsolated {

@@ -59,7 +59,7 @@ installs and launches through `devicectl`.
 Two Apple accounts, each with its own apps; nothing is transferred between them. Every bundle id starts with
 `DISPATCH_BUNDLE_ID_PREFIX` (`project.yml`): `yachts.dispatch.pilot` by default, the Pilot account's apps
 (`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`, `….mobile.watchkitapp.widgets`,
-`group.yachts.dispatch.pilot.mobile`). `--stable` on `./run.sh` and `scripts/release-prepare.sh` passes
+`group.yachts.dispatch.pilot.mobile`). `--stable` on `./run.sh` and `scripts/release-build.sh` passes
 `DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch` to xcodebuild for the stable account's (`yachts.dispatch.app`,
 `yachts.dispatch.mobile`, …; published nowhere yet: the GitHub release, Homebrew and TestFlight are Pilot's). Both are named Dispatch and install side by side as
 separate apps with separate data (UserDefaults, Keychain, containers); the Mac ones still share
@@ -80,9 +80,9 @@ size and SHA-256 are the expanded file's (`GzipMember`, shared with the Mac's `S
 builds Release for simulator and device, checks the helpers' architectures and versions, Info.plist's device keys, the
 privacy manifest, and that every required-reason API the executable imports is declared in
 `Mobile/App/PrivacyInfo.xcprivacy`; the same for the embedded watch app. The fast suite cannot run against Release
-(`@testable`, Debug-only demos). TestFlight builds come from `scripts/release-prepare.sh`: `./run.sh --archive` builds
+(`@testable`, Debug-only demos). Ad Hoc and TestFlight builds come from `scripts/release-build.sh`: `./run.sh --archive` builds
 Release for any iPhone without signing (`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team), the script
-signs it ad hoc with the targets' entitlements, and the signing machine exports and uploads it
+signs it ad hoc with the targets' entitlements, and the signing machine exports it
 ([releasing.md](releasing.md)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
 code.
 

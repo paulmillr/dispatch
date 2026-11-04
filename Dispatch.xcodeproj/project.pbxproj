@@ -272,6 +272,7 @@
 		33016D73DC4E04CF2E0F0A23 /* HerdrChatIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B56AC0B594891C64B98EF72 /* HerdrChatIntegrationTests.swift */; };
 		33043E7EB982C08B2A1AB359 /* ChatRoutingIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76B97E350E25064DDB8FB1CA /* ChatRoutingIntegrationTests.swift */; };
 		336791611C72AD2AB64CA52A /* HelperClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF372B279A5E3139E85E64E /* HelperClient.swift */; };
+		33826A59F7E2998B37C6DA1F /* ChatTabSwitchMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27AE9C6E26314D5727417699 /* ChatTabSwitchMotionTests.swift */; };
 		33E0B149FC06D388190D2178 /* GitReadCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD752AF7D21467D55BA0E0FE /* GitReadCore.swift */; };
 		3403BE4000112B4EA133CA9D /* AgentWorkingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2A70E947998A3718A337EE1 /* AgentWorkingIndicator.swift */; };
 		3438F7A030235F50BC9ECBA7 /* ChatModelControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADF5E6D8A1B207539A7A7FEA /* ChatModelControls.swift */; };
@@ -1645,6 +1646,7 @@
 		27061A0130BE6CFF659F8FEB /* TabsOnlyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsOnlyTests.swift; sourceTree = "<group>"; };
 		276F7EC6AD29A8E4AF013925 /* ChatCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCoordinator.swift; sourceTree = "<group>"; };
 		27AD77A5784D97D9CB3E931C /* compiler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = compiler.h; sourceTree = "<group>"; };
+		27AE9C6E26314D5727417699 /* ChatTabSwitchMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTabSwitchMotionTests.swift; sourceTree = "<group>"; };
 		27D4DE209AC196CE0D8C60CD /* Stream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Stream.swift; sourceTree = "<group>"; };
 		27F374647513135E0E576132 /* GlyphConstraint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphConstraint.swift; sourceTree = "<group>"; };
 		2806AC2D809DBA00D19B1131 /* KnownHostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostStore.swift; sourceTree = "<group>"; };
@@ -2985,6 +2987,7 @@
 				19CCC3D2418EFC4C3EB0E056 /* ChatSideConversationTests.swift */,
 				CBC79326A20FAF44FB0E77B4 /* ChatSideCustomConfigTests.swift */,
 				B54DADAF3C94FFA9B00EAA95 /* ChatSideQuestionTests.swift */,
+				27AE9C6E26314D5727417699 /* ChatTabSwitchMotionTests.swift */,
 				D6CA616C3E1C710A355650A9 /* ChatTests.swift */,
 				59045C7602178F8CDBC46237 /* ChatToolGroupingTests.swift */,
 				4268F4D5A12175A9E43249FD /* ChatTypingRevealTests.swift */,
@@ -5882,6 +5885,7 @@
 				AFB3CC580AF9A7DB480034BD /* ChatSideConversationTests.swift in Sources */,
 				18E11D7087E5F38FFEC2C7F1 /* ChatSideCustomConfigTests.swift in Sources */,
 				CFE950E12B5407581F582BCB /* ChatSideQuestionTests.swift in Sources */,
+				33826A59F7E2998B37C6DA1F /* ChatTabSwitchMotionTests.swift in Sources */,
 				BD820D27DF4D3A9087996E83 /* ChatTests.swift in Sources */,
 				75939C230E1EF044B557E8FD /* ChatToolGroupingTests.swift in Sources */,
 				1D40B13D8CA48E2C240F5C0F /* ChatTypingRevealTests.swift in Sources */,

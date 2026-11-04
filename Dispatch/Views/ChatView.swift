@@ -16,6 +16,8 @@ struct ChatView: View {
     @State private var alternateSendHeld = false
     @State private var queueTipPresented = false
     @State private var floatingInputHeight: CGFloat = 0
+    /// The footer's activity, shared by every variant of its `ViewThatFits` (`ChatComposerActivityState`).
+    @State private var activity = ChatComposerActivityState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +80,7 @@ struct ChatView: View {
             if !visible { session.modelPicker?.abandon(); session.modelPicker = nil; session.shortcutsPresented = false }
         }
         .onChange(of: focused) { _, focused in if !focused { session.shortcutsPresented = false } }
+        .onAppear { activity.bind(session) }
         .onChange(of: session.search.visible) { _, visible in
             if !visible, focused { session.focusRequest = System.uuid() }
         }
@@ -376,7 +379,7 @@ struct ChatView: View {
                     ScrollView(.horizontal) {
                         HStack(spacing: 12) {
                             modelControls(compactEffort: hasActivity, truncated: true).fixedSize().focusedOnly(focused)
-                            ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: false).fixedSize()
+                            ChatComposerActivity(session: session, activity: activity, active: focused || agentWorking, showsLabel: false).fixedSize()
                             ChatComposerAgents(session: session).fixedSize()
                             ChatComposerShells(session: session).fixedSize()
                         }
@@ -469,7 +472,7 @@ struct ChatView: View {
 
     private func composerActivity(showsLabel: Bool) -> some View {
         HStack(spacing: 8) {
-            ChatComposerActivity(session: session, active: focused || agentWorking, showsLabel: showsLabel)
+            ChatComposerActivity(session: session, activity: activity, active: focused || agentWorking, showsLabel: showsLabel)
             ChatComposerAgents(session: session)
             ChatComposerShells(session: session)
             if agentWorking, session.stopArmedAt != nil {
