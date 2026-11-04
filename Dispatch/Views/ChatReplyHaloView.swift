@@ -3,20 +3,15 @@ import SwiftUI
 
 /// The reply halo (ChatReplyHalo) on its bubble's frame in the transcript document. The light is the composer's working
 /// border (ChatComposerAnimatedBorder): nested dash bands lapping the outline every 4 s on the same media clock, over a
-/// steady accent edge; settling, light and edge fade into the bubble's own outline. The empty placeholder also shows the
-/// composer footer's ◆ and orbit (ChatComposerOrbit) where its first word will be.
+/// steady accent edge; settling, light and edge fade into the bubble's own outline.
 final class ChatReplyHaloView: NSView {
     static let bandCount = 24
     static let lapDuration: CFTimeInterval = 4
     static let key = "reply-halo"
 
-    var accent: Color { didSet { if accent != oldValue { updateColors(); orbitView.style.accent = accent } } }
-    /// The reply's first line: the ◆ is centred on it.
-    var lineHeight: CGFloat = 18 { didSet { if lineHeight != oldValue { needsLayout = true } } }
+    var accent: Color { didSet { if accent != oldValue { updateColors() } } }
     private(set) var phase: ChatReplyHalo.Phase?
-    private var orbit = false
     private let lap = CALayer(), ring = CAShapeLayer()
-    private let orbitView: ChatComposerOrbit.OrbitView
     /// The accent edge's strength under the light: the composer's working border's.
     static let edge: Float = 0.35
     private var bands: [CAShapeLayer] = []
@@ -25,11 +20,8 @@ final class ChatReplyHaloView: NSView {
 
     init(accent: Color) {
         self.accent = accent
-        orbitView = ChatComposerOrbit.OrbitView(accent: accent)
         super.init(frame: .zero)
         wantsLayer = true
-        orbitView.alphaValue = 0
-        addSubview(orbitView)
         lap.opacity = 0
         layer?.addSublayer(lap)
         for _ in 0..<Self.bandCount {
@@ -67,8 +59,6 @@ final class ChatReplyHaloView: NSView {
 
     override func layout() {
         super.layout()
-        // The bubble's text starts 16 points in and 12 down (ChatTranscriptRowView); the ◆'s slot is 16 wide.
-        orbitView.frame = NSRect(x: 14, y: 12 + (lineHeight - 20) / 2, width: 16, height: 20)
         guard pathSize != bounds.size else { return }
         pathSize = bounds.size
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
@@ -107,16 +97,7 @@ final class ChatReplyHaloView: NSView {
         if window == nil { stop() } else { restartMotion() }
     }
 
-    func apply(_ next: ChatReplyHalo.Phase, orbit showsOrbit: Bool) {
-        if showsOrbit != orbit {
-            orbit = showsOrbit
-            orbitView.moving = showsOrbit
-            NSAnimationContext.runAnimationGroup { context in
-                // In with the bubble; out before the first word, which types in where it was, can overlap it.
-                context.duration = showsOrbit ? 0.3 : 0.08
-                orbitView.animator().alphaValue = showsOrbit ? 1 : 0
-            }
-        }
+    func apply(_ next: ChatReplyHalo.Phase) {
         guard next != phase else { return }
         phase = next
         switch next {
@@ -170,7 +151,6 @@ final class ChatReplyHaloView: NSView {
     /// Hidden: the next phase starts afresh, fading in.
     func reset() {
         phase = nil
-        orbit = false; orbitView.moving = false; orbitView.alphaValue = 0
         stop()
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for layer in [lap, ring] as [CALayer] { layer.removeAllAnimations(); layer.opacity = 0 }

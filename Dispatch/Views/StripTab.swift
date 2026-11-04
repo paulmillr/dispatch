@@ -439,7 +439,7 @@ struct StripSpacePicker: View {
                 // The sidebar's "+ space" and "+ local": "New local space" only while another host is live, where it
                 // differs from "New space".
                 StripPickerAction(title: "New space", shortcut: "⌘N") {
-                    Image(systemName: "plus").font(.system(size: typography.size(offset: -1), weight: .medium))
+                    Image(systemName: "plus").font(typography.symbol(.body, weight: .medium))
                 } action: {
                     chosen()
                     controller.newSpace()
@@ -456,7 +456,7 @@ struct StripSpacePicker: View {
                 }
                 // The sidebar toggle, which the mark stands in for while the sidebar is hidden.
                 StripPickerAction(title: controller.sidebarVisible ? "Hide sidebar" : "Show sidebar", shortcut: "⌘\\") {
-                    Image(systemName: "sidebar.left").font(.system(size: typography.size(offset: -1)))
+                    Image(systemName: "sidebar.left").font(typography.symbol(.body))
                 } action: {
                     chosen()
                     controller.toggleSidebar()
@@ -476,7 +476,7 @@ struct StripSpacePicker: View {
     private func heading(_ host: HostRecord) -> some View {
         let size = typography.size(offset: -3)
         return Text(host.id == .local ? "LOCAL" : host.name.uppercased())
-            .font(AppFont.ui(size: size)).tracking(size * 0.08)
+            .interfaceFont(size: size).tracking(size * 0.08)
             .foregroundStyle(host.tint?.foreground ?? Chrome.palette.sidebarHostLabel)
             .lineLimit(1).truncationMode(.middle)
             .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 2)
@@ -521,7 +521,7 @@ private struct StripPickerCheck: View {
     let color: Color
 
     var body: some View {
-        Image(systemName: "checkmark").font(.system(size: typography.size(offset: -2.5), weight: .semibold))
+        Image(systemName: "checkmark").font(typography.symbol(.caption, weight: .semibold))
             .foregroundStyle(color)
             .opacity(shown ? 1 : 0)
             .accessibilityHidden(!shown)

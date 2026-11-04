@@ -54,7 +54,7 @@ struct SSHHostsSettings: View {
                 Spacer(minLength: 0)
                 // Always offered: it also clears a stale saved session with nothing listed.
                 Button(resetting ? "Resetting…" : "Reset all…", action: forgetAll)
-                    .buttonStyle(.plain).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .buttonStyle(.plain).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .disabled(resetting)
                     .accessibilityIdentifier("settings-reset-all-host-integrations")
                     .help("Disconnect SSH and forget every host’s saved tabs, helper choices and caches. Global preferences are kept.")
@@ -68,7 +68,7 @@ struct SSHHostsSettings: View {
             }
             if !other.isEmpty {
                 if !grouped.isEmpty { separator }
-                Text("OTHER LOGINS").font(typography.font(.caption)).tracking(1).foregroundStyle(SettingsControlStyle.detail)
+                Text("OTHER LOGINS").font(typography, .caption).tracking(1).foregroundStyle(SettingsControlStyle.detail)
                     .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 2)
                     .help("Saved helper choices for SSH configurations that haven’t connected since Dispatch launched")
                 ForEach(other) { entry in
@@ -118,7 +118,7 @@ struct SSHHostsSettings: View {
                         ForEach(logins) { entry in
                             HStack(spacing: 10) {
                                 if host != nil {
-                                    Text(address(entry)).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                                    Text(address(entry)).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                                         .lineLimit(1).truncationMode(.middle)
                                         .help("\(address(entry))\nSSH executable: \(entry.scope.executable)\nSaved configuration: \(entry.scope.configurationFingerprint)")
                                 }
@@ -127,7 +127,7 @@ struct SSHHostsSettings: View {
                         }
                         if logins.isEmpty, let destination = host?.destinations.first {
                             Text(destination.replacingOccurrences(of: "ssh://", with: ""))
-                                .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                                .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                                 .lineLimit(1).truncationMode(.middle)
                         }
                     }.padding(.leading, 23)
@@ -148,13 +148,13 @@ struct SSHHostsSettings: View {
                 HStack(spacing: 5) {
                     Circle().frame(width: 6, height: 6)
                     Text(state.shownLabel)
-                }.font(typography.font(.body)).foregroundStyle(Chrome.palette.green).fixedSize()
+                }.font(typography, .body).foregroundStyle(Chrome.palette.green).fixedSize()
             } else {
                 Text(SidebarThemeStore.shared.current == .nautical ? state.portLabel : state == .disconnected ? "offline" : state.label)
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).fixedSize()
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
             }
         } else {
-            Text("not seen yet").font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).fixedSize()
+            Text("not seen yet").font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
                 .help("This SSH configuration hasn’t connected since Dispatch launched")
         }
     }
@@ -169,7 +169,7 @@ struct SSHHostsSettings: View {
                     chip(Self.chipTitle(choice), on: draft.checked.contains(choice))
                 }
             } else {
-                Text("plain ssh").font(typography.font(.caption)).foregroundStyle(SettingsControlStyle.detail)
+                Text("plain ssh").font(typography, .caption).foregroundStyle(SettingsControlStyle.detail)
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(SettingsControlStyle.border) }
             }
@@ -181,7 +181,7 @@ struct SSHHostsSettings: View {
     }
 
     private func chip(_ title: String, on: Bool) -> some View {
-        Text(title).font(typography.font(.caption))
+        Text(title).font(typography, .caption)
             .strikethrough(!on, color: SettingsControlStyle.detail.opacity(0.6))
             .foregroundStyle(on ? Chrome.ink : SettingsControlStyle.detail)
             .padding(.horizontal, 5).padding(.vertical, 1)
@@ -209,11 +209,11 @@ struct SSHHostsSettings: View {
                 options(entry, draft)
                 reconnectNotice(entry, draft)
                 Text("removals apply now; additions on the next connection.")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("follows “On new hosts” on the next connection.")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 16) {
@@ -235,7 +235,7 @@ struct SSHHostsSettings: View {
             ForEach(logins) { entry in
                 let on = entry.id == selected
                 Button { account[id] = entry.id } label: {
-                    Text(address(entry)).font(typography.font(.body)).lineLimit(1).truncationMode(.middle)
+                    Text(address(entry)).font(typography, .body).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(on ? Chrome.ink : SettingsControlStyle.detail)
                         .padding(.horizontal, 9).padding(.vertical, 3)
                         .background(on ? SettingsControlStyle.selected : .clear, in: RoundedRectangle(cornerRadius: 4))
@@ -287,7 +287,7 @@ struct SSHHostsSettings: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                Text(detail).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
             control()
@@ -308,7 +308,7 @@ struct SSHHostsSettings: View {
 
     private func toggleChip(_ title: String, on: Bool, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(typography.font(.body))
+            Text(title).font(typography, .body)
                 .foregroundStyle(on ? Chrome.ink : SettingsControlStyle.detail)
                 .padding(.horizontal, 8).padding(.vertical, 2)
                 .background(on ? Chrome.ink.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 5))
@@ -331,10 +331,10 @@ struct SSHHostsSettings: View {
             let ready = state.requirements.isSubset(of: draft.features)
             HStack(spacing: 10) {
                 Text(Self.pendingAdditions(draft, live: state.grants))
-                    .font(typography.font(.body)).fixedSize(horizontal: false, vertical: true)
+                    .font(typography, .body).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button { TerminalRuntime.shared.ssh.reconnectIntegration(entry.scope) } label: {
-                    Text("Reconnect").font(typography.font(.body)).foregroundStyle(Chrome.window)
+                    Text("Reconnect").font(typography, .body).foregroundStyle(Chrome.window)
                         .padding(.horizontal, 10).padding(.vertical, 3)
                         .background(Chrome.accent, in: RoundedRectangle(cornerRadius: 5))
                 }.buttonStyle(.plain).disabled(!ready).opacity(ready ? 1 : 0.4)
@@ -368,13 +368,13 @@ struct SSHHostsSettings: View {
             } else if forgetting == id {
                 HStack(spacing: 10) {
                     Text("Forget \(host.name)? Its tabs, helper choices and caches are removed; remote tmux, herdr and programs keep running.")
-                        .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                        .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .fixedSize(horizontal: false, vertical: true)
                     actionLink("Cancel", identifier: "settings-reset-host-cancel-\(id)") { forgetting = nil }
                     Button("Forget") {
                         TerminalRuntime.shared.hosts.reset(host.id)
                         forgetting = nil; expanded = nil
-                    }.buttonStyle(.plain).font(typography.font(.label, weight: .semibold)).foregroundStyle(.red)
+                    }.buttonStyle(.plain).font(typography, .label, weight: .semibold).foregroundStyle(.red)
                         .accessibilityIdentifier("settings-reset-host-confirm-\(id)")
                 }
             } else {
@@ -426,7 +426,7 @@ struct SSHHostsSettings: View {
                              + "Removing still \(local ? "quits" : "forgets the host"); if it fails, run \(DispatchRemoval.command) there.")
                     }
                 } else { Text("Checking…") }
-            }.font(typography.font(.body)).foregroundStyle(Chrome.ink).textSelection(.enabled)
+            }.font(typography, .body).foregroundStyle(Chrome.ink).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-removal-preview")
             Text("Codex may ask you to trust your own hooks again in /hooks.")
@@ -440,7 +440,7 @@ struct SSHHostsSettings: View {
                 Spacer(minLength: 0)
                 actionLink("Cancel", identifier: "settings-removal-cancel") { removal = nil }
                 Button(local ? "Remove & Quit" : "Remove", action: remove).buttonStyle(.plain)
-                    .font(typography.font(.label, weight: .semibold)).foregroundStyle(.red)
+                    .font(typography, .label, weight: .semibold).foregroundStyle(.red)
                     .accessibilityIdentifier("settings-removal-confirm")
             }
         }
@@ -449,7 +449,7 @@ struct SSHHostsSettings: View {
     private func actionLink(_ title: String, identifier: String, destructive: Bool = false, disabled: Bool = false,
                             action: @escaping () -> Void) -> some View {
         Button(title, action: action).buttonStyle(.plain)
-            .font(typography.font(.body))
+            .font(typography, .body)
             .foregroundStyle(disabled ? SettingsControlStyle.detail.opacity(0.6) : destructive ? Color.red : Chrome.accent)
             .disabled(disabled).accessibilityIdentifier(identifier)
     }
@@ -471,11 +471,11 @@ struct SSHHostsSettings: View {
                         HostGlyph(host: local, size: typography.hostIconSize).foregroundStyle(Chrome.ink)
                             .frame(width: typography.hostIconSize)
                         Text("This Mac").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
-                        Text("local").font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).fixedSize()
+                        Text("local").font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
                         Image(systemName: "chevron.right").font(AppFont.ui(size: 9, weight: .semibold))
                             .foregroundStyle(SettingsControlStyle.detail).rotationEffect(.degrees(open ? 90 : 0))
                     }
-                    localSummary(launches).font(typography.font(.body))
+                    localSummary(launches).font(typography, .body)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 23)
                 }.padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
@@ -499,7 +499,7 @@ struct SSHHostsSettings: View {
             }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
             Text("A switched-off agent’s hooks are ignored here; its settings are left alone.")
-                .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
             if removal?.id == Self.localID {
                 removalConfirmation("this Mac", local: true) {
@@ -542,7 +542,7 @@ struct SSHHostsSettings: View {
                         .help("\(launch.label) is not installed on this Mac: run this in a terminal")
                         .accessibilityIdentifier("settings-install-command-\(launch.key)")
                 } else {
-                    Text(localStatus(launch)).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    Text(localStatus(launch)).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)

@@ -49,6 +49,7 @@ struct FileImageHandoff {
 /// footer names the scale and opens the image full screen (`FileImageFullScreen`).
 struct FileImagePreview: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.appTypography) private var typography
     /// The encoded file; decoded off the main actor at the size it draws. Nil while it is read: `handoff` shows.
     let data: Data?
     /// Tells a reloaded file from the last one: its bytes are not compared.
@@ -178,7 +179,7 @@ struct FileImagePreview: View {
             }
         }
         .buttonStyle(.plain)
-        .font(theme.typography.font(offset: -2))
+        .font(typography, .caption)
         .foregroundStyle(theme.muted)
         .padding(.horizontal, 14)
         .frame(height: 24)

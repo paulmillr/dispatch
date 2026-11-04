@@ -214,7 +214,7 @@ struct NewSpaceButton: View {
     /// Compact flat list: a row like a space's, the icon in the status column.
     private var rowLabel: some View {
         fitted(iconSize: metrics.hostIconSize, iconWidth: max(metrics.activitySize, metrics.hostIconSize), shortcutSize: metrics.shortcutSize)
-            .font(AppFont.ui(size: metrics.nameSize))
+            .interfaceFont(size: metrics.nameSize)
             .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
             .padding(.leading, 6).padding(.trailing, 8).frame(height: metrics.rowHeight)
             .background(hovered ? Chrome.palette.hover : .clear, in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
@@ -224,7 +224,7 @@ struct NewSpaceButton: View {
     /// Large without glass: a filled tile as tall as the glass capsules, each filling half the row.
     private var tileLabel: some View {
         fitted(iconSize: typography.hostIconSize, shortcutSize: typography.size(offset: -1.5))
-            .font(AppFont.ui(size: typography.tabSize))
+            .interfaceFont(size: typography.tabSize)
             .foregroundStyle(Chrome.ink).opacity(hovered ? 1 : 0.75)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(typography))
@@ -236,7 +236,7 @@ struct NewSpaceButton: View {
     /// 2 points inside it marks the pointer.
     private var glassLabel: some View {
         fitted(iconSize: typography.hostIconSize, shortcutSize: typography.size(offset: -1.5))
-            .font(AppFont.ui(size: typography.tabSize))
+            .interfaceFont(size: typography.tabSize)
             .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(typography))

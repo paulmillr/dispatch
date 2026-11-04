@@ -252,7 +252,7 @@ private struct ModeSwitchLabel: View {
     private func segment(_ title: String, symbol: String, mode: TabMode, glass: Bool) -> some View {
         let on = state?.mode == mode
         return HStack(spacing: 5) {
-            Image(systemName: symbol).font(.system(size: typography.size(offset: -3)))
+            Image(systemName: symbol).font(typography.symbol(.micro))
             Text(title)
         }
         .font(HarbourType.mono(typography.size(offset: -2)))

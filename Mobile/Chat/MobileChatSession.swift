@@ -475,9 +475,8 @@ final class MobileChatSession: Identifiable {
     }
 
     private func receive(live records: [HelperChat.Record]) {
-        let streams = agentKey.map(ChatTypingReveals.streamingAgents.contains) ?? false
-        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing] row in
-            if streams { typing.began(row) }
+        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing, agentKey] row, completed in
+            typing.arrived(row, agent: agentKey, completed: completed)
         }
         for change in applied {
             switch change {

@@ -3208,6 +3208,7 @@
     "DispatchMobileTests/ChatRedesignTests/testWaitingTheRowSaysForWhat": "fast",
     "DispatchMobileTests/ChatRedesignTests/testAnOpenTurnOfAnIdleAgentShowsNoRowAndTheReplysTime": "fast",
     "DispatchTests/PlanOneTests/testChatEmphasisInRoundedDrawsSanFranciscoItalic": "fast",
+    "DispatchTests/PlanOneTests/testEveryFontSetsTextOnSourceCodeProsLines": "fast",
     "DispatchMobileTests/SettingsStyleTests/testRoundedEmphasisDrawsSanFranciscoItalic": "fast",
     "DispatchTests/SharedStatsVoiceTests/testSampleDecodingKeepsPlatformMissingFieldPolicies": "fast",
     "DispatchMobileTests/SharedStatsVoiceTests/testSampleDecodingKeepsPlatformMissingFieldPolicies": "fast",

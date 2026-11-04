@@ -116,7 +116,7 @@ struct ConnectionRouteView: View {
             Text(remote ? "ssh" : "local")
                 .foregroundStyle(Color(red: 126/255, green: 166/255, blue: 201/255)).fixedSize()
             if !address.isEmpty { Self.address(route).truncationMode(.middle) }
-        }.font(AppFont.ui(size: fontSize)).lineLimit(1)
+        }.interfaceFont(size: fontSize).lineLimit(1)
     }
 
     /// The route without its scheme, its `@` dimmed between account and host.
@@ -164,7 +164,7 @@ struct SpaceHoverCard: View {
                     Text(agents).foregroundStyle(secondary).fixedSize()
                 }
             }.lineLimit(1)
-        }.font(AppFont.ui(size: fontSize))
+        }.interfaceFont(size: fontSize)
             .padding(.horizontal, 12).padding(.vertical, 9)
             .frame(minHeight: max(30, fontSize + 18))
             .modifier(SpaceHoverSurface(glass: glass, below: below, above: above))

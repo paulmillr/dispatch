@@ -202,7 +202,7 @@ struct SidebarSpaceTile: View {
                 }
             }
         }
-        .font(AppFont.ui(size: metrics.nameSize))
+        .interfaceFont(size: metrics.nameSize)
         .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
         .padding(.leading, metrics.icons ? 5 : 6).padding(.trailing, metrics.shortcutInset)
         .frame(height: metrics.rowHeight)
@@ -352,7 +352,7 @@ struct SidebarSpaceCard: View {
                 Text(count == 1 ? "1 tab" : "\(count) tabs").foregroundStyle(detailColor).fixedSize()
             }
         }
-        .font(AppFont.ui(size: metrics.detailSize))
+        .interfaceFont(size: metrics.detailSize)
         .lineLimit(1)
     }
 
@@ -370,7 +370,7 @@ struct SidebarSpaceCard: View {
                 .fixedSize()
             if let label { Text(label).foregroundStyle(color).lineLimit(1) }
         }
-        .font(AppFont.ui(size: metrics.detailSize))
+        .interfaceFont(size: metrics.detailSize)
         .padding(.horizontal, 6).padding(.vertical, 1.5)
         .background(color.opacity(dark ? 0.14 : 0.1), in: Capsule())
         .fixedSize()

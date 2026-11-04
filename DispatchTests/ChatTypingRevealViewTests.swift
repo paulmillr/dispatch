@@ -119,8 +119,9 @@ import XCTest
         XCTAssertGreaterThan(carets, 20)
     }
 
-    /// A Codex reply that starts while the chat shows types out from its first character; Claude's whole posts, a
-    /// reply arriving while the chat is not shown, and history show at once.
+    /// A Codex reply that starts while the chat shows types out from its first character, and so does a short Claude
+    /// post (complete, its turn ended); a long Claude post, a reply arriving while the chat is not shown, and history
+    /// show at once.
     func testSessionTypesRepliesStartedWhileShown() throws {
         let previous = ChatTypingReveals.enabled
         ChatTypingReveals.enabled = true
@@ -139,10 +140,20 @@ import XCTest
         XCTAssertEqual(codex.current.shown, 1)
         let pi = try XCTUnwrap(reveal(session("pi")))
         XCTAssertEqual(pi.current.shown, 1)
-        for whole in [reveal(session("claude")), reveal(session("codex", shown: false)), reveal(session("codex"), historical: true)] {
+        for whole in [reveal(session("codex", shown: false)), reveal(session("codex"), historical: true)] {
             let whole = try XCTUnwrap(whole)
             XCTAssertEqual(whole.current.shown, whole.layout.total)
         }
+        func post(_ text: String) -> ChatTypingReveal? {
+            let claude = session("claude")
+            var item = ChatItem(id: "a1", kind: .assistant, text: text)
+            item.completed = true
+            claude.insert(item, turnID: "t1")
+            return claude.typingReveals.reveal("2:t1:a1", text: text, live: false, ended: true, reduceMotion: false)
+        }
+        let short = try XCTUnwrap(post("Done: the resize now lands in the same transaction."))
+        XCTAssertLessThan(short.current.shown, short.layout.total)
+        XCTAssertNil(post(String(repeating: "A longer answer that goes on. ", count: 20)))
     }
 
     /// Through the row's own view (`ChatTypedMarkdown`): drawing it shows the reveal (its clock runs), drawing it again

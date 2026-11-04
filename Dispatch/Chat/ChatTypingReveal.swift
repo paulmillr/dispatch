@@ -432,20 +432,22 @@ struct ChatTypingClock: Equatable {
     /// The units showing: a unit shows once it starts typing.
     var shown: Int { Int(position.rounded(.up)) }
 
-    /// Moves the clock to `now` with `costs` being every unit that has arrived; `ended` once the stream will add nothing.
-    mutating func advance(to now: TimeInterval, costs: [Double], ended: Bool) {
+    /// Moves the clock to `now` with the first `arrived` of `costs` (all by default) being every unit that has arrived;
+    /// `ended` once the stream will add nothing.
+    mutating func advance(to now: TimeInterval, costs: [Double], arrived: Int? = nil, ended: Bool) {
         let dt = max(0, now - time)
         time = max(time, now)
-        let available = Double(costs.count)
+        let count = min(arrived ?? costs.count, costs.count)
+        let available = Double(count)
         if position > available { position = available }
         self.ended = ended
         var backlog = 0.0
         var unit = Int(position)
-        if unit < costs.count {
+        if unit < count {
             backlog += costs[unit] * (1 - (position - Double(unit)))
             unit += 1
         }
-        while unit < costs.count { backlog += costs[unit]; unit += 1 }
+        while unit < count { backlog += costs[unit]; unit += 1 }
         let target = backlog > 0 ? max(Self.minimumRate, backlog / (self.ended ? Self.lag * Self.endingLag : Self.lag)) : 0
         rate += (target - rate) * (1 - exp(-dt / Self.smoothing))
         var budget = rate * dt
@@ -524,11 +526,19 @@ final class ChatTypingReveal {
     @ObservationIgnored private(set) var layout: ChatTypingLayout
     @ObservationIgnored private(set) var clock: ChatTypingClock
     @ObservationIgnored private(set) var text: String
-    @ObservationIgnored private var ended: Bool
+    @ObservationIgnored private(set) var ended: Bool
     /// Views showing it: the clock runs only while one does. One that showed it and left (a row scrolled away, a tab
     /// switched) shows what has arrived when it comes back, then types from there.
     @ObservationIgnored private var mounts = 0
     @ObservationIgnored private(set) var left = false
+    /// A whole message posted at once (Claude Code's): when it was first drawn. The clock is given it as if it streamed
+    /// in from then at `postedRate` (`posted(at:)`), so it types like a streamed reply; nil for a streamed one.
+    @ObservationIgnored private(set) var postedAt: TimeInterval?
+
+    /// The pace a posted message "arrives" at, in unit costs a second (`ChatTypingLayout.costs`), and the head start it
+    /// has: the clock's lag, so it types from the first frame.
+    static let postedRate = 160.0
+    static let postedLead = postedRate * ChatTypingClock.lag
 
     init(id: String, text: String, ended: Bool, fromStart: Bool, at now: TimeInterval) {
         self.id = id
@@ -543,23 +553,65 @@ final class ChatTypingReveal {
         frame = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
     }
 
+    /// A whole message posted at once, typed from its start as if it streamed in from `now` (`postedAt`).
+    init(id: String, posted text: String, at now: TimeInterval) {
+        self.id = id
+        self.text = text
+        ended = true
+        layout = ChatTypingLayout(text, ended: true)
+        postedAt = now
+        clock = ChatTypingClock(position: min(Double(layout.total), 1e-6), at: now)
+        frame = ChatTypingFrame(shown: 0, caret: 1)
+        advance(to: now)
+        frame = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
+    }
+
+    /// The units of a posted message that have "arrived" by `now`: those whose costs fit in the time since it was
+    /// posted at `postedRate`, after `postedLead`. All of them for a streamed message.
+    func arrived(at now: TimeInterval) -> Int {
+        guard let postedAt else { return layout.total }
+        var budget = Self.postedLead + max(0, now - postedAt) * Self.postedRate
+        var count = 0
+        for cost in layout.costs {
+            budget -= cost
+            if budget < 0 { break }
+            count += 1
+        }
+        return count
+    }
+
+    /// What typing all of a posted message `text` takes, in seconds at `postedRate`: nil for one shown at once.
+    static func postedDuration(_ layout: ChatTypingLayout) -> TimeInterval? {
+        layout.truncated ? nil : max(0, layout.costs.reduce(0, +) - postedLead) / postedRate
+    }
+
+    private func advance(to now: TimeInterval) {
+        guard postedAt != nil else { clock.advance(to: now, costs: layout.costs, ended: ended); return }
+        let arrived = arrived(at: now)
+        clock.advance(to: now, costs: layout.costs, arrived: arrived, ended: arrived == layout.total)
+    }
+
     /// The units showing and the caret as of the last step, within the current layout.
     var current: ChatTypingFrame { ChatTypingFrame(shown: min(clock.shown, layout.total), caret: frame.caret) }
 
     /// The message as it is now. A reveal that rested (caught up, faded, past its blink) takes up what is new from
     /// where it shows: the caller schedules the clock again.
     func feed(_ text: String, ended: Bool, at now: TimeInterval) {
+        // A posted message is whole: nothing more streams into it.
+        let ended = ended || postedAt != nil
         if left { snap(text, ended: ended, at: now); return }
         guard text != self.text || ended != self.ended else { return }
         self.text = text
         self.ended = ended
         layout = ChatTypingLayout(text, ended: ended)
-        clock.resume(at: now, available: layout.total, ended: ended)
+        let arrived = arrived(at: now)
+        clock.resume(at: now, available: arrived, ended: ended && arrived == layout.total)
     }
 
     /// Shows what has arrived at once (a reveal shown again after it left), caught up: it types what comes next.
     private func snap(_ text: String, ended: Bool, at now: TimeInterval) {
         left = false
+        postedAt = nil
         self.text = text
         self.ended = ended
         layout = ChatTypingLayout(text, ended: ended)
@@ -568,7 +620,7 @@ final class ChatTypingReveal {
     }
 
     func step(to now: TimeInterval) {
-        clock.advance(to: now, costs: layout.costs, ended: ended)
+        advance(to: now)
         let caret = (clock.caret(at: now) * 20).rounded() / 20
         let next = ChatTypingFrame(shown: clock.shown, caret: caret)
         if next != frame { frame = next }
@@ -576,7 +628,12 @@ final class ChatTypingReveal {
 
     /// Shown in a view now.
     var mounted: Bool { mounts > 0 && !left }
-    func needs(at now: TimeInterval) -> ChatTypingClock.Needs { mounted ? clock.needs(at: now) : .nothing }
+    func needs(at now: TimeInterval) -> ChatTypingClock.Needs {
+        guard mounted else { return .nothing }
+        // A posted message still "arriving" types on every frame, even where the clock caught up with it.
+        if postedAt != nil, arrived(at: now) < layout.total { return .frames }
+        return clock.needs(at: now)
+    }
     func done(at now: TimeInterval) -> Bool { clock.done(at: now) }
 
     func appeared() { mounts += 1; left = false }
@@ -589,19 +646,32 @@ final class ChatTypingReveal {
 /// A conversation's live reveals, kept beside its view state (never in the model or persisted). A row asks for its
 /// message's reveal as it draws (`reveal`): a message that is complete, not in the live turn, or first seen with its
 /// text already there shows at once; one that arrived while the chat was shown (`began`, just now) types from its
-/// start. One display link advances them all, and runs only while one is typing, blinking or fading.
+/// start, and so does a short whole message just posted (`began(posted:)`). One display link advances them all, and
+/// runs only while one is typing, blinking or fading.
 @MainActor final class ChatTypingReveals {
     /// Off while testing: recorded tests wait on text and replay with no display time, so every message shows at once
     /// (`DISPATCH_TESTING`, or an XCTest host on the iPhone). A test of the reveal turns it on.
     static var enabled = !System.testing && System.environment("XCTestConfigurationFilePath") == nil
         && System.environment("XCTestSessionIdentifier") == nil
-    /// The agents whose replies stream in deltas (Codex's `item/agentMessage/delta`, Pi's `text_delta`). Claude Code
-    /// posts whole messages: they show as they come.
+    /// The agents whose replies stream in deltas (Codex's `item/agentMessage/delta`, Pi's `text_delta`).
     static let streamingAgents: Set<String> = ["codex", "pi"]
+    /// The agents that post whole messages (Claude Code): a short one types out as if it streamed in
+    /// (`ChatTypingReveal.postedRate`); a longer one shows as it comes.
+    static let postingAgents: Set<String> = ["claude"]
+    /// The longest a posted message may take to type, in seconds; a longer one shows at once.
+    static let postedLimit: TimeInterval = 2
     /// How long after its arrival a new message first drawn still types from its start; later it shows at once.
     static let arrivalWindow: TimeInterval = 2
 
-    private var arrivals: [String: TimeInterval] = [:]
+    /// A reply of `agent` added to the live turn while its chat shows: a streaming agent's types from its start while
+    /// it streams, a posting agent's when it is short.
+    func arrived(_ rowID: String, agent: String?, completed: Bool) {
+        guard let agent else { return }
+        if Self.postingAgents.contains(agent) { began(rowID, posted: true) }
+        else if !completed, Self.streamingAgents.contains(agent) { began(rowID) }
+    }
+
+    private var arrivals: [String: (time: TimeInterval, posted: Bool)] = [:]
     private var reveals: [String: ChatTypingReveal] = [:]
     private var link: ChatTypingLink?
     /// A clock of the test's own (stepped with `step(to:)`; the display link then steps to it too); nil: the display's
@@ -614,11 +684,12 @@ final class ChatTypingReveal {
     init() {}
 
     /// A message of a streaming agent arrived live while its chat shows: drawn soon, it types from its start.
-    func began(_ rowID: String) {
+    /// `posted`: a whole message, typed only if short (`postedLimit`), whether or not its turn is still live.
+    func began(_ rowID: String, posted: Bool = false) {
         guard Self.enabled, reveals[rowID] == nil, arrivals[rowID] == nil else { return }
         let now = time
-        arrivals = arrivals.filter { now - $0.value < Self.arrivalWindow }
-        arrivals[rowID] = now
+        arrivals = arrivals.filter { now - $0.value.time < Self.arrivalWindow }
+        arrivals[rowID] = (now, posted)
     }
 
     /// The reveal row `rowID` draws `text` through; nil draws it at once. `live`: the message belongs to the live turn;
@@ -628,12 +699,22 @@ final class ChatTypingReveal {
         let now = time
         if let reveal = reveals[rowID] {
             reveal.feed(text, ended: ended || !live, at: now)
-            if reveal.done(at: now) && (ended || !live) { reveals[rowID] = nil; return nil }
+            // Fed above: `ended` is the message's now (a posted one's always).
+            if reveal.done(at: now) && reveal.ended { reveals[rowID] = nil; return nil }
+            schedule()
+            return reveal
+        }
+        if arrivals[rowID]?.posted == true {
+            guard let arrival = arrivals.removeValue(forKey: rowID), now - arrival.time < Self.arrivalWindow else { return nil }
+            let reveal = ChatTypingReveal(id: rowID, posted: text, at: now)
+            guard reveal.layout.total > 0, let duration = ChatTypingReveal.postedDuration(reveal.layout),
+                  duration <= Self.postedLimit else { return nil }
+            reveals[rowID] = reveal
             schedule()
             return reveal
         }
         guard live, !ended else { return nil }
-        let arrived = arrivals.removeValue(forKey: rowID).map { now - $0 < Self.arrivalWindow } ?? false
+        let arrived = arrivals.removeValue(forKey: rowID).map { now - $0.time < Self.arrivalWindow } ?? false
         let reveal = ChatTypingReveal(id: rowID, text: text, ended: false, fromStart: arrived, at: now)
         guard !reveal.layout.truncated else { return nil }
         reveals[rowID] = reveal

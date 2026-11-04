@@ -60,7 +60,7 @@ struct WindowTabBar: View {
                }) { id, width, hovered in
             if let tab = tabs.first(where: { $0.id == id }) { row(tab, width: width, hovered: hovered) }
         }
-        .font(typography.font(.label))
+        .font(typography, .label)
         // A container, so the tabs and buttons inside keep their own identifiers instead of inheriting this one.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tmux-window-tabs")

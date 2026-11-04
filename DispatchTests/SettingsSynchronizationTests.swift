@@ -608,20 +608,6 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
     }
 
-    func testReplyPlaceholderDefaultOffAndPersistExplicitChoice() throws {
-        XCTAssertFalse(Preferences().chatReplyPlaceholder)
-        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).chatReplyPlaceholder)
-        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
-        var preferences = Preferences()
-        preferences.chatReplyPlaceholder = true
-        try store.save(preferences)
-        XCTAssertTrue(SettingsStore(file: file).values.chatReplyPlaceholder)
-        try store.save(Preferences())
-        XCTAssertFalse(SettingsStore(file: file).values.chatReplyPlaceholder)
-    }
-
     func testDiagnosticsDefaultOffAndPersistExplicitChoice() throws {
         XCTAssertFalse(Preferences().enableDiagnostics)
         XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).enableDiagnostics)
@@ -988,7 +974,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         var defaults = original
-        defaults.theme = "Default"; defaults.lightTheme = "Default"
+        defaults.theme = "Default"; defaults.lightTheme = "Default"; defaults.appTheme = .automatic
         try runtime.apply(defaults)
         try store.save(defaults)
         let workspace = Workspace()
@@ -998,25 +984,29 @@ final class SettingsSynchronizationTests: XCTestCase {
         let host = NSHostingView(rootView: SettingsView(store: store, workspace: workspace))
         window.contentView = host; window.makeKeyAndOrderFront(nil)
         try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
-        var picker: NSPopUpButton?
-        func themePicker(_ titles: [String]) async throws -> NSPopUpButton {
-            try await TestSupport.eventually(diagnostic: picker?.itemTitles.description ?? "no picker") {
-                picker = PresentationTestSupport.views(of: NSPopUpButton.self, in: host).first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }
-                return picker?.itemTitles == titles
-            }
-            return try XCTUnwrap(picker)
+        func shows(_ identifier: String) -> Bool { !PresentationTestSupport.accessibilityFrames(identifier, in: window).isEmpty }
+        func click(_ identifier: String) async throws {
+            try await TestSupport.eventually(diagnostic: "No \(identifier)") { shows(identifier) }
+            let frame = try XCTUnwrap(PresentationTestSupport.accessibilityFrames(identifier, in: window).first)
+            try PresentationTestSupport.click(window, at: NSPoint(x: frame.midX, y: frame.midY))
         }
-        // Nautical is an easter egg: offered only once its code unlocks it.
+        // Nautical is an easter egg: its switch shows only once its code unlocks it, which turns it on.
         let originalUnlock = SidebarThemeStore.shared.nauticalUnlocked
         defer { SidebarThemeStore.shared.nauticalUnlocked = originalUnlock }
         SidebarThemeStore.shared.nauticalUnlocked = false
-        // The theme menu offers the current choices only.
-        _ = try await themePicker(["Automatic", "Dark", "Light"])
-        SidebarThemeStore.shared.nauticalUnlocked = true
-        let control = try await themePicker(["Automatic", "Dark", "Light", "Nautical"])
-        for theme in AppTheme.allCases {
-            control.selectItem(withTitle: theme.label)
-            control.sendAction(control.action, to: control.target)
+        try await TestSupport.eventually { shows("settings-follow-system") }
+        XCTAssertFalse(shows("settings-nautical"))
+        let systemSide = SidebarThemeStore.systemIsDark ? "dark" : "light"
+        // Each step's control and the theme it leaves: unlocking turns Nautical on; its switch off follows the system
+        // again; Follow system off stays on the system's side, the switch's halves pick dark and light.
+        let steps: [(control: String?, theme: AppTheme)] = [
+            (nil, .nautical), ("settings-nautical", .automatic),
+            ("settings-follow-system", SidebarThemeStore.systemIsDark ? .dark : .light),
+            ("settings-scheme-in-use-\(systemSide == "dark" ? "light" : "dark")", SidebarThemeStore.systemIsDark ? .light : .dark),
+            ("settings-follow-system", .automatic),
+        ]
+        for (step, (control, theme)) in steps.enumerated() {
+            if let control { try await click(control) } else { SidebarThemeStore.shared.nauticalUnlocked = true }
             let palette = theme.sidebarTheme(systemIsDark: SidebarThemeStore.systemIsDark)
             try await TestSupport.eventually { store.values.appTheme == theme && SidebarThemeStore.shared.current == palette }
             XCTAssertEqual(runtime.preferences.theme, "Default")
@@ -1034,7 +1024,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                 }
             }
             XCTAssertEqual(SettingsStore(file: directory.appendingPathComponent("settings.json")).values.appTheme, theme)
-            _ = try await PresentationTestSupport.capture(window, named: "settings-sidebar-" + theme.rawValue)
+            _ = try await PresentationTestSupport.capture(window, named: "settings-sidebar-\(step)-\(theme.rawValue)")
         }
     }
 
@@ -1103,59 +1093,110 @@ final class SettingsSynchronizationTests: XCTestCase {
         var expanded = "", offset: CGFloat = 0
         while true {
             expanded += "\n" + (try await PresentationTestSupport.capture(window).text())
-            if expanded.contains("Colorblind-friendly") || offset >= bottom { break }
+            if expanded.contains("Appearance") || offset >= bottom { break }
             offset = min(bottom, offset + scroll.contentView.bounds.height * 0.6)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
             scroll.reflectScrolledClipView(scroll.contentView)
         }
-        XCTAssertTrue(expanded.contains("Colorblind-friendly"), expanded)
+        XCTAssertTrue(expanded.contains("Appearance"), expanded)
         // Each side's first bundled scheme, as the gallery lists it.
         let listed = ColorSchemes(directory: System.resources.appendingPathComponent("ghostty/themes")).filtered(for: .typical)
         func firstScheme(light: Bool) -> String? {
             let side = light ? listed.light : listed.dark
             return (light ? SchemeGroup.light : SchemeGroup.dark).lazy.compactMap { group in side.first { listed.groups[$0] == group } }.first
         }
-        func inUse(_ side: String) -> [String] { PresentationTestSupport.accessibilityLabels("settings-scheme-in-use-\(side)", in: window) }
+        // The switch's halves are labelled Dark and Light, their values the schemes; Nautical's line is the name alone.
+        func inUse(_ side: String) -> [String] {
+            PresentationTestSupport.accessibilityLabels("settings-scheme-in-use-\(side)", in: window).filter { $0 != "Dark" && $0 != "Light" }
+        }
         func label(_ value: String) -> String { value == "Default" ? "Dispatch" : value }
+        /// Scrolls down the page until the element shows; its frame.
+        func find(_ identifier: String) async throws -> NSRect {
+            let end = { max(0, document.bounds.height - scroll.contentView.bounds.height) }
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            // Accessibility frames trail a jump across the page.
+            try await Task.sleep(for: .milliseconds(300))
+            var found: NSRect?
+            // A tile counts once it is wholly below the bar pinned over the scrolling tiles, where a click reaches it.
+            let tile = identifier.hasPrefix("settings-scheme-") && !identifier.hasPrefix("settings-scheme-in-use-")
+            try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "No \(identifier)") {
+                found = PresentationTestSupport.accessibilityFrames(identifier, in: window).first
+                if tile, let frame = found,
+                   let bar = PresentationTestSupport.accessibilityFrames("settings-surprise-scheme-dark", in: window).first
+                    ?? PresentationTestSupport.accessibilityFrames("settings-surprise-scheme-light", in: window).first,
+                   frame.maxY > bar.minY - 10 || frame.minY < 0 { found = nil }
+                if found == nil {
+                    let step = scroll.contentView.bounds.height * 0.5
+                    let next = min(end(), scroll.contentView.bounds.minY + step)
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: next))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                return found != nil
+            }
+            return try XCTUnwrap(found)
+        }
+        /// What the page's last two screens read: Fun, last in the gallery, and Your color schemes. The lazy grid's tiles
+        /// that far down don't reliably reach accessibility, so the text is read.
+        func bottomText() async throws -> String {
+            var text = ""
+            for lift: CGFloat in [0, 400] {
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document.bounds.height - scroll.contentView.bounds.height - lift)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await Task.sleep(for: .milliseconds(300))
+                text += "\n" + (try await PresentationTestSupport.capture(window).text())
+            }
+            return text
+        }
+        let systemSide = SidebarThemeStore.systemIsDark ? "dark" : "light"
         for appearance: AppTheme in [.automatic, .light, .dark, .nautical, .automatic] {
             var values = store.values
             values.appTheme = appearance
             let darkAppearance = appearance.isDark(systemIsDark: SidebarThemeStore.systemIsDark)
             try store.save(values)
-            // Automatic shows both sides, dark first; a fixed theme only its own.
+            // The switch names both sides' schemes; Nautical, dark only, names its own.
             try await TestSupport.eventually(diagnostic: "dark=\(inUse("dark")) light=\(inUse("light"))") {
-                if appearance == .automatic { return inUse("dark") == [label(values.theme)] && inUse("light") == [label(values.lightTheme)] }
-                return darkAppearance ? inUse("dark") == [label(values.theme)] && inUse("light").isEmpty
-                    : inUse("light") == [label(values.lightTheme)] && inUse("dark").isEmpty
+                appearance == .nautical ? inUse("dark") == [label(values.theme)] && inUse("light").isEmpty
+                    : inUse("dark") == [label(values.theme)] && inUse("light") == [label(values.lightTheme)]
             }
             XCTAssertEqual(store.values.lightTheme, values.lightTheme)
             XCTAssertEqual(store.values.theme, values.theme)
-            if appearance != .automatic {
+            if appearance == .automatic {
+                // Following the system, the gallery opens on its side and Fun holds both sides' schemes once: the
+                // other side's fun ones are chosen for this side too.
+                let otherFun = systemSide == "dark" ? "Cotton Candy" : "Root Access"
+                let bottom = try await bottomText()
+                XCTAssertTrue(bottom.contains(otherFun), bottom)
+                // The switch and Surprise me stay pinned at the top while the tiles scroll.
+                XCTAssertTrue(bottom.contains("Surprise me"), bottom)
+                // The other half only switches the side being chosen for: the app keeps following.
+                let other = systemSide == "dark" ? "light" : "dark"
+                let half = try await find("settings-scheme-in-use-\(other)")
+                try PresentationTestSupport.click(window, at: NSPoint(x: half.midX, y: half.midY))
+                _ = try await find("settings-scheme-\(other)-Default")
+                let otherSideFun = otherFun == "Cotton Candy" ? "Root Access" : "Cotton Candy"
+                let otherBottom = try await bottomText()
+                XCTAssertTrue(otherBottom.contains(otherSideFun), otherBottom)
+                XCTAssertEqual(store.values.appTheme, .automatic)
+            } else {
                 // A click on another scheme's tile chooses it for the side showing.
                 let side = darkAppearance ? "dark" : "light"
                 let current = darkAppearance ? values.theme : values.lightTheme
                 let first = try XCTUnwrap(firstScheme(light: !darkAppearance))
                 let choice = current == first ? "Default" : first
-                scroll.contentView.scroll(to: .zero)
-                scroll.reflectScrolledClipView(scroll.contentView)
-                var tile: NSRect?
-                try await TestSupport.eventually(diagnostic: "No tile for \(choice) on the \(side) side") {
-                    tile = PresentationTestSupport.accessibilityFrames("settings-scheme-\(side)-\(choice)", in: window).first
-                    if tile == nil {
-                        let next = min(max(0, document.bounds.height - scroll.contentView.bounds.height),
-                                       scroll.contentView.bounds.minY + scroll.contentView.bounds.height * 0.5)
-                        scroll.contentView.scroll(to: NSPoint(x: 0, y: next))
-                        scroll.reflectScrolledClipView(scroll.contentView)
-                    }
-                    return tile != nil
-                }
-                let frame = try XCTUnwrap(tile)
+                let frame = try await find("settings-scheme-\(side)-\(choice)")
                 try PresentationTestSupport.click(window, at: NSPoint(x: frame.midX, y: frame.midY))
                 try await TestSupport.eventually {
                     store.values.theme == (darkAppearance ? choice : values.theme)
                         && store.values.lightTheme == (darkAppearance ? values.lightTheme : choice)
                 }
                 _ = try await PresentationTestSupport.capture(window, named: "settings-color-scheme-\(appearance.rawValue)")
+                if appearance == .light {
+                    // Not following, the switch is the appearance: its Dark half makes the app dark.
+                    let half = try await find("settings-scheme-in-use-dark")
+                    try PresentationTestSupport.click(window, at: NSPoint(x: half.midX, y: half.midY))
+                    try await TestSupport.eventually { store.values.appTheme == .dark }
+                }
             }
         }
     }

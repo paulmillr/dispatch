@@ -31,13 +31,13 @@ struct FilesSegments<ID: Hashable>: View {
                 let on = segment.id == selection
                 Button { selection = segment.id } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: segment.symbol).font(.system(size: typography.size(offset: -2)))
+                        Image(systemName: segment.symbol).font(typography.symbol(.caption))
                         if !compact {
                             Text(verbatim: segment.title).lineLimit(1)
                         }
                         if let count = segment.count {
                             Text("\(count)")
-                                .font(typography.font(.caption))
+                                .font(typography, .caption)
                                 .foregroundStyle(segment.countTint ?? (on ? palette.sidebarHostLabel : palette.detail))
                                 .padding(.horizontal, 5).padding(.vertical, 1)
                                 .background(Capsule().fill(segment.countTint.map { $0.opacity(0.16) } ?? palette.ink.opacity(0.06)))
@@ -59,7 +59,7 @@ struct FilesSegments<ID: Hashable>: View {
             }
         }
         .glassSegmentTrack(fallback: palette.control)
-        .font(typography.font(.label))
+        .font(typography, .label)
         .fixedSize()
     }
 }
@@ -126,7 +126,7 @@ struct FilesHeader: View {
         .padding(.trailing, 12 + trailingInset)
         .frame(height: typography.expanded(34))
         .frame(maxWidth: .infinity)
-        .font(typography.font(.label))
+        .font(typography, .label)
         .foregroundStyle(palette.muted)
         .background(Chrome.window)
         // Glass controls carry the bar themselves; the flat bar keeps its rule.
@@ -181,7 +181,7 @@ struct FilesHeader: View {
             // Too narrow even for "… / api": the folder's name alone, else nothing, rather than a row clipped to a dot.
             if let last = all.last {
                 Text(verbatim: last.title)
-                    .font(typography.font(.label))
+                    .font(typography, .label)
                     .foregroundStyle(Chrome.palette.secondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -242,7 +242,7 @@ struct FilesHeader: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(root.map { FilesPath.crumbLine(root: $0, home: session.home, host: session.hostLabel) } ?? "")
         .accessibilityIdentifier("files-crumbs")
-        .font(typography.font(.label))
+        .font(typography, .label)
         .lineLimit(1)
         .fixedSize()
     }
@@ -254,7 +254,7 @@ struct FilesHeader: View {
             if following { root.map { session.pin($0) } } else { session.followShell() }
         } label: {
             Image(systemName: "link")
-                .font(.system(size: typography.size(offset: -1.5)))
+                .font(typography.symbol(.body))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
         }
@@ -277,14 +277,14 @@ struct FilesHeader: View {
             Text(verbatim: name).foregroundStyle(palette.secondary)
             if let status {
                 Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: typography.size(offset: -2)))
+                    .font(typography.symbol(.caption))
                     .foregroundStyle(palette.faint)
                 Text(verbatim: GitChangesText.branch(status)).truncationMode(.middle)
                 if status.ahead > 0 { Text(verbatim: "↑\(status.ahead)").foregroundStyle(palette.green) }
                 if status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
             }
         }
-        .font(typography.font(.label))
+        .font(typography, .label)
         .lineLimit(1)
         .help(session.git.repository?.root ?? "")
         .accessibilityElement(children: .ignore)
@@ -384,7 +384,7 @@ struct FilesHeader: View {
     private func filterField(_ text: Binding<String>, prompt: String, help: String, identifier: String) -> some View {
         let palette = Chrome.palette
         return HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: typography.size(offset: -2.5)))
+            Image(systemName: "magnifyingglass").font(typography.symbol(.caption))
             TextField(prompt, text: text, prompt: Text(prompt).foregroundStyle(palette.detail))
                 .textFieldStyle(.plain)
                 .foregroundStyle(palette.ink)
@@ -420,7 +420,7 @@ struct FilesHeader: View {
     private var searchButton: some View {
         Button(action: openSearch) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: typography.size(offset: -1.5)))
+                .font(typography.symbol(.body))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
         }
@@ -446,7 +446,7 @@ struct FilesHeader: View {
         } label: {
             // Not a sidebar glyph: the window's sidebar button already draws one.
             Image(systemName: "rectangle.righthalf.inset.filled")
-                .font(.system(size: typography.size(offset: -1.5)))
+                .font(typography.symbol(.body))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
         }
@@ -507,7 +507,7 @@ struct FilesColumnHeader: View {
         }
         // As tall as the preview's header beside it, its rule included.
         .frame(height: FilesColumns.headerHeight(typography) + 1)
-        .font(typography.font(.caption))
+        .font(typography, .caption)
         .foregroundStyle(palette.detail)
         .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
         .accessibilityElement(children: .contain)

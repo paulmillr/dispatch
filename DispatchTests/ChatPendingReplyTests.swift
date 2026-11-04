@@ -1,7 +1,7 @@
 import XCTest
 @testable import DispatchApp
 
-/// Settings › Experimental › Reply placeholder: the empty reply bubble a sent prompt arms (ChatPendingReply).
+/// The reply placeholder: the empty reply bubble a sent prompt arms (ChatPendingReply).
 @MainActor
 final class ChatPendingReplyTests: XCTestCase {
     private func sentSession() -> ChatSession {
@@ -43,8 +43,8 @@ final class ChatPendingReplyTests: XCTestCase {
         XCTAssertTrue(last.placeholder)
         XCTAssertNil(last.item)
         XCTAssertEqual(ChatReplyHalo.target(session, rows: session.transcriptRows),
-                       ChatReplyHalo(first: pending.id, last: pending.id, phase: .lapping, orbit: true))
-        XCTAssertTrue(session.replyShowsOrbit)
+                       ChatReplyHalo(first: pending.id, last: pending.id, phase: .lapping))
+        XCTAssertTrue(session.replyShowsStatus)
     }
 
     func testAcknowledgementBeforeTheDelayShowsItAfterTheDelay() async throws {
@@ -68,15 +68,29 @@ final class ChatPendingReplyTests: XCTestCase {
         let landed = try XCTUnwrap(session.landedReply)
         let halo = try XCTUnwrap(ChatReplyHalo.target(session, rows: rows, now: landed.at + 0.5))
         XCTAssertEqual(halo.phase, .settling(since: landed.at))
-        XCTAssertFalse(halo.orbit)
         XCTAssertNil(ChatReplyHalo.target(session, rows: rows, now: landed.at + ChatReplyHalo.settle + 0.1))
-        XCTAssertFalse(session.replyShowsOrbit)
-        XCTAssertTrue(session.replyHaloOwnsActivity, "The composer stays neutral until the turn ends")
-        session.busy = false
-        XCTAssertFalse(session.replyHaloOwnsActivity)
+        XCTAssertFalse(session.replyShowsStatus)
+        XCTAssertTrue(session.replyHaloOwnsActivity, "The composer stays neutral while the halo settles")
+        try await TestSupport.eventually { session.landedReply == nil }
+        XCTAssertFalse(session.replyHaloOwnsActivity, "Then its light comes back for the rest of the turn")
+        XCTAssertTrue(session.busy)
+        XCTAssertNil(ChatReplyHalo.target(session, rows: session.transcriptRows))
         // Later updates of the reply stay on its row.
         session.insert(.init(id: "reply", kind: .assistant, text: "Five minutes.", completed: true), turnID: "turn-2")
         XCTAssertEqual(session.transcriptRows.last?.id, pending.id)
+    }
+
+    func testReasoningSummaryShowsAboveItAndTheReplyTakesItOver() async throws {
+        let session = sentSession()
+        let pending = try await shown(session)
+        session.insert(.init(id: "summary", kind: .reasoning, text: "**Inspecting the reconnect test**", completed: true),
+                       turnID: "turn-2")
+        XCTAssertEqual(session.pendingReply, pending, "A summary is its own disclosure row, not the reply's bubble")
+        XCTAssertEqual(session.transcriptRows.last?.id, pending.id)
+        session.insert(.init(id: "claude-thinking", kind: .reasoning, text: "Checking where the server stops."), turnID: "turn-2")
+        XCTAssertNil(session.pendingReply, "Claude's narration is a bubble: it takes the placeholder's row")
+        XCTAssertEqual(session.transcriptRows.last?.id, pending.id)
+        XCTAssertEqual(session.transcriptRows.last?.item?.id, "claude-thinking")
     }
 
     func testEarlierTurnsContentDoesNotTakeItOver() async throws {

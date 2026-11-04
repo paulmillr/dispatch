@@ -3,6 +3,7 @@ import SwiftUI
 /// A folder's summary (F2d): its items, size, when it changed and its path, with Open folder (pins it as the
 /// root), cd here and Copy path. The counts arrive from the bounded walk; until then the rows say so.
 struct FileFolderPreview: View {
+    @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     let path: String
     let entry: FileEntry?
@@ -51,7 +52,7 @@ struct FileFolderPreview: View {
                         .accessibilityIdentifier("file-preview-folder-path")
                 }
             }
-            .font(theme.typography.font(offset: -0.5))
+            .font(typography, .label)
             .foregroundStyle(theme.ink)
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

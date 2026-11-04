@@ -3,6 +3,7 @@ import SwiftUI
 /// "◆ fixtures/ already has 12 of these" with Replace / Keep both / Skip them / Cancel: asked before anything is
 /// written, as the second form of a transfer row (F2b).
 struct FileConflictPrompt: View {
+    @Environment(\.appTypography) private var typography
     let transfer: FileTransfer
     let text: FileTransferText
 
@@ -22,7 +23,7 @@ struct FileConflictPrompt: View {
                 choice("Cancel", .cancel, id: "conflict-cancel", help: "Cancel · copy nothing", quiet: true)
             }
         }
-        .font(ChatThemeStore.shared.current.typography.font(offset: -1))
+        .font(typography, .label)
         .padding(.vertical, 8)
         .padding(.leading, 14)
         .padding(.trailing, 12)

@@ -350,3 +350,55 @@ extension PlanOneTests {
         XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup", agent: "claude"), "Server")
     }
 }
+
+/// Switching fonts changes the letters, not where lines fall: chat's prose and the interface's text are set on Source
+/// Code Pro's line at their size whichever font draws them (`AppFont.lineHeight`), and text that changes in place
+/// keeps its widest variant's width.
+extension PlanOneTests {
+    func testEveryFontSetsTextOnSourceCodeProsLines() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Line heights are set from macOS 26") }
+        AppFont.register()
+        let prose = String(repeating: "The queue drains once the link is back, and each retry waits for the reply. ", count: 4)
+        for size in [14.0, 18] {
+            let line = AppFont.lineHeight(size: size + 1)
+            for choice in ChatFont.allCases {
+                var preferences = Preferences(); preferences.fontSize = size; preferences.chatFont = choice
+                var theme = ChatTheme.standard; theme.typography = ChatTypography(preferences: preferences)
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                defer { window.close(); window.contentView = nil }
+                window.contentView = NSHostingView(rootView: ChatMarkdown(text: prose).font(theme.typography.font(offset: 1))
+                    .environment(\.chatTheme, theme).frame(width: 320))
+                let root = try XCTUnwrap(window.contentView)
+                try await TestSupport.eventually { PresentationTestSupport.views(of: NSTextView.self, in: root).first?.string.isEmpty == false }
+                let view = try XCTUnwrap(PresentationTestSupport.views(of: NSTextView.self, in: root).first)
+                let layout = try XCTUnwrap(view.layoutManager), container = try XCTUnwrap(view.textContainer)
+                layout.ensureLayout(for: container)
+                var origins: [CGFloat] = []
+                layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { rect, _, _, _, _ in origins.append(rect.minY) }
+                XCTAssertGreaterThan(origins.count, 2, "\(choice) wraps")
+                let pitches = Set(zip(origins.dropFirst(), origins).map { $0 - $1 })
+                XCTAssertEqual(pitches, [line + theme.typography.lineSpacing], "\(choice) at \(size)")
+            }
+        }
+        // The interface's roles: San Francisco's lines are Source Code Pro's, one line or several.
+        let interface = InterfaceFontStore.shared.current
+        defer { InterfaceFontStore.shared.current = interface }
+        let typography = AppTypography(contentSize: 14)
+        for role in [AppTypography.Role.title, .content, .label, .body, .caption, .micro] {
+            var heights: [InterfaceFont: [CGFloat]] = [:]
+            for font in [InterfaceFont.sourceCodePro, .system] {
+                InterfaceFontStore.shared.current = font
+                heights[font] = ["Queue", "Queue\ndrains"].map {
+                    NSHostingView(rootView: Text($0).font(typography, role).fixedSize()).fittingSize.height
+                }
+            }
+            XCTAssertEqual(heights[.system], heights[.sourceCodePro], "\(role)")
+            XCTAssertEqual(heights[.system]?.first, AppFont.lineHeight(size: typography.size(role)), "\(role)")
+        }
+        let widths = ["Play", "Copying…"].map {
+            NSHostingView(rootView: ReservedText(text: $0, variants: ["Play", "Copying…"]).fixedSize()).fittingSize.width
+        }
+        XCTAssertEqual(widths[0], widths[1])
+    }
+}

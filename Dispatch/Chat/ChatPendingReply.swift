@@ -1,9 +1,10 @@
 import Foundation
 
-// Settings › Experimental › Reply placeholder (`ChatCoordinator.replyPlaceholder`). Once the agent acknowledges a sent
-// prompt, an empty assistant bubble stands where its reply will be: the composer footer's ◆ and orbit where its first
-// word will be, its outline lapped by the composer's working light, while the composer itself stays neutral. The first
-// content takes over its row, and the light fades into the bubble's outline as the words type in.
+// The reply placeholder. Once the agent acknowledges a sent prompt, an empty assistant bubble stands where its reply
+// will be: the composer footer's activity (◆ and orbit, label, time) where its first word will be, its outline lapped by
+// the composer's working light, while the composer and its footer stay quiet. The first reply, tool step or narration
+// takes over its row, the light fades into the bubble's outline as the words type in, and then the composer's light
+// comes back for the rest of the turn.
 
 struct ChatPendingReply: Equatable {
     /// After sending, at the earliest: the send flight lands first (0.42 s).
@@ -14,12 +15,10 @@ struct ChatPendingReply: Equatable {
     let afterTurn: String?
 }
 
-/// The reply that took over the placeholder's row (system uptimes).
+/// The reply that took over the placeholder's row and when (system uptime), until its halo settled.
 struct ChatLandedReply: Equatable {
     let rowID: String
     let at: TimeInterval
-    /// When its turn ended; until then the composer leaves the activity to the reply.
-    var ended: TimeInterval?
 }
 
 /// Where the reply halo draws: the rows of one bubble and what the light does there.
@@ -32,8 +31,6 @@ struct ChatReplyHalo: Equatable {
     let first: String
     let last: String
     let phase: Phase
-    /// The placeholder's ◆ and orbit, where its first word will be.
-    var orbit = false
     /// How long a settle takes; a halo settled longer ago than this draws nothing.
     static let settle: TimeInterval = 1.2
 
@@ -41,7 +38,7 @@ struct ChatReplyHalo: Equatable {
     @MainActor static func target(_ session: ChatSession, rows: [ChatTranscriptRow],
                                   now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> ChatReplyHalo? {
         if let pending = session.pendingReply, rows.last?.id == pending.id {
-            return ChatReplyHalo(first: pending.id, last: pending.id, phase: .lapping, orbit: true)
+            return ChatReplyHalo(first: pending.id, last: pending.id, phase: .lapping)
         }
         guard let landed = session.landedReply, now - landed.at <= settle,
               var end = rows.lastIndex(where: { $0.id == landed.rowID }) else { return nil }

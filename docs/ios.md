@@ -494,7 +494,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
   (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Composers are
   `ChatEditorTextView`-based, as on the Mac.
-  A reply streaming into the live turn types out as on the Mac (docs/architecture.md, Typed reveal;
+  A reply streaming into the live turn, or a short Claude Code post, types out as on the Mac (docs/architecture.md, Typed reveal;
   `MobileTypedMarkdown`): a text renderer draws its caret, and a bubble that hugs its text is as wide as what has
   arrived from the first frame.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line; the

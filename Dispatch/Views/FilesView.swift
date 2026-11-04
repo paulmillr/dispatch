@@ -177,7 +177,7 @@ private struct FilesBackBar: View {
         HStack(spacing: 0) {
             Button(action: back) {
                 HStack(spacing: 5) {
-                    Image(systemName: "chevron.left").font(.system(size: typography.size(offset: -2), weight: .semibold))
+                    Image(systemName: "chevron.left").font(typography.symbol(.caption, weight: .semibold))
                     Text(verbatim: title)
                 }
                 .foregroundStyle(palette.accent)
@@ -188,7 +188,7 @@ private struct FilesBackBar: View {
             .accessibilityIdentifier("files-split-back")
             Spacer(minLength: 0)
         }
-        .font(typography.font(.label))
+        .font(typography, .label)
         .padding(.horizontal, 14)
         .frame(height: typography.expanded(28))
         .background(Chrome.window)
@@ -359,11 +359,11 @@ private struct FilesRootErrorLine: View {
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle").font(.system(size: typography.size(offset: -3)))
+            Image(systemName: "exclamationmark.triangle").font(typography.symbol(.micro))
             Text(verbatim: message).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
         }
-        .font(typography.font(.body))
+        .font(typography, .body)
         .foregroundStyle(palette.detail)
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)
@@ -402,7 +402,7 @@ private struct FilesListState: View {
 
     private func centred(_ text: String, identifier: String) -> some View {
         Text(text)
-            .font(typography.font(.body))
+            .font(typography, .body)
             .foregroundStyle(Chrome.palette.detail)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)

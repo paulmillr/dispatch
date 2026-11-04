@@ -24,7 +24,7 @@ struct SettingsExtraPage: View {
             importGroup
             exportGroup
             if let message {
-                Text(message).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                Text(message).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
                     .accessibilityIdentifier("settings-extra-message")
             }
@@ -195,9 +195,9 @@ struct ImportReviewSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Import from \(plan.source)").font(typography.font(offset: 2)).fontWeight(.semibold)
+                Text("Import from \(plan.source)").font(typography, offset: 2).fontWeight(.semibold)
                 Text("Choose what to bring over. Nothing changes until you import.")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -250,7 +250,7 @@ struct ImportReviewSheet: View {
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title.uppercased()).font(typography.font(.caption)).tracking(1).foregroundStyle(SettingsControlStyle.detail)
+            Text(title.uppercased()).font(typography, .caption).tracking(1).foregroundStyle(SettingsControlStyle.detail)
             content()
         }
     }

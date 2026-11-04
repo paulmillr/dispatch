@@ -148,6 +148,7 @@ struct ReviewLineAction: ViewModifier {
 /// A saved comment under its line: where it is, its text, Edit and Delete. One whose line is not among the rows (on the
 /// file's top) quotes the line it was written on.
 struct ReviewCommentCard: View {
+    @Environment(\.appTypography) private var typography
     let review: GitDiffReview
     let comment: ReviewComment
     /// Its line is not among the rows: the file changed there, or the view does not show it.
@@ -173,7 +174,7 @@ struct ReviewCommentCard: View {
                     .buttonStyle(FilePreviewButtonStyle(prominent: false))
                     .accessibilityIdentifier("review-comment-delete")
             }
-            .font(theme.typography.font(offset: -1.5))
+            .font(typography, .body)
             .lineLimit(1)
             if detached, let last = comment.quote.last {
                 Text(verbatim: TextRendering.visible(last.text))
@@ -182,7 +183,7 @@ struct ReviewCommentCard: View {
                     .lineLimit(1).truncationMode(.tail)
             }
             Text(verbatim: comment.text)
-                .font(theme.typography.font(offset: -0.5))
+                .font(typography, .label)
                 .foregroundStyle(theme.ink)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -198,6 +199,7 @@ struct ReviewCommentCard: View {
 
 /// The comment being written: what it is on, the editor (⏎ saves, ⌥⏎ or ⇧⏎ a new line, esc cancels), Cancel and Comment.
 struct ReviewComposer: View {
+    @Environment(\.appTypography) private var typography
     let review: GitDiffReview
     let draft: ReviewDraft
     @Environment(\.chatTheme) private var theme
@@ -209,7 +211,7 @@ struct ReviewComposer: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: (editing ? "Edit the comment on " : "Comment on ")
                  + ReviewText.target(start: draft.start, end: draft.end))
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
             ReviewTextEditor(text: review.session.reviewDraftText, focus: draft.focus,
                              placeholder: "What should the agent change?", label: "Review comment",
@@ -225,7 +227,7 @@ struct ReviewComposer: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.border))
             HStack(spacing: 8) {
                 Text("⏎ \(editing ? "saves" : "comments") · ⌥⏎ / ⇧⏎ new line · esc cancels")
-                    .font(theme.typography.font(offset: -2))
+                    .font(typography, .caption)
                     .foregroundStyle(theme.muted)
                     .lineLimit(1)
                 Spacer(minLength: 8)
@@ -288,7 +290,7 @@ struct ReviewHeaderButton: View {
                     }
                 }
             }
-            .font(typography.font(.label))
+            .font(typography, .label)
             // The button and the note crossfade: copying, Undo and the note's timeout change the repository outside
             // any animation.
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: reviews.copied[scope] != nil)
@@ -296,7 +298,7 @@ struct ReviewHeaderButton: View {
             // A remote host's comments are kept by the host's own id (`ReviewScope`): without one, none are taken.
             Label("No comments", systemImage: "text.bubble")
                 .labelStyle(.titleAndIcon)
-                .font(typography.font(.body))
+                .font(typography, .body)
                 .foregroundStyle(.secondary)
                 .help("Comments are kept per host, and \(source.hostLabel ?? "this host") isn’t identified yet. "
                       + "They can be written once its connection is.")
@@ -356,6 +358,7 @@ private struct ReviewCreateButtonStyle: ButtonStyle {
 /// again in the files as they are now (`ReviewRefresh`), hands over the review's text and clears the comments (the bar's
 /// Undo brings them back).
 private struct ReviewFinish: View {
+    @Environment(\.appTypography) private var typography
     let session: FilesSession
     let scope: String
     let status: GitStatus
@@ -374,10 +377,10 @@ private struct ReviewFinish: View {
         // This tab's own agent is the button; every agent tab (this one first) is in the menu beside it.
         let agent = targets.first { $0.tab == session.id }
         VStack(alignment: .leading, spacing: 10) {
-            Text("Finish your review").font(theme.typography.font(weight: .semibold)).foregroundStyle(theme.ink)
+            Text("Finish your review").font(typography, .content, weight: .semibold).foregroundStyle(theme.ink)
             Text(verbatim: review.comments.isEmpty ? "No comments on lines yet"
                  : "\(ReviewText.count(review.comments.count)) on \(FilesFormatting.count(files)) \(files == 1 ? "file" : "files")")
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
             if !review.comments.isEmpty { overview(review) }
             ReviewTextEditor(text: review.summary, focus: focus, placeholder: "Overall comment (optional)",
@@ -391,11 +394,11 @@ private struct ReviewFinish: View {
                 if checking != nil {
                     ProgressView().controlSize(.small)
                     Text("Checking the lines…")
-                        .font(theme.typography.font(offset: -2))
+                        .font(typography, .caption)
                         .foregroundStyle(theme.muted)
                 } else {
                     Text(targets.isEmpty ? "Copies the review and clears the comments" : "Then clears the comments")
-                        .font(theme.typography.font(offset: -2))
+                        .font(typography, .caption)
                         .foregroundStyle(theme.muted)
                         .lineLimit(1)
                 }
@@ -421,7 +424,7 @@ private struct ReviewFinish: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .font(theme.typography.font(offset: -1.5))
+                    .font(typography, .body)
                     .help("Send the review to the agent in another tab; that tab shows its chat")
                     .accessibilityIdentifier("review-send-menu")
                 }
@@ -464,7 +467,7 @@ private struct ReviewFinish: View {
                 }
             }
         }
-        .font(theme.typography.font(offset: -1.5))
+        .font(typography, .body)
         .frame(maxHeight: min(CGFloat(comments.count) * 22, 176))
         .accessibilityIdentifier("review-overview")
     }

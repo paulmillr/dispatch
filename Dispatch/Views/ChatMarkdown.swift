@@ -57,10 +57,14 @@ struct ChatMarkdown: View {
                     inline(block.text, cut: cut).font(theme.typography.font(offset: level == 1 ? 7.5 : (level == 2 ? 3.5 : 1), weight: .semibold))
                         .padding(.top, 6).accessibilityAddTraits(.isHeader)
                 case .list(let marker, let depth):
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(marker).foregroundStyle(theme.muted).frame(minWidth: 14, alignment: .trailing)
-                        inline(block.text, cut: cut).frame(maxWidth: .infinity, alignment: .leading)
-                    }.padding(.leading, CGFloat(depth) * 14)
+                    // The marker on the item's first baseline, over the text rather than beside it: the line the text is
+                    // set on stays where the paragraphs' are, though the marker's own font's line is taller (Latin Modern).
+                    inline(block.text, cut: cut).frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline)) {
+                            Text(marker).foregroundStyle(theme.muted).fixedSize()
+                                .alignmentGuide(.leading) { $0[.trailing] + 8 }
+                        }
+                        .padding(.leading, CGFloat(depth) * 14 + 22)
                 case .quote:
                     HStack(spacing: 10) {
                         Rectangle().fill(theme.muted.opacity(0.5)).frame(width: 2)
@@ -103,7 +107,7 @@ struct ChatMarkdown: View {
                 .modifier(ChatSelectableBaseline())
         } else {
             Text(cut.map { $0.apply(to: attributed(text, color: color), color: theme.accent).value } ?? attributed(text, color: color))
-                .textSelection(.enabled).lineSpacing(theme.typography.lineSpacing).tint(theme.blue)
+                .textSelection(.enabled).lineSpacing(theme.typography.naturalLineSpacing).tint(theme.blue)
         }
     }
 
@@ -199,8 +203,8 @@ struct ChatMarkdown: View {
 }
 
 /// The native text view reports no text baselines, so baseline-aligned stacks (the radio log's columns) would fall back
-/// to its bottom edge. Its first line sits at the top with no inset, so TextKit 1 draws the first baseline at the font's
-/// ascent rounded to a whole point.
+/// to its bottom edge. Its first line sits at the top with no inset, on a fixed line (`ChatTypography.lineHeight(for:)`),
+/// so TextKit 1 draws the first baseline the font's descent above the line's bottom, rounded to a whole point.
 @available(macOS 26, *)
 private struct ChatSelectableBaseline: ViewModifier {
     // The keys it reads, not the whole environment: any environment change would run it again for every block.
@@ -209,8 +213,8 @@ private struct ChatSelectableBaseline: ViewModifier {
     @Environment(\.fontResolutionContext) private var fontContext
     func body(content: Content) -> some View {
         let font = (font ?? theme.typography.body).resolve(in: fontContext).ctFont
-        let ascent = CTFontGetAscent(font).rounded()
-        content.alignmentGuide(.firstTextBaseline) { _ in ascent }
+        let baseline = (theme.typography.lineHeight(for: font) - CTFontGetDescent(font)).rounded()
+        content.alignmentGuide(.firstTextBaseline) { _ in baseline }
     }
 }
 
@@ -267,7 +271,11 @@ private struct ChatSelectableText: NSViewRepresentable {
         ChatTextMetrics.builds += 1
         (view as? SelectableTextView)?.builds += 1
         let text = NSMutableAttributedString(attributedString: NSAttributedString(value))
+        // Every chat font on Source Code Pro's line at its size: switching fonts keeps the prose's pitch. A shorter face
+        // gets the room above its letters, a taller one (Latin Modern) gives it up there.
+        let line = theme.typography.lineHeight(for: base.resolve(in: fontContext).ctFont)
         let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = theme.typography.lineSpacing
+        paragraph.minimumLineHeight = line; paragraph.maximumLineHeight = line
         text.addAttributes([.paragraphStyle: paragraph, .foregroundColor: coordinator.color(theme.ink)],
                            range: NSRange(location: 0, length: text.length))
         var offset = 0

@@ -38,11 +38,11 @@ struct FilesWriteRefusal: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Copying in is off for \(host)").foregroundStyle(Chrome.ink)
                 Text("Turn on Copy files in under Settings › Hosts, then reconnect.")
-                    .font(typography.font(.body)).foregroundStyle(palette.detail)
+                    .font(typography, .body).foregroundStyle(palette.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(typography.font(.label))
+        .font(typography, .label)
         .padding(.horizontal, 14).padding(.vertical, 11)
         .frame(maxWidth: 360, alignment: .leading)
         .background(Chrome.window, in: RoundedRectangle(cornerRadius: 10))
@@ -59,7 +59,7 @@ struct FilesReadOnlyTag: View {
 
     var body: some View {
         Text("read-only")
-            .font(typography.font(.caption))
+            .font(typography, .caption)
             .foregroundStyle(Chrome.palette.detail)
             .padding(.horizontal, 6).padding(.vertical, 1)
             .overlay { Capsule().strokeBorder(Chrome.palette.detail.opacity(0.5)) }

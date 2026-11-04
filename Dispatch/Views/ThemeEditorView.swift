@@ -146,7 +146,7 @@ struct ThemeEditorView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText).lineLimit(1)
             Text("Choose a color below the preview, then its hue, colorfulness and lightness.")
-                .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
         }.frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
     }
@@ -159,7 +159,7 @@ struct ThemeEditorView: View {
                 Spacer()
                 if color != original[slot] {
                     Button("Revert") { set(original[slot]) }.buttonStyle(.plain)
-                        .font(typography.font(.body)).foregroundStyle(Chrome.accent)
+                        .font(typography, .body).foregroundStyle(Chrome.accent)
                         .help("Back to this color as the scheme had it")
                         .accessibilityIdentifier("theme-editor-revert")
                 }
@@ -181,7 +181,7 @@ struct ThemeEditorView: View {
                     .onSubmit(commitHex)
                     .accessibilityIdentifier("theme-editor-hex")
                 Spacer(minLength: 0)
-                Toggle(isOn: $wide) { Text("P3").font(typography.font(.label)) }
+                Toggle(isOn: $wide) { Text("P3").font(typography, .label) }
                     .toggleStyle(.checkbox)
                     .help("Display P3: colors beyond sRGB for wide-color displays. Ghostty and other apps get the nearest sRGB colors.")
                     .accessibilityLabel("Display P3")
@@ -194,7 +194,7 @@ struct ThemeEditorView: View {
             let problems = SchemeAudit.problems(name: name, theme: theme.text)
             if !problems.isEmpty {
                 Label(problems.joined(separator: "; "), systemImage: "exclamationmark.triangle")
-                    .font(typography.font(.body)).foregroundStyle(Chrome.palette.warning)
+                    .font(typography, .body).foregroundStyle(Chrome.palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("theme-editor-problems")
             }
@@ -205,9 +205,9 @@ struct ThemeEditorView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Chrome.palette.separator).frame(height: 1)
             HStack(spacing: 10) {
-                Text("Name").font(typography.font(.label)).foregroundStyle(Chrome.muted)
+                Text("Name").font(typography, .label).foregroundStyle(Chrome.muted)
                 TextField("Name", text: $name)
-                    .textFieldStyle(.roundedBorder).font(typography.font(.label))
+                    .textFieldStyle(.roundedBorder).font(typography, .label)
                     .frame(width: 200)
                     .disabled(nameFixed)
                     .onSubmit(commit)
@@ -273,7 +273,7 @@ private struct SlotGrid: View {
                         HStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: 3).fill(theme[slot].swiftUI).frame(width: 14, height: 14)
                                 .overlay { RoundedRectangle(cornerRadius: 3).strokeBorder(theme.foreground.swiftUI.opacity(0.25)) }
-                            Text(slot.title).font(typography.font(.caption)).foregroundStyle(theme.foreground.swiftUI).lineLimit(1)
+                            Text(slot.title).font(typography, .caption).foregroundStyle(theme.foreground.swiftUI).lineLimit(1)
                             Spacer(minLength: 0)
                         }.padding(.horizontal, 6).frame(height: 24).contentShape(Rectangle())
                             .overlay { ring(slot) }

@@ -54,9 +54,6 @@ final class ChatCoordinator {
     var toolSteps = ChatToolGroupDisclosure.current {
         didSet { for session in sessions.values where session.toolSteps != toolSteps { session.toolSteps = toolSteps } }
     }
-    /// Settings › Experimental › Reply placeholder: a sent prompt's reply shows as an empty bubble once the agent
-    /// acknowledges it, carrying the working light until its first words (ChatPendingReply).
-    var replyPlaceholder = false
     /// The first queued message showed its steering tip (once, ever).
     var queueTipShown: Bool { didSet { defaults?.set(queueTipShown, forKey: "chatQueueSteerTipShown") } }
     @ObservationIgnored private var owners: [String: UUID] = [:]

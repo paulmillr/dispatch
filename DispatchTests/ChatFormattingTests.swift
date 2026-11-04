@@ -658,7 +658,8 @@ final class ChatFormattingTests: XCTestCase {
             XCTAssertTrue(text.contains("Idempotent retries"), text)
             XCTAssertFalse(text.contains("/bin/zsh"), text)
             XCTAssertFalse(text.contains("exec_command"), text)
-            let codeLine = try XCTUnwrap(rows.first { $0.topCandidates(1).first?.string.contains("let key") == true })
+            // Vision reads the line's first letter as a capital L at some positions.
+            let codeLine = try XCTUnwrap(rows.first { $0.topCandidates(1).first?.string.lowercased().contains("let key") == true })
             XCTAssertLessThan(codeLine.boundingBox.minX, 0.2, "Code must align with the left inset, even in a wide window")
             if expanded { XCTAssertTrue(text.contains("Command"), text); XCTAssertTrue(text.contains("Tool details"), text) }
         }

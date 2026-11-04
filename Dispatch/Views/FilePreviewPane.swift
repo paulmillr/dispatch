@@ -8,6 +8,7 @@ import SwiftUI
 /// text, scroll or find. One exception: an image replacing an image keeps the last picture until its own is decoded
 /// (`FilesSession.imageHandoff`), so two versions of a picture compare without a blank frame between them.
 struct FilePreviewPane: View {
+    @Environment(\.appTypography) private var typography
     let session: FilesSession
 
     private struct LoadKey: Hashable {
@@ -24,7 +25,7 @@ struct FilePreviewPane: View {
                     .id(ObjectIdentifier(preview))
             } else {
                 Text("Select a file to preview it")
-                    .font(theme.typography.font(offset: -1))
+                    .font(typography, .label)
                     .foregroundStyle(theme.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("file-preview-empty")
@@ -138,7 +139,7 @@ private struct FilePreviewDetail: View {
         let notice = FilesEditorNotices.shared.notice(for: session.id)
         return HStack(spacing: 10) {
             Text(verbatim: TextRendering.visible(preview.name))
-                .font(theme.typography.font())
+                .font(typography, .content)
                 .foregroundStyle(theme.ink)
                 .lineLimit(1).truncationMode(.middle)
                 .layoutPriority(1)
@@ -155,14 +156,14 @@ private struct FilePreviewDetail: View {
                 .accessibilityIdentifier("file-preview-copy-path")
             }
             Text(verbatim: TextRendering.visible(FilesFormatting.meta(preview, now: System.date())))
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("file-preview-meta")
             if let notice {
                 Text(notice)
-                    .font(theme.typography.font(offset: -1.5))
+                    .font(typography, .body)
                     .foregroundStyle(theme.yellow)
                     .lineLimit(1)
                     .fixedSize()
@@ -246,7 +247,7 @@ private struct FilePreviewDetail: View {
                     .accessibilityIdentifier("file-preview-find-count")
             }
         }
-        .font(theme.typography.font(offset: -1))
+        .font(typography, .label)
         .padding(.horizontal, 8)
         .frame(width: 190, height: 22)
         .background(theme.window, in: RoundedRectangle(cornerRadius: 5))
@@ -359,7 +360,7 @@ private struct FilePreviewDetail: View {
             VStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle").font(.system(size: 22)).foregroundStyle(theme.muted)
                 Text(message)
-                    .font(theme.typography.font(offset: -0.5))
+                    .font(typography, .label)
                     .foregroundStyle(theme.ink.opacity(0.8))
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
@@ -386,18 +387,20 @@ private struct FilePreviewDetail: View {
             VStack(spacing: 10) {
                 Image(systemName: "film").font(.system(size: 24, weight: .ultraLight)).foregroundStyle(theme.muted)
                 Text("Video")
-                    .font(theme.typography.font(offset: -0.5))
+                    .font(typography, .label)
                     .foregroundStyle(theme.ink.opacity(0.85))
                     .accessibilityIdentifier("file-preview-video")
                 Text(detail)
-                    .font(theme.typography.font(offset: -1.5))
+                    .font(typography, .body)
                     .foregroundStyle(theme.muted)
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("file-preview-video-detail")
                 HStack(spacing: 8) {
-                    Button(video.copying ? "Copying…" : "Play") { video.play(preview.path, in: session) }
+                    Button { video.play(preview.path, in: session) } label: {
+                        ReservedText(text: video.copying ? "Copying…" : "Play", variants: ["Play", "Copying…"])
+                    }
                         .buttonStyle(FilePreviewButtonStyle())
                         .disabled(video.copying)
                         .accessibilityIdentifier("file-preview-play")
@@ -425,7 +428,7 @@ private struct FilePreviewDetail: View {
                 .help("Show this tab’s terminal")
                 .accessibilityIdentifier("file-preview-open-terminal")
         }
-        .font(theme.typography.font(offset: -1.5))
+        .font(typography, .body)
         .padding(.horizontal, 14)
         .frame(height: 34)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.border).frame(height: 1) }
@@ -454,6 +457,7 @@ private struct FilePreviewDetail: View {
 
 /// "Too large to preview here", with Show first 64 KB and Open in terminal (F2d).
 private struct FileLargeNotice: View {
+    @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     let title: String
     let detail: String
@@ -465,11 +469,11 @@ private struct FileLargeNotice: View {
         VStack(spacing: 10) {
             Image(systemName: "doc").font(.system(size: 24, weight: .ultraLight)).foregroundStyle(theme.muted)
             Text(title)
-                .font(theme.typography.font(offset: -0.5))
+                .font(typography, .label)
                 .foregroundStyle(theme.ink.opacity(0.85))
                 .accessibilityIdentifier("file-preview-unpreviewable")
             Text(detail)
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
@@ -499,6 +503,7 @@ struct FilePreviewButtonStyle: ButtonStyle {
     }
 
     private struct Styled: View {
+        @Environment(\.appTypography) private var typography
         @Environment(\.chatTheme) private var theme
         @Environment(\.isEnabled) private var enabled
         let configuration: Configuration
@@ -506,7 +511,7 @@ struct FilePreviewButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(prominent ? theme.ink.opacity(0.9) : theme.ink.opacity(0.6))
                 .lineLimit(1)
                 .fixedSize()
@@ -546,13 +551,14 @@ struct FilePreviewIconButtonStyle: ButtonStyle {
     }
 
     private struct Styled: View {
+        @Environment(\.appTypography) private var typography
         @Environment(\.chatTheme) private var theme
         let configuration: Configuration
         let on: Bool
 
         var body: some View {
             configuration.label
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(on ? theme.ink : theme.ink.opacity(0.6))
                 .fixedSize()
                 .padding(.horizontal, 5)

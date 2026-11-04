@@ -24,7 +24,7 @@ struct ContentSearchBar: View {
         HStack(spacing: 8) {
             ContentSearchField(search: search, focused: focused).frame(minWidth: 80, idealWidth: 200)
             Text(search.query.isEmpty ? "" : search.total.map { "\(search.selected.map { $0 + 1 } ?? 0) of \($0)" } ?? "Searching…")
-                .font(AppFont.ui(size: 11)).foregroundStyle(Chrome.muted).fixedSize()
+                .interfaceFont(size: 11).foregroundStyle(Chrome.muted).fixedSize()
                 .accessibilityIdentifier("find-count")
             Button { search.move(-1) } label: { Image(systemName: "chevron.left") }
                 .accessibilityLabel("Previous match").disabled(search.total == nil || search.total == 0)
@@ -32,7 +32,7 @@ struct ContentSearchBar: View {
                 .accessibilityLabel("Next match").disabled(search.total == nil || search.total == 0)
             Button { search.close() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close Find")
         }
-        if let status = search.status { Text(status).font(AppFont.ui(size: 11)).foregroundStyle(Chrome.muted) }
+        if let status = search.status { Text(status).interfaceFont(size: 11).foregroundStyle(Chrome.muted) }
         }
         .buttonStyle(.plain).padding(8)
         // A glass panel over the terminal or chat; otherwise the bordered sidebar-colored panel.

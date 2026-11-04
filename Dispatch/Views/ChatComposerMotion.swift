@@ -52,13 +52,17 @@ struct ChatComposerBorder: ViewModifier {
     @State private var visible = false
 
     func body(content: Content) -> some View {
-        // A reply bubble that carries the activity (ChatReplyHalo) leaves the composer neutral.
-        let working = AgentWorkingState.isWorking(session) && !session.replyHaloOwnsActivity
+        // A reply bubble that carries the activity (ChatReplyHalo) leaves the composer neutral; once its light settled
+        // the composer's comes back, fading in (and only then: a turn's own start and end change it at once).
+        let handedOff = session.replyHaloOwnsActivity
+        let working = AgentWorkingState.isWorking(session) && !handedOff
+        let handOff: Animation? = reduceMotion ? nil : .easeInOut(duration: 0.4)
         content
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .stroke(theme.accent.opacity(working ? 0.06 : theme.radioLog && active ? 0.07 : 0), lineWidth: 6)
                     .allowsHitTesting(false).accessibilityHidden(true)
+                    .animation(handOff, value: handedOff)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
@@ -68,13 +72,17 @@ struct ChatComposerBorder: ViewModifier {
                                      : theme.radioLog && active ? theme.accent.opacity(0.5)
                                      : LiquidGlassStore.shared.active ? .clear : theme.border))
                     .allowsHitTesting(false).accessibilityHidden(true)
+                    .animation(handOff, value: handedOff)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: working)
             .overlay {
-                if working && !AgentWorkingState.isWaiting(session) && !reduceMotion && session.showChat {
-                    ChatComposerAnimatedBorder(accent: theme.accent, moving: visible && active, radius: cornerRadius - 0.5)
-                        .allowsHitTesting(false).accessibilityHidden(true)
+                ZStack {
+                    if working && !AgentWorkingState.isWaiting(session) && !reduceMotion && session.showChat {
+                        ChatComposerAnimatedBorder(accent: theme.accent, moving: visible && active, radius: cornerRadius - 0.5)
+                            .transition(.opacity)
+                    }
                 }
+                .allowsHitTesting(false).accessibilityHidden(true)
+                .animation(handOff, value: handedOff)
             }
             .onAppear { visible = true }
             .onDisappear { visible = false }

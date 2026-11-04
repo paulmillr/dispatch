@@ -43,9 +43,9 @@ struct FilesUnavailableView: View {
         let palette = Chrome.palette
         return VStack(spacing: 10) {
             title.foregroundStyle(palette.secondary)
-                .font(typography.font(.label))
+                .font(typography, .label)
             Text(detail)
-                .font(typography.font(.body))
+                .font(typography, .body)
                 .foregroundStyle(palette.detail)
                 .lineSpacing(3)
             HStack(spacing: 8) { actions() }
@@ -95,15 +95,17 @@ struct FilesOfflineBar: View {
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            Button(reconnecting ? "Reconnecting…" : "Reconnect") {
+            Button {
                 if let hostID { controller.reconnect(hostID: hostID, sourceSurfaceID: session.id) }
+            } label: {
+                ReservedText(text: reconnecting ? "Reconnecting…" : "Reconnect", variants: ["Reconnect", "Reconnecting…"])
             }
             .buttonStyle(FilesButtonStyle(tint: Color(nsColor: amber)))
             .disabled(hostID == nil || reconnecting)
             .help("Reconnect to \(host)")
             .accessibilityIdentifier("files-reconnect")
         }
-        .font(typography.font(.body))
+        .font(typography, .body)
         .padding(.horizontal, 12)
         .frame(height: typography.expanded(34))
         .frame(maxWidth: .infinity)
@@ -126,7 +128,7 @@ struct FilesLoadingView: View {
 
     var body: some View {
         Text("Loading…")
-            .font(typography.font(.body))
+            .font(typography, .body)
             .foregroundStyle(Chrome.palette.detail)
             .opacity(shown ? 1 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -163,7 +165,7 @@ struct FilesButtonStyle: ButtonStyle {
             let ink: Color = if let tint { tint } else if primary { Color(nsColor: SSHReconnectControl.actionInk) }
                 else { palette.secondary }
             configuration.label
-                .font(typography.font(.body))
+                .font(typography, .body)
                 .lineLimit(1)
                 .foregroundStyle(ink)
                 .padding(.horizontal, 10)

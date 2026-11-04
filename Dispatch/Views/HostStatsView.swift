@@ -207,12 +207,12 @@ private struct HostStatsPresentation: View {
                 Text("host").foregroundStyle(StatsStyle.muted)
                 Spacer()
                 Text(sample.host).textSelection(.enabled)
-            }.font(typography.font(.label)).padding(.vertical, 8)
+            }.font(typography, .label).padding(.vertical, 8)
                 .overlay(alignment: .top) { if !StatsStyle.glass { Rectangle().fill(StatsStyle.track).frame(height: 1) } } }
             if sample.state == .unavailable {
                 statisticsContent.hidden().overlay {
                     Text("Stats unavailable")
-                        .font(typography.font(offset: 3.5, weight: .medium))
+                        .font(typography, offset: 3.5, weight: .medium)
                         .foregroundStyle(StatsStyle.muted)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -252,11 +252,11 @@ private struct HostStatsPresentation: View {
             HStack(spacing: 6) {
                 Text("top processes")
                 if sample.processesPartial { Text("· partial").accessibilityIdentifier("stats-processes-partial") }
-            }.font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
+            }.font(typography, .body).foregroundStyle(StatsStyle.muted)
             processes(rows).overlay(alignment: .topLeading) {
                 if rows.isEmpty {
                     Text(sample.processes?.isEmpty == false ? "Measuring process CPU…" : "Process data unavailable")
-                        .font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
+                        .font(typography, .body).foregroundStyle(StatsStyle.muted)
                         .padding(.vertical, 4)
                 }
             }
@@ -276,7 +276,7 @@ private struct HostStatsPresentation: View {
             }.pickerStyle(.menu).accessibilityIdentifier("stats-account")
         }
         if sample.state != .unavailable, let status = sample.statusText {
-            Text(status).font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
+            Text(status).font(typography, .body).foregroundStyle(StatsStyle.muted)
                 .accessibilityIdentifier("stats-status")
         }
     }
@@ -300,7 +300,7 @@ private struct HostStatsPresentation: View {
                         Text(" ").frame(maxWidth: .infinity, alignment: .leading).hidden()
                     }
                 }
-                .font(typography.font(.body)).monospacedDigit()
+                .font(typography, .body).monospacedDigit()
                 .padding(.vertical, 4)
                 .overlay(alignment: .top) {
                     if index < rows.count { Rectangle().fill(StatsStyle.track).frame(height: 1) }
@@ -331,7 +331,7 @@ private struct HostStatsPresentation: View {
             let bars = sample.historyBars(memory: memorySelected, at: timeline.date)
             VStack(alignment: .leading, spacing: 5) {
                 Text("15-min history")
-                    .foregroundStyle(StatsStyle.muted).font(typography.font(.body))
+                    .foregroundStyle(StatsStyle.muted).font(typography, .body)
                 Canvas { context, size in
                     // One bar per 15-second bucket; missing samples stay empty.
                     let count = bars.count
@@ -363,11 +363,11 @@ private struct HostMetricSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(typography.font(.body)).foregroundStyle(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.muted)
+            Text(title).font(typography, .body).foregroundStyle(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.muted)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value.map { String(format: "%.0f", $0) } ?? "—").font(typography.font(offset: 13.5, weight: .medium))
+                Text(value.map { String(format: "%.0f", $0) } ?? "—").font(typography, offset: 13.5, weight: .medium)
                     .tracking(-0.52).foregroundStyle(valueColor)
-                Text("%").font(typography.font(.body)).foregroundStyle(StatsStyle.muted)
+                Text("%").font(typography, .body).foregroundStyle(StatsStyle.muted)
             }.monospacedDigit().fixedSize()
             if SidebarThemeStore.shared.current == .nautical {
                 // Nautical's engine room reads each metric off a dial.
@@ -386,7 +386,7 @@ private struct HostMetricSummary: View {
     }
 
     private var detailText: some View {
-        Text(detail).font(typography.font(.body))
+        Text(detail).font(typography, .body)
             .foregroundStyle(StatsStyle.muted)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

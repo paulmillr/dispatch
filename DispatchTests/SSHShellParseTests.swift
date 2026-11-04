@@ -30,6 +30,32 @@ final class SSHShellParseTests: XCTestCase {
         XCTAssertEqual(parse("ssh alice@nightly -l bob -p 2222")?.options, ["-p", "2222"])
     }
 
+    /// Found by comparing with `ssh -G`: a port in an `ssh://` destination and a user given as `-o User` behave as `-l`.
+    func testADestinationsUserAndPortWinOverLaterOptions() {
+        XCTAssertEqual(parse("ssh alice@nightly -o User=carol")?.options, [])
+        XCTAssertEqual(parse("ssh alice@nightly -o user=carol -p 2222")?.options, ["-p", "2222"], "No port in the destination")
+        XCTAssertEqual(parse("ssh ssh://nightly:2201 -p 2222 -l bob")?.options, ["-l", "bob"])
+        XCTAssertEqual(parse("ssh ssh://alice@[fd00::5]:2201 -oPort=2300 -l bob -4")?.options, ["-4"])
+        XCTAssertEqual(parse("ssh -p 2222 ssh://nightly:2201")?.options, ["-p", "2222"], "Before it, -p wins and stays")
+    }
+
+    func testTagTakesAValue() {
+        XCTAssertEqual(parse("ssh -P work nightly")?.destination, "nightly")
+        XCTAssertEqual(parse("ssh -P work nightly")?.options, ["-P", "work"])
+    }
+
+    /// `-t` asks for a terminal, `-T` refuses one, the last wins; `-o RequestTTY` counts only before either.
+    func testTheTerminalRequestDecidesAsSSHDoes() {
+        XCTAssertNil(parse("ssh -t nightly -T ls"))
+        XCTAssertNotNil(parse("ssh -T -t nightly"))
+        XCTAssertNotNil(parse("ssh -o RequestTTY=force nightly ls"))
+        XCTAssertNil(parse("ssh -o RequestTTY=no nightly"))
+        XCTAssertNotNil(parse("ssh -o RequestTTY=no -t nightly"))
+        XCTAssertNotNil(parse("ssh -t -o RequestTTY=no nightly"), "-t came first: the option is ignored")
+        XCTAssertNil(parse("ssh -o SessionType=none nightly"))
+        XCTAssertNil(parse("ssh nightly -o ForkAfterAuthentication=yes"))
+    }
+
     func testCommandsAndNonLoginsAreNotFollowed() {
         XCTAssertNil(parse("ssh nightly ls"))
         XCTAssertNil(parse("ssh nightly -l alice ls"))
@@ -56,6 +82,12 @@ final class SSHShellParseTests: XCTestCase {
         XCTAssertEqual(invocation("-l bob alice@nightly")?.options, ["-l", "bob"])
         XCTAssertEqual(invocation("nightly -t -l alice top"),
                        SSHInvocation(options: ["-l", "alice"], destination: "nightly", command: "top", forcedTTY: true))
+    }
+
+    func testTheLauncherKeepsTheDestinationsUserAndPort() {
+        XCTAssertEqual(invocation("alice@nightly -o User=carol -A")?.options, ["-A"])
+        XCTAssertEqual(invocation("ssh://nightly:2201 -p 2222")?.options, [])
+        XCTAssertEqual(invocation("-P work nightly -l bob")?.options, ["-P", "work", "-l", "bob"])
     }
 
     func testTheLauncherLeavesCommandsAndControlUsesToSSH() {

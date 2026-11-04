@@ -184,7 +184,7 @@ struct MainView: View {
             Color.clear.frame(width: sidebarToggleLeadingSpace)
             SidebarToggle(controller: controller)
             Spacer(minLength: 0)
-            MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography.font(.title)).lineLimit(1).truncationMode(.middle)
+            MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography, .title).lineLimit(1).truncationMode(.middle)
                 .id(workspace.selectedSpace)
                 .transition(reduceMotion ? .identity : .asymmetric(insertion: .offset(y: 8).combined(with: .opacity), removal: .offset(y: -8).combined(with: .opacity)))
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: workspace.selectedSpace)
@@ -227,7 +227,7 @@ struct MainView: View {
                     Image(nsImage: NSApp.applicationIconImage)
                         .resizable().interpolation(.high).frame(width: 72, height: 72)
                         .accessibilityHidden(true)
-                    Text("A space to work.").font(typography.font(offset: 4.5))
+                    Text("A space to work.").font(typography, offset: 4.5)
                     HStack(spacing: 10) {
                         // Tabs only: a new tab is the only thing to make (⌘N still works, unadvertised).
                         if !workspace.tabsOnly {
@@ -329,7 +329,7 @@ private struct EmptyStateAction: View {
                 .foregroundStyle(Chrome.palette.secondary.opacity(0.7)).padding(.leading, 4)
         }
         .lineLimit(1)
-        .font(AppFont.ui(size: typography.tabSize))
+        .interfaceFont(size: typography.tabSize)
         .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
         .padding(.horizontal, 14).frame(height: StripTab.glassTrackHeight(typography))
         .modifier(EmptyStateActionSurface(glass: glass, hovered: hovered))
@@ -383,7 +383,7 @@ private struct HelperErrorBar: View {
         }
     }
 
-    private var message: some View { Text(error).font(typography.font(.body)).textSelection(.enabled) }
+    private var message: some View { Text(error).font(typography, .body).textSelection(.enabled) }
 }
 
 /// A tab strip in the title row. `leading` carries the traffic-light inset, sidebar toggle, and space

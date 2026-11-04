@@ -61,7 +61,7 @@ struct LayoutOptions: View {
                 }
                 Divider()
                 Text("Layouts move existing tabs. Add tabs first for more panes.")
-                    .font(typography.font(.caption)).foregroundStyle(Chrome.muted).padding(5)
+                    .font(typography, .caption).foregroundStyle(Chrome.muted).padding(5)
             }.font(typography.font(.label)).padding(6).frame(width: typography.expanded(290))
                 // On glass the popover's own system glass shows through instead of the sidebar fill.
                 .background(LiquidGlassStore.shared.active ? Color.clear : Chrome.sidebar).preferredColorScheme(Chrome.colorScheme)

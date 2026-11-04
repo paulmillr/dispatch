@@ -31,7 +31,7 @@ struct FileTransferRow: View {
     let host: String
 
     private var palette: SidebarPalette { Chrome.palette }
-    private var typography: ChatTypography { ChatThemeStore.shared.current.typography }
+    @Environment(\.appTypography) private var typography
 
     var body: some View {
         let text = FileTransferText(transfer, host: host)
@@ -72,7 +72,7 @@ struct FileTransferRow: View {
             if transfer.isActive { StageDots(stage: transfer.stage, archived: transfer.archived) }
             closeButton
         }
-        .font(typography.font(offset: -1))
+        .font(typography, .label)
         .padding(.leading, 14)
         .padding(.trailing, 12)
         .frame(height: 34)
@@ -101,21 +101,21 @@ struct FileTransferRow: View {
                 closeButton
             }
             if let note = text.note {
-                Text(note).font(typography.font(offset: -2)).foregroundStyle(palette.muted)
+                Text(note).font(typography, .caption).foregroundStyle(palette.muted)
             }
         }
-        .font(typography.font(offset: -1))
+        .font(typography, .label)
         .padding(.vertical, 8)
         .padding(.leading, 14)
         .padding(.trailing, 12)
     }
 
-    /// ✕ cancels while the copy can still stop, and dismisses a settled row; it dims once entries move in.
+    /// The cross cancels while the copy can still stop, and dismisses a settled row; it dims once entries move in.
     private var closeButton: some View {
         let settled = !transfer.isActive
         let enabled = transfer.cancellable || (settled && transfer.cancel != nil)
         return Button { transfer.cancel?() } label: {
-            Text("✕")
+            Image(systemName: "xmark").font(typography.symbol(.caption, weight: .semibold))
                 .frame(minWidth: 22, minHeight: 22)
                 .contentShape(Rectangle())
         }
@@ -165,6 +165,7 @@ struct FileTransferRow: View {
 /// pack · send · unpack: green once done, accent while running, dim ahead. Files written one by one are neither
 /// packed nor unpacked: they show the send dot alone.
 private struct StageDots: View {
+    @Environment(\.appTypography) private var typography
     let stage: FileTransfer.Stage
     let archived: Bool
     private var palette: SidebarPalette { Chrome.palette }
@@ -185,20 +186,21 @@ private struct StageDots: View {
                 Text(name)
             }
         }
-        .font(ChatThemeStore.shared.current.typography.font(offset: -2))
+        .font(typography, .caption)
         .foregroundStyle(palette.detail)
         .accessibilityHidden(true)
     }
 }
 
 struct FileTransferButtonStyle: ButtonStyle {
+    @Environment(\.appTypography) var typography
     /// The quiet Cancel at the end of the conflict question: no fill, muted.
     var quiet = false
 
     func makeBody(configuration: Configuration) -> some View {
         let palette = Chrome.palette
         configuration.label
-            .font(ChatThemeStore.shared.current.typography.font(offset: -1.5))
+            .font(typography, .body)
             .foregroundStyle(quiet ? palette.muted : palette.secondary)
             .lineLimit(1)
             .padding(.horizontal, 10)

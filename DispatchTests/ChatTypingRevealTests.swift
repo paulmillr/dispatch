@@ -219,6 +219,49 @@ import XCTest
         XCTAssertNil(store.reveal("testing", text: "Streaming", live: true, ended: false, reduceMotion: false))
     }
 
+    /// A short message posted whole (Claude Code's) types from its first character as if it streamed in at
+    /// `postedRate`, whether or not its turn is still live: steadily, done within its posted duration plus the clock's
+    /// catch-up, then it leaves the store. One too long to type within `postedLimit`, or drawn too late, shows at once.
+    func testShortPostedMessagesType() throws {
+        let previous = ChatTypingReveals.enabled
+        ChatTypingReveals.enabled = true
+        defer { ChatTypingReveals.enabled = previous }
+        var time: TimeInterval = 50
+        let store = ChatTypingReveals()
+        store.now = { time }
+        store.drivesItself = false
+        let text = "Fixed: the drawable resize now lands in the same transaction, so no frame is dropped. Tests pass."
+        store.arrived("post", agent: "claude", completed: true)
+        let reveal = try XCTUnwrap(store.reveal("post", text: text, live: false, ended: true, reduceMotion: false))
+        store.appeared(reveal)
+        XCTAssertLessThanOrEqual(reveal.current.shown, 1)
+        let duration = try XCTUnwrap(ChatTypingReveal.postedDuration(reveal.layout))
+        XCTAssertGreaterThan(duration, 0.3)
+        var shown = [reveal.current.shown]
+        let start = time
+        while !reveal.done(at: time), time - start < 5 {
+            time += 1.0 / 60
+            store.step(to: time)
+            shown.append(reveal.current.shown)
+        }
+        XCTAssertTrue(reveal.done(at: time))
+        XCTAssertGreaterThan(time - start, duration)
+        XCTAssertLessThan(time - start, duration + 0.8)
+        XCTAssertEqual(shown, shown.sorted(), "never goes back")
+        XCTAssertLessThanOrEqual(zip(shown, shown.dropFirst()).map { $1 - $0 }.max() ?? 0, 6, "no frame jumps ahead")
+        XCTAssertFalse(store.running)
+        XCTAssertNil(store.reveal("post", text: text, live: false, ended: true, reduceMotion: false))
+
+        store.arrived("long", agent: "claude", completed: true)
+        XCTAssertNil(store.reveal("long", text: String(repeating: text + " ", count: 4), live: true, ended: false, reduceMotion: false))
+        store.arrived("late", agent: "claude", completed: false)
+        time += ChatTypingReveals.arrivalWindow + 0.1
+        XCTAssertNil(store.reveal("late", text: text, live: true, ended: false, reduceMotion: false))
+        // A complete reply of a streaming agent still shows at once.
+        store.arrived("codex", agent: "codex", completed: true)
+        XCTAssertNil(store.reveal("codex", text: text, live: true, ended: true, reduceMotion: false))
+    }
+
     /// While testing the reveal is off, so recorded tests that wait on a reply's text see it as it arrives.
     func testRevealIsOffWhileTesting() {
         XCTAssertFalse(ChatTypingReveals.enabled)

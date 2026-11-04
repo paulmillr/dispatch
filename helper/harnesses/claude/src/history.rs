@@ -85,6 +85,8 @@ pub struct Parser {
     /// The newest Bash calls, oldest first: (call id, description, command, time_ms). A result
     /// that sends one to the background starts a shell (`state.shells`) with them.
     bash: VecDeque<(String, Option<String>, Option<String>, i64)>,
+    /// Recent calls that stop a background task (`TaskStop`, earlier `KillShell`): call id → the task it names.
+    stops: VecDeque<(String, Option<String>)>,
 }
 impl Parser {
     pub fn new(session: String) -> Self {
@@ -104,6 +106,7 @@ impl Parser {
             version: None,
             page: None,
             bash: VecDeque::new(),
+            stops: VecDeque::new(),
         }
     }
     /// A queued task notification (`queue-operation` enqueue, written when the task ends): its text.
@@ -123,6 +126,23 @@ impl Parser {
             let Some((id, after)) = after.split_once("</task-id>") else { break };
             self.state.shells.retain(|shell| shell.id != id.trim());
             rest = after;
+        }
+    }
+    /// A stop call's result (`TaskStop`, earlier `KillShell`): Claude queues no task notification for a shell it
+    /// stops, so a successful stop ends the shell it names. A failed one (no such task, already ended) leaves it.
+    fn stopped(&mut self, root: Value<'_>, call: &str, failed: bool) {
+        let Some(at) = self.stops.iter().position(|(id, _)| id == call) else { return };
+        let (_, named) = self.stops.remove(at).unwrap_or_default();
+        if failed {
+            return;
+        }
+        let result = root.get("toolUseResult");
+        let task = result
+            .and_then(|r| text(r, "task_id").or_else(|| text(r, "shell_id")))
+            .map(str::to_owned)
+            .or(named);
+        if let Some(task) = task {
+            self.state.shells.retain(|shell| shell.id != task.trim());
         }
     }
     /// A Bash result naming a `backgroundTaskId` (run in the background, or sent there when it
@@ -607,6 +627,8 @@ impl Parser {
                     if results.len() == 1 {
                         self.backgrounded(root, call, record.time_ms.unwrap_or(0));
                     }
+                    let failed = block.get("is_error").and_then(|v| v.boolean()) == Some(true);
+                    self.stopped(root, call, failed);
                     out.push(Record {
                         id: format!("tool-{call}"),
                         kind: RecordKind::Tool,
@@ -704,6 +726,17 @@ impl Parser {
                                 }
                                 let time = record.time_ms.unwrap_or(0);
                                 self.bash.push_back((call.into(), field("description"), field("command"), time));
+                            }
+                            if matches!(name, "TaskStop" | "KillShell" | "KillBash") {
+                                let input = b.get("input");
+                                let task = ["task_id", "shell_id", "bash_id"]
+                                    .iter()
+                                    .find_map(|key| input.and_then(|i| text(i, key)))
+                                    .map(str::to_owned);
+                                if self.stops.len() == 16 {
+                                    self.stops.pop_front();
+                                }
+                                self.stops.push_back((call.into(), task));
                             }
                             let body = b
                                 .get("input")
@@ -1024,6 +1057,41 @@ mod tests {
         ) + "\n";
         parser.feed(notice.as_bytes()).unwrap();
         assert!(parser.state.shells.is_empty());
+    }
+
+    fn tool(call: &str, name: &str, input: &str, result: &str, error: bool) -> String {
+        format!(
+            r#"{{"parentUuid":"p0","isSidechain":false,"type":"assistant","message":{{"role":"assistant","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{call}","name":"{name}","input":{input}}}],"stop_reason":"tool_use"}},"uuid":"a-{call}","timestamp":"2026-10-20T12:35:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n"
+            + &format!(
+                r#"{{"parentUuid":"a-{call}","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{call}","content":"stopped","is_error":{error}}}]}},"toolUseResult":{result},"uuid":"r-{call}","timestamp":"2026-10-20T12:35:01.000Z","sessionId":"{SESSION}"}}"#
+            )
+            + "\n"
+    }
+
+    /// Claude queues no notification for a shell it stops (Claude Code 2.1.318: `TaskStop`'s result is
+    /// `{command, message, task_id, task_type}`): the stop itself ends it.
+    #[test]
+    fn a_stopped_shell_ends_with_its_stop() {
+        let mut parser = Parser::new(SESSION.into());
+        let serve = r#"{"command":"python3 -m http.server 8000","description":"Serve the docs","run_in_background":true}"#;
+        parser.feed(bash("toolu_1", serve, r#"{"backgroundTaskId":"b1"}"#).as_bytes()).unwrap();
+        parser.feed(bash("toolu_2", r#"{"command":"sleep 600"}"#, r#"{"backgroundTaskId":"b2"}"#).as_bytes()).unwrap();
+        parser.feed(bash("toolu_3", r#"{"command":"tail -f log"}"#, r#"{"backgroundTaskId":"b3"}"#).as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.len(), 3);
+        // A failed stop (the task already ended, or never was) leaves the shell as it is.
+        parser.feed(tool("toolu_4", "TaskStop", r#"{"task_id":"b2"}"#, r#""No task found with ID: b2""#, true).as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.len(), 3);
+        let stop = r#"{"command":"sleep 600","message":"Successfully stopped task: b2 (sleep 600)","task_id":"b2","task_type":"local_bash"}"#;
+        parser.feed(tool("toolu_5", "TaskStop", r#"{"task_id":"b2"}"#, stop, false).as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b1", "b3"]);
+        // Earlier Claude Code: KillShell, its result naming the shell.
+        let kill = r#"{"message":"Successfully killed shell: b3 (tail -f log)","shell_id":"b3"}"#;
+        parser.feed(tool("toolu_6", "KillShell", r#"{"shell_id":"b3"}"#, kill, false).as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["b1"]);
+        // Another tool's result with a task id is no stop.
+        parser.feed(tool("toolu_7", "TaskOutput", r#"{"task_id":"b1"}"#, r#"{"task_id":"b1"}"#, false).as_bytes()).unwrap();
+        assert_eq!(parser.state.shells.len(), 1);
     }
 
     #[test]

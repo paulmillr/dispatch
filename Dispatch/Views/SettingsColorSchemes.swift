@@ -40,8 +40,9 @@ enum SurpriseScheme {
     }
 }
 
-/// Settings › Theme's color schemes: every scheme for each side in use (dark, then light, while the theme follows the
-/// system), each drawn as a demo in its own colors, a click choosing it for that side. Yours lead, then the bundled
+/// Settings › Theme's color schemes: every scheme for one side, the one the Dark | Light switch picks, each drawn as a
+/// demo in its own colors, a click choosing it for that side. The switch and Surprise me stay pinned at the top of
+/// Settings while the tiles scroll. Yours lead, then the bundled
 /// ones under their `SchemeGroup` headers (Dispatch first in OLED or White), then those that read as either side. Your own can be kept
 /// (a surprise), changed in the maker or put in the Trash; New…, Add File…, Import… and each side's Surprise me add more.
 /// Any scheme can be duplicated and edited (its hover button or context menu): a made one's copy in the maker, any
@@ -51,8 +52,15 @@ struct ColorSchemeGallery: View {
     @Binding var draft: Preferences
     /// The schemes Settings lists, for the current vision.
     let schemes: ColorSchemes
-    /// The sides shown, light (true) or dark, in order.
-    let sides: [Bool]
+    /// The side whose schemes the gallery lists and a click chooses for: light (true) or dark.
+    @Binding var light: Bool
+    /// The Dark | Light switch shows (every theme but Nautical, which is dark only).
+    let switchable: Bool
+    /// The app follows the system: both sides are in use, the switch only picks the one being chosen for, and Fun
+    /// is one section for both.
+    let following: Bool
+    /// The side the system is on, marked in the switch while following it.
+    let systemLight: Bool
     /// Dispatch's colors on the light (true) or dark side: dispatch-black under the app theme's palette.
     let matching: (Bool) -> TerminalTheme?
     /// The schemes on disk changed: list them again.
@@ -71,8 +79,18 @@ struct ColorSchemeGallery: View {
     @State private var message: String?
 
     var body: some View {
-        VStack(spacing: 8) {
-            ForEach(sides, id: \.self) { light in side(light) }
+        // One card drawn in three pieces, so its bar can stay at the top of Settings while the tiles scroll under it:
+        // the title, which scrolls away; the bar, pinned; the tiles.
+        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            Text("Color scheme").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 10).padding(.bottom, 7).padding(.horizontal, 14)
+                .modifier(CardPiece(top: true, bottom: false))
+            Section {
+                tiles(light).modifier(CardPiece(top: false, bottom: true))
+            } header: {
+                bar(light).modifier(CardPiece(top: false, bottom: false))
+            }
             SettingsGroup(title: "Your color schemes") {
                 SettingsSeparator()
                 HStack(spacing: 10) {
@@ -84,21 +102,21 @@ struct ColorSchemeGallery: View {
                         .accessibilityIdentifier("settings-import-schemes")
                     Spacer(minLength: 8)
                     Button("Show in Finder") { showFolder() }.buttonStyle(.plain)
-                        .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                        .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 }.padding(.vertical, 9)
                 if allCustom > schemes.custom.count {
                     Text(draft.colorVision == .typical
                          ? "\(allCustom - schemes.custom.count) made for color blindness, shown in colorblind mode"
                          : "\(allCustom - schemes.custom.count) not made for \(draft.colorVision.title.lowercased()) color blindness, hidden")
-                        .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                        .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                 }
                 if let message {
-                    Text(message).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    Text(message).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                         .accessibilityIdentifier("settings-themes-message")
                 }
-            }
+            }.padding(.top, 8)
         }
         .sheet(item: $sheet) { sheet in
             Group {
@@ -124,24 +142,42 @@ struct ColorSchemeGallery: View {
 
     private func selection(_ light: Bool) -> Binding<String> { light ? $draft.lightTheme : $draft.theme }
 
-    /// One side: the scheme in use and Surprise me, then the tiles under their headers.
-    private func side(_ light: Bool) -> some View {
+    /// A scheme's name as the gallery shows it, or why Dispatch's own is drawn instead.
+    private func inUseTitle(_ light: Bool) -> String {
         let chosen = selection(light).wrappedValue
-        let missing = chosen != "Default" && ThemeResolution.value(for: chosen).missing
-        return SettingsGroup(title: sides.count > 1 ? (light ? "Light color scheme" : "Dark color scheme") : "Color scheme") {
+        if chosen != "Default" && ThemeResolution.value(for: chosen).missing { return "“\(chosen)” not found; using Dispatch’s own" }
+        return chosen == "Default" ? "Dispatch" : SchemeGroup.title(chosen)
+    }
+
+    /// The bar, pinned while the tiles scroll: the Dark | Light switch, each half naming its scheme (Nautical: the dark
+    /// scheme alone), and Surprise me, between separators.
+    private func bar(_ light: Bool) -> some View {
+        VStack(spacing: 0) {
             SettingsSeparator()
             HStack(spacing: 12) {
-                Text(missing ? "“\(chosen)” not found; using Dispatch’s own" : chosen == "Default" ? "Dispatch" : SchemeGroup.title(chosen))
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1)
-                    .accessibilityIdentifier("settings-scheme-in-use-\(light ? "light" : "dark")")
+                if switchable {
+                    HStack(spacing: 1) { sideSegment(light: false); sideSegment(light: true) }
+                        .glassSegmentTrack(fallback: Chrome.palette.control, corner: 6, inset: 1)
+                } else {
+                    Text(inUseTitle(light))
+                        .font(typography, .body).foregroundStyle(SettingsControlStyle.detail).lineLimit(1)
+                        .accessibilityIdentifier("settings-scheme-in-use-\(light ? "light" : "dark")")
+                }
                 Spacer(minLength: 8)
                 Button { surprise(light) } label: { Label("Surprise me", systemImage: "dice") }
                     .help("Make a random \(light ? "light" : "dark") scheme and use it; the next one replaces it unless you keep it")
                     .accessibilityIdentifier("settings-surprise-scheme-\(light ? "light" : "dark")")
             }.padding(.vertical, 9)
+            SettingsSeparator()
+        }.padding(.horizontal, 14)
+    }
+
+    /// The side's tiles under their headers.
+    private func tiles(_ light: Bool) -> some View {
+        VStack(spacing: 0) {
             ForEach(sections(light), id: \.title) { section in
                 if !section.title.isEmpty {
-                    Text(section.title).font(typography.font(.body)).fontWeight(.semibold)
+                    Text(section.title).font(typography, .body).fontWeight(.semibold)
                         .foregroundStyle(SettingsControlStyle.detail)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.bottom, 6)
                 }
@@ -149,25 +185,62 @@ struct ColorSchemeGallery: View {
                     ForEach(section.names, id: \.self) { tile($0, light: light) }
                 }
             }
-            Spacer().frame(height: 10)
+            Spacer().frame(height: 14)
+        }.padding(.horizontal, 14)
+    }
+
+    /// One half of the Dark | Light switch: the side and its scheme. Following the system, a dot marks the side in use
+    /// now; otherwise choosing a half sets the app's appearance.
+    private func sideSegment(light side: Bool) -> some View {
+        let on = light == side
+        let palette = Chrome.palette
+        let name = side ? "Light" : "Dark"
+        let scheme = inUseTitle(side)
+        return Button { light = side } label: {
+            HStack(spacing: 5) {
+                Image(systemName: side ? "sun.max" : "moon").imageScale(.small)
+                Text(name).fontWeight(.semibold).fixedSize()
+                Text(scheme).foregroundStyle(on ? palette.muted : palette.muted.opacity(0.8)).lineLimit(1).truncationMode(.tail)
+                if following && side == systemLight {
+                    Circle().fill(Chrome.accent).frame(width: 5, height: 5)
+                }
+            }
+            .font(typography, .body)
+            .foregroundStyle(on ? palette.ink : palette.muted)
+            .padding(.horizontal, 9).frame(maxWidth: .infinity).frame(height: typography.expanded(24))
+            .glassSegmentPill(on, fallback: palette.selectedControl)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help(following ? "\(name) schemes; the system is \(systemLight ? "light" : "dark") now"
+              : "Use the \(name.lowercased()) appearance and its schemes")
+        .accessibilityLabel(name)
+        .accessibilityValue(scheme)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityIdentifier("settings-scheme-in-use-\(side ? "light" : "dark")")
     }
 
     /// Yours, the bundled ones by group, then those that read as either side. Dispatch, the Default tile, leads OLED or
     /// White (typical vision only: its colors aren't made for color blindness), so dispatch-black isn't listed again
-    /// unless it is chosen by name.
+    /// unless it is chosen by name. Following the system, Fun comes last and holds both sides' (Root Access in Light
+    /// too), each once: a fun scheme is chosen for its fun, not its side.
     private func sections(_ light: Bool) -> [(title: String, names: [String])] {
         var result: [(title: String, names: [String])] = []
         let yours = schemes.custom.filter { $0.light == nil || $0.light == light }.map(\.name)
         if !yours.isEmpty { result.append(("Yours", yours)) }
         let side = (light ? schemes.light : schemes.dark)
             .filter { $0 != "dispatch-black" || selection(light).wrappedValue == $0 }
-        for group in light ? SchemeGroup.light : SchemeGroup.dark {
+        for group in light ? SchemeGroup.light : SchemeGroup.dark where !(following && group == .fun) {
             let own = draft.colorVision == .typical && group == (light ? .white : .oled) ? ["Default"] : []
             let names = own + group.ordered(side.filter { schemes.groups[$0] == group }) { $0 }
             if !names.isEmpty { result.append((group.title, names)) }
         }
         if !schemes.either.isEmpty { result.append(("Light or dark", schemes.either)) }
+        if following {
+            var seen = Set<String>()
+            let fun = (schemes.dark + schemes.light).filter { schemes.groups[$0] == .fun && seen.insert($0).inserted }
+            if !fun.isEmpty { result.append((SchemeGroup.fun.title, SchemeGroup.fun.ordered(fun) { $0 })) }
+        }
         return result
     }
 
@@ -217,7 +290,7 @@ struct ColorSchemeGallery: View {
     private func actions(_ entry: CustomThemes.Entry, light: Bool) -> some View {
         HStack(spacing: 8) {
             if !entry.ghostty && SurpriseScheme.isSurprise(entry.name) {
-                Button("Keep") { keep(entry) }.buttonStyle(.plain).font(typography.font(.caption)).fontWeight(.semibold)
+                Button("Keep") { keep(entry) }.buttonStyle(.plain).font(typography, .caption).fontWeight(.semibold)
                     .help("Keep this scheme when the next random one comes").accessibilityLabel("Keep \(entry.name)")
                     .accessibilityIdentifier("settings-theme-keep-\(entry.name)")
             }
@@ -260,7 +333,7 @@ struct ColorSchemeGallery: View {
         let title = name == "Default" ? "Dispatch" : SchemeGroup.title(name)
         let copy = CustomThemes.uniqueName("\(title) copy", taken: SurpriseScheme.takenNames())
         let kind: SchemeSheet.Kind = ThemeRecipe(theme: theme).map { .maker($0) } ?? .colors(theme)
-        sheet = SchemeSheet(kind: kind, title: "Copy of \(title)", name: copy, selects: sides.filter { selection($0).wrappedValue == name })
+        sheet = SchemeSheet(kind: kind, title: "Copy of \(title)", name: copy, selects: (following ? [false, true] : [light]).filter { selection($0).wrappedValue == name })
     }
 
     /// Your scheme changed in place under its name: a made one in the maker unless `colors`, any other in the editor.
@@ -460,4 +533,57 @@ struct SchemeDemo: View {
     }
 
     private func color(_ c: ThemeColor) -> Color { c.swiftUI }
+}
+
+/// A piece of a Settings card split so part of it can be pinned: the card's fill, rounded at the `top` and `bottom`
+/// it has, and its border down the sides and around those ends only, so the pieces join without a seam.
+private struct CardPiece: ViewModifier {
+    let top: Bool
+    let bottom: Bool
+
+    func body(content: Content) -> some View {
+        let r: CGFloat = 8
+        content
+            .background(Chrome.sidebar, in: UnevenRoundedRectangle(topLeadingRadius: top ? r : 0, bottomLeadingRadius: bottom ? r : 0,
+                                                                   bottomTrailingRadius: bottom ? r : 0, topTrailingRadius: top ? r : 0))
+            .overlay { CardEdges(top: top, bottom: bottom, radius: r).stroke(Chrome.border, lineWidth: 1) }
+    }
+}
+
+/// The border of a `CardPiece`: both sides, and the top or bottom with its rounded corners where the piece ends the card.
+private struct CardEdges: Shape {
+    let top: Bool
+    let bottom: Bool
+    let radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        // Inset half the line where a line is drawn, so it falls inside like strokeBorder's.
+        let inner = rect.insetBy(dx: 0.5, dy: 0.5)
+        let left = inner.minX, right = inner.maxX
+        let upper = top ? inner.minY : rect.minY, lower = bottom ? inner.maxY : rect.maxY
+        var path = Path()
+        if bottom {
+            path.move(to: CGPoint(x: right - radius, y: lower))
+            path.addLine(to: CGPoint(x: left + radius, y: lower))
+            path.addArc(tangent1End: CGPoint(x: left, y: lower), tangent2End: CGPoint(x: left, y: lower - radius), radius: radius)
+        } else {
+            path.move(to: CGPoint(x: left, y: lower))
+        }
+        if top {
+            path.addLine(to: CGPoint(x: left, y: upper + radius))
+            path.addArc(tangent1End: CGPoint(x: left, y: upper), tangent2End: CGPoint(x: left + radius, y: upper), radius: radius)
+            path.addLine(to: CGPoint(x: right - radius, y: upper))
+            path.addArc(tangent1End: CGPoint(x: right, y: upper), tangent2End: CGPoint(x: right, y: upper + radius), radius: radius)
+        } else {
+            path.addLine(to: CGPoint(x: left, y: upper))
+            path.move(to: CGPoint(x: right, y: upper))
+        }
+        if bottom {
+            path.addLine(to: CGPoint(x: right, y: lower - radius))
+            path.addArc(tangent1End: CGPoint(x: right, y: lower), tangent2End: CGPoint(x: right - radius, y: lower), radius: radius)
+        } else {
+            path.addLine(to: CGPoint(x: right, y: lower))
+        }
+        return path
+    }
 }

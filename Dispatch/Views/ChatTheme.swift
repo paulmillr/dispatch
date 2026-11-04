@@ -233,9 +233,19 @@ struct ChatTypography: Equatable, Sendable {
     var stepTitleWidth: CGFloat = 64
     var replyLineHeight: CGFloat = 18
     var detailLineHeight: CGFloat = 14
-    /// Between the lines of chat's prose: 4 points at Settings' Normal line spacing, less for a face whose own line is
-    /// taller than Source Code Pro's.
+    /// Between the lines of chat's prose: 4 points at Settings' Normal line spacing. Every face's lines are Source Code
+    /// Pro's (`lineHeight(for:)`), so the prose keeps its pitch whichever font draws it: 23 points at size 14.
     var lineSpacing: CGFloat = 4
+    /// Before macOS 26, where SwiftUI's prose keeps each face's own line: the spacing that makes its pitch Source Code
+    /// Pro's at the reply size, as far as spacing can (a taller face, as Latin Modern, keeps its taller lines).
+    var naturalLineSpacing: CGFloat = 4
+    /// The line prose in `font` is set on: Source Code Pro's at the size the font stands for, before the chat font's
+    /// scale (`AppFont.lineHeight`).
+    @MainActor func lineHeight(for font: CTFont) -> CGFloat {
+        let size = CTFontGetSize(font)
+        let code = CTFontCopyPostScriptName(font) as String == codeFontName
+        return AppFont.lineHeight(size: ((code ? size : size / max(0.01, sizeScale)) * 2).rounded() / 2)
+    }
     init() {}
     static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Locate"]
     @MainActor init(preferences: Preferences) {
@@ -262,11 +272,7 @@ struct ChatTypography: Equatable, Sendable {
         codeDetailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: code.fontDescriptor, size: codeDetailSize)
             ?? .monospacedSystemFont(ofSize: codeDetailSize, weight: .regular))
         replyLineHeight = layout.defaultLineHeight(for: reply)
-        // A face whose own line is taller than Source Code Pro's at the same apparent size (Latin Modern's, by a quarter)
-        // gives up spacing first, so its lines aren't farther apart than the other fonts'. Shorter lines keep theirs.
-        if let reference = NSFont(name: "SourceCodePro-Regular", size: size + 1) {
-            lineSpacing = max(0, lineSpacing - max(0, replyLineHeight - layout.defaultLineHeight(for: reference)))
-        }
+        naturalLineSpacing = max(0, lineSpacing + AppFont.lineHeight(size: size + 1) - replyLineHeight)
         detailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: selected.fontDescriptor, size: detailSize)
             ?? .monospacedSystemFont(ofSize: detailSize, weight: .regular))
     }

@@ -104,7 +104,7 @@ struct GitDiffView: View {
         return HStack(spacing: 10) {
             if let kind { GitChangeBadge(kind: kind, side: 18, plain: true) }
             Text(verbatim: title)
-                .font(theme.typography.font())
+                .font(typography, .content)
                 .foregroundStyle(theme.ink)
                 .lineLimit(1).truncationMode(.middle)
                 .layoutPriority(1)
@@ -112,7 +112,7 @@ struct GitDiffView: View {
             // The file's counts as the Review list draws them.
             GitCounts(additions: isBinary ? nil : presentation.additions, deletions: isBinary ? nil : presentation.deletions,
                       binary: isBinary ? GitChangesText.binary(old: diff.oldSize, new: diff.newSize, kind: kind) : nil)
-                .font(typography.font(.body))
+                .font(typography, .body)
                 .accessibilityIdentifier("git-diff-meta")
             Spacer(minLength: 0)
             Button { wrap.toggle() } label: {
@@ -201,7 +201,7 @@ struct GitDiffView: View {
 
     private func notice(_ text: String, identifier: String) -> some View {
         Text(verbatim: text)
-            .font(theme.typography.font(offset: -1))
+            .font(typography, .label)
             .foregroundStyle(theme.muted)
             .multilineTextAlignment(.center)
             .lineSpacing(3)
@@ -411,7 +411,7 @@ struct GitDiffView: View {
                 Text(verbatim: "· \(message)").foregroundStyle(theme.yellow)
             }
         }
-        .font(theme.typography.font(offset: -1.5))
+        .font(typography, .body)
         .foregroundStyle(theme.muted)
         .lineLimit(1)
         .padding(.horizontal, 14)
@@ -464,7 +464,7 @@ struct GitDiffView: View {
                     Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
                     Text(verbatim: GitChangesText.unmodified(count))
                 }
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
                 .padding(.horizontal, 14)
                 .frame(minWidth: width, minHeight: 22, maxHeight: 22, alignment: .leading)
@@ -482,14 +482,14 @@ struct GitDiffView: View {
             commentable(gapLine(old: old, new: new, gutter: gutter, width: width, metrics: metrics), row, layout: layout)
         case .diff(.noNewline(let index)):
             Text("No newline at end of file")
-                .font(theme.typography.font(offset: -2))
+                .font(typography, .caption)
                 .foregroundStyle(theme.muted)
                 .padding(.leading, inset + (mode == .diff ? gutter * 2 + 14 : 14 + gutter + 10 + 14))
                 .frame(minWidth: width, minHeight: 18, alignment: .leading)
                 .accessibilityIdentifier("git-diff-no-newline-\(index)")
         case .diff(.omitted(let after, let count)):
             Text("\(FilesFormatting.count(count)) \(count == 1 ? "line" : "lines") not in the diff")
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.muted)
                 .padding(.horizontal, 14)
                 .frame(minWidth: width, minHeight: 22, maxHeight: 22, alignment: .leading)
@@ -501,7 +501,7 @@ struct GitDiffView: View {
             if let review { reviewRow(row, review: review, layout: layout, leading: leading, pane: pane) }
         case .truncated:
             Text("Output cut at the helper’s bound")
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(theme.yellow)
                 .padding(.horizontal, 14)
                 .frame(minWidth: width, minHeight: 26, alignment: .leading)
@@ -923,6 +923,7 @@ struct GitSourceText: Equatable {
 
 /// The Diff / Source switch in the diff's header (`.seg` at 20 pt).
 struct GitDiffModePicker: View {
+    @Environment(\.appTypography) private var typography
     @Binding var mode: GitDiffMode
     @Environment(\.chatTheme) private var theme
 
@@ -940,7 +941,7 @@ struct GitDiffModePicker: View {
         let on = mode == value
         return Button { mode = value } label: {
             Text(title)
-                .font(theme.typography.font(offset: -1.5))
+                .font(typography, .body)
                 .foregroundStyle(on ? palette.ink : palette.muted)
                 .padding(.horizontal, 8)
                 .frame(height: 20)

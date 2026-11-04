@@ -22,7 +22,7 @@ struct FilesFooter: View {
         .padding(.leading, FilesColumns.leading)
         .padding(.trailing, FilesColumns.trailing)
         .frame(height: typography.expanded(24))
-        .font(typography.font(.caption))
+        .font(typography, .caption)
         .foregroundStyle(palette.detail)
         .background(Chrome.window)
         .overlay(alignment: .top) { palette.separator.frame(height: 1) }

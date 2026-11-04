@@ -273,8 +273,9 @@ struct ChatComposerActivity: View {
         let state = activity?.current ?? AgentWorkingState(session, details: false)
         if state.visible && !state.loading {
             // Motion runs in the compositor (ChatComposerMotion.swift); SwiftUI updates only the whole seconds.
-            // The reply placeholder's ◆ moves instead (ChatReplyHalo).
-            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat && !session.replyShowsOrbit
+            // The reply placeholder shows the activity instead (ChatReplyPlaceholderStatus): this one hides, still.
+            let hidden = session.replyShowsStatus
+            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat && !hidden
             Button { details.toggle() } label: {
                 HStack(spacing: 8) {
                     if theme.radioLog {
@@ -289,7 +290,7 @@ struct ChatComposerActivity: View {
                         if showsLabel || state.waiting { ChatComposerStatus(label: state.label, moving: moving) }
                     }
                     if !state.waiting {
-                        TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
+                        TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat || hidden)) { timeline in
                             let time = (showsLabel ? "· " : "") + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
                                                                                                reduceMotion: reduceMotion)
                             // Sized by its template, which a tick changes only when the clock gains a digit: the
@@ -304,6 +305,8 @@ struct ChatComposerActivity: View {
                 .help(showsLabel ? "Show activity details" : "\(state.label) · show activity details")
                 .accessibilityElement(children: .contain)
                 .font(theme.typography.detail).accessibilityIdentifier("chat-working")
+                .opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: hidden)
                 .onAppear { appeared = .now; visible = true }
                 .onDisappear { visible = false }
                 .onChange(of: session.activeTurnID) { _, _ in appeared = .now }

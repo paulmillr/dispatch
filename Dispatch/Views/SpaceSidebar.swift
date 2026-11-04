@@ -175,7 +175,7 @@ struct SpaceSidebar: View {
         // Without glass, one flat sidebar column.
         .background { if !glass { Chrome.sidebar } }
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: attention.count)
-        .font(typography.sidebarFont).foregroundStyle(Chrome.ink)
+        .font(typography.font(.label)).foregroundStyle(Chrome.ink)
         .environment(\.appTypography, typography)
         .onPreferenceChange(SpaceBranchNames.self) { branches = $0 }
         .onAppear { workspace.spaceOrder = settings.values.spaceOrder }
@@ -242,7 +242,7 @@ struct SpaceSidebar: View {
 
     private var searchField: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: typography.size(offset: -2)))
+            Image(systemName: "magnifyingglass").font(typography.symbol(.caption))
                 .foregroundStyle(Chrome.palette.detail).accessibilityHidden(true)
             let prompt = tabsOnly ? "Search tabs…" : "Search spaces…"
             TextField(prompt,
@@ -267,7 +267,7 @@ struct SpaceSidebar: View {
             }
             Text("⌘P").font(typography.shortcut()).foregroundStyle(Chrome.palette.detail).fixedSize()
         }
-        .font(typography.font(.body))
+        .font(typography, .body)
         .padding(.horizontal, 8)
         .frame(height: max(20, headerHeight - 6))
         .background(Chrome.palette.field, in: RoundedRectangle(cornerRadius: 6))
@@ -292,7 +292,7 @@ struct SpaceSidebar: View {
     private static let headerButtonSize: CGFloat = 24
     private func headerButton<Label: View>(active: Bool = false, @ViewBuilder label: () -> Label) -> some View {
         label()
-            .font(.system(size: typography.size(offset: -1.5)))
+            .font(typography.symbol(.body))
             .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
             .foregroundStyle(active ? Chrome.ink : Chrome.palette.detail)
             .background(active ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
@@ -497,7 +497,7 @@ struct SpaceSidebar: View {
                 flatDetachedSection
             }
             if listed.isEmpty && tabs.isEmpty && matchingDetachedEntries.isEmpty {
-                Text(tabsOnly ? "No matching tabs" : "No matching spaces").font(sidebarDetailFont).foregroundStyle(Chrome.muted).padding(10)
+                Text(tabsOnly ? "No matching tabs" : "No matching spaces").interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted).padding(10)
             }
         }
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: selectedRow)
@@ -517,7 +517,7 @@ struct SpaceSidebar: View {
                 .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
                 .lineLimit(1).truncationMode(.middle)
             if host.id != .local && state != .connected {
-                Text(state.shownShortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+                Text(state.shownShortLabel).interfaceFont(size: metrics.headerSize).foregroundStyle(Chrome.muted)
             }
             Spacer(minLength: 0)
         }
@@ -543,7 +543,7 @@ struct SpaceSidebar: View {
                             .foregroundStyle(hue ?? Chrome.palette.secondary)
                             .lineLimit(1).truncationMode(.middle)
                         if host.id != .local && state != .connected {
-                            Text(state.shownShortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+                            Text(state.shownShortLabel).interfaceFont(size: metrics.headerSize).foregroundStyle(Chrome.muted)
                         }
                     }
                     .padding(.leading, 8).frame(height: metrics.headerHeight).contentShape(Rectangle())
@@ -640,7 +640,7 @@ struct SpaceSidebar: View {
                         .disabled(entries.allSatisfy { workspace.isRestoringDetached($0.id) })
                         .help("Restore detached work using its existing processes")
                         .accessibilityIdentifier("restore-all-detached-flat")
-                }.font(sidebarDetailFont).foregroundStyle(Chrome.muted)
+                }.interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted)
                     .padding(.horizontal, 8).padding(.vertical, 5)
                 if flatDetachedExpanded || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     ForEach(entries) { entry in flatDetachedRow(entry) }
@@ -658,15 +658,15 @@ struct SpaceSidebar: View {
                     Image(systemName: restoring ? "arrow.triangle.2.circlepath" : "rectangle.dashed")
                         .font(metrics.large ? sidebarFont : sidebarDetailFont).foregroundStyle(Chrome.muted).frame(width: metrics.activitySize)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.name).font(sidebarFont).foregroundStyle(Chrome.palette.secondary)
+                        Text(entry.name).interfaceFont(size: metrics.nameSize).foregroundStyle(Chrome.palette.secondary)
                             .lineLimit(1).truncationMode(.middle)
                         Text(restoring ? "Restoring…" : entry.source + " · " + entry.kind.lowercased())
-                            .font(sidebarDetailFont).foregroundStyle(Chrome.muted)
+                            .interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted)
                     }
                     Spacer(minLength: 4)
                     if entry.host != .local { spaceHostIndicator(host) }
                     Image(systemName: "arrow.uturn.backward")
-                        .font(sidebarDetailFont).foregroundStyle(Chrome.muted)
+                        .interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted)
                 }
                 .padding(.leading, 8).padding(.trailing, 4).padding(.vertical, metrics.large ? 6 : 3)
                 .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
@@ -692,7 +692,7 @@ struct SpaceSidebar: View {
     private func removeDetachedButton(_ entry: DetachedEntry) -> some View {
         Button { workspace.forgetDetached(entry.id) } label: {
             Image(systemName: "xmark")
-                .font(sidebarDetailFont).foregroundStyle(Chrome.muted)
+                .interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted)
                 .frame(width: metrics.large ? 30 : 20, height: metrics.large ? 30 : 20).contentShape(Rectangle())
         }
         .help("Remove from sidebar; keep server work running")
@@ -727,8 +727,8 @@ struct SpaceSidebar: View {
                     ForEach(entries) { entry in
                         HStack(spacing: 6) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.name).font(sidebarFont).lineLimit(1)
-                                Text(entry.kind).foregroundStyle(Chrome.muted).font(sidebarDetailFont)
+                                Text(entry.name).interfaceFont(size: metrics.nameSize).lineLimit(1)
+                                Text(entry.kind).foregroundStyle(Chrome.muted).interfaceFont(size: metrics.detailSize)
                             }
                             Spacer(minLength: 4)
                             Button(workspace.isRestoringDetached(entry.id) ? "Restoring…" : "Restore") { workspace.restoreDetached([entry.id]) }
@@ -745,7 +745,7 @@ struct SpaceSidebar: View {
                             }
                     }
                 }
-            }.font(sidebarDetailFont).foregroundStyle(Chrome.muted)
+            }.interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(metrics.large ? 8 : 4)
         }
     }
@@ -1015,7 +1015,7 @@ struct SpaceSidebar: View {
                         .foregroundStyle(Chrome.accent)
                 }
                 Spacer(minLength: 0)
-            }.font(sidebarDetailFont).lineLimit(1).padding(.horizontal, 10).padding(.vertical, metrics.large ? 6 : 4)
+            }.interfaceFont(size: metrics.detailSize).lineLimit(1).padding(.horizontal, 10).padding(.vertical, metrics.large ? 6 : 4)
                 .frame(maxWidth: .infinity).contentShape(Rectangle())
                 // On glass it is a bar over the rows' soft scroll edge, not a panel of its own.
                 .modifier(OverflowPanel(glass: glass))

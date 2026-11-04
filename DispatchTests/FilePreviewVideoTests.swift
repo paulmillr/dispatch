@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import SwiftUI
 import XCTest
 @testable import DispatchApp
 
@@ -73,6 +75,16 @@ final class FilePreviewVideoTests: XCTestCase {
         guard case .idle = video.stage else { return XCTFail("Stopped: \(video.stage)") }
         let leftovers = try System.list(System.temporary).filter { $0.hasPrefix("dispatch-video-") }
         XCTAssertEqual(leftovers, [], "No copy is left behind")
+    }
+
+    /// The preview's player is SwiftUI's `VideoPlayer`, from `_AVKit_SwiftUI`, whose view subclasses AVKit's player
+    /// view. Nothing else in the app names AVKit, so the linker dropped it, and the first player shown aborted
+    /// (superclass metadata not found). The app links AVKit explicitly (project.yml); so must the iPhone app.
+    func testThePlayerViewIsMade() {
+        let host = NSHostingView(rootView: VideoPlayer(player: AVPlayer()).frame(width: 320, height: 180))
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 180)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(host.subviews.isEmpty, "The system player is in the preview")
     }
 
     /// This Mac's fake source, given the folders the video made in the temporary folder (the real one has them).

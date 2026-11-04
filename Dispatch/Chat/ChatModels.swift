@@ -826,10 +826,10 @@ final class ChatSession: Identifiable {
         }
     }
     @ObservationIgnored private var cachedRows: [ChatTranscriptRow]?
-    /// Settings › Experimental › Reply placeholder (ChatPendingReply.swift): the empty reply bubble shown once the agent
-    /// acknowledged a prompt, until its first content takes over its row.
+    /// The reply placeholder (ChatPendingReply.swift): the empty reply bubble shown once the agent acknowledged a prompt,
+    /// until its first content takes over its row.
     var pendingReply: ChatPendingReply? { didSet { cachedRows = nil; cachedVisibleRows = nil } }
-    /// The reply that took over the placeholder's row: its row, turn and when, for the halo's later phases.
+    /// The reply that took over the placeholder's row, while its halo settles; the composer has the activity back after.
     var landedReply: ChatLandedReply?
     /// Armed by a sent prompt: the placeholder shows once both the delay passed and the agent acknowledged.
     private var replyArm: (afterTurn: String?, delayed: Bool, token: UUID)?
@@ -1540,12 +1540,18 @@ final class ChatSession: Identifiable {
     /// the follow revision.
     func insert(_ item: ChatItem, turnID: String, at date: Date = Date(), historical: Bool = false, fileOffset: UInt64? = nil) {
         var item = item
-        // The new turn's first content takes over the placeholder's row; content before it shows skips it.
-        if !historical, item.kind != .user, item.kind != .notice {
+        // The new turn's first bubble content takes over the placeholder's row; content before it shows skips it. A
+        // reasoning summary (its own disclosure row, not a bubble) shows above it instead.
+        if !historical, item.kind == .assistant || item.kind == .tool || item.isNarration {
             if let pending = pendingReply, turnID != pending.afterTurn {
                 item.rowID = item.rowID ?? pending.id
                 pendingReply = nil
-                landedReply = ChatLandedReply(rowID: pending.id, at: ProcessInfo.processInfo.systemUptime)
+                let landed = ChatLandedReply(rowID: pending.id, at: ProcessInfo.processInfo.systemUptime)
+                landedReply = landed
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(ChatReplyHalo.settle))
+                    if self?.landedReply == landed { self?.landedReply = nil }
+                }
             } else if let arm = replyArm, turnID != arm.afterTurn { replyArm = nil }
         }
         let result = ChatTranscript.insert(item, turnID: turnID, at: date, historical: historical, fileOffset: fileOffset,
@@ -1559,10 +1565,10 @@ final class ChatSession: Identifiable {
                 scrollPosition.expectArrival()
             }
         }
-        // A streamed reply that starts while the chat shows types out from its first word.
-        if result.added, !historical, showChat, !loadingHistory, item.kind == .assistant, !item.completed,
-           ChatTypingReveals.streamingAgents.contains(agentID) {
-            typingReveals.began(item.rowID ?? "\(turnID.utf8.count):\(turnID):\(item.id)")
+        // A streamed reply that starts while the chat shows, or a short posted one, types out from its first word.
+        if result.added, !historical, showChat, !loadingHistory, item.kind == .assistant {
+            typingReveals.arrived(item.rowID ?? "\(turnID.utf8.count):\(turnID):\(item.id)", agent: agentID,
+                                  completed: item.completed)
         }
         // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
         // no revision, so no transcript pass and no follow scroll for it.
@@ -1606,20 +1612,18 @@ final class ChatSession: Identifiable {
         revision += 1
     }
 
-    /// The turn ended: a placeholder nothing took over goes, and the composer has the activity again.
+    /// The turn ended: a placeholder nothing took over goes, and the composer has the activity again (a landed reply's
+    /// halo finishes settling).
     private func endPendingReply() {
         replyArm = nil
         if pendingReply != nil { pendingReply = nil; followRevision = atBottom ? revision + 1 : nil; revision += 1 }
-        if landedReply != nil, landedReply?.ended == nil { landedReply?.ended = ProcessInfo.processInfo.systemUptime }
     }
 
     /// A prompt's reply shows (or is about to show) where the agent's activity is: the composer's border stays neutral
-    /// from the send to the turn's end, so only one light moves.
-    var replyHaloOwnsActivity: Bool {
-        replyArm != nil || pendingReply != nil || (landedReply != nil && landedReply?.ended == nil && busy)
-    }
-    /// The placeholder shows the ◆ and its orbit: the composer footer's stays still meanwhile.
-    var replyShowsOrbit: Bool { pendingReply != nil }
+    /// from the send until the reply's halo has settled, so only one light moves; then the composer's light comes back.
+    var replyHaloOwnsActivity: Bool { replyArm != nil || pendingReply != nil || landedReply != nil }
+    /// The placeholder shows the agent's activity (ChatReplyPlaceholderStatus): the composer footer's hides meanwhile.
+    var replyShowsStatus: Bool { pendingReply != nil }
 
     func showOptimisticPrompt(_ text: String, attachments: [ChatAttachment] = [], at date: Date = .now) {
         optimisticPromptDelivered = false

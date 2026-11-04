@@ -11,7 +11,7 @@ struct AttentionBanner: View {
                     Text(entry.title + " is waiting for input").lineLimit(1)
                     Spacer()
                     Text("⌘J").foregroundStyle(Chrome.muted)
-                }.font(typography.font(.label)).padding(.horizontal, 14).padding(.vertical, 7)
+                }.font(typography, .label).padding(.horizontal, 14).padding(.vertical, 7)
                     .foregroundStyle(Chrome.palette.green)
                     // On glass a floating capsule inset under the strip; otherwise a full-width sidebar-colored bar.
                     .liquidGlass(in: Capsule(), interactive: true)

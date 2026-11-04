@@ -204,6 +204,9 @@ targets:
         embed: false
       - target: Zstd
         embed: false
+      # SwiftUI's VideoPlayer (_AVKit_SwiftUI) subclasses AVKit's player view, and nothing names AVKit itself:
+      # unlinked, the first video played aborts (superclass metadata not found).
+      - sdk: AVKit.framework
       - sdk: Accelerate.framework
       - sdk: AppKit.framework
       - sdk: Carbon.framework
@@ -413,6 +416,8 @@ targets:
         embed: false
       - target: TermAppleMobile
         embed: false
+      # VideoPlayer's superclass (see the Dispatch target).
+      - sdk: AVKit.framework
       - sdk: Accelerate.framework
       - sdk: CoreText.framework
       - sdk: Metal.framework

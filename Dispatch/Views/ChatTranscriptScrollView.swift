@@ -84,7 +84,6 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     var halo: ChatReplyHalo? = nil
     var haloMaxWidth: CGFloat = .infinity
     var haloAccent: Color = .accentColor
-    var haloLineHeight: CGFloat = 18
     let row: (String, CGFloat) -> AnyView
 
     func makeNSView(context: Context) -> TranscriptScrollView {
@@ -97,7 +96,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
         scroll.documentView = document
         document.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context,
                         revision: revision, row: row)
-        document.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent, lineHeight: haloLineHeight)
+        document.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
         return scroll
     }
 
@@ -111,7 +110,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     func updateNSView(_ scroll: TranscriptScrollView, context: Context) {
         let document = scroll.documentView as? ChatTranscriptDocument
         document?.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context, revision: revision, row: row)
-        document?.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent, lineHeight: haloLineHeight)
+        document?.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
     }
 
     final class TranscriptScrollView: NSScrollView {
@@ -526,12 +525,11 @@ final class ChatTranscriptDocument: NSView {
         #endif
     }
 
-    func setHalo(_ halo: ChatReplyHalo?, maxWidth: CGFloat, accent: Color, lineHeight: CGFloat) {
+    func setHalo(_ halo: ChatReplyHalo?, maxWidth: CGFloat, accent: Color) {
         self.halo = halo; haloMaxWidth = maxWidth
-        haloView?.accent = accent; haloView?.lineHeight = lineHeight
+        haloView?.accent = accent
         if halo != nil, haloView == nil {
             let view = ChatReplyHaloView(accent: accent)
-            view.lineHeight = lineHeight
             view.isHidden = true
             addSubview(view, positioned: .above, relativeTo: nil)
             haloView = view
@@ -552,7 +550,7 @@ final class ChatTranscriptDocument: NSView {
                            height: max(0, starts[last + 1] - starts[first] - 12))
         if haloView.frame != frame { haloView.frame = frame }
         if haloView.isHidden { haloView.isHidden = false }
-        haloView.apply(halo.phase, orbit: halo.orbit)
+        haloView.apply(halo.phase)
     }
 
     private func lookahead(clipY: CGFloat, viewportHeight: CGFloat) -> (lower: CGFloat, upper: CGFloat) {

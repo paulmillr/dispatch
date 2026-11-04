@@ -62,15 +62,8 @@ struct SSHInvocation: Equatable, Sendable {
         var later: [String] = []
         if !first.terminated, index < arguments.count {
             guard let second = options() else { return nil }
-            // Dispatch's commands put every option before the destination. OpenSSH keeps the first user it reads: a
-            // `user@` destination's wins over a `-l` after it, which would win once moved in front.
-            var rest = second.kept[...]
-            while let option = rest.first {
-                let pair = option.count == 2 && values.contains(option.dropFirst().first ?? " ")
-                if option == "-l", destination.contains("@") { rest = rest.dropFirst(2); continue }
-                later += pair ? Array(rest.prefix(2)) : [option]
-                rest = rest.dropFirst(pair ? 2 : 1)
-            }
+            // Dispatch's commands put every option before the destination (`SSHShell.afterDestination`).
+            later = SSHShell.afterDestination(second.kept, destination: destination, takingValues: values)
         }
         let words = Array(arguments.dropFirst(index))
         guard words.isEmpty || tty else { return nil }

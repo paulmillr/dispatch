@@ -38,6 +38,8 @@ struct SettingsView: View {
     @State private var remoteHelperExpanded = false
     @State private var dictationExpanded = false
     @State private var appearanceExpanded = false
+    /// The side Theme's gallery shows while the app follows the system, once the switch is used; nil, the system's.
+    @State private var schemeSideLight: Bool?
     @State private var tabsAndSpacesExpanded = false
     /// Startup command as typed, saved on Return.
     @State private var startupDraft: String?
@@ -110,7 +112,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             // Nautical's settings are the ship's bridge.
             Text(SidebarThemeStore.shared.current == .nautical ? "Bridge" : "Settings")
-                .font(typography.font(.title))
+                .font(typography, .title)
                 .foregroundStyle(Chrome.muted)
                 .frame(maxWidth: .infinity).frame(minHeight: typography.expanded(38))
                 .background(Chrome.sidebar)
@@ -118,7 +120,7 @@ struct SettingsView: View {
             HStack(spacing: 2) {
                 ForEach(SettingsTab.allCases, id: \.self) { tab in
                     Button { selectedTab = tab } label: {
-                        Text(tab.rawValue).font(typography.font(.label))
+                        Text(tab.rawValue).font(typography, .label)
                             .foregroundStyle(selectedTab == tab ? SettingsControlStyle.selectedText : Chrome.muted)
                             .padding(.horizontal, 14).padding(.vertical, 5)
                             .background(selectedTab == tab ? Chrome.palette.control : .clear,
@@ -148,13 +150,13 @@ struct SettingsView: View {
                 Spacer()
                 Button("restore defaults", action: restoreDefaults)
                     .buttonStyle(.plain)
-                    .font(typography.font(.body))
+                    .font(typography, .body)
                     .foregroundStyle(SettingsControlStyle.detail)
                     .padding(.vertical, 4)
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let error {
                 separator
-                Text(error).font(typography.font(.body)).foregroundStyle(.red)
+                Text(error).font(typography, .body).foregroundStyle(.red)
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12)
             }
         }
@@ -186,6 +188,8 @@ struct SettingsView: View {
         .onChange(of: SidebarThemeStore.shared.nauticalUnlocked) { _, unlocked in
             if unlocked { draft.appTheme = .nautical }
         }
+        // A new theme, here or from elsewhere, opens the gallery on the side in use.
+        .onChange(of: draft.appTheme) { _, _ in schemeSideLight = nil }
         .onChange(of: draft.colorVision) { _, vision in
             if loaded { conformSchemes(to: vision) }
         }
@@ -295,12 +299,6 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings-output-window")
                     .help("Off: output streams as fast as the connection takes it. On: at most 256 KB in flight per connection.")
             }
-            row("Reply placeholder", detail: "an empty reply bubble carries the working light until the first words · Chat",
-                info: "Once the agent takes a message you sent in Chat, an empty reply bubble appears where its answer will be, with the working light going around it instead of around the message box. When the first words arrive they fill that bubble and the light fades out. Not shown with Reduce Motion or in the radio log theme.") {
-                settingToggle("Reply placeholder", isOn: $draft.chatReplyPlaceholder)
-                    .accessibilityIdentifier("settings-reply-placeholder")
-                    .help("Off: the message box shows the agent is working. On: an empty reply bubble does, until the reply arrives.")
-            }
         }
     }
 
@@ -334,7 +332,7 @@ struct SettingsView: View {
                         NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
                     }.accessibilityIdentifier("diagnostics-copy-path")
                     if let error = diagnostics.error {
-                        Text(error).font(typography.font(.body)).foregroundStyle(.red)
+                        Text(error).font(typography, .body).foregroundStyle(.red)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
             }
@@ -412,7 +410,7 @@ struct SettingsView: View {
                         .help("8–22 pt · 0.5 pt steps")
                     (Text(draft.fontSize.formatted(.number.precision(.fractionLength(0...1))))
                         .foregroundColor(Chrome.ink) + Text(" pt").foregroundColor(Chrome.muted))
-                        .font(typography.font(.label)).monospacedDigit().fixedSize()
+                        .font(typography, .label).monospacedDigit().fixedSize()
                         .frame(width: sliderValueWidth, alignment: .trailing)
                 }.frame(width: pickerWidth)
             }
@@ -429,7 +427,7 @@ struct SettingsView: View {
                                        identifier: "settings-line-spacing", stops: true, describe: { spacing($0).title })
                             .frame(height: 20)
                         Text(draft.lineSpacing.title).foregroundColor(Chrome.ink)
-                            .font(typography.font(.label)).fixedSize()
+                            .font(typography, .label).fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
@@ -440,15 +438,16 @@ struct SettingsView: View {
     /// The Cursor menu's checked item, below the shapes.
     private static let blinkingCursor = "Blinking"
 
-    /// Colors' row under App theme: how the window and its terminals look, folded like General's Tabs & spaces; its
-    /// title opens it too. The sidebar's size, terminal opacity, text contrast, host colors, then Liquid Glass.
+    /// Colors' row under Follow system (and Nautical): how the window and its terminals look, folded like General's
+    /// Tabs & spaces; its title opens it too. The sidebar's size, terminal opacity, colorblind mode, text contrast, host
+    /// colors, then Liquid Glass.
     @ViewBuilder private var appearanceOptions: some View {
         // A switch that can't be changed here (no Liquid Glass on this system) isn't counted.
         let fold = Fold(title: "Appearance", changed: changed {
-            [$0.terminalOpacity, $0.showHostColors, $0.textContrast, $0.sidebarStyle]
+            [$0.terminalOpacity, $0.showHostColors, $0.textContrast, $0.sidebarStyle, $0.colorVision]
                 + (LiquidGlassStore.supported ? [$0.liquidGlass] : [])
         }, isExpanded: $appearanceExpanded)
-        row("Appearance", detail: "space size, opacity, contrast, host colors and glass") { foldButton(fold, card: "Appearance") }
+        row("Appearance", detail: "space size, opacity, colorblind mode, host colors and glass") { foldButton(fold, card: "Appearance") }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
         if appearanceExpanded {
             foldedOptions {
@@ -463,7 +462,7 @@ struct SettingsView: View {
                                        describe: { order[min(order.count - 1, max(0, Int($0.rounded())))].label })
                             .frame(height: 20)
                         Text(draft.sidebarStyle.label).foregroundColor(Chrome.ink)
-                            .font(typography.font(.label)).fixedSize()
+                            .font(typography, .label).fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
@@ -473,9 +472,24 @@ struct SettingsView: View {
                         SettingsSlider(value: $draft.terminalOpacity, range: Preferences.terminalOpacityRange, step: 0.05,
                                        label: "Terminal opacity", identifier: "settings-terminal-opacity").frame(height: 20)
                         Text(draft.terminalOpacity.formatted(.percent.precision(.fractionLength(0))))
-                            .foregroundColor(Chrome.ink).font(typography.font(.label)).monospacedDigit().fixedSize()
+                            .foregroundColor(Chrome.ink).font(typography, .label).monospacedDigit().fixedSize()
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
+                }
+                cardOption("Colorblind-friendly", detail: "lists and makes only colorblind-safe schemes", detailBelow: true) {
+                    settingToggle("Colorblind-friendly", isOn: Binding(get: { draft.colorVision != .typical },
+                                                                       set: { draft.colorVision = $0 ? .redGreen : .typical }))
+                        .accessibilityIdentifier("settings-colorblind")
+                }
+                if draft.colorVision != .typical {
+                    // Under Colorblind-friendly, which it refines, indented as its own row was.
+                    cardOption("Color blindness", detail: draft.colorVision.detail, detailBelow: true) {
+                        dropdown("Color blindness", selection: Binding(
+                            get: { draft.colorVision.title },
+                            set: { title in
+                                if let vision = ColorVision.allCases.first(where: { $0.title == title }) { draft.colorVision = vision }
+                            }), choices: [ColorVision.redGreen, .blueYellow].map(\.title))
+                    }.padding(.leading, 16)
                 }
                 cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
                     dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
@@ -499,38 +513,38 @@ struct SettingsView: View {
         }
     }
 
-    /// The app theme, its appearance and colorblind mode; then every color scheme for each side in use, drawn in its own
-    /// colors, a click choosing it; then New…, Add File… and Import….
+    /// Whether the app follows the system's light or dark, Nautical once unlocked, the window's appearance and colorblind
+    /// mode; then the color schemes for the side the gallery's switch picks, drawn in their own colors, a click choosing
+    /// one; then New…, Add File… and Import…. The switch is the light or dark choice when the app doesn't follow the
+    /// system; while it does, it only picks the side being chosen for, starting on the system's.
     private var themeSettings: some View {
-        VStack(spacing: 8) {
+        let nautical = draft.appTheme == .nautical
+        let following = draft.appTheme == .automatic
+        let systemDark = SidebarThemeStore.systemIsDark
+        return VStack(spacing: 8) {
             settingsGroup("Colors") {
-                row("App theme", detail: SidebarThemeStore.shared.nauticalUnlocked || draft.appTheme == .nautical ? "⚓ Nautical unlocked" : "app, terminal and chat") {
-                    dropdown("Theme", selection: Binding(get: { draft.appTheme.label }, set: { label in
-                        if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }
-                    }), choices: AppTheme.offered(selected: draft.appTheme,
-                                                  nauticalUnlocked: SidebarThemeStore.shared.nauticalUnlocked).map(\.label))
-                }
-                appearanceOptions
-                row("Colorblind-friendly", detail: "lists and makes only colorblind-safe schemes") {
-                    settingToggle("Colorblind-friendly", isOn: Binding(get: { draft.colorVision != .typical },
-                                                                       set: { draft.colorVision = $0 ? .redGreen : .typical }))
-                        .accessibilityIdentifier("settings-colorblind")
-                }
-                if draft.colorVision != .typical {
-                    // Indented under Colorblind-friendly, which it refines.
-                    row("Color blindness", detail: draft.colorVision.detail, indented: true) {
-                        dropdown("Color blindness", selection: Binding(
-                            get: { draft.colorVision.title },
-                            set: { title in
-                                if let vision = ColorVision.allCases.first(where: { $0.title == title }) { draft.colorVision = vision }
-                            }), choices: [ColorVision.redGreen, .blueYellow].map(\.title))
+                // Turned off, the app stays on the side the system is on now, so nothing changes until the switch does.
+                row("Follow system", detail: "light or dark, as macOS is") {
+                    settingToggle("Follow system", isOn: Binding(get: { following }, set: { follow in
+                        draft.appTheme = follow ? .automatic : systemDark ? .dark : .light
+                    })).disabled(nautical).accessibilityIdentifier("settings-follow-system")
+                }.opacity(nautical ? 0.5 : 1)
+                // Nautical, the easter egg, is dark only; off, the app follows the system again.
+                if SidebarThemeStore.shared.nauticalUnlocked || nautical {
+                    row("⚓ Nautical", detail: "harbour radar chrome, radio-log chat") {
+                        settingToggle("Nautical", isOn: Binding(get: { nautical }, set: { draft.appTheme = $0 ? .nautical : .automatic }))
+                            .accessibilityIdentifier("settings-nautical")
                     }
                 }
+                appearanceOptions
             }
-            // Each side in use, dark first while the theme follows the system.
             ColorSchemeGallery(draft: $draft, schemes: schemes.filtered(for: draft.colorVision),
-                               sides: draft.appTheme == .automatic ? [false, true]
-                                   : [!draft.appTheme.isDark(systemIsDark: SidebarThemeStore.systemIsDark)],
+                               light: Binding(get: {
+                                   following ? schemeSideLight ?? !systemDark : !draft.appTheme.isDark(systemIsDark: systemDark)
+                               }, set: { light in
+                                   if following { schemeSideLight = light } else if !nautical { draft.appTheme = light ? .light : .dark }
+                               }),
+                               switchable: !nautical, following: following, systemLight: !systemDark,
                                matching: matchingScheme(light:), schemesChanged: reloadSchemes,
                                importSchemes: { selectedTab = .extra }, surprise: surpriseScheme(light:),
                                allCustom: schemes.custom.count)
@@ -597,7 +611,7 @@ struct SettingsView: View {
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
             }.accessibilityIdentifier("settings-agents")
             if let chatError = TerminalRuntime.shared.chat.error {
-                Text(chatError).font(typography.font(.body)).foregroundStyle(.red).textSelection(.enabled)
+                Text(chatError).font(typography, .body).foregroundStyle(.red).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             // One switch for every multiplexer: on while any is, and it turns them all on or off.
@@ -612,7 +626,7 @@ struct SettingsView: View {
                     }
                 }
                 Text("the original tab closes after attach.")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 7)
             }
             // Git (review mode, the commit log and the sidebar's branch names) is one of Files' options.
@@ -675,7 +689,7 @@ struct SettingsView: View {
                 }
             }.accessibilityIdentifier("settings-notifications")
             if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
-                Text(error).font(typography.font(.body)).foregroundStyle(Chrome.muted)
+                Text(error).font(typography, .body).foregroundStyle(Chrome.muted)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
             }
             remoteHelperSettings
@@ -736,7 +750,7 @@ struct SettingsView: View {
                        detailBelow: true) {
                 if draft.dictationWakeWords != VoiceCommand.defaultWakeWords {
                     Button("Restore default") { draft.dictationWakeWords = VoiceCommand.defaultWakeWords }
-                        .buttonStyle(.plain).font(typography.font(.body)).foregroundStyle(accent)
+                        .buttonStyle(.plain).font(typography, .body).foregroundStyle(accent)
                         .accessibilityIdentifier("settings-wake-words-restore")
                 }
             }
@@ -755,14 +769,14 @@ struct SettingsView: View {
                     }
                 }
                 Text("from huggingface.co, kept on this Mac · click a downloaded one to use it")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
             } else if draft.dictationEngine == .parakeet {
                 separator
                 DictationModelRow(model: .parakeet, selected: true) {}
                     .padding(.vertical, 7)
                 Text("NVIDIA's Parakeet TDT 0.6B v3 (CC BY 4.0) as Core ML models converted by FluidInference,\nfrom huggingface.co, kept on this Mac · runs on the Neural Engine")
-                    .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                    .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
             }
         }.accessibilityIdentifier("settings-dictation")
@@ -955,7 +969,7 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings-custom-shell")
             }.padding(.bottom, 9)
             Text("A program by its full path, then its arguments. Press Return to use it.")
-                .font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
         }
     }
@@ -978,7 +992,7 @@ struct SettingsView: View {
                     // What the modifier symbols on this page stand for, in the order macOS writes them.
                     Text(KeyGroups.names.map { "\($0.symbol) \($0.name.capitalized)" }.joined(separator: "   "))
                         .accessibilityIdentifier("settings-key-symbols")
-                }.font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                }.font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                 // Worded as in the ⌘/ shortcut sheet.
                 row("Spaces", detail: ShortcutRow.spaceDigits) { keyRecorder("Spaces", \.spaces, digits: "1…9") }
@@ -988,7 +1002,7 @@ struct SettingsView: View {
                 row("Splits", detail: ShortcutRow.splitDigits) { keyRecorder("Splits", \.splits, digits: "1…4") }
                 screenshotWarning(\.splits, digits: 4)
                 if let keyError {
-                    Text(keyError).font(typography.font(.body)).foregroundStyle(.red)
+                    Text(keyError).font(typography, .body).foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                         .accessibilityIdentifier("settings-keys-error")
                 }
@@ -999,7 +1013,7 @@ struct SettingsView: View {
                 }
                 if !conflicts.isEmpty {
                     Text("\(conflicts.flatMap(\.1).joined(separator: ", ")) also switch macOS Desktops, which takes them before Dispatch. Choose other modifiers for \(conflicts.map(\.0).joined(separator: " and ")), or turn those off in System Settings › Keyboard › Keyboard Shortcuts › Mission Control.")
-                        .font(typography.font(.body)).foregroundStyle(Chrome.muted)
+                        .font(typography, .body).foregroundStyle(Chrome.muted)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                         .accessibilityIdentifier("settings-desktop-shortcut-conflict")
                 }
@@ -1021,7 +1035,7 @@ struct SettingsView: View {
                 }
                 if draft.dictationEnabled, draft.dictationKey == .function {
                     Text("macOS answers 🌐 too. To leave it to Dispatch, choose Do Nothing in System Settings › Keyboard › Press 🌐 key to.")
-                        .font(typography.font(.body)).foregroundStyle(Chrome.palette.warning)
+                        .font(typography, .body).foregroundStyle(Chrome.palette.warning)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                         .accessibilityIdentifier("settings-voice-key-globe")
@@ -1051,7 +1065,7 @@ struct SettingsView: View {
             let keys = [3, 4, 5].filter { $0 <= digits }.map { "⇧⌘\($0)" }
             let list = keys.count > 1 ? keys.dropLast().joined(separator: ", ") + " and " + keys.last! : keys.joined()
             Text("macOS takes \(list) for screenshots first. To use them here, turn those off in System Settings › Keyboard › Keyboard Shortcuts › Screenshots.")
-                .font(typography.font(.body)).foregroundStyle(Chrome.palette.warning)
+                .font(typography, .body).foregroundStyle(Chrome.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
                 .accessibilityIdentifier("settings-screenshot-shortcut-conflict")
@@ -1147,7 +1161,7 @@ struct SettingsView: View {
         return Button { toggle(fold) } label: {
             HStack(spacing: 5) {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 11, weight: .medium))
-                if fold.changed > 0 { Text("\(fold.changed)").font(typography.font(.caption)).monospacedDigit() }
+                if fold.changed > 0 { Text("\(fold.changed)").font(typography, .caption).monospacedDigit() }
             }
             .foregroundStyle(open ? Chrome.ink : SettingsControlStyle.detail)
             .padding(.horizontal, 8).frame(height: 24)
@@ -1205,7 +1219,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         SettingsTitle(title: title, privacy: privacy).fontWeight(.semibold)
                             .foregroundStyle(SettingsControlStyle.selectedText)
-                        Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                        Text(detail).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     }
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle()).onTapGesture { if let fold { toggle(fold) } }
@@ -1235,16 +1249,16 @@ struct SettingsView: View {
         HStack(spacing: 12) {
             if detailBelow {
                 VStack(alignment: .leading, spacing: 2) {
-                    SettingsTitle(title: title, privacy: privacy).font(typography.font(.label))
+                    SettingsTitle(title: title, privacy: privacy).font(typography, .label)
                     if let detail {
-                        Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail)
+                        Text(detail).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    SettingsTitle(title: title, privacy: privacy).font(typography.font(.label))
-                    if let detail { Text(detail).font(typography.font(.body)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1) }
+                    SettingsTitle(title: title, privacy: privacy).font(typography, .label)
+                    if let detail { Text(detail).font(typography, .body).foregroundStyle(SettingsControlStyle.detail).lineLimit(1) }
                 }
             }
             Spacer(minLength: 0)

@@ -782,8 +782,8 @@ final class SettingsStatsPresentationTests: XCTestCase {
                          "On launch", "Reopen spaces", "Scrollback", "Tabs & spaces", "login shell", "automatic scrollback", "Startup command",
                          "Show git branch in spaces", "Show sidebar with one space", "Automatic tab names", "Vertical tabs, no spaces",
                          "Security", "programs can copy"]),
-            ("Theme", ["Colors", "App theme", "app, terminal and chat", "Appearance", "space size, opacity, contrast, host colors and glass",
-                       "Colorblind-friendly", "Dark color scheme", "Dispatch", "Light color scheme", "Your color schemes"]),
+            ("Theme", ["Colors", "Follow system", "light or dark, as macOS is", "Appearance", "space size, opacity, colorblind mode, host colors and glass",
+                       "Color scheme", "Dark", "Light", "Dispatch", "Fun", "Your color schemes"]),
             ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Key bindings", "Prefix keys", "Dictate", "Option as Alt"]),
             ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "git with review mode", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device", "Notifications"]),
             ("Hosts", ["Hosts", "This Mac"])
@@ -835,6 +835,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             if tab == "Theme" {
                 XCTAssertFalse(text.contains("Terminal opacity"), "Appearance starts collapsed")
                 XCTAssertFalse(text.contains("Improve text contrast"), "Appearance starts collapsed")
+                XCTAssertFalse(text.contains("Colorblind-friendly"), "Appearance starts collapsed")
             }
             if tab == "Features" {
                 XCTAssertFalse(text.contains("Auto-confirm"), "Card options start folded")
@@ -1000,14 +1001,11 @@ final class SettingsStatsPresentationTests: XCTestCase {
         controller.showSettings()
         let window = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0.title == "Settings" })
         defer { window.close(); window.contentView = nil }
-        let root = try XCTUnwrap(window.contentView)
-        // The app theme is on Theme's page.
+        // Follow system is on Theme's page; Nautical's switch shows only once unlocked.
         try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
-        func themeTitles() -> [String]? {
-            PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
-                .first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }?.itemTitles
-        }
-        try await TestSupport.eventually { themeTitles() == ["Automatic", "Dark", "Light"] }
+        func shows(_ identifier: String) -> Bool { !PresentationTestSupport.accessibilityFrames(identifier, in: window).isEmpty }
+        try await TestSupport.eventually { shows("settings-follow-system") }
+        XCTAssertFalse(shows("settings-nautical"))
         func type(_ text: String, in target: NSWindow) {
             for character in text {
                 NSApp.postEvent(TerminalTestSupport.keyEvent(0, String(character), in: target), atStart: false)
@@ -1023,11 +1021,11 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(SidebarThemeStore.shared.nauticalUnlocked)
         XCTAssertEqual(settings.values.appTheme, .automatic)
+        XCTAssertFalse(shows("settings-nautical"))
         type("x" + AppTheme.nauticalCode.uppercased(), in: window)
-        try await TestSupport.eventually(diagnostic: themeTitles()?.description ?? "no picker") {
+        try await TestSupport.eventually {
             SidebarThemeStore.shared.nauticalUnlocked && settings.values.appTheme == .nautical
-                && themeTitles() == ["Automatic", "Dark", "Light", "Nautical"]
-                && SidebarThemeStore.shared.current == .nautical
+                && shows("settings-nautical") && SidebarThemeStore.shared.current == .nautical
         }
         XCTAssertEqual(window.appearance?.name, .darkAqua)
         _ = try await capture(window, "settings-nautical")

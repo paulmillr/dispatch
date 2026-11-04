@@ -623,9 +623,9 @@ extension ChatCoordinator {
             session.observedCommand = (title: text.trimmingCharacters(in: .whitespacesAndNewlines), output: nil)
         } else {
             session.showOptimisticPrompt(text, attachments: attachments)
-            // Settings › Experimental › Reply placeholder, for a prompt that starts a turn (a steered message joins the
+            // The reply placeholder (ChatPendingReply), for a prompt that starts a turn (a steered message joins the
             // running one). Without motion, or in the radio log, the composer keeps the activity.
-            if replyPlaceholder, session.awaitingPromptAck, !session.busy, !ChatThemeStore.shared.current.radioLog,
+            if session.awaitingPromptAck, !session.busy, !ChatThemeStore.shared.current.radioLog,
                !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 session.armPendingReply()
             }

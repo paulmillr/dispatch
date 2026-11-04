@@ -20,7 +20,7 @@ struct VoiceNavigationNote: View {
                     Image(systemName: content.symbol).foregroundStyle(content.failed ? Chrome.accent : Chrome.palette.secondary)
                     Text(content.text).lineLimit(1).truncationMode(.head)
                 }
-                .font(typography.font(.body)).foregroundStyle(Chrome.ink)
+                .font(typography, .body).foregroundStyle(Chrome.ink)
                 .padding(.horizontal, 14).padding(.vertical, 7)
                 .liquidGlass(in: Capsule(), fallback: Chrome.sidebar, interactive: true)
                 .frame(maxWidth: 520)

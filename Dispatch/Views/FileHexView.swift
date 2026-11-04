@@ -26,6 +26,7 @@ import SwiftUI
 /// switch to its strings, go to an offset or the end; under the rows, what the selection's bytes read as. Arrows,
 /// pages, Home and End move the selection (shift extends it); ⌘C copies it as hex, the context menu in other forms.
 struct FileHexPreview: View {
+    @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     let document: FileHexDocument
     /// The preview has focus: ⌘C, ⌘A and ⌘L are the hex view's then.
@@ -98,7 +99,7 @@ struct FileHexPreview: View {
                 .help("Show this tab’s terminal")
                 .accessibilityIdentifier("file-preview-open-terminal")
         }
-        .font(theme.typography.font(offset: -1.5))
+        .font(typography, .body)
         .padding(.horizontal, 14)
         .frame(height: 34)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.border).frame(height: 1) }
@@ -238,7 +239,7 @@ struct FileHexPreview: View {
             }
             .font(theme.typography.codeFont(offset: -1.5))
         }
-        .font(theme.typography.font(offset: -1.5))
+        .font(typography, .body)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -254,7 +255,7 @@ struct FileHexPreview: View {
         return Group {
             if document.strings.isEmpty && !document.scanning {
                 Text(document.failure == nil ? "No runs of 4 or more printable characters" : "")
-                    .font(theme.typography.font(offset: -1.5))
+                    .font(typography, .body)
                     .foregroundStyle(theme.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
