@@ -188,7 +188,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Dispatch/Dispatch.entitlements
         PRODUCT_MODULE_NAME: DispatchApp
         INFOPLIST_FILE: Dispatch/Info.plist
-        MARKETING_VERSION: "0.1.3"
+        MARKETING_VERSION: "0.1.4"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Only this target: the static terminal frameworks keep the debug info the dSYM is made from.
@@ -390,7 +390,7 @@ targets:
         SWIFT_INCLUDE_PATHS: ""
         PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
         INFOPLIST_FILE: Mobile/App/Info.plist
-        MARKETING_VERSION: "0.1.3"
+        MARKETING_VERSION: "0.1.4"
         CURRENT_PROJECT_VERSION: "1"
         # iPhone and iPad (TARGETED_DEVICE_FAMILY in mobileApp); never Catalyst or a Mac running the iPad build.
         SUPPORTS_MACCATALYST: NO
@@ -514,7 +514,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
         INFOPLIST_FILE: Watch/App/Info.plist
         CODE_SIGN_ENTITLEMENTS: Watch/App/DispatchWatch.entitlements
-        MARKETING_VERSION: "0.1.3"
+        MARKETING_VERSION: "0.1.4"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -539,7 +539,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
         INFOPLIST_FILE: Watch/Widgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: Watch/Widgets/DispatchWatchWidgets.entitlements
-        MARKETING_VERSION: "0.1.3"
+        MARKETING_VERSION: "0.1.4"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_INCLUDE_PATHS: ""
         SKIP_INSTALL: YES
