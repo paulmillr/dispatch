@@ -9,7 +9,14 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     var isConnecting = false
     var terminal: UInt64?
     var machine: TerminalMachine = .local
+    /// The agent the helper found running here (its topology binding), named by `agent(named:)`: what a launcher-named
+    /// tab shows until Chat binds the agent and gives its own key. Not saved; the next topology sets it again.
+    var agent: String?
     var label: String { customTitle ?? title }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, customTitle, directory, launchCommand, isConnecting, terminal, machine
+    }
     var surfaceIDs: [UUID] { [id] }
     var focusedSurfaceID: UUID { id }
 
@@ -22,11 +29,60 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     }
 
     /// Automatic names follow the agent's conversation, then a running program's
-    /// own title, then the folder at an idle prompt. Renamed tabs keep theirs.
-    func displayLabel(automatic: Bool, conversation: String?) -> String {
+    /// own title, then the folder at an idle prompt. Renamed tabs keep theirs. `agent`: the tab's agent (Chat's key,
+    /// else `agent`), whose name stands in for the launcher's (`shown`).
+    func displayLabel(automatic: Bool, conversation: String?, agent: String? = nil) -> String {
         guard automatic, customTitle == nil else { return label }
         if let conversation = Self.conversationLabel(conversation) { return conversation }
+        let title = Self.shown(title, agent: agent)
         return Self.titleNamesDirectory(title, directory) ? directoryName : title
+    }
+
+    /// The folder it is in as a name (`~`, `/`, else the last component); nil without one. Remote paths are display
+    /// data: never resolved against the Mac's filesystem.
+    var folder: String? {
+        if directory == "/" { return "/" }
+        if machine == .local, directory == System.home.path { return "~" }
+        let name = (directory as NSString).lastPathComponent
+        return name.isEmpty ? nil : name
+    }
+
+    /// What a multiplexer names an agent Dispatch's typed launcher started (`claude` in a Dispatch shell on an SSH
+    /// host runs `dispatch-helper launch claude`; tmux's automatic rename, and the helper's own terminals by its
+    /// path, name it after that program): it says nothing about the tab. The Mac and the phone show the agent's.
+    static let launcher = "dispatch-helper"
+
+    /// A name as shown: the agent's in place of the launcher's.
+    static func shown(_ name: String, agent: String?) -> String {
+        guard let agent, (name.trimmingCharacters(in: .whitespaces) as NSString).lastPathComponent == launcher else { return name }
+        return agent
+    }
+
+    /// Whether a window's name is the user's: renamed, but not to its agent's own name (`agent`), which a launch from
+    /// the phone gives its new window (`launch.names`: tmux's `new-window -n claude`, herdr's `tab.rename`) and which
+    /// tmux and herdr report as a rename like any other. Such a tab still follows its conversation's title.
+    static func named(_ name: String, renamed: Bool, agent: String?) -> Bool {
+        renamed && name != agent
+    }
+
+    /// A numbered tab's name from its focused pane, on the Mac and the phone alike: the pane's own title (the agent's
+    /// in place of the launcher's) unless it names the folder (a shell at its prompt) or only repeats the tab's name;
+    /// else the folder; else the tab's name.
+    static func paneLabel(_ title: String, folder: String?, directory: String, tab name: String, agent: String?) -> String {
+        let title = shown(title.trimmingCharacters(in: .whitespaces), agent: agent)
+        if !title.isEmpty, title != name, !titleNamesDirectory(title, directory) { return title }
+        return folder ?? (title.isEmpty ? name : title)
+    }
+
+    /// The agent the names around a bound process give (its executable, its pane's title, its window's): claude, codex
+    /// or pi, else "agent". The topology says an agent runs, not which; Chat's binding names it exactly.
+    static func agent(named names: [String?]) -> String {
+        for name in names.compactMap({ $0?.lowercased() }) {
+            if name.contains("claude") { return "claude" }
+            if name.contains("codex") { return "codex" }
+            if name == "pi" || name.hasPrefix("pi ") || name.hasPrefix("pi-") { return "pi" }
+        }
+        return "agent"
     }
 
     static func conversationLabel(_ title: String?) -> String? {
@@ -34,13 +90,7 @@ struct TerminalTab: Identifiable, Equatable, Codable {
         return title
     }
 
-    // Remote paths are display data; don't resolve them against the Mac filesystem.
-    private var directoryName: String {
-        if directory == "/" { return "/" }
-        if machine == .local, directory == System.home.path { return "~" }
-        let name = (directory as NSString).lastPathComponent
-        return name.isEmpty ? title : name
-    }
+    private var directoryName: String { folder ?? title }
 
     /// Shell integration titles an idle prompt with its folder (`~/src/app`, `…/src/app`,
     /// bash's `\w`) and a running command with its command line.
@@ -120,6 +170,30 @@ enum LayoutPreset: String, CaseIterable, Codable {
         }
         self = preset
     }
+    /// The layout a split of this many tabs starts with: side by side, then two above one, then a grid.
+    static func split(_ count: Int) -> LayoutPreset {
+        switch count {
+        case ...1: .single
+        case 2: .columns
+        case 3: .twoAbove
+        default: .grid
+        }
+    }
+
+    /// The layouts a split of this many tabs can take.
+    static func splits(_ count: Int) -> [LayoutPreset] { allCases.filter { $0 != .single && $0.count == count } }
+
+    /// A split's layout as the sidebar's menus name it.
+    var splitTitle: String {
+        switch self {
+        case .single: "Single"
+        case .columns: "Side by Side"
+        case .rows: "Stacked"
+        case .twoAbove: "Two Above One"
+        case .grid: "Grid"
+        }
+    }
+
     var title: String {
         switch self {
         case .columns: "columns"
@@ -223,10 +297,17 @@ indirect enum PaneLayout: Equatable, Codable {
     /// Number visible panes from left to right, then top to bottom, even when
     /// a custom grid's split tree stores an entire column before the next one.
     func paneIDsInReadingOrder(fractions: [UUID: CGFloat] = [:]) -> [UUID] {
-        var positions: [(id: UUID, origin: CGPoint)] = []
+        paneFrames(fractions: fractions).sorted {
+            $0.frame.minY == $1.frame.minY ? $0.frame.minX < $1.frame.minX : $0.frame.minY < $1.frame.minY
+        }.map(\.id)
+    }
+
+    /// Each pane's frame in the unit square, in tree order.
+    func paneFrames(fractions: [UUID: CGFloat] = [:]) -> [(id: UUID, frame: CGRect)] {
+        var frames: [(id: UUID, frame: CGRect)] = []
         func visit(_ node: PaneLayout, in rect: CGRect) {
             switch node {
-            case .pane(let id): positions.append((id, rect.origin))
+            case .pane(let id): frames.append((id, rect))
             case .split(let id, let axis, let first, let second):
                 let distance = (axis == .columns ? rect.width : rect.height) * (fractions[id] ?? 0.5)
                 let parts = rect.divided(atDistance: distance, from: axis == .columns ? .minXEdge : .minYEdge)
@@ -235,9 +316,7 @@ indirect enum PaneLayout: Equatable, Codable {
             }
         }
         visit(self, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        return positions.sorted {
-            $0.origin.y == $1.origin.y ? $0.origin.x < $1.origin.x : $0.origin.y < $1.origin.y
-        }.map(\.id)
+        return frames
     }
 
     var splitIDs: Set<UUID> {
@@ -408,9 +487,13 @@ struct Space: Identifiable, Equatable, Codable {
     /// Native panes and window groups have stable numbers regardless of which tab is selected
     /// inside them. An ungrouped structured space is one pane.
     var numberedPaneIDs: [UUID] {
-        let fractions = splitFractions.merging(splitRatios.mapValues { CGFloat($0) }) { _, local in local }
-        if !containers.isEmpty { return presentation?.layout.paneIDsInReadingOrder(fractions: fractions) ?? [id] }
-        return layout.paneIDsInReadingOrder(fractions: fractions)
+        if !containers.isEmpty { return presentation?.layout.paneIDsInReadingOrder(fractions: paneFractions) ?? [id] }
+        return layout.paneIDsInReadingOrder(fractions: paneFractions)
+    }
+
+    /// The dividers' positions: a server's, or the app's own where it set one.
+    var paneFractions: [UUID: CGFloat] {
+        splitFractions.merging(splitRatios.mapValues { CGFloat($0) }) { _, local in local }
     }
 
     func paneShortcutNumber(for id: UUID) -> Int? {
@@ -435,15 +518,14 @@ struct ContainerTab: Identifiable, Equatable, Codable {
     var terminals: [TerminalTab] { arrangement.panes.flatMap(\.tabs) }
     var focusedTerminal: TerminalTab? { arrangement.panes.first { $0.id == arrangement.focusedPane }?.activeTab }
 
-    /// `agent`: the focused pane's agent (its helper key). A window named after it, as the phone's launch names the
-    /// windows it starts (`launch.names`: `new-window -n claude`), is not one the user named, though tmux and herdr
-    /// report it as renamed: it still follows the conversation.
+    /// `agent`: the focused pane's agent (its helper key). A window named after it is not one the user named
+    /// (`TerminalTab.named`): it still follows the conversation. The phone's `MobileTab.label` follows the same rules.
     func displayLabel(automatic: Bool, conversation: String?, focused: TerminalTab? = nil, agent: String? = nil) -> String {
-        guard automatic, renamed != true || name == agent else { return name }
+        guard automatic, !TerminalTab.named(name, renamed: renamed == true, agent: agent) else { return name }
         if let conversation = TerminalTab.conversationLabel(conversation) { return conversation }
-        guard numbered == true, let pane = focused ?? focusedTerminal else { return name }
-        let label = pane.displayLabel(automatic: true, conversation: nil)
-        return label.isEmpty ? name : label
+        guard numbered == true, let pane = focused ?? focusedTerminal else { return TerminalTab.shown(name, agent: agent) }
+        if let custom = pane.customTitle { return custom }
+        return TerminalTab.paneLabel(pane.title, folder: pane.folder, directory: pane.directory, tab: name, agent: agent)
     }
 
     /// The node that moves this window: its only terminal (every multiplexer moves a lone pane with its
@@ -588,8 +670,21 @@ struct TabPresentation: Equatable, Codable {
         groups.removeAll { $0.windows.isEmpty }
         let known = Set(groups.flatMap(\.windows))
         if !groups.isEmpty {
+            // An arriving window (made here, or moved in from another space before or after one of these) takes its
+            // server place: after the nearest window before it in the server's order that the group holds, else
+            // before the nearest after it. Appended, a window moved before the first would land last.
             let destination = groups.firstIndex { $0.windows.contains(where: { $0 == selected }) } ?? 0
-            groups[destination].windows += windows.filter { !known.contains($0) }
+            for (index, window) in windows.enumerated() where !known.contains(window) {
+                let members = groups[destination].windows
+                if let previous = windows[..<index].last(where: members.contains), let at = members.firstIndex(of: previous) {
+                    groups[destination].windows.insert(window, at: at + 1)
+                } else if let following = windows[(index + 1)...].first(where: members.contains),
+                          let at = members.firstIndex(of: following) {
+                    groups[destination].windows.insert(window, at: at)
+                } else {
+                    groups[destination].windows.append(window)
+                }
+            }
         }
         if groups.count == 1 { preset = .single }
         else if groups.count != preset?.count { preset = nil }

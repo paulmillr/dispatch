@@ -63,7 +63,10 @@ struct ChatTranscriptView: View {
                 }
             },
             halo: reduceMotion || theme.radioLog || !session.showChat ? nil : ChatReplyHalo.target(session, rows: rows),
-            haloMaxWidth: theme.typography.characterWidth * 80, haloAccent: theme.accent) { id, width in
+            haloMaxWidth: theme.typography.characterWidth * 80, haloAccent: theme.accent,
+            haloInView: { [weak session] inView in
+                if session?.replyBubbleInView != inView { session?.replyBubbleInView = inView }
+            }) { id, width in
             let content: AnyView
             if id == "earlier" { content = AnyView(earlierMessages) }
             else if id == "radio-header" { content = AnyView(ChatRadioLogHeader(surface: session.id)) }

@@ -45,7 +45,8 @@ struct AttentionEntry: Identifiable {
                     let host = workspace.hosts.record(workspace.hosts.terminals[surface]?.host ?? space.hostID)
                     // Only panes that want attention are shown or announced, so only theirs follow title changes.
                     let shown = urgency == .idle ? tab : workspace.liveTab(tab.id) ?? tab
-                    let title = shown.displayLabel(automatic: automaticNames, conversation: session?.active == true ? session?.conversationTitle : nil)
+                    let title = shown.displayLabel(automatic: automaticNames, conversation: session?.active == true ? session?.conversationTitle : nil,
+                                                   agent: TerminalRuntime.agent(of: shown, session: session))
                     let window = space.windows.first { $0.terminals.contains { $0.id == tab.id } }
                     let name = urgency == .idle ? space.name : workspace.liveName(space)
                     let path = ([host.id == .local ? "local" : host.name, name] + [window?.name].compactMap { $0 }).joined(separator: " › ")

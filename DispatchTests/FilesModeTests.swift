@@ -661,6 +661,52 @@ final class FilesModeTests: XCTestCase {
         session.availability = .offline(host: "build", since: nil)
         XCTAssertEqual(outcome(), .failed)
     }
+
+    /// A tab showing files is named by what it shows (the phone uses the same rule): Files the open file with its
+    /// folder, else the folder; Review the branch; Commits the open commit's subject, else the branch.
+    func testFilesNamesTheTabByWhatItShows() {
+        let home = "/home/dev"
+        func files(_ file: String?, _ folder: String?) -> String? {
+            FilesTab.files.tabName(file: file, folder: folder, home: home, branch: "main", commit: nil)
+        }
+        XCTAssertEqual(files("/work/api/src/auth/token.ts", "/work/api"), "auth/token.ts")
+        XCTAssertEqual(files("/work/api/README.md", "/work/api"), "api/README.md", "never a bare name")
+        XCTAssertEqual(files("/home/dev/notes.md", home), "~/notes.md")
+        XCTAssertEqual(files("/hosts", "/"), "/hosts")
+        XCTAssertEqual(files(nil, "/work/api"), "api")
+        XCTAssertEqual(files(nil, home), "~")
+        XCTAssertEqual(files(nil, "/"), "/")
+        XCTAssertNil(files(nil, nil), "nothing known: the tab keeps its usual name")
+        XCTAssertEqual(FilesTab.changes.tabName(file: "/work/api/a.ts", folder: nil, home: home, branch: "feat/login", commit: nil),
+                       "Review feat/login")
+        XCTAssertEqual(FilesTab.changes.tabName(file: nil, folder: nil, home: home, branch: nil, commit: nil), "Review")
+        XCTAssertEqual(FilesTab.commits.tabName(file: nil, folder: nil, home: home, branch: "main", commit: "Fix token refresh\n"),
+                       "Fix token refresh")
+        XCTAssertEqual(FilesTab.commits.tabName(file: nil, folder: nil, home: home, branch: "main", commit: nil), "Commits main")
+        let long = String(repeating: "word ", count: 20)
+        XCTAssertEqual(FilesTab.commits.tabName(file: nil, folder: nil, home: home, branch: nil, commit: long)?.count, 48,
+                       "47 characters of the subject and an ellipsis")
+    }
+
+    /// The name shows while files shows, where a conversation title would; without automatic names, or with a name
+    /// the user gave, the tab keeps its own.
+    func testATabShowingFilesTakesItsName() {
+        let runtime = TerminalRuntime.shared
+        let id = System.uuid()
+        var tab = TerminalTab(id: id, directory: "/work/api")
+        tab.title = "zsh"
+        let session = runtime.files.session(for: id)
+        defer { session.visible = false }
+        XCTAssertEqual(runtime.label(for: tab, automatic: true), "zsh")
+        session.visible = true
+        XCTAssertEqual(runtime.label(for: tab, automatic: true), "api")
+        XCTAssertEqual(runtime.label(for: tab, automatic: false), "zsh")
+        session.git = .loading
+        session.tab = .changes
+        XCTAssertEqual(runtime.label(for: tab, automatic: true), "Review")
+        tab.customTitle = "mine"
+        XCTAssertEqual(runtime.label(for: tab, automatic: true), "mine")
+    }
 }
 
 extension FilesModeTests {

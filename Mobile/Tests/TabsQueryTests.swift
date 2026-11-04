@@ -130,6 +130,22 @@ final class TabsQueryTests: XCTestCase {
         XCTAssertEqual(model.rows(in: docs).map { SpaceTabRow.line($0, model: model)?.text }, ["~/src/docs"], "a shell: its folder")
     }
 
+    /// A tab on Files is named by what Files shows (the Mac's rule, `FilesTab.tabName`), in place of its conversation
+    /// title; back on another segment the usual name returns.
+    func testATabOnFilesIsNamedByWhatItShows() throws {
+        let (model, _) = model()
+        let claude = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:1")))
+        let usual = model.label(of: claude, host: nil)
+        model.filesName = { _, mode in mode == .files ? "auth/token.ts" : "Review main" }
+        XCTAssertEqual(model.label(of: claude, host: nil), usual, "not on Files")
+        model.segments[claude.ref] = .files
+        XCTAssertEqual(model.label(of: claude, host: nil), "auth/token.ts")
+        model.filesModes[claude.ref] = .review
+        XCTAssertEqual(model.label(of: claude, host: nil), "Review main")
+        model.segments[claude.ref] = .chat
+        XCTAssertEqual(model.label(of: claude, host: nil), usual)
+    }
+
     /// The agent's mark: Chat's key when it knows, else the bound process's or the topology's names.
     func testTheAgentMarkComesFromChatOrTheNames() throws {
         let (model, keys) = model()

@@ -831,6 +831,9 @@ final class ChatSession: Identifiable {
     var pendingReply: ChatPendingReply? { didSet { cachedRows = nil; cachedVisibleRows = nil } }
     /// The reply that took over the placeholder's row, while its halo settles; the composer has the activity back after.
     var landedReply: ChatLandedReply?
+    /// Whether the placeholder's bubble is in the transcript's view (the transcript document reports it while the
+    /// placeholder shows). Scrolled away, the composer keeps the activity.
+    var replyBubbleInView = true
     /// Armed by a sent prompt: the placeholder shows once both the delay passed and the agent acknowledged.
     private var replyArm: (afterTurn: String?, delayed: Bool, token: UUID)?
     @ObservationIgnored private var cachedVisibleRows: [ChatTranscriptRow]?
@@ -1621,9 +1624,11 @@ final class ChatSession: Identifiable {
 
     /// A prompt's reply shows (or is about to show) where the agent's activity is: the composer's border stays neutral
     /// from the send until the reply's halo has settled, so only one light moves; then the composer's light comes back.
-    var replyHaloOwnsActivity: Bool { replyArm != nil || pendingReply != nil || landedReply != nil }
-    /// The placeholder shows the agent's activity (ChatReplyPlaceholderStatus): the composer footer's hides meanwhile.
-    var replyShowsStatus: Bool { pendingReply != nil }
+    /// While the placeholder is scrolled out of view, the composer keeps its light.
+    var replyHaloOwnsActivity: Bool { replyArm != nil || replyShowsStatus || landedReply != nil }
+    /// The placeholder shows the agent's activity (ChatReplyPlaceholderStatus) in view: the composer footer's dims and
+    /// stills meanwhile.
+    var replyShowsStatus: Bool { pendingReply != nil && replyBubbleInView }
 
     func showOptimisticPrompt(_ text: String, attachments: [ChatAttachment] = [], at date: Date = .now) {
         optimisticPromptDelivered = false

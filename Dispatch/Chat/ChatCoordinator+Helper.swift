@@ -171,6 +171,7 @@ extension ChatCoordinator {
             }
             receiveHelper(page.records, session: session, historical: true)
             if let state = page.state { receiveHelper(.state(state), session: session) }
+            refreshHelperQueue(session)
         case .records(let records):
             receiveHelper(records, session: session, historical: false)
             // Completion can follow idle; a start acknowledgement still has the preceding idle state.
@@ -1440,6 +1441,18 @@ extension ChatCoordinator {
         try sent.confirmed()
     }
 
+    /// Read the host's queue again while this Mac shows rows the host held. A (re)opened chat hears
+    /// of a stored queue only when it holds something, so rows the host sent or dropped while this
+    /// Mac was away (a lost SSH connection) would stay and refuse every change as `expired`.
+    func refreshHelperQueue(_ session: ChatSession) {
+        guard let helper = session.helper, helper.transcript == nil,
+              session.queuedMessages.contains(where: { $0.native != nil }) else { return }
+        changeHelperQueue(session, message: nil) { session in
+            let snapshot: [HelperChat.Queued] = try await helper.call("queue.list", input: .init(helper.route))
+            session.helperQueueSnapshot = snapshot
+        } failed: { _ in }
+    }
+
     /// One queue operation at a time; snapshots arriving meanwhile apply after it.
     @discardableResult
     private func changeHelperQueue(_ session: ChatSession, message: UUID?,
@@ -1450,6 +1463,7 @@ extension ChatCoordinator {
         return operations.run(for: session.id) { [weak self, weak session] in
             guard let self, let session else { return }
             let current = { session.helper === helper && session.queueGeneration == generation }
+            var expired = false
             do {
                 try Task.checkCancellation()
                 guard current() else { return }
@@ -1458,6 +1472,7 @@ extension ChatCoordinator {
                 guard current() else { return }
                 failed(session)
                 session.submissionFailure = error.localizedDescription
+                expired = (error as? HelperFailure)?.code == "expired"
             }
             guard current() else { return }
             session.queueBusy = false; session.queuedSubmissionID = nil
@@ -1465,6 +1480,8 @@ extension ChatCoordinator {
                 session.helperQueueSnapshot = nil
                 self.receiveHelperQueue(snapshot, session: session)
             } else { self.drainQueue(session) }
+            // The row changed or left on the host meanwhile: show the host's queue as it is now.
+            if expired, !session.queueBusy { self.refreshHelperQueue(session) }
         }
     }
 }

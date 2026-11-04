@@ -548,6 +548,9 @@ final class FilesBrowsers {
         return browser
     }
 
+    /// The tab's browser if Files made one; never makes it (a tab's name reads it).
+    func existing(_ tab: TabRef) -> FilesBrowser? { browsers[tab] }
+
     /// Keeps only the tabs that still exist.
     func retain(_ tabs: Set<TabRef>) {
         for tab in browsers.keys where !tabs.contains(tab) { browsers[tab] = nil }

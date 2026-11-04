@@ -287,6 +287,36 @@ final class HerdrTests: XCTestCase {
         XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil), "2")
     }
 
+    /// An agent started through the typed launcher (`dispatch-helper launch claude`) gets the launcher's name from tmux
+    /// (a window) or the helper (a terminal, by its path): the bound agent's shows instead, as on the phone, until the
+    /// conversation has a title. Without an agent, or for any other name, nothing changes. The agent is Chat's key once
+    /// it binds, before that the one the topology found; a numbered tab whose pane only repeats its name shows the folder.
+    func testTheLaunchersNameShowsAsItsAgent() throws {
+        var found = TerminalTab(directory: "/work/api")
+        found.title = "dispatch-helper"
+        found.agent = TerminalTab.agent(named: ["claude", "dispatch-helper", nil])
+        XCTAssertEqual(TerminalRuntime.agent(of: found, session: nil), "claude", "the topology's, before Chat binds")
+        XCTAssertEqual(found.displayLabel(automatic: true, conversation: nil, agent: TerminalRuntime.agent(of: found, session: nil)), "claude")
+        let saved = String(decoding: try JSONEncoder().encode(found), as: UTF8.self)
+        XCTAssertFalse(saved.contains("\"agent\""), "never saved: \(saved)")
+        var repeated = TerminalTab(directory: "/work/api")
+        repeated.title = "2"
+        XCTAssertEqual(ContainerTab(id: System.uuid(), node: 1, name: "2", renamed: false, numbered: true,
+                                    arrangement: PaneArrangement(tab: repeated)).displayLabel(automatic: true, conversation: nil), "api")
+        let window = ContainerTab(id: System.uuid(), node: 1, name: "dispatch-helper", renamed: false,
+                                  arrangement: PaneArrangement(tab: TerminalTab(directory: "/tmp")))
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: nil, agent: "claude"), "claude")
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup", agent: "claude"), "Fix startup")
+        XCTAssertEqual(window.displayLabel(automatic: true, conversation: nil), "dispatch-helper")
+        var pane = TerminalTab(directory: "/work/api")
+        pane.title = "/opt/dispatch/bin/dispatch-helper"
+        XCTAssertEqual(pane.displayLabel(automatic: true, conversation: nil, agent: "codex"), "codex")
+        let numbered = ContainerTab(id: System.uuid(), node: 1, name: "1", renamed: false, numbered: true, arrangement: PaneArrangement(tab: pane))
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil, focused: pane, agent: "codex"), "codex")
+        pane.title = "vim"
+        XCTAssertEqual(pane.displayLabel(automatic: true, conversation: nil, agent: "codex"), "vim")
+    }
+
     func testHandoffClosesOnlyLaunchingTabAndRemovesEmptySpace() async throws {
         for count in [1, 2, 3] {
             let herdr = try await HerdrSession(launch: false); defer { herdr.close() }

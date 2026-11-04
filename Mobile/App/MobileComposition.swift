@@ -150,6 +150,29 @@ final class MobileComposition {
         }
         let presences = presences
         tabs.paneTitle = { host, key in presences.presence(.init(host: host, node: key))?.title }
+        let navigator = navigator, gitFacts = gitFacts, browsers = filesBrowsers, commits = commits
+        tabs.filesName = { [weak tabs] tab, mode in
+            let ref = tab.ref
+            let home = tabs?.workspace(ref.host)?.host.home
+            let facts = gitFacts.facts(SpaceGitFacts.Key(host: ref.host, key: ref.key))
+            // The newest screen this mode pushed for the tab: a file, a folder's listing, a change or a commit.
+            let pushed = navigator.path.reversed().lazy.compactMap { route -> FilesRoute? in
+                guard case .files(let owner, let files) = route, owner == ref, files.mode == mode else { return nil }
+                return files
+            }.first
+            func absolute(_ path: String) -> String {
+                path.hasPrefix("/") ? FilesPath.normalized(path) : FilesPath.join(facts?.root ?? home ?? "/", path)
+            }
+            var file: String?
+            var folder = browsers.existing(ref)?.folder ?? tab.activePane?.cwd
+            if let pushed, let path = pushed.path {
+                if pushed.detail == FilesRoute.directory { folder = absolute(path) } else { file = absolute(path) }
+            }
+            // The iPad shows Commits' commit beside its list rather than pushing it.
+            let revision = pushed?.revision ?? tabs?.paneRoutes[ref]?[mode]?.revision
+            let commit = mode == .commits ? revision.flatMap { commits.existing(ref)?.commit($0)?.subject } : nil
+            return mode.tab.tabName(file: file, folder: folder, home: home, branch: facts?.branch, commit: commit)
+        }
         tabs.conversationTitle = { host, terminal in
             guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
             return conversations.conversation(key)?.summary.title

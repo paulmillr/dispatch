@@ -216,8 +216,10 @@ struct MainView: View {
                                   identity: "\(space.id):\(space.layout)",
                                   spaceID: space.id, layout: space.layout, hostID: space.hostID, selectedTabID: space.activeWindow?.id)
                 }
-                // Split tmux windows give each group its own strip; with glass each washes below its own.
-                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) ? nil : tmuxTint(space),
+                // Split tmux windows give each group its own strip; with glass each washes below its own. Tabs only with
+                // the sidebar shown: its row marks the host, so no edge across the top.
+                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) || (workspace.tabsOnly && sidebarVisible)
+                                ? nil : tmuxTint(space),
                                 surfaceID: space.activeTab?.focusedSurfaceID,
                                 stripHeight: showTmuxTabs ? tmuxStripHeight : 0)
                 .modifier(PaneFocusHighlight(workspace: workspace,

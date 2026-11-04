@@ -357,36 +357,65 @@ final class FilesDropTests: XCTestCase {
         XCTAssertNil(target.node("/home/ivan/in/a.png"))
     }
 
-    func testAFileTheHelperIsRefusedIsCopiedThroughTheAppsOwnCopy() async throws {
-        // Desktop denied to this app: the helper it started is refused even what the user dropped, which macOS lets
-        // the app itself read.
+    func testAFileInAProtectedFolderIsCopiedThroughTheAppsOwnCopyUntried() async throws {
+        // The helper's read of a Desktop file would be the folder's first access, and raise macOS's consent prompt
+        // when the app has no answer for Desktop yet: the app, which may read what was dropped, copies it first.
         let local = FakeFilesSource(endpoint: .local)
         local.file("/Users/ivan/Desktop/report.pdf", "%PDF")
-        local.failures["read /Users/ivan/Desktop/report.pdf"] = .permissionDenied("/Users/ivan/Desktop/report.pdf")
-        local.failures["list /Users/ivan/Desktop"] = .permissionDenied("/Users/ivan/Desktop")
         local.file("/Users/ivan/src/notes.txt", "notes")
         let target = FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab")
         target.directory("/home/ivan/in")
         let session = coordinator.session(for: System.uuid())
         session.availability = .available(target)
-        let folder = System.temporary.appendingPathComponent(FilesDropStaging.prefix + System.uuid().uuidString)
-        try System.directory(folder)
-        let staged = folder.appendingPathComponent("report.pdf").path
-        let asked = OSAllocatedUnfairLock(initialState: [[String]]())
-        let controller = controller(local: local, stage: { paths in
-            asked.withLock { $0.append(paths) }
-            local.file(staged, "%PDF")
-            return FilesDropStaging(folder: folder, paths: [paths[0]: staged])
-        })
+        let (stage, asked, folder) = try stagingFake(local)
+        let controller = controller(local: local, stage: stage, home: "/Users/ivan")
         let finder = pasteboard()
         finder.writeObjects([URL(fileURLWithPath: "/Users/ivan/Desktop/report.pdf") as NSURL,
                              URL(fileURLWithPath: "/Users/ivan/src/notes.txt") as NSURL])
         XCTAssertTrue(controller.accept(finder, onto: "/home/ivan/in", in: session))
         try await TestSupport.eventually { session.transfers.first?.stage == .done }
-        XCTAssertEqual(asked.withLock { $0 }, [["/Users/ivan/Desktop/report.pdf"]], "Only what the helper is refused")
+        XCTAssertEqual(asked.withLock { $0 }, [["/Users/ivan/Desktop/report.pdf"]], "Only what is in a protected folder")
+        XCTAssertFalse(local.calls.contains { $0.hasSuffix(" /Users/ivan/Desktop/report.pdf") }, "The helper never tries it")
+        XCTAssertTrue(local.calls.contains("read /Users/ivan/src/notes.txt"), "It tries the others")
         XCTAssertEqual(target.text("/home/ivan/in/report.pdf"), "%PDF")
         XCTAssertEqual(target.text("/home/ivan/in/notes.txt"), "notes")
         XCTAssertFalse(System.exists(folder), "The app's copy goes once the copy is done")
+    }
+
+    func testAFileTheHelperIsRefusedElsewhereIsCopiedThroughTheAppsOwnCopy() async throws {
+        // A removable volume denied to this app: the helper it started is refused even what the user dropped, which
+        // macOS lets the app itself read.
+        let local = FakeFilesSource(endpoint: .local)
+        local.file("/Volumes/Backup/report.pdf", "%PDF")
+        local.failures["read /Volumes/Backup/report.pdf"] = .permissionDenied("/Volumes/Backup/report.pdf")
+        local.file("/Volumes/Backup/notes.txt", "notes")
+        let target = FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab")
+        target.directory("/home/ivan/in")
+        let session = coordinator.session(for: System.uuid())
+        session.availability = .available(target)
+        let (stage, asked, folder) = try stagingFake(local)
+        let controller = controller(local: local, stage: stage, home: "/Users/ivan")
+        let finder = pasteboard()
+        finder.writeObjects([URL(fileURLWithPath: "/Volumes/Backup/report.pdf") as NSURL,
+                             URL(fileURLWithPath: "/Volumes/Backup/notes.txt") as NSURL])
+        XCTAssertTrue(controller.accept(finder, onto: "/home/ivan/in", in: session))
+        try await TestSupport.eventually { session.transfers.first?.stage == .done }
+        XCTAssertEqual(asked.withLock { $0 }, [["/Volumes/Backup/report.pdf"]], "Only what the helper is refused")
+        XCTAssertEqual(target.text("/home/ivan/in/report.pdf"), "%PDF")
+        XCTAssertEqual(target.text("/home/ivan/in/notes.txt"), "notes")
+        XCTAssertFalse(System.exists(folder), "The app's copy goes once the copy is done")
+    }
+
+    func testProtectedFoldersAreTheHomesOwn() {
+        for path in ["/Users/ivan/Desktop", "/Users/ivan/Documents/q3/report.pdf", "/Users/ivan/Downloads/a.zip",
+                     "/Users/ivan/Library/Mobile Documents/com~apple~CloudDocs/Documents/report.pdf",
+                     "/Users/ivan/Library/CloudStorage/Sync-ivan/a.txt"] {
+            XCTAssertTrue(FilesDragController.isProtected(path, home: "/Users/ivan"), path)
+        }
+        for path in ["/Users/ivan/DesktopNotes/a.txt", "/Users/ivan/src/Documents/a.txt", "/Users/maria/Desktop/a.txt",
+                     "/Volumes/Backup/Desktop/a.txt", "/Users/ivan/Library/Preferences/a.plist"] {
+            XCTAssertFalse(FilesDragController.isProtected(path, home: "/Users/ivan"), path)
+        }
     }
 
     func testStagingKeepsNamesAndRemovesItsFolder() throws {
@@ -414,6 +443,22 @@ final class FilesDropTests: XCTestCase {
 
     // MARK: Support
 
+    /// Staging that puts the one item it is asked for into `local` as `report.pdf` of a real staging folder, and
+    /// records what it was asked.
+    private func stagingFake(_ local: FakeFilesSource) throws
+        -> (@Sendable ([String]) throws -> FilesDropStaging, OSAllocatedUnfairLock<[[String]]>, URL) {
+        let folder = System.temporary.appendingPathComponent(FilesDropStaging.prefix + System.uuid().uuidString)
+        try System.directory(folder)
+        let staged = folder.appendingPathComponent("report.pdf").path
+        let asked = OSAllocatedUnfairLock(initialState: [[String]]())
+        let stage: @Sendable ([String]) throws -> FilesDropStaging = { paths in
+            asked.withLock { $0.append(paths) }
+            local.file(staged, "%PDF")
+            return FilesDropStaging(folder: folder, paths: [paths[0]: staged])
+        }
+        return (stage, asked, folder)
+    }
+
     private func pasteboard() -> NSPasteboard {
         let pasteboard = NSPasteboard.withUniqueName()
         pasteboard.clearContents()
@@ -423,13 +468,14 @@ final class FilesDropTests: XCTestCase {
 
     private func controller(local: (any FilesSource)? = FakeFilesSource(endpoint: .local),
                             enabled: @escaping @MainActor () -> Bool = { true },
-                            stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make)
+                            stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make,
+                            home: String = System.home.path)
         -> FilesDragController {
         let engine = FileTransferEngine(coordinator: { [unowned self] in coordinator }, asksBeforeReplacing: { true })
         // Finished rows stay to be checked.
         engine.sleep = { _, _ in throw CancellationError() }
         return FilesDragController(engine: engine, coordinator: { [unowned self] in coordinator },
-                                   localSource: { local }, enabled: enabled, stage: stage)
+                                   localSource: { local }, enabled: enabled, stage: stage, home: home)
     }
 }
 

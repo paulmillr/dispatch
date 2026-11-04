@@ -6,6 +6,15 @@ enum FilesMode: String, CaseIterable, Identifiable, Hashable, Sendable {
     case files, review, commits
     var id: Self { self }
 
+    /// The Mac's files tab this mode is, whose `FilesTab.tabName` names a tab showing it.
+    var tab: FilesTab {
+        switch self {
+        case .files: .files
+        case .review: .changes
+        case .commits: .commits
+        }
+    }
+
     var title: String {
         switch self {
         case .files: "Files"

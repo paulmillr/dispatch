@@ -51,6 +51,9 @@ final class MobileTabs {
     @ObservationIgnored var agentKey: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
     /// (host, pane key) → the terminal's own title (OSC 0/2) while the phone has it attached. The composition sets it.
     @ObservationIgnored var paneTitle: @MainActor (UUID, String) -> String? = { _, _ in nil }
+    /// A tab showing Files → what it shows as its name (`FilesTab.tabName`: the open file, the folder, Review or the
+    /// commit), as the Mac names it. The composition sets it from the Files screens' state.
+    @ObservationIgnored var filesName: @MainActor (MobileTab, FilesMode) -> String? = { _, _ in nil }
     /// (host, terminal) → when an agent's conversation last moved (its newest record, the time Agents shows). Chat sets
     /// it; a chat tab's time is the later of this and the last change the phone saw in the tab.
     @ObservationIgnored var agentActivity: @MainActor (UUID, UInt64) -> Date? = { _, _ in nil }
@@ -279,7 +282,7 @@ final class MobileTabs {
     func agent(of tab: MobileTab) -> String? {
         guard let pane = tab.agentPane else { return nil }
         if let key = agentKey(tab.ref.host, pane.id) { return key }
-        return MobileTab.agent(named: [pane.agent?.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, pane.name, tab.name])
+        return TerminalTab.agent(named: [pane.agent?.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, pane.name, tab.name])
     }
 
     /// Every pane runs an agent whose turn is over (idle, or a result not seen yet): Close ends the tab without asking.
@@ -319,10 +322,12 @@ final class MobileTabs {
                   label: label(of: tab, host: host))
     }
 
-    /// The name a tab shows (rows, its screen, sorting): `MobileTab.label` with its agent's conversation title, and its
-    /// agent's name for a window named after the launcher.
+    /// The name a tab shows (rows, its screen, sorting): `MobileTab.label` with what Files shows while the tab is on
+    /// Files, else its agent's conversation title, and its agent's name for a window named after the launcher.
     func label(of tab: MobileTab, host: TabsHost?) -> String {
-        tab.label(conversation: tab.agentPane.flatMap { conversationTitle(tab.ref.host, $0.id) }, homes: host?.homes ?? HomePath(account: nil),
+        let shown = segments[tab.ref] == .files ? filesName(tab, filesModes[tab.ref] ?? .files) : nil
+        let conversation = shown ?? tab.agentPane.flatMap { conversationTitle(tab.ref.host, $0.id) }
+        return tab.label(conversation: conversation, homes: host?.homes ?? HomePath(account: nil),
                   paneTitle: tab.activePane.flatMap { paneTitle(tab.ref.host, $0.key) }, agent: agent(of: tab))
     }
 

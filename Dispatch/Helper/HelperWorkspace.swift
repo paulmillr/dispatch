@@ -1865,6 +1865,12 @@
     /// The pane directory each tab last took from its server (`Node.cwd`).
     private var serverDirectories: [UUID: String] = [:]
 
+    /// The agent a terminal's topology binding says runs in it, named from its executable, its name and its window's,
+    /// as the phone names it (`MobileTabs.agent(of:)`); nil without one.
+    private static func agentName(_ node: HelperTopology.Node, window: String?) -> String? {
+        node.agent.map { TerminalTab.agent(named: [$0.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, node.name, window]) }
+    }
+
     /// A tab's directory as a topology gives it: the server's pane directory when that changed since the tab last took
     /// it. A shell's own report (OSC 7, `Workspace.updateTab`) after a `cd` is newer than the directory tmux gave the
     /// helper's earlier read (tmux tells a control client of no directory change), so an unchanged one keeps it.
@@ -3009,6 +3015,7 @@
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
+            tab.agent = Self.agentName(node, window: nil)
             tab.directory = serverDirectory(tab, node.cwd)
             tab.terminal = node.id
             // A pending tab this terminal fills (its creation's placeholder) is connected now.
@@ -3053,6 +3060,7 @@
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
+            tab.agent = Self.agentName(node, window: source.name)
             tab.directory = serverDirectory(tab, node.cwd)
             tab.terminal = node.id
             // A pending tab this terminal fills (its creation's placeholder) is connected now.

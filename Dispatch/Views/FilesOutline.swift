@@ -237,8 +237,29 @@ final class FilesOutlineView: NSOutlineView {
         return NSRect(x: x, y: frame.minY, width: max(0, columnRect.maxX - x), height: frame.height)
     }
 
+    /// The first ⌃D of a pair (its event time); a second within a second leaves files, as in chat.
+    private var exitArmedAt: TimeInterval?
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { exitArmedAt = nil }
+        return resigned
+    }
+
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if flags == .control, event.keyCode == 2 {
+            // Holding the key never confirms; the hidden terminal never gets the ^D.
+            guard !event.isARepeat else { return }
+            if let first = exitArmedAt, event.timestamp >= first, event.timestamp - first <= 1 {
+                exitArmedAt = nil
+                controller?.leaveFiles()
+            } else {
+                exitArmedAt = event.timestamp
+            }
+            return
+        }
+        exitArmedAt = nil
         if flags.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
             controller?.openSelection()
             return
@@ -665,6 +686,14 @@ final class FilesOutlineView: NSOutlineView {
 
     func find() {
         session?.findRequest = System.uuid()
+    }
+
+    /// Double ⌃D, as chat's: an idle agent that can quit closes the tab and quits; anything else shows the terminal.
+    func leaveFiles() {
+        guard let session else { return }
+        let chat = TerminalRuntime.shared.chat
+        if let agent = chat.sessions[session.id], chat.quitCommand(agent) != nil { return chat.quitFromChat(agent) }
+        TerminalRuntime.shared.files.switchMode(session.id, to: .terminal)
     }
 
     @objc private func doubleClicked(_ sender: Any?) {

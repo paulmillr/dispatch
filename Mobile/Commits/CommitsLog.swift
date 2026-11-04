@@ -481,6 +481,9 @@ final class CommitsLog {
 
     init(limit: Int = 8) { self.limit = limit }
 
+    /// The tab's log if Commits holds one; never makes it or moves it up the reuse order (a tab's name reads it).
+    func existing(_ tab: TabRef) -> CommitsLog? { logs[Key(host: tab.host, tab: tab.key)] }
+
     func log(_ tab: TabRef) -> CommitsLog {
         let key = Key(host: tab.host, tab: tab.key)
         used.removeAll { $0 == key }

@@ -41,8 +41,8 @@ enum SurpriseScheme {
 }
 
 /// Settings › Theme's color schemes: every scheme for one side, the one the Dark | Light switch picks, each drawn as a
-/// demo in its own colors, a click choosing it for that side. The switch and Surprise me stay pinned at the top of
-/// Settings while the tiles scroll. Yours lead, then the bundled
+/// demo in its own colors, a click choosing it for that side. The switch and Surprise me stay at the top of Settings
+/// while the tiles scroll (PinnedHeader). Yours lead, then the bundled
 /// ones under their `SchemeGroup` headers (Dispatch first in OLED or White), then those that read as either side. Your own can be kept
 /// (a surprise), changed in the maker or put in the Trash; New…, Add File…, Import… and each side's Surprise me add more.
 /// Any scheme can be duplicated and edited (its hover button or context menu): a made one's copy in the maker, any
@@ -69,27 +69,19 @@ struct ColorSchemeGallery: View {
     let importSchemes: () -> Void
     /// Surprise me: a random scheme for the light (true) or dark side, used at once.
     let surprise: (Bool) -> Void
+    /// Use now: stop following the system and use the light (true) or dark side.
+    let useNow: (Bool) -> Void
     /// The user's schemes in any vision, for the count of those hidden in this one.
     let allCustom: Int
     /// The maker or the color editor, open over Settings.
     @State private var sheet: SchemeSheet?
-    /// The tile under the pointer (side and name), which shows its duplicate button.
-    @State private var hoveredTile: String?
     @State private var deleting: CustomThemes.Entry?
     @State private var message: String?
 
     var body: some View {
-        // One card drawn in three pieces, so its bar can stay at the top of Settings while the tiles scroll under it:
-        // the title, which scrolls away; the bar, pinned; the tiles.
-        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-            Text("Color scheme").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10).padding(.bottom, 7).padding(.horizontal, 14)
-                .modifier(CardPiece(top: true, bottom: false))
-            Section {
-                tiles(light).modifier(CardPiece(top: false, bottom: true))
-            } header: {
-                bar(light).modifier(CardPiece(top: false, bottom: false))
+        VStack(spacing: 8) {
+            SettingsGroup(title: "Color scheme") {
+                PinnedHeader(header: bar(light), content: tiles(light))
             }
             SettingsGroup(title: "Your color schemes") {
                 SettingsSeparator()
@@ -116,7 +108,7 @@ struct ColorSchemeGallery: View {
                         .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                         .accessibilityIdentifier("settings-themes-message")
                 }
-            }.padding(.top, 8)
+            }
         }
         .sheet(item: $sheet) { sheet in
             Group {
@@ -168,8 +160,20 @@ struct ColorSchemeGallery: View {
                     .help("Make a random \(light ? "light" : "dark") scheme and use it; the next one replaces it unless you keep it")
                     .accessibilityIdentifier("settings-surprise-scheme-\(light ? "light" : "dark")")
             }.padding(.vertical, 9)
+            // Following the system, the other side's scheme shows only once macOS changes: say so, and offer it now.
+            if following && light != systemLight {
+                let side = light ? "light" : "dark", now = systemLight ? "light" : "dark"
+                HStack(spacing: 12) {
+                    Text("Used when macOS is \(side); it’s \(now) now")
+                        .font(typography, .body).foregroundStyle(SettingsControlStyle.detail).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button("Use \(light ? "Light" : "Dark") now") { useNow(light) }
+                        .help("Turns off Follow system and uses the \(side) appearance")
+                        .accessibilityIdentifier("settings-scheme-use-now")
+                }.padding(.bottom, 9)
+            }
             SettingsSeparator()
-        }.padding(.horizontal, 14)
+        }
     }
 
     /// The side's tiles under their headers.
@@ -185,8 +189,8 @@ struct ColorSchemeGallery: View {
                     ForEach(section.names, id: \.self) { tile($0, light: light) }
                 }
             }
-            Spacer().frame(height: 14)
-        }.padding(.horizontal, 14)
+            Spacer().frame(height: 10)
+        }
     }
 
     /// One half of the Dark | Light switch: the side and its scheme. Following the system, a dot marks the side in use
@@ -251,20 +255,17 @@ struct ColorSchemeGallery: View {
         // A bundled classic, never your own scheme of the same name; Dispatch is one.
         let history = entry == nil ? SchemeGroup.classics[name == "Default" ? "dispatch-black" : name] : nil
         let notes = (history.map { [$0] } ?? []) + problems
-        return Button { selection(light).wrappedValue = name } label: {
-            SchemeDemo(title: name == "Default" ? "Dispatch" : SchemeGroup.title(name),
-                       theme: name == "Default" ? matching(light) : schemes.themes[name],
-                       selected: selected, fontFamily: draft.fontFamily, fontSize: draft.fontSize,
-                       classic: history != nil, problems: problems)
-        }
-        .buttonStyle(.plain)
-        .onHover { inside in
-            let key = "\(light)/\(name)"
-            if inside { hoveredTile = key } else if hoveredTile == key { hoveredTile = nil }
-        }
-        .overlay(alignment: .topTrailing) {
+        return HoverReveal {
+            Button { selection(light).wrappedValue = name } label: {
+                SchemeDemo(title: name == "Default" ? "Dispatch" : SchemeGroup.title(name),
+                           theme: name == "Default" ? matching(light) : schemes.themes[name],
+                           selected: selected, fontFamily: draft.fontFamily, fontSize: draft.fontSize,
+                           classic: history != nil, problems: problems)
+            }
+            .buttonStyle(.plain)
+        } overlay: { hovered in
             if let entry { actions(entry, light: light) }
-            else if hoveredTile == "\(light)/\(name)" { duplicateButton(name, light: light).modifier(TileActions(ink: tileInk(name, light: light))) }
+            else if hovered { duplicateButton(name, light: light).modifier(TileActions(ink: tileInk(name, light: light))) }
         }
         .contextMenu {
             Button("Duplicate and Edit…") { duplicate(name, light: light) }
@@ -535,55 +536,42 @@ struct SchemeDemo: View {
     private func color(_ c: ThemeColor) -> Color { c.swiftUI }
 }
 
-/// A piece of a Settings card split so part of it can be pinned: the card's fill, rounded at the `top` and `bottom`
-/// it has, and its border down the sides and around those ends only, so the pieces join without a seam.
-private struct CardPiece: ViewModifier {
-    let top: Bool
-    let bottom: Bool
+/// `header` above `content`, kept at the top of the Settings page while `content` scrolls under it, until `content`
+/// ends. Laid out in place, then moved down by how far the pair has scrolled above the page's top: only the header
+/// follows the scrolling, not a lazy stack's pinned section, whose estimated height left the page's end blank.
+struct PinnedHeader<Header: View, Content: View>: View {
+    /// The coordinate space of the Settings page's scroll view (SettingsView.settingsPage).
+    static var space: String { "settings-page" }
+    let header: Header
+    let content: Content
+    @State private var headerHeight: CGFloat = 0
 
-    func body(content: Content) -> some View {
-        let r: CGFloat = 8
-        content
-            .background(Chrome.sidebar, in: UnevenRoundedRectangle(topLeadingRadius: top ? r : 0, bottomLeadingRadius: bottom ? r : 0,
-                                                                   bottomTrailingRadius: bottom ? r : 0, topTrailingRadius: top ? r : 0))
-            .overlay { CardEdges(top: top, bottom: bottom, radius: r).stroke(Chrome.border, lineWidth: 1) }
+    var body: some View {
+        VStack(spacing: 0) {
+            // The header's place; the header itself is drawn over the content, so it can move.
+            Color.clear.frame(height: headerHeight)
+            content
+        }
+        .overlay(alignment: .top) {
+            GeometryReader { proxy in
+                let frame = proxy.frame(in: .named(Self.space))
+                header
+                    .background(Chrome.sidebar)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+                    .offset(y: min(max(0, -frame.minY), max(0, frame.height - headerHeight)))
+            }
+        }
     }
 }
 
-/// The border of a `CardPiece`: both sides, and the top or bottom with its rounded corners where the piece ends the card.
-private struct CardEdges: Shape {
-    let top: Bool
-    let bottom: Bool
-    let radius: CGFloat
+/// `content` with `overlay` at its top trailing corner, told whether the pointer is over it. The hover is kept here, in
+/// the tile, so the pointer crossing tiles (as it does under a scrolling list) redraws those two tiles, not the gallery.
+private struct HoverReveal<Content: View, Overlay: View>: View {
+    @ViewBuilder let content: Content
+    @ViewBuilder let overlay: (Bool) -> Overlay
+    @State private var hovered = false
 
-    func path(in rect: CGRect) -> Path {
-        // Inset half the line where a line is drawn, so it falls inside like strokeBorder's.
-        let inner = rect.insetBy(dx: 0.5, dy: 0.5)
-        let left = inner.minX, right = inner.maxX
-        let upper = top ? inner.minY : rect.minY, lower = bottom ? inner.maxY : rect.maxY
-        var path = Path()
-        if bottom {
-            path.move(to: CGPoint(x: right - radius, y: lower))
-            path.addLine(to: CGPoint(x: left + radius, y: lower))
-            path.addArc(tangent1End: CGPoint(x: left, y: lower), tangent2End: CGPoint(x: left, y: lower - radius), radius: radius)
-        } else {
-            path.move(to: CGPoint(x: left, y: lower))
-        }
-        if top {
-            path.addLine(to: CGPoint(x: left, y: upper + radius))
-            path.addArc(tangent1End: CGPoint(x: left, y: upper), tangent2End: CGPoint(x: left + radius, y: upper), radius: radius)
-            path.addLine(to: CGPoint(x: right - radius, y: upper))
-            path.addArc(tangent1End: CGPoint(x: right, y: upper), tangent2End: CGPoint(x: right, y: upper + radius), radius: radius)
-        } else {
-            path.addLine(to: CGPoint(x: left, y: upper))
-            path.move(to: CGPoint(x: right, y: upper))
-        }
-        if bottom {
-            path.addLine(to: CGPoint(x: right, y: lower - radius))
-            path.addArc(tangent1End: CGPoint(x: right, y: lower), tangent2End: CGPoint(x: right - radius, y: lower), radius: radius)
-        } else {
-            path.addLine(to: CGPoint(x: right, y: lower))
-        }
-        return path
+    var body: some View {
+        content.onHover { hovered = $0 }.overlay(alignment: .topTrailing) { overlay(hovered) }
     }
 }

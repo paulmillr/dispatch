@@ -197,6 +197,8 @@ final class TabsWorkspaceTests: XCTestCase {
         // The attached terminal's own title, as the Mac's pane label reads it: a shell's prompt title names the folder.
         XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes, paneTitle: "~/src/app"), "app")
         XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes, paneTitle: "vim notes.md"), "vim notes.md")
+        // A pane named after Dispatch's launcher shows its agent, as a launcher-named tmux window does (and on the Mac).
+        XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes, paneTitle: "dispatch-helper", agent: "claude"), "claude")
         // tmux names an unrenamed window after its program: that name stays.
         let tmux = TabsFixtures.workspace()
         tmux.apply(TabsFixtures.app().topology)
@@ -215,7 +217,7 @@ final class TabsWorkspaceTests: XCTestCase {
         workspace.apply(sketch.topology)
         let homes = TabsFixtures.host.homes
         let tab = try XCTUnwrap(workspace.tab("tmux:s:@1"))
-        XCTAssertEqual(MobileTab.agent(named: [nil, tab.panes.first?.name, tab.name]), "claude", "from the pane's title")
+        XCTAssertEqual(TerminalTab.agent(named: [nil, tab.panes.first?.name, tab.name]), "claude", "from the pane's title")
         XCTAssertEqual(tab.label(conversation: nil, homes: homes, agent: "claude"), "claude")
         XCTAssertEqual(tab.label(conversation: "Fix the build", homes: homes, agent: "claude"), "Fix the build")
         XCTAssertEqual(tab.label(conversation: nil, homes: homes), "dispatch-helper")

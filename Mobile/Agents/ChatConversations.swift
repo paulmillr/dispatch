@@ -470,7 +470,7 @@ struct ChatConversation: Identifiable, Equatable {
                 // its unseen result.
                 let working = summary.busy
                 rows.append(ChatConversation(
-                    key: key, terminal: node.id, hostName: host.name, name: Self.name(tab: tab ?? node, title: summary.title, agent: session?.agentKey ?? MobileTab.agent(named: [
+                    key: key, terminal: node.id, hostName: host.name, name: Self.name(tab: tab ?? node, title: summary.title, agent: session?.agentKey ?? TerminalTab.agent(named: [
                         binding.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, node.name, (tab ?? node).name])), space: space?.name,
                     spaceNode: space?.id, cwd: node.cwd, binding: binding, summary: summary,
                     urgency: PaneUrgency(waiting: waiting, working: working, unread: unread),
@@ -507,10 +507,10 @@ struct ChatConversation: Identifiable, Equatable {
 
     /// A row's name as the Mac's automatic tab names give it (ContainerTab.displayLabel): a renamed tab's own name, else
     /// the conversation's title, else the tab's, the agent's (`agent`) for a window named after the launcher. A tab the
-    /// phone's launch named after its agent is not renamed (`MobileTab.named`).
+    /// phone's launch named after its agent is not renamed (`TerminalTab.named`).
     static func name(tab: HelperTopology.Node, title: String?, agent: String? = nil) -> String {
-        guard !MobileTab.named(tab.name, renamed: tab.renamed == true, agent: agent) else { return tab.name }
-        return TerminalTab.conversationLabel(title) ?? MobileTab.shown(tab.name, agent: agent)
+        guard !TerminalTab.named(tab.name, renamed: tab.renamed == true, agent: agent) else { return tab.name }
+        return TerminalTab.conversationLabel(title) ?? TerminalTab.shown(tab.name, agent: agent)
     }
 
     static func milliseconds(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }

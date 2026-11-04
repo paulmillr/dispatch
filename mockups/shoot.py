@@ -8,6 +8,12 @@
     python3 mockups/shoot.py sheets [phone|ipad|watch]     # contact sheets from existing shots
     python3 mockups/shoot.py list                          # the screen ids by group
 
+    python3 mockups/shoot.py mac [render|list|sheets] [--themes dark,light] [selector…]   # Mac screens (README, Mac)
+    python3 mockups/shoot.py M1-main [dark|light|graphite|lavender|nautical]          # one Mac screen
+    python3 mockups/shoot.py all mac                       # every Mac screen, then its sheets
+
+The Mac screens need no simulator: `mac` builds the Swift package in Mac/ (incremental, about a second) and draws them
+offscreen into mockups/shots/mac/<id>-<theme>.png, sheets into mockups/sheets/mac-<group>-<theme>.png.
 Shots land in mockups/shots/<id>-<scheme>.png (watch: <id>.png), contact sheets in mockups/sheets/<group>-<scheme>.png.
 The simulator is the booted one whose name fits the platform, else the newest available, which is booted;
 MOCKUPS_DEVICE=<name or UDID> overrides. MOCKUPS_SETTLE seconds (default 3) wait before each screenshot.
@@ -77,7 +83,30 @@ def platform_of(screen):
     for platform, groups in GROUPS.items():
         if any(screen in ids for ids in groups.values()):
             return platform
+    if screen in mac_ids():
+        return 'mac'
     sys.exit(f'unknown screen {screen}; see `shoot.py list`')
+
+
+MAC_THEMES = {'dark', 'light', 'graphite', 'lavender', 'nautical'}
+
+
+def mac(*args, capture=False):
+    """Builds the Mac mockups (mockups/Mac, a Swift package) if a source changed, then runs them with `args`."""
+    result = run('swift', 'build', '--package-path', str(ROOT / 'Mac'), '--scratch-path', str(ROOT / 'build/mac'), '--quiet',
+                 check=False, capture_output=True)
+    if result.returncode:
+        output = re.sub(r'\x1b\[[0-9;]*m', '', result.stdout + result.stderr)
+        errors = [line for line in output.splitlines() if re.search(r'\.swift:\d+:\d+: error:', line)]
+        sys.exit('\n'.join(dict.fromkeys(errors)) or output)
+    result = run(str(ROOT / 'build/mac/debug/MacMockups'), *args, check=False, capture_output=capture)
+    if result.returncode:
+        sys.exit(result.returncode)
+    return result.stdout
+
+
+def mac_ids():
+    return [line.split()[0] for line in mac('list', capture=True).splitlines() if line.strip()]
 
 
 def run(*cmd, check=True, **kw):
@@ -165,13 +194,23 @@ def main(argv):
         for platform, groups in GROUPS.items():
             for group, ids in groups.items():
                 print(f'{platform:5} {group:10} ' + ' '.join(ids))
+        print('mac   (mockups/Mac)')
+        mac('list')
+    elif cmd == 'mac':
+        mac(*(rest or ['render']))
     elif cmd == 'build':
         for platform in rest or ['phone']:
-            build(platform)
+            if platform == 'mac':
+                mac('list', capture=True)
+            else:
+                build(platform)
     elif cmd == 'rotate':
         rotate(*rest[:1])
     elif cmd == 'all':
         for platform in rest or ['phone']:
+            if platform == 'mac':
+                mac('render'); mac('sheets')
+                continue
             udid = device(platform)
             for ids in GROUPS[platform].values():
                 for screen in ids:
@@ -180,9 +219,16 @@ def main(argv):
             sheets(platform)
     elif cmd == 'sheets':
         for platform in rest or ['phone']:
-            sheets(platform)
+            if platform == 'mac':
+                mac('sheets')
+            else:
+                sheets(platform)
     else:
         platform = platform_of(cmd)
+        if platform == 'mac':
+            themes = [t for t in rest if t in MAC_THEMES]
+            mac('render', *(['--themes', ','.join(themes)] if themes else []), cmd)
+            return
         for scheme in (rest or PLATFORMS[platform]['schemes']):
             shot(cmd, None if scheme in ('none', None) else scheme)
 

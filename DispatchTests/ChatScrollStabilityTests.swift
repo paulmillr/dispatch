@@ -20,6 +20,27 @@ final class ChatScrollStabilityTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(1)) { requests > 0 }
     }
 
+    /// The reply placeholder's bubble tells the session when it is scrolled out of view (`replyBubbleInView`).
+    func testALappingHalosRowReportsWhetherItIsInView() async throws {
+        let fixture = try NativeScrollFixture(rows: 4)
+        defer { fixture.close() }
+        var reports: [Bool] = []
+        fixture.document.haloInView = { reports.append($0) }
+        fixture.document.setHalo(ChatReplyHalo(first: "row-3", last: "row-3", phase: .lapping), maxWidth: 400, accent: .blue)
+        fixture.document.layoutTranscript()
+        try await TestSupport.eventually { reports.last == false }
+        fixture.move(to: 900)
+        fixture.document.layoutTranscript()
+        try await TestSupport.eventually { reports.last == true }
+        fixture.move(to: 0)
+        fixture.document.layoutTranscript()
+        try await TestSupport.eventually { reports.last == false }
+        fixture.document.setHalo(ChatReplyHalo(first: "row-3", last: "row-3", phase: .settling(since: 0)), maxWidth: 400,
+                                 accent: .blue)
+        try await TestSupport.eventually { reports.last == true }
+        XCTAssertEqual(reports, [false, true, false, true], "Only changes are reported")
+    }
+
     func testDiagnosticsOptInDiscardsQueuedSamplesOnDisableAndCanReenable() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
         defer { fixture.close() }

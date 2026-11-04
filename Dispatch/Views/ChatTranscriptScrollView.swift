@@ -84,6 +84,8 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     var halo: ChatReplyHalo? = nil
     var haloMaxWidth: CGFloat = .infinity
     var haloAccent: Color = .accentColor
+    /// Whether a lapping halo's bubble intersects the view (true otherwise), on change.
+    var haloInView: ((Bool) -> Void)? = nil
     let row: (String, CGFloat) -> AnyView
 
     func makeNSView(context: Context) -> TranscriptScrollView {
@@ -96,6 +98,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
         scroll.documentView = document
         document.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context,
                         revision: revision, row: row)
+        document.haloInView = haloInView
         document.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
         return scroll
     }
@@ -110,6 +113,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     func updateNSView(_ scroll: TranscriptScrollView, context: Context) {
         let document = scroll.documentView as? ChatTranscriptDocument
         document?.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context, revision: revision, row: row)
+        document?.haloInView = haloInView
         document?.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
     }
 
@@ -209,6 +213,10 @@ final class ChatTranscriptDocument: NSView {
     private var halo: ChatReplyHalo?
     private var haloMaxWidth: CGFloat = .infinity
     private(set) var haloView: ChatReplyHaloView?
+    /// Told whether a lapping halo's bubble intersects the clip, from its rows' frames, when that changes.
+    var haloInView: ((Bool) -> Void)?
+    /// Nil until the first report: a new document tells the session once, whatever it last heard.
+    private var reportedHaloInView: Bool?
 
     init(position: ChatScrollPosition, initiallyAtBottom: Bool) {
         self.position = position
@@ -540,6 +548,7 @@ final class ChatTranscriptDocument: NSView {
 
     /// Frames the halo on its bubble: the rows from `first` to `last`, less the last row's 12 points below its bubble.
     private func positionHalo() {
+        reportHaloInView()
         guard let haloView else { return }
         guard let halo, let first = indices[halo.first], let last = indices[halo.last], first <= last,
               last + 1 < starts.count, hosts[halo.first]?.isHidden == false, hosts[halo.last]?.isHidden == false else {
@@ -551,6 +560,24 @@ final class ChatTranscriptDocument: NSView {
         if haloView.frame != frame { haloView.frame = frame }
         if haloView.isHidden { haloView.isHidden = false }
         haloView.apply(halo.phase)
+    }
+
+    /// From the rows' frames, not their hosts, so a pass that has not built the row yet reports nothing new.
+    private func reportHaloInView() {
+        var inView = reportedHaloInView ?? true
+        if let halo, halo.phase == .lapping {
+            if let clip = enclosingScrollView?.contentView.bounds, let first = indices[halo.first],
+               let last = indices[halo.last], first <= last, last + 1 < starts.count {
+                // Within the insets: on glass the composer floats over the bottom one.
+                inView = starts[last + 1] - 12 > clip.minY + topInset && starts[first] < clip.maxY - bottomInset
+            }
+        } else {
+            inView = true
+        }
+        guard inView != reportedHaloInView else { return }
+        reportedHaloInView = inView
+        // Layout can run inside a SwiftUI update: the session hears it after.
+        if let haloInView { DispatchQueue.main.async { haloInView(inView) } }
     }
 
     private func lookahead(clipY: CGFloat, viewportHeight: CGFloat) -> (lower: CGFloat, upper: CGFloat) {

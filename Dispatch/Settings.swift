@@ -273,6 +273,10 @@ struct Preferences: Codable, Equatable {
     /// flight to this app (`terminals.window`, HelperOutputWindow), so a keystroke or a reply never waits behind megabytes
     /// parked in SSH and TCP buffers on a slow link. Off: output streams as before.
     var outputWindow = false
+    /// Settings › Experimental › Host icons in group headings: in the icons sidebar grouped by host, each host's icon
+    /// shows once, at the end of its group's heading, and the rows lead with their activity instead of the host's disc
+    /// (SidebarMetrics.hostInHeader).
+    var hostHeaderIcons = false
     var hideSingleSpace = true
     /// Tabs only: no tab strips, and the sidebar lists every tab (a tmux or herdr space's windows) instead of spaces,
     /// with "+ tab" in place of "+ space". Spaces still exist underneath (⌘N, splits, layouts); they are just not shown.
@@ -381,7 +385,7 @@ struct Preferences: Codable, Equatable {
         case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
         case keyGroups
         case hideSingleSpace, tabsOnly, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
-        case enableDiagnostics, outputWindow
+        case enableDiagnostics, outputWindow, hostHeaderIcons
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case textContrast, colorVision, terminalOpacity
         case spaces, enableKittyGraphics
@@ -452,6 +456,7 @@ struct Preferences: Codable, Equatable {
         restoreTerminalOutput = try fields.decodeIfPresent(Bool.self, forKey: .restoreTerminalOutput) ?? restoreTerminalOutput
         enableDiagnostics = try fields.decodeIfPresent(Bool.self, forKey: .enableDiagnostics) ?? false
         outputWindow = try fields.decodeIfPresent(Bool.self, forKey: .outputWindow) ?? false
+        hostHeaderIcons = try fields.decodeIfPresent(Bool.self, forKey: .hostHeaderIcons) ?? false
         hideSingleSpace = try fields.decodeIfPresent(Bool.self, forKey: .hideSingleSpace) ?? hideSingleSpace
         tabsOnly = try fields.decodeIfPresent(Bool.self, forKey: .tabsOnly) ?? tabsOnly
         spaces = try fields.decodeIfPresent([String: Bool].self, forKey: .spaces) ?? [:]

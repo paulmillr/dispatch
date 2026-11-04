@@ -80,6 +80,17 @@ final class ChatPendingReplyTests: XCTestCase {
         XCTAssertEqual(session.transcriptRows.last?.id, pending.id)
     }
 
+    func testScrolledAwayTheComposerKeepsTheActivity() async throws {
+        let session = sentSession()
+        _ = try await shown(session)
+        session.replyBubbleInView = false
+        XCTAssertFalse(session.replyShowsStatus, "Out of view, the footer's activity stays at full strength")
+        XCTAssertFalse(session.replyHaloOwnsActivity, "and the composer's light moves")
+        session.replyBubbleInView = true
+        XCTAssertTrue(session.replyShowsStatus)
+        XCTAssertTrue(session.replyHaloOwnsActivity)
+    }
+
     func testReasoningSummaryShowsAboveItAndTheReplyTakesItOver() async throws {
         let session = sentSession()
         let pending = try await shown(session)

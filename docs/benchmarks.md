@@ -18,7 +18,7 @@ python3 scripts/benchmark.py run --suite full --environment vm --desktop --label
 | core | Headless; needs only Xcode. herdr line buffering, tmux unescaping (64 KiB/2 MiB), colored-output filtering, fragmented tmux framing (1/64 KiB reads) |
 | quick | Chat history scrolling, code preview resizing |
 | transcript | Cold chat mount, tab switching, streamed updates, wheel scrolling and idle cost |
-| full | Space/tab switching, splits/resize, local/SSH/tmux/herdr input and scrollback, sidebar at 40/240 spaces, settings open/scroll, terminal lifecycle, idle terminals, concurrent output while switching, dense chat paging |
+| full | Space/tab switching, splits/resize, local/SSH/tmux/herdr input and scrollback, sidebar at 40/240 spaces, settings open/scroll (General, and Theme's color scheme gallery), terminal lifecycle, idle terminals, concurrent output while switching, dense chat paging |
 | soak | Longer idle and mixed-output phases; `--duration` is seconds **per phase** |
 
 - Desktop suites (`quick` and up) need `--desktop`, prepared offline dependencies, a current generated project, and an unlocked, idle desktop. Use the [VM](vm_testing.md) or a dedicated Mac, never alongside another desktop test runner. `--environment` is only a label: the runner doesn't boot or control a VM.

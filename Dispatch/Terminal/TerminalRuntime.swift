@@ -46,7 +46,7 @@ final class TerminalRuntime {
 
     /// A tab's shown name; an exited agent's read-only transcript no longer names it.
     func label(for tab: TerminalTab, automatic: Bool) -> String {
-        tab.displayLabel(automatic: automatic, conversation: liveConversationTitle(tab))
+        tab.displayLabel(automatic: automatic, conversation: liveConversationTitle(tab), agent: agent(of: tab))
     }
 
     func label(for window: ContainerTab, automatic: Bool) -> String {
@@ -54,12 +54,37 @@ final class TerminalRuntime {
         // Only numbered windows read the pane's title, so only they re-render on it.
         let live = automatic && window.numbered == true ? focused.map { workspace?.liveTab($0.id) ?? $0 } : nil
         return window.displayLabel(automatic: automatic, conversation: focused.flatMap(liveConversationTitle), focused: live,
-                                   agent: focused.flatMap { chat.sessions[$0.focusedSurfaceID]?.agentID })
+                                   agent: focused.flatMap(agent(of:)))
     }
 
+    func agent(of tab: TerminalTab) -> String? { Self.agent(of: tab, session: chat.sessions[tab.focusedSurfaceID]) }
+
+    /// The tab's agent as its name shows it, as the phone's `MobileTabs.agent(of:)` gives it: the key Chat bound (its
+    /// `agentID` says "codex" before it binds), else the one the helper's topology found running there.
+    static func agent(of tab: TerminalTab, session: ChatSession?) -> String? {
+        if let session, session.binding != nil { return session.agentID }
+        return tab.agent
+    }
+
+    /// While files shows, what it shows names the tab (`FilesTab.tabName`); else a live agent's conversation title.
     private func liveConversationTitle(_ tab: TerminalTab) -> String? {
+        if let name = filesName(tab) { return name }
         let session = chat.sessions[tab.focusedSurfaceID]
         return session?.active == true ? session?.conversationTitle : nil
+    }
+
+    private func filesName(_ tab: TerminalTab) -> String? {
+        guard let session = files.existing(tab.focusedSurfaceID), session.visible else { return nil }
+        let file = session.preview.flatMap { preview -> String? in
+            if case .folder = preview.kind { return nil }
+            return preview.path
+        }
+        let commit = session.selectedCommit.flatMap { hash -> String? in
+            if let detail = session.commitDetail, detail.commit.hash == hash { return detail.commit.subject }
+            return session.log?.commits.first { $0.hash == hash }?.subject
+        }
+        return session.tab.tabName(file: file, folder: session.root(tabDirectory: tab.directory), home: session.home,
+                                   branch: session.status.map(GitChangesText.branch), commit: commit)
     }
 
     func owningMachine(for tab: TerminalTab) -> TerminalMachine {

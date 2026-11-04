@@ -209,6 +209,35 @@ enum FilesAvailability {
 /// and Commits.
 enum FilesTab: String, Hashable, Sendable, CaseIterable {
     case files, changes, commits
+
+    /// The tab's automatic name while files shows, on the Mac and the phone alike (it stands where the agent's
+    /// conversation title would; a name the user gave still wins). Files: the open file with its folder
+    /// (`auth/token.ts`, `~/notes.md`, `/etc`'s `/hosts`), else the folder browsed (`api`, `~`, `/`). Review: "Review"
+    /// and the branch. Commits: the open commit's subject, shortened, else "Commits" and the branch. Nil when there is
+    /// nothing to say yet (no folder known): the tab keeps its usual name.
+    func tabName(file: String?, folder: String?, home: String?, branch: String?, commit: String?) -> String? {
+        func named(_ path: String) -> String {
+            if path == "/" { return "/" }
+            if let home, path == home { return "~" }
+            return (path as NSString).lastPathComponent
+        }
+        func titled(_ word: String) -> String { branch.map { "\(word) \($0)" } ?? word }
+        switch self {
+        case .files:
+            if let file, !file.isEmpty, file != "/" {
+                let parent = (file as NSString).deletingLastPathComponent
+                let name = (file as NSString).lastPathComponent
+                return parent == "/" ? "/" + name : named(parent) + "/" + name
+            }
+            return folder.flatMap { $0.isEmpty ? nil : named($0) }
+        case .changes:
+            return titled("Review")
+        case .commits:
+            let subject = commit?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !subject.isEmpty else { return titled("Commits") }
+            return subject.count > 48 ? String(subject.prefix(47)).trimmingCharacters(in: .whitespaces) + "…" : subject
+        }
+    }
 }
 
 enum FilesSort: String, Hashable, Sendable, CaseIterable {

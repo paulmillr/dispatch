@@ -229,6 +229,8 @@ struct SettingsView: View {
                     Color.clear.preference(key: SettingsPageHeights.self, value: ["page": proxy.size.height])
                 })
         }
+        // Where a PinnedHeader measures how far it has scrolled above the top.
+        .coordinateSpace(name: PinnedHeader<EmptyView, EmptyView>.space)
         .background(GeometryReader { proxy in
             Color.clear.preference(key: SettingsPageHeights.self, value: ["viewport": proxy.size.height])
         })
@@ -298,6 +300,12 @@ struct SettingsView: View {
                 settingToggle("Slow connection mode", isOn: $draft.outputWindow)
                     .accessibilityIdentifier("settings-output-window")
                     .help("Off: output streams as fast as the connection takes it. On: at most 256 KB in flight per connection.")
+            }
+            row("Host icons in group headings", detail: "sidebar grouped by host · icons style",
+                info: "With spaces grouped by host, each host's icon shows once, at the end of its group's heading, instead of on every space. A space's row starts with its agent's status instead, and rows are a little shorter.") {
+                settingToggle("Host icons in group headings", isOn: $draft.hostHeaderIcons)
+                    .accessibilityIdentifier("settings-host-header-icons")
+                    .help("Off: every space shows its host's icon. On: each group's heading shows it once.")
             }
         }
     }
@@ -523,10 +531,10 @@ struct SettingsView: View {
         let systemDark = SidebarThemeStore.systemIsDark
         return VStack(spacing: 8) {
             settingsGroup("Colors") {
-                // Turned off, the app stays on the side the system is on now, so nothing changes until the switch does.
+                // Turned off, the app takes the side the gallery shows: the system's, unless the switch picked the other.
                 row("Follow system", detail: "light or dark, as macOS is") {
                     settingToggle("Follow system", isOn: Binding(get: { following }, set: { follow in
-                        draft.appTheme = follow ? .automatic : systemDark ? .dark : .light
+                        draft.appTheme = follow ? .automatic : (schemeSideLight ?? !systemDark) ? .light : .dark
                     })).disabled(nautical).accessibilityIdentifier("settings-follow-system")
                 }.opacity(nautical ? 0.5 : 1)
                 // Nautical, the easter egg, is dark only; off, the app follows the system again.
@@ -547,6 +555,7 @@ struct SettingsView: View {
                                switchable: !nautical, following: following, systemLight: !systemDark,
                                matching: matchingScheme(light:), schemesChanged: reloadSchemes,
                                importSchemes: { selectedTab = .extra }, surprise: surpriseScheme(light:),
+                               useNow: { draft.appTheme = $0 ? .light : .dark },
                                allCustom: schemes.custom.count)
         }
     }
@@ -782,10 +791,11 @@ struct SettingsView: View {
         }.accessibilityIdentifier("settings-dictation")
     }
 
-    /// Scrollback as Tabs & spaces' detail names it: "automatic scrollback", "10 MB scrollback", "10,000-line scrollback".
+    /// Scrollback as Tabs & spaces' detail names it: "scrollback" (automatic), "10 MB scrollback", "10,000-line scrollback".
     private var scrollbackDetail: String {
         switch draft.scrollback {
-        case .automatic, .unlimited: "\(draft.scrollback.title.lowercased()) scrollback"
+        case .automatic: "scrollback"
+        case .unlimited: "unlimited scrollback"
         case .small, .large: "\(draft.scrollback.title) scrollback"
         case .lines10k, .lines100k: draft.scrollback.title.replacingOccurrences(of: " lines", with: "-line") + " scrollback"
         }
@@ -793,7 +803,7 @@ struct SettingsView: View {
 
     /// Terminal's row above Security, folded; its title opens it too: what a new tab starts (folder, shell, startup
     /// command, scrollback), then how tabs and spaces are listed (git branches, the sidebar with one space, tab names,
-    /// vertical tabs). The detail summarizes the launch settings; the badge counts the choices that differ from
+    /// vertical tabs). The detail summarizes the launch settings and says "spaces enabled" unless vertical tabs replace them; the badge counts the choices that differ from
     /// defaults. How the window looks is under Theme › Appearance.
     @ViewBuilder private var tabsAndSpacesOptions: some View {
         // A switch that can't be changed here (git off) isn't counted.
@@ -805,7 +815,7 @@ struct SettingsView: View {
         let shell = draft.shellProgram.map { ($0 as NSString).lastPathComponent } ?? "login shell"
         let command = draft.startupCommand.trimmingCharacters(in: .whitespaces)
         // The startup command last: the longest, it is the one cut short.
-        row("Tabs & spaces", detail: ([folder, shell, scrollbackDetail] + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
+        row("Tabs & spaces", detail: ([folder, shell, scrollbackDetail] + (draft.tabsOnly ? [] : ["spaces enabled"]) + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
             foldButton(fold, card: "Tabs & spaces")
         }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }

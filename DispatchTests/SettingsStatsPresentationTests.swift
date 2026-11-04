@@ -779,7 +779,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
             ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal",
-                         "On launch", "Reopen spaces", "Scrollback", "Tabs & spaces", "login shell", "automatic scrollback", "Startup command",
+                         "On launch", "Reopen spaces", "Scrollback", "Tabs & spaces", "login shell", "spaces enabled", "Startup command",
                          "Show git branch in spaces", "Show sidebar with one space", "Automatic tab names", "Vertical tabs, no spaces",
                          "Security", "programs can copy"]),
             ("Theme", ["Colors", "Follow system", "light or dark, as macOS is", "Appearance", "space size, opacity, colorblind mode, host colors and glass",

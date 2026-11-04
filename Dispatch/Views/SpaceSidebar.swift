@@ -5,7 +5,11 @@ struct SpaceSidebar: View {
     private var typography: AppTypography { AppTypography(contentSize: settings.values.fontSize) }
     /// Both densities share every layout below; only these numbers differ.
     private var metrics: SidebarMetrics {
-        let metrics = settings.values.sidebarMetrics(glass: glass)
+        var metrics = settings.values.sidebarMetrics(glass: glass)
+        // Settings › Experimental: the icons style grouped by host draws each host's icon once, in its heading.
+        if metrics.icons && settings.values.spaceOrder == .tree && settings.values.hostHeaderIcons {
+            metrics = metrics.hostInHeaders(contentSize: settings.values.fontSize)
+        }
         return glass ? metrics.nested(cornerRadius: Self.glassRadius - Self.glassRowInset) : metrics
     }
     private var sidebarFont: Font { AppFont.ui(size: metrics.nameSize) }
@@ -123,6 +127,7 @@ struct SpaceSidebar: View {
     /// A listed tab's name: the window's, or the tab's live label (its agent's conversation, program or folder).
     fileprivate func label(_ tab: SidebarTab) -> String {
         let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
+        if tab.split { return tab.members.map { label(of: $0, in: tab) }.joined(separator: " · ") }
         if tab.window {
             guard let window = workspace.spaces.lazy.flatMap(\.containers).first(where: { $0.id == tab.id }) else { return "Terminal" }
             return runtime.label(for: window, automatic: automatic)
@@ -373,7 +378,7 @@ struct SpaceSidebar: View {
             switch item {
             case .space: return !tabsOnly
             case .tab(let id):
-                guard tabsOnly, let last = workspace.sidebarTabs.last(where: { !$0.window }), let pane = last.pane else { return false }
+                guard tabsOnly, let last = workspace.sidebarTabs.last(where: { $0.pane != nil }), let pane = last.pane else { return false }
                 return workspace.canMoveTab(id, to: pane)
             case .window(let id):
                 guard tabsOnly, let last = workspace.sidebarTabs.last(where: \.window) else { return false }
@@ -387,7 +392,7 @@ struct SpaceSidebar: View {
                       let last = workspace.presentationSpaces.last(where: { workspace.spaceOrder != .tree || $0.hostID == source.hostID }) else { return }
                 workspace.reorderSpace(id, relativeTo: last.id, after: true)
             case .tab(let id):
-                guard let last = workspace.sidebarTabs.last(where: { !$0.window }), let pane = last.pane else { return }
+                guard let last = workspace.sidebarTabs.last(where: { $0.pane != nil }), let pane = last.pane else { return }
                 workspace.moveTab(id, to: pane, relativeTo: last.id, after: true)
             case .window(let id):
                 guard let last = workspace.sidebarTabs.last(where: \.window) else { return }
@@ -582,7 +587,20 @@ struct SpaceSidebar: View {
                         hostHeader(host) { hostHeading(host) }
                             .help(host.id == .local ? "Local" : host.details)
                             .accessibilityIdentifier("host-card-\(host.id.rawValue)")
-                        newSpace.padding(.trailing, max(0, metrics.shortcutInset - 6))
+                        ZStack(alignment: .trailing) {
+                            // Host icons in group headings (Experimental): the host's disc, as rows draw it without
+                            // the setting, ends where the rows' shortcuts do and gives its place to the plus while
+                            // that shows.
+                            if metrics.hostInHeader {
+                                HostDisc(host: host, metrics: metrics)
+                                    .padding(.trailing, min(6, metrics.shortcutInset))
+                                    .opacity(revealed ? 0 : 1)
+                                    .animation(.easeOut(duration: 0.12), value: revealed)
+                                    .allowsHitTesting(false).accessibilityHidden(true)
+                            }
+                            newSpace
+                        }
+                        .padding(.trailing, max(0, metrics.shortcutInset - 6))
                     }
                 }
             }
@@ -757,7 +775,8 @@ struct SpaceSidebar: View {
 
     private func tabRow(_ tab: SidebarTab, pending: Bool, shortcut: String) -> some View {
         SidebarTabRow(sidebar: self, tab: tab, selected: workspace.selectedSidebarTab == tab.id, pending: pending,
-                      shortcut: shortcut, branch: branches[tab.id], selection: selection).equatable()
+                      shortcut: shortcut, branch: branches[tab.id], marked: workspace.sidebarMarks.contains(tab.id),
+                      selection: selection).equatable()
     }
 
     /// The body of `SpaceSidebarRow`. It reads selection and branch only through its arguments,
@@ -815,47 +834,62 @@ struct SpaceSidebar: View {
 
     /// The body of `SidebarTabRow`: a tab (or a tmux or herdr window) drawn as a space's row is, named by its live
     /// label, with its host, agent activity, branch and ⌘ digit. Tabs reorder among tabs and windows among windows;
-    /// a tab dropped on another lands beside it, in that tab's pane, moving between spaces if it must.
+    /// a tab dropped on another lands beside it, in that tab's pane, moving between spaces if it must. A split lists
+    /// its tabs a line each (a window its panes): a split's line is chosen, dragged and dropped on as its tab, and
+    /// focuses that pane; ⌘- and ⇧-clicks mark rows to split together.
     fileprivate func tabRowContent(_ tab: SidebarTab, selected: Bool, pending: Bool, shortcut: String, branch: String?,
-                                   selection: Namespace.ID) -> some View {
+                                   marked: Bool, selection: Namespace.ID) -> some View {
         let flat = settings.values.spaceOrder != .tree
         let host = workspace.hosts.record(tab.host)
         let owner = workspace.spaces.first { $0.id == tab.space }
-        // The terminal that names a window's branch and hover card: its focused pane.
+        // The terminal that names a window's branch and hover card: its focused pane (a split's too).
         let terminal: TerminalTab? = tab.window
             ? owner?.containers.first { $0.id == tab.id }?.focusedTerminal.map { workspace.liveTab($0.id) ?? $0 }
-            : workspace.liveTab(tab.id)
+            : workspace.liveTab((tab.members.first(where: \.focused) ?? tab.members.first)?.id ?? tab.id)
         let name = label(tab)
         let hover = terminal.map { SpaceHoverDetails.make(tab: $0, host: host, runtime: .shared, title: tab.window ? name : nil) }
-        return Button { workspace.selectSidebarTab(tab.id) } label: {
-            SidebarSpaceTile(entry: SidebarEntry(id: tab.id, name: name, surfaceIDs: tab.surfaceIDs), host: host,
-                             mixedHost: nil, grouped: !flat, selected: selected, pending: pending, shortcut: shortcut,
-                             connecting: tab.surfaceIDs.contains { workspace.hostMoveMotion.connecting.contains($0) },
-                             branch: branch, showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection)
+        let members = tab.members.map { member in
+            SidebarEntry.Member(id: member.id, name: label(of: member, in: tab), cell: member.cell, focused: member.focused,
+                                surfaceIDs: tab.windows ? windowSurfaces(member.id) : [member.id])
+        }
+
+        let entry = SidebarEntry(id: tab.id, name: name, surfaceIDs: tab.surfaceIDs, members: members, cells: tab.cells)
+        let tile = SidebarSpaceTile(entry: entry, host: host, mixedHost: nil, grouped: !flat, selected: selected,
+                                    pending: pending, shortcut: shortcut,
+                                    connecting: tab.surfaceIDs.contains { workspace.hostMoveMotion.connecting.contains($0) },
+                                    branch: branch, showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection,
+                                    marked: marked, decorate: tab.split ? memberDecoration(tab) : nil)
+        return rowButton(split: tab.split, tile: tile) {
+            workspace.clickSidebarRow(tab.id, Self.click(NSApp.currentEvent?.modifierFlags ?? []))
         }
         .background {
-            if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showsGitBranches) }
+            // A split's branch is its space's, keyed by the row.
+            if let owner, tab.split { SpaceBranchObserver(space: owner, enabled: settings.values.showsGitBranches) }
+            else if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showsGitBranches) }
         }
         .accessibilityHint(hover?.summary ?? "")
         .accessibilityIdentifier("sidebar-tab-\(tab.id)")
         .overlay {
-            LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical, spaceHover: hover,
-                         hoverFontSize: metrics.nameSize, dragLabel: name,
-                         select: { workspace.selectSidebarTab(tab.id) }, accepts: { item in
-                switch item {
-                case .tab(let id): return !tab.window && tab.pane.map { workspace.canMoveTab(id, to: $0) } == true
-                case .window(let id): return tab.window && workspace.canMoveWindow(id, beside: tab.id)
-                case .space, .host, .queued: return false
-                }
-            }) { item, after in
-                switch item {
-                case .tab(let id): if let pane = tab.pane { workspace.moveTab(id, to: pane, relativeTo: tab.id, after: after) }
-                case .window(let id): workspace.moveContainer(id, beside: tab.id, edge: nil, after: after)
-                case .space, .host, .queued: break
+            // A split's lines take the clicks and drops themselves.
+            if !tab.split {
+                LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical, spaceHover: hover,
+                             hoverFontSize: metrics.nameSize, dragLabel: name,
+                             click: { workspace.clickSidebarRow(tab.id, Self.click($0)) }, accepts: { item in
+                    switch item {
+                    case .tab(let id): return !tab.window && tab.pane.map { workspace.canMoveTab(id, to: $0) } == true
+                    case .window(let id): return tab.window && workspace.canMoveWindow(id, beside: tab.id)
+                    case .space, .host, .queued: return false
+                    }
+                }) { item, after in
+                    switch item {
+                    case .tab(let id): if let pane = tab.pane { workspace.moveTab(id, to: pane, relativeTo: tab.id, after: after) }
+                    case .window(let id): workspace.moveContainer(id, beside: tab.id, edge: nil, after: after)
+                    case .space, .host, .queued: break
+                    }
                 }
             }
         }
-        .contextMenu { tabMenu(tab, label: name) }
+        .contextMenu { tab.split ? AnyView(splitMenu(tab, member: nil)) : AnyView(tabMenu(tab, label: name)) }
         .id(tab.id)
         .modifier(HostMoveRow(motion: workspace.hostMoveMotion, id: tab.id))
         .background(GeometryReader { proxy in
@@ -863,18 +897,154 @@ struct SpaceSidebar: View {
         })
     }
 
-    /// A listed tab's actions, as its strip offered them: a window detaches or terminates, a tab closes.
+    /// A row's button. A split's is its card itself, tapped around its lines: a Button would merge the lines, each
+    /// a control of its own, into one accessibility element.
+    @ViewBuilder private func rowButton(split: Bool, tile: some View, action: @escaping () -> Void) -> some View {
+        if split {
+            tile.contentShape(Rectangle()).onTapGesture(perform: action)
+                .accessibilityElement(children: .contain).accessibilityAddTraits(.isButton)
+        } else {
+            Button(action: action) { tile }
+        }
+    }
+
+    private static func click(_ flags: NSEvent.ModifierFlags) -> SidebarClick {
+        SidebarClick(command: flags.contains(.command), shift: flags.contains(.shift))
+    }
+
+    /// A split's line: a click focuses its pane (⌘ and ⇧ mark the split); it drags as its tab, out to other rows or
+    /// to another place in the split, and a tab dropped on it joins the split there; its menu acts on its tab.
+    private func memberDecoration(_ tab: SidebarTab) -> SidebarMemberDecoration {
+        { member, line in
+            let host = workspace.hosts.record(tab.host)
+            let hover = workspace.liveTab(member.id).map { SpaceHoverDetails.make(tab: $0, host: host, runtime: .shared) }
+            let split = tab.members.first { $0.id == member.id }
+            return AnyView(line
+                .overlay {
+                    // A window's line drags out as its window (a move on the server, as its row's would); none joins.
+                    LocalReorder(item: tab.windows ? .window(member.id) : .tab(member.id), edge: .vertical, spaceHover: hover,
+                                 hoverFontSize: metrics.nameSize, dragLabel: member.name, click: { flags in
+                        let click = Self.click(flags)
+                        if click == .plain {
+                            workspace.sidebarMarks = []
+                            workspace.sidebarMarkAnchor = tab.id
+                            if tab.windows { workspace.selectWindow(member.id) } else { workspace.selectTab(member.id) }
+                        } else {
+                            workspace.clickSidebarRow(tab.id, click)
+                        }
+                    }, accepts: { item in
+                        guard !tab.windows, case .tab(let id) = item else { return false }
+                        return workspace.canAddToSplit(id, space: tab.space)
+                    }) { item, after in
+                        if case .tab(let id) = item { workspace.addToSplit(id, space: tab.space, relativeTo: member.id, after: after) }
+                    }
+                }
+                .contextMenu { splitMenu(tab, member: split) }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("sidebar-split-member-\(member.id)"))
+        }
+    }
+
+    /// A split line's name: its tab's, or its window's.
+    private func label(of member: SidebarSplitMember, in tab: SidebarTab) -> String {
+        guard tab.windows else { return label(ofTab: member.id) }
+        guard let window = workspace.spaces.lazy.flatMap(\.containers).first(where: { $0.id == member.id }) else { return "Terminal" }
+        return TerminalRuntime.shared.label(for: window, automatic: settings.values.automaticTabNames)
+    }
+
+    /// A window's terminals, whose agents make its line's activity.
+    private func windowSurfaces(_ id: UUID) -> [UUID] {
+        workspace.spaces.lazy.flatMap(\.containers).first { $0.id == id }?.terminals.flatMap(\.surfaceIDs) ?? []
+    }
+
+    /// A tab's live label, as its row names it.
+    private func label(ofTab id: UUID) -> String {
+        guard let live = workspace.liveTab(id) else { return "Terminal" }
+        return TerminalRuntime.shared.label(for: live, automatic: settings.values.automaticTabNames)
+    }
+
+    /// A listed tab's actions, as its strip offered them: a window detaches or terminates, a tab closes. A marked row
+    /// offers the marked rows' instead.
     @ViewBuilder private func tabMenu(_ tab: SidebarTab, label: String) -> some View {
-        Button("Rename…") {
-            controller.rename(title: "Rename tab", value: label) { name in
-                if tab.window { workspace.renameWindow(tab.id, to: name) } else { workspace.updateTab(tab.id, customTitle: name) }
+        let marks = workspace.sidebarMarks
+        if marks.count > 1, marks.contains(tab.id) {
+            marksMenu(workspace.liveSidebarMarks)
+        } else {
+            Button("Rename…") {
+                controller.rename(title: "Rename tab", value: label) { name in
+                    if tab.window { workspace.renameWindow(tab.id, to: name) } else { workspace.updateTab(tab.id, customTitle: name) }
+                }
+            }
+            if tab.window {
+                Button("Detach") { controller.detachWindow(tab.id) }
+                Button("Terminate…") { controller.terminateWindow(tab.id) }
+            } else {
+                Button("Close Tab") { controller.closeTab(tab.id) }
             }
         }
-        if tab.window {
-            Button("Detach") { controller.detachWindow(tab.id) }
-            Button("Terminate…") { controller.terminateWindow(tab.id) }
+    }
+
+    /// A split's actions: on a line, its tab's (rename, pop out, close); then the split's layout, separating its tabs
+    /// into rows of their own, and closing it.
+    @ViewBuilder private func splitMenu(_ tab: SidebarTab, member: SidebarSplitMember?) -> some View {
+        let marks = workspace.sidebarMarks
+        let presets = LayoutPreset.splits(tab.members.count)
+        if marks.count > 1, marks.contains(tab.id) {
+            marksMenu(workspace.liveSidebarMarks)
         } else {
-            Button("Close Tab") { controller.closeTab(tab.id) }
+            if let member {
+                let name = label(of: member, in: tab)
+                Button("Rename “\(name)”…") {
+                    controller.rename(title: "Rename tab", value: name) { value in
+                        if tab.windows { workspace.renameWindow(member.id, to: value) } else { workspace.updateTab(member.id, customTitle: value) }
+                    }
+                }
+                Button("Pop Out of Split") { workspace.popOutOfSplit(member.id) }
+                if !tab.windows { Button("Close Tab") { controller.closeTab(member.id) } }
+                Divider()
+            }
+            if presets.count > 1 {
+                Menu("Layout") {
+                    ForEach(presets, id: \.self) { preset in
+                        Button(preset.splitTitle) { workspace.arrangeSplit(tab.space, preset) }
+                    }
+                }
+            }
+            Button("Separate All") { workspace.separateSplit(tab.space) }
+            // A split of windows is a space of its session: detached, its work keeps running.
+            if tab.windows { Button("Detach Split") { controller.closeSpace(tab.space) } }
+            else { Button("Close Split (\(tab.members.count) Tabs)") { controller.closeSpace(tab.space) } }
+        }
+    }
+
+    /// The marked rows' actions: split them in a layout for their count (greyed, with the reason, when they can't
+    /// be), or close them.
+    @ViewBuilder private func marksMenu(_ marks: Set<UUID>) -> some View {
+        let rows = workspace.sidebarTabs.filter { marks.contains($0.id) }
+        let tabs = rows.flatMap(\.tabIDs)
+        let title = "Split \(tabs.count) Tabs"
+        let presets = LayoutPreset.splits(tabs.count)
+        if let refusal = workspace.sidebarSplitRefusal(marks) {
+            Button {} label: {
+                Text(title)
+                Text(refusal)
+            }
+            .disabled(true)
+        } else if presets.count > 1 {
+            Menu(title) {
+                ForEach(presets, id: \.self) { preset in
+                    Button(preset.splitTitle) { workspace.splitSidebarRows(marks, preset: preset) }
+                }
+            }
+        } else {
+            Button(title) { workspace.splitSidebarRows(marks) }
+        }
+        if !rows.isEmpty, !rows.contains(where: \.multiplexed) {
+            Divider()
+            Button("Close \(tabs.count) Tabs") {
+                workspace.sidebarMarks = []
+                for id in tabs { controller.closeTab(id) }
+            }
         }
     }
 
@@ -959,7 +1129,9 @@ struct SpaceSidebar: View {
                                    select: { select($0) },
                                    menu: { id in AnyView(Group {
                                        if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) }
-                                       if let tab = tabs.first(where: { $0.id == id }) { tabMenu(tab, label: label(tab)) }
+                                       if let tab = tabs.first(where: { $0.id == id }) {
+                                           if tab.split { splitMenu(tab, member: nil) } else { tabMenu(tab, label: label(tab)) }
+                                       }
                                    }) })
                     .padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : 10).padding(.top, 10)
             }
@@ -1130,15 +1302,18 @@ private struct SidebarTabRow: View, Equatable {
     let pending: Bool
     let shortcut: String
     let branch: String?
+    let marked: Bool
     let selection: Namespace.ID
 
     var body: some View {
-        sidebar.tabRowContent(tab, selected: selected, pending: pending, shortcut: shortcut, branch: branch, selection: selection)
+        sidebar.tabRowContent(tab, selected: selected, pending: pending, shortcut: shortcut, branch: branch, marked: marked,
+                              selection: selection)
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.tab == rhs.tab && lhs.selected == rhs.selected && lhs.pending == rhs.pending
-            && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.selection == rhs.selection
+            && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.marked == rhs.marked
+            && lhs.selection == rhs.selection
     }
 }
 

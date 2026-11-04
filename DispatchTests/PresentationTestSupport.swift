@@ -367,16 +367,17 @@ enum PresentationTestSupport {
         field.placeholderString ?? field.placeholderAttributedString?.string
     }
 
-    static func mouseEvent(_ type: NSEvent.EventType, in window: NSWindow, at point: NSPoint,
+    static func mouseEvent(_ type: NSEvent.EventType, in window: NSWindow, at point: NSPoint, modifierFlags: NSEvent.ModifierFlags = [],
                            file: StaticString = #filePath, line: UInt = #line) throws -> NSEvent {
-        try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+        try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifierFlags,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: type == .leftMouseUp ? 1 : 0, clickCount: 1, pressure: 1), file: file, line: line)
     }
 
-    static func click(_ window: NSWindow, at point: NSPoint, file: StaticString = #filePath, line: UInt = #line) throws {
-        let down = try mouseEvent(.leftMouseDown, in: window, at: point, file: file, line: line)
-        let up = try mouseEvent(.leftMouseUp, in: window, at: point, file: file, line: line)
+    static func click(_ window: NSWindow, at point: NSPoint, modifierFlags: NSEvent.ModifierFlags = [],
+                      file: StaticString = #filePath, line: UInt = #line) throws {
+        let down = try mouseEvent(.leftMouseDown, in: window, at: point, modifierFlags: modifierFlags, file: file, line: line)
+        let up = try mouseEvent(.leftMouseUp, in: window, at: point, modifierFlags: modifierFlags, file: file, line: line)
         // AppKit buttons and drag trackers may run a nested event loop on down.
         NSApp.postEvent(up, atStart: true)
         window.sendEvent(down)

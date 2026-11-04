@@ -74,6 +74,8 @@ struct FilesDragPayload: Equatable, Sendable {
     private let localSource: @MainActor () -> (any FilesSource)?
     private let enabled: @MainActor () -> Bool
     private let stage: @Sendable ([String]) throws -> FilesDropStaging
+    /// The account's home, under which `protectedFolders` lie.
+    private let home: String
     /// The promises of the drag being started, by tab: every row dragged together arrives as one copy.
     private var openBatches: [UUID: FilesPromiseBatch] = [:]
 
@@ -81,12 +83,14 @@ struct FilesDragPayload: Equatable, Sendable {
          coordinator: @escaping @MainActor () -> FilesCoordinator = { TerminalRuntime.shared.files },
          localSource: @escaping @MainActor () -> (any FilesSource)? = { FilesSources.local() },
          enabled: @escaping @MainActor () -> Bool = FilesTransferSettings.enabled,
-         stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make) {
+         stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make,
+         home: String = System.home.path) {
         self.engine = engine
         self.coordinator = coordinator
         self.localSource = localSource
         self.enabled = enabled
         self.stage = stage
+        self.home = home
     }
 
     var dragEnabled: Bool { enabled() }
@@ -190,14 +194,34 @@ struct FilesDragPayload: Equatable, Sendable {
         return true
     }
 
+    /// Folders of the home macOS guards with a consent prompt (`Library/Mobile Documents` is iCloud Drive, and
+    /// Desktop and Documents when iCloud keeps them; `Library/CloudStorage` holds other file providers' folders).
+    /// All on the home's volume, so staging one of their files is a clone.
+    nonisolated static let protectedFolders = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents", "Library/CloudStorage"]
+
+    /// Whether `path` lies in one of `home`'s `protectedFolders` (or is one).
+    nonisolated static func isProtected(_ path: String, home: String) -> Bool {
+        protectedFolders.contains { folder in
+            let root = (home as NSString).appendingPathComponent(folder)
+            return path == root || path.hasPrefix(root + "/")
+        }
+    }
+
     /// Files the user dropped or pasted, which macOS lets this app read even in a folder it was denied (Desktop,
-    /// Documents, Downloads), but not the helper it started. Those the helper is refused (`permission_denied`) the
-    /// app copies itself into a private folder in its temporary folder (`FilesDropStaging`, a clone on APFS), and the
-    /// copy reads them from there; the folder goes when the copy settles. Nothing is staged when the helper may read.
+    /// Documents, Downloads), but not the helper it started. The app copies those into a private folder in its
+    /// temporary folder (`FilesDropStaging`, a clone on APFS), and the copy reads them from there; the folder goes
+    /// when the copy settles. Files in a `protectedFolders` folder are staged without the helper trying them first:
+    /// its read would be the folder's first access when the app has no answer for it yet, and would raise the
+    /// consent prompt for a copy that needs no consent. Elsewhere (a removable or network volume, where staging is a
+    /// full copy) the helper tries each, and only those it is refused (`permission_denied`) are staged.
     private func copyInDropped(_ paths: [String], into directory: String, in session: FilesSession) async {
         guard let local = localSource() else { return }
         var denied: [String] = []
         for path in paths {
+            if Self.isProtected(path, home: home) {
+                denied.append(path)
+                continue
+            }
             do {
                 _ = try await local.read(path, offset: 0, length: 0, revision: nil)
             } catch FilesSourceError.permissionDenied {

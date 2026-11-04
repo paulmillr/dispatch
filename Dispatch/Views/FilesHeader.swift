@@ -82,6 +82,8 @@ struct FilesHeader: View {
     /// The search shows as its glyph until clicked or ⌘F, and folds back once it is empty and loses focus.
     @State private var searching = false
     private var glass: Bool { LiquidGlassStore.shared.active }
+    /// The bar's height; a floating mode switch over its trailing end centers on it (TerminalContentView).
+    static func height(_ typography: AppTypography) -> CGFloat { typography.expanded(34) }
 
     var body: some View {
         let palette = Chrome.palette
@@ -124,7 +126,7 @@ struct FilesHeader: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 12 + trailingInset)
-        .frame(height: typography.expanded(34))
+        .frame(height: Self.height(typography))
         .frame(maxWidth: .infinity)
         .font(typography, .label)
         .foregroundStyle(palette.muted)

@@ -14,6 +14,51 @@ the platform (iPhone, iPad, Apple Watch); without one it boots the newest availa
 The iPad screens are landscape: `shoot.py rotate` runs the `MockupsRotate` UI test once per simulator boot, because
 `simctl` cannot rotate and iPadOS refuses `requestGeometryUpdate`; `shoot.py rotate landscape` turns an iPhone the same way. Contact sheets come from `contact.swift`.
 
+The Mac's screens are a Swift package of their own, drawn offscreen with no simulator (Mac, below).
+
+## Mac
+
+`Mac/` draws the Mac app's screens: a SwiftUI kit of the main window's chrome and a renderer that draws each screen in
+an offscreen window, so AppKit's own controls (toggles, fields, pickers, buttons) come out real and in their focused
+look, in the app's accent, without taking focus or activating anything.
+
+    python3 mockups/shoot.py mac list                          # ids, groups, titles
+    python3 mockups/shoot.py K2-main-chat                      # one screen, dark and light → shots/mac/<id>-<theme>.png
+    python3 mockups/shoot.py mac render --themes dark,lavender K2 --flat   # options: README below, or `mac` alone
+    python3 mockups/shoot.py all mac                           # every screen, then sheets/mac-<group>-<theme>.png
+
+`mac` builds the package first (incremental: about a second, then under a second a screen). Options: `--themes`
+(dark, light, graphite, lavender, nautical), `--flat` (flat chrome; Liquid Glass is the app's default), `--font code`
+(Source Code Pro interface), `--size` (Settings › Font size, 14), `--scale`, `--out`. A selector is an id, its part
+before the first dash (`K2`), or a group.
+
+**Drawn with the app's values, not copies.** `Mac/Sources/MacMockups/App/` links the app's `Chrome.swift` (every
+theme's palette, `Chrome` metrics), `AppFont.swift` (typography roles, SF Rounded at Source Code Pro's size, line
+heights), `HostTint.swift` (host colours), `TerminalFontScale.swift` and `ColorVision.swift`; `Shims.swift` stands in for
+what they reach elsewhere, at the app's defaults. The terminal and chat colours come from `extras/ghostty/dispatch-black`
+under the theme's overrides, as the app derives them. When one of those sources gains a dependency, the build names it:
+add it to `Shims.swift`.
+
+**The kit** (`Kit/`), at the app's defaults (content size 14, icons sidebar, Liquid Glass):
+
+| Piece | Draws |
+|---|---|
+| `DispatchWindow`, `MacWindow` | the main window (sidebar, divider, content) in a window with traffic lights and shadow |
+| `Sidebar`, `SpaceRow`, `NewSpaceRow` | spaces (host disc, name, branch, activity, ⇧⌘ shortcut), flat or by host (`tree`), the footer's hosts |
+| `Pane`, `TabStrip`, `TabCell`, `Split` | a pane's strip (glass track and pill, or flat underline), +, mode and layout buttons, pane badge, focus edge; splits |
+| `TerminalScreen`, `T`, `c` | a terminal in Source Code Pro with ANSI colours from the theme's scheme; `.prompt(…)` |
+| `ChatPane`, `ComposerCard`, `ToolRow`, `WorkingRow` | user bubbles, agent replies with times, tool cards, working row, composer with Send |
+| `SheetOver`, `MacMenu`, `Callout` | a sheet over a window, an opaque menu, numbered notes for review |
+| `Hosts`, `Activity`, `Sample` | fictional hosts (local, studio, build-box, ai, staging), agent states, sample spaces/terminal/chat |
+
+Real SwiftUI controls (`Toggle`, `TextField`, `Picker`, `Button`, `Form`) go straight into a screen. Materials and Liquid
+Glass do not draw offscreen: glass surfaces are drawn as `GlassTone`'s tones, sampled from the app's capture.
+
+**A new topic** is a file in `Mac/Sources/MacMockups/Screens/` with `static let screens: [Screen]`, listed in
+`Screens.all` (`Screen.swift`). Start from `Reference.swift`'s screens (K0–K4); K9 redraws the app's own capture
+(`build/ui-audit/main-sidebar-dark.png` from `MainMockupPresentationTests`) to check the kit against the app. Ids are a
+letter and number, then a name; ones the iOS screens use cannot be reused.
+
 ## Screens
 
 **iPhone** (`Sources/`). A tab's header is B7, as the app ships it: Back with the needs-you count and the host's
@@ -92,7 +137,7 @@ Commits; iPad keyboard shortcuts.
 
 ## Layout of this folder
 
-`project.yml` (three targets: `Mockups` for iPhone and iPad, `MockupsRotate`, `MockupsWatch`; the `.xcodeproj` is
+`Mac/` (the Mac screens: a Swift package, built into `build/mac`), `project.yml` (three targets: `Mockups` for iPhone and iPad, `MockupsRotate`, `MockupsWatch`; the `.xcodeproj` is
 generated and ignored), `Sources/` (the iOS screens; `Chrome.swift` holds the shared pieces, `Data.swift` the
 fictional repo and hosts), `Rotate/`, `Watch/`, `shoot.py`, `contact.swift`. Fictional data only: hosts `mba2`,
 `studio`, `ai`; authors Alex Rivera, Sam Example, Priya Example.

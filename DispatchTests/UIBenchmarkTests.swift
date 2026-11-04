@@ -498,5 +498,17 @@ final class UIBenchmarkTests: XCTestCase {
                 XCTAssertGreaterThan(abs(scroll.contentView.bounds.minY - start), 100)
             }
         }
+        // Theme's color scheme gallery: tiles drawn in their own colors coming into view, under the pinned switch.
+        try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
+        await display(window)
+        let gallery = try scrollView(window)
+        let top = gallery.contentView.bounds.minY
+        try await measure("settings-theme-scroll", count: 60, window: window) { index in
+            try self.wheel(gallery, pixels: index < 30 ? -120 : 120)
+            if index == 29 {
+                await self.display(window)
+                XCTAssertGreaterThan(abs(gallery.contentView.bounds.minY - top), 1000)
+            }
+        }
     }
 }

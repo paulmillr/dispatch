@@ -608,6 +608,36 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
     }
 
+    /// Settings › Experimental › Host icons in group headings: off by default and saved when chosen; on, the icons
+    /// style's rows keep their height and lead with a 16-point activity column (at 14), the heading grows to hold the
+    /// host's disc, and Liquid Glass's nesting keeps all of it.
+    func testHostHeaderIconsDefaultOffPersistAndMetrics() throws {
+        XCTAssertFalse(Preferences().hostHeaderIcons)
+        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).hostHeaderIcons)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
+        var preferences = Preferences()
+        preferences.hostHeaderIcons = true
+        try store.save(preferences)
+        XCTAssertTrue(SettingsStore(file: file).values.hostHeaderIcons)
+        try store.save(Preferences())
+        XCTAssertFalse(SettingsStore(file: file).values.hostHeaderIcons)
+
+        let icons = SidebarMetrics.icons(contentSize: 14)
+        XCTAssertFalse(icons.hostInHeader)
+        let headed = icons.hostInHeaders(contentSize: 14)
+        XCTAssertTrue(headed.hostInHeader)
+        XCTAssertEqual(headed.rowHeight, icons.rowHeight)
+        XCTAssertEqual(headed.groupSpacing, icons.groupSpacing)
+        XCTAssertEqual(headed.markColumn, 16)
+        XCTAssertEqual(headed.headerHeight, icons.discSize)
+        let nested = headed.nested(cornerRadius: 9)
+        XCTAssertTrue(nested.hostInHeader)
+        XCTAssertEqual(nested.markColumn, headed.markColumn)
+        XCTAssertEqual(nested.rowHeight, headed.rowHeight)
+    }
+
     func testDiagnosticsDefaultOffAndPersistExplicitChoice() throws {
         XCTAssertFalse(Preferences().enableDiagnostics)
         XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).enableDiagnostics)
@@ -1165,19 +1195,32 @@ final class SettingsSynchronizationTests: XCTestCase {
                 // Following the system, the gallery opens on its side and Fun holds both sides' schemes once: the
                 // other side's fun ones are chosen for this side too.
                 let otherFun = systemSide == "dark" ? "Cotton Candy" : "Root Access"
-                let bottom = try await bottomText()
-                XCTAssertTrue(bottom.contains(otherFun), bottom)
-                // The switch and Surprise me stay pinned at the top while the tiles scroll.
-                XCTAssertTrue(bottom.contains("Surprise me"), bottom)
+                // The switch and Surprise me stay pinned at the top while the tiles scroll. OCR can come back empty
+                // for a frame still settling: read again.
+                var bottom = ""
+                try await TestSupport.eventually(timeout: .seconds(10), diagnostic: bottom) {
+                    bottom = try await bottomText()
+                    return bottom.contains(otherFun) && bottom.contains("Surprise me")
+                }
                 // The other half only switches the side being chosen for: the app keeps following.
                 let other = systemSide == "dark" ? "light" : "dark"
                 let half = try await find("settings-scheme-in-use-\(other)")
                 try PresentationTestSupport.click(window, at: NSPoint(x: half.midX, y: half.midY))
                 _ = try await find("settings-scheme-\(other)-Default")
                 let otherSideFun = otherFun == "Cotton Candy" ? "Root Access" : "Cotton Candy"
-                let otherBottom = try await bottomText()
-                XCTAssertTrue(otherBottom.contains(otherSideFun), otherBottom)
+                var otherBottom = ""
+                try await TestSupport.eventually(timeout: .seconds(10), diagnostic: otherBottom) {
+                    otherBottom = try await bottomText()
+                    return otherBottom.contains(otherSideFun)
+                }
                 XCTAssertEqual(store.values.appTheme, .automatic)
+                // That side isn't in use yet, which the bar says, offering it now.
+                _ = try await find("settings-scheme-use-now")
+                // Follow system off keeps the side showing, not the system's.
+                let follow = try await find("settings-follow-system")
+                try PresentationTestSupport.click(window, at: NSPoint(x: follow.midX, y: follow.midY))
+                try await TestSupport.eventually { store.values.appTheme == (other == "light" ? .light : .dark) }
+                XCTAssertTrue(PresentationTestSupport.accessibilityFrames("settings-scheme-use-now", in: window).isEmpty)
             } else {
                 // A click on another scheme's tile chooses it for the side showing.
                 let side = darkAppearance ? "dark" : "light"

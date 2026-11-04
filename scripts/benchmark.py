@@ -33,7 +33,7 @@ EXPECTED = {
     'testLiveTerminalInputAndScroll': [backend + '-' + action for backend in ('local', 'ssh', 'tmux', 'herdr')
                                        for action in ('input-reply', 'terminal-scroll')],
     'testSidebarScrollingAndFiltering': [f'sidebar-{action}-{size}' for size in (40, 240) for action in ('scroll', 'filter')],
-    'testSettings': ['settings-scroll'],
+    'testSettings': ['settings-scroll', 'settings-theme-scroll'],
     'testTerminalLifecycle': ['local-terminal-create-ready-close'],
     'testIdleTerminals': ['idle-four-terminals'],
     'testMixedOutputAndNavigation': ['mixed-three-output-space-switch', 'mixed-three-output-sustained'],

@@ -273,9 +273,10 @@ struct ChatComposerActivity: View {
         let state = activity?.current ?? AgentWorkingState(session, details: false)
         if state.visible && !state.loading {
             // Motion runs in the compositor (ChatComposerMotion.swift); SwiftUI updates only the whole seconds.
-            // The reply placeholder shows the activity instead (ChatReplyPlaceholderStatus): this one hides, still.
-            let hidden = session.replyShowsStatus
-            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat && !hidden
+            // The reply placeholder in view shows the activity instead (ChatReplyPlaceholderStatus): this one dims and
+            // stills, its time blank in its slot, so the footer keeps its place and its details.
+            let handedOff = session.replyShowsStatus
+            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat && !handedOff
             Button { details.toggle() } label: {
                 HStack(spacing: 8) {
                     if theme.radioLog {
@@ -290,14 +291,14 @@ struct ChatComposerActivity: View {
                         if showsLabel || state.waiting { ChatComposerStatus(label: state.label, moving: moving) }
                     }
                     if !state.waiting {
-                        TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat || hidden)) { timeline in
+                        TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat || handedOff)) { timeline in
                             let time = (showsLabel ? "· " : "") + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
                                                                                                reduceMotion: reduceMotion)
                             // Sized by its template, which a tick changes only when the clock gains a digit: the
                             // time itself is an overlay, so a tick changes no size and the footer's `ViewThatFits`
                             // does not measure its variants again every second.
                             ChatClockSlot(template: ChatClockSlot.template(time)).equatable()
-                                .overlay(alignment: .leading) { Text(time).monospacedDigit().fixedSize() }
+                                .overlay(alignment: .leading) { Text(time).monospacedDigit().fixedSize().opacity(handedOff ? 0 : 1) }
                         }
                     }
                 }.foregroundStyle(theme.muted).contentShape(Rectangle())
@@ -305,8 +306,8 @@ struct ChatComposerActivity: View {
                 .help(showsLabel ? "Show activity details" : "\(state.label) · show activity details")
                 .accessibilityElement(children: .contain)
                 .font(theme.typography.detail).accessibilityIdentifier("chat-working")
-                .opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: hidden)
+                .opacity(handedOff ? 0.45 : 1)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: handedOff)
                 .onAppear { appeared = .now; visible = true }
                 .onDisappear { visible = false }
                 .onChange(of: session.activeTurnID) { _, _ in appeared = .now }

@@ -85,7 +85,9 @@ struct PaneView: View {
                 }.padding(.top, overlaidStrip ? 0 : stripInset)
             }
         }
-        .hostTintBorder(!space.structured ? hostTint : nil, surfaceID: pane.activeTab?.focusedSurfaceID,
+        // Tabs only with the sidebar shown: the sidebar's row marks the host, so no edge across the pane's top.
+        .hostTintBorder(!space.structured && !(workspace.tabsOnly && controller.sidebarVisible) ? hostTint : nil,
+                        surfaceID: pane.activeTab?.focusedSurfaceID,
                         stripHeight: showTabs ? tabBarHeight : 0)
         .frame(minWidth: 180, maxWidth: .infinity, minHeight: 120, maxHeight: .infinity)
         .font(typography.font(.label))

@@ -95,6 +95,7 @@ struct TerminalContentView: View {
     /// beside the edge reveal's host mark, at the strip's trailing inset, as it would sit on a strip.
     var switchRow: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appTypography) private var typography
     /// A glass strip over the pane's top: the terminal always sits below it, so switching to chat never resizes
     /// the PTY; chat scrolls under it.
     @Environment(\.glassStripInset) private var glassInset
@@ -166,11 +167,13 @@ struct TerminalContentView: View {
                 }
                 if floatingSwitch && !searchShown {
                     let hidden = revealsSwitch && mode == .terminal && !switchRevealed
+                    // Over files it sits in the header's row, one of the bar's controls, rather than hanging below it.
+                    let row = mode == .files ? FilesHeader.height(typography) : switchRow
                     ChatModeSwitch(session: session, coordinator: chat, floating: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { floatingSwitchWidth = $0 }
                         // Centered on a fixed row, not offset by a measured height: no frame shows it elsewhere.
-                        .frame(height: switchRow, alignment: .center)
-                        .padding(.top, (switchRow == nil ? 10 : 0) + glassInset).padding(.trailing, switchTrailing)
+                        .frame(height: row, alignment: .center)
+                        .padding(.top, (row == nil ? 10 : 0) + glassInset).padding(.trailing, switchTrailing)
                         // Faded, not removed: a held press's menu keeps its button, and the width stays measured.
                         .opacity(hidden ? 0 : 1)
                         .allowsHitTesting(!hidden)

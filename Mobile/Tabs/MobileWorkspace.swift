@@ -144,55 +144,25 @@ final class MobileTab: Identifiable {
     /// Whether its program is a login shell at a prompt, as far as the name tells (M2b: busy tabs are white).
     var atShell: Bool { program.map(Self.isShell) ?? false }
 
-    /// What tmux names a window whose agent Dispatch's typed launcher started (`claude` in a Dispatch shell runs
-    /// `dispatch-helper launch claude`, and tmux names the window after that program): it says nothing about the tab.
-    nonisolated static let launcher = "dispatch-helper"
-
-    /// A window's name as shown: the agent's (`agent`) in place of the launcher's.
-    nonisolated static func shown(_ name: String, agent: String?) -> String {
-        name == launcher ? agent ?? name : name
-    }
-
-    /// Whether a window's name is the user's: renamed, but not to its agent's own name (`agent`), which a launch from
-    /// the phone gives its new window (`launch.names`: tmux's `new-window -n claude`, herdr's `tab.rename`) and which
-    /// tmux and herdr report as a rename like any other. Such a tab still follows its conversation's title.
-    nonisolated static func named(_ name: String, renamed: Bool, agent: String?) -> Bool {
-        renamed && name != agent
-    }
-
-    /// The agent the names around a bound process give (its executable, its pane's title, its window's): claude, codex
-    /// or pi, else "agent".
-    nonisolated static func agent(named names: [String?]) -> String {
-        for name in names.compactMap({ $0?.lowercased() }) {
-            if name.contains("claude") { return "claude" }
-            if name.contains("codex") { return "codex" }
-            if name == "pi" || name.hasPrefix("pi ") || name.hasPrefix("pi-") { return "pi" }
-        }
-        return "agent"
-    }
-
     nonisolated static func isShell(_ name: String) -> Bool {
         let base = name.hasPrefix("-") ? String(name.dropFirst()) : name
         return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"].contains(base)
     }
 
-    /// The name it shows, by the Mac's automatic names (ContainerTab.displayLabel): a renamed tab keeps its name (but
-    /// one named after its agent by the phone's launch, `named`); else
-    /// the agent's conversation title; else for a numbered herdr tab its pane's label (TerminalTab.displayLabel): the
-    /// terminal's own title (`paneTitle`, OSC 0/2, when the phone has it attached, else the pane's name), or its folder
-    /// when that title names the folder (a shell at its prompt) or there is none. A tmux window keeps the name tmux gives
-    /// it (its program), as on the Mac, but for the launcher's: an agent's tab without a title yet shows `agent`.
+    /// The name it shows, by the Mac's automatic names (ContainerTab.displayLabel, the same rules): a renamed tab keeps
+    /// its name (but one named after its agent by the phone's launch, `TerminalTab.named`); else the agent's
+    /// conversation title; else for a numbered herdr tab its pane's (`TerminalTab.paneLabel`, from the terminal's own
+    /// title, `paneTitle`, OSC 0/2, when the phone has it attached, else the pane's name); else the window's name, the
+    /// agent's in place of the launcher's (`TerminalTab.shown`).
     func label(conversation: String?, homes: HomePath, paneTitle: String? = nil, agent: String? = nil) -> String {
-        guard !Self.named(name, renamed: renamed, agent: agent) else { return name }
+        guard !TerminalTab.named(name, renamed: renamed, agent: agent) else { return name }
         if let title = TerminalTab.conversationLabel(conversation) { return title }
-        guard numbered, let pane = activePane else { return Self.shown(name, agent: agent) }
+        guard numbered, let pane = activePane else { return TerminalTab.shown(name, agent: agent) }
         let folder: String? = pane.cwd.map { cwd in
             let path = homes.abbreviate(cwd)
             return path == "/" || path == "~" ? path : (path as NSString).lastPathComponent
         }
-        let title = (paneTitle ?? pane.name).trimmingCharacters(in: .whitespaces)
-        if !title.isEmpty, title != name, !TerminalTab.titleNamesDirectory(title, pane.cwd ?? "") { return title }
-        return folder ?? (title.isEmpty ? name : title)
+        return TerminalTab.paneLabel(paneTitle ?? pane.name, folder: folder, directory: pane.cwd ?? "", tab: name, agent: agent)
     }
 
     func pick(_ pane: MobilePane) { if picked != pane.key { picked = pane.key } }

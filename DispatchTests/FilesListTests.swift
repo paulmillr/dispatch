@@ -469,6 +469,37 @@ final class FilesListTests: XCTestCase {
         return (controller, container.outline, update)
     }
 
+    /// ⌃D twice within a second leaves files for the terminal, as chat's pair does; a repeat, a late second press or
+    /// another key between them only arms it again.
+    func testControlDTwiceLeavesFiles() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let files = TerminalRuntime.shared.files
+        let session = files.session(for: System.uuid())
+        session.home = source.home
+        session.availability = .available(source)
+        await load(source, session, root)
+        session.visible = true
+        defer { session.visible = false }
+        let (_, outline, update) = outline(session, builder: FilesRowBuilder())
+        update()
+        func press(_ code: UInt16, at time: TimeInterval, flags: NSEvent.ModifierFlags = .control, repeated: Bool = false) {
+            outline.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: time,
+                                                   windowNumber: 0, context: nil, characters: code == 2 ? "\u{4}" : "a",
+                                                   charactersIgnoringModifiers: code == 2 ? "d" : "a", isARepeat: repeated,
+                                                   keyCode: code)!)
+        }
+        press(2, at: 10)
+        press(2, at: 10.5, repeated: true)
+        XCTAssertEqual(files.mode(for: session.id), .files, "holding the key never confirms")
+        press(2, at: 11.6)
+        XCTAssertEqual(files.mode(for: session.id), .files, "a second press after a second only arms again")
+        press(0, at: 11.8, flags: [])
+        press(2, at: 12)
+        XCTAssertEqual(files.mode(for: session.id), .files, "another key between them disarms")
+        press(2, at: 12.4)
+        XCTAssertEqual(files.mode(for: session.id), .terminal)
+    }
+
     func testARefreshWithTheSameEntriesChangesNoRow() async throws {
         let source = FakeFilesSource.mockupAPI()
         let session = await session(source)
