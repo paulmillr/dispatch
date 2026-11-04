@@ -118,7 +118,8 @@ build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` stan
 - Helper capability groups (`HelperCapabilities`), hello validation/configuration and multiplexer descriptors.
   Platform grants and opt-in hello feature lists remain distinct; the phone still has no file-write capability.
 - Files wire shapes and error classification (`FilesWire`, `FilesSourceFailure`), strict UTF-8 prefix decoding,
-  orientation-aware image metadata/thumbnail bounds, and occurrence scanning. Preview byte/pixel limits stay with
+  orientation-aware image metadata/thumbnail bounds, occurrence scanning, and naming a binary's format from its
+  first bytes (`FileFormat`; every read bounds-checked). Preview byte/pixel limits stay with
   each client. Invalid trailing UTF-8 is rejected; only an incomplete valid scalar at a read boundary is trimmed.
 - Git models, parsers, graph lanes, command construction and commit reads (`GitCommitReads`); untracked content and
   status enrichment; Review models, text and source policy. Staged content changed again in the working tree uses the
@@ -407,9 +408,16 @@ The policies below are the ones a change must keep; the screens themselves are d
   leaving the preview stops it before anything is typed. A refused send says it did not reach the terminal, one with
   no answer or an uncertain one that it may have; neither is retried. The phone checks the screen the helper had sent
   when it answered: a program that takes the pane after that (a command typed just before) still gets the `cd`, a
-  window only the helper could close. Share, Save to Photos and Ask take
+  window only the helper could close. A binary shows what its first bytes say it is (`FileFormat`, the Mac's: "ELF
+  64-bit LSB pie executable, arm64"), else its kind by name, and its size. Share, Save to Photos and Ask take
   only the whole revision the preview read, with the helper's metadata (off while loading, failed, offline or a
-  folder): a file past the limit, a short read or a file changed since fail instead of sharing part of it. A path that
+  folder): a file past the limit, a short read or a file changed since fail instead of sharing part of it. Share and
+  Save to Photos copy it to the phone first (`FilePreview.download`: up to 4 GB, in 8 MB reads of that revision, the
+  More button spinning meanwhile, cancelled by leaving the preview, the copy removed after); Save to Photos is offered
+  for images and for videos by name (`.mp4`, `.mov`, `.m4v`), which Photos imports from the copy. Such a video shows
+  its name and size with Play: nothing is read until it is tapped, then the same copy is made and plays in the system
+  player (`VideoPlayer`); leaving the preview stops it and removes the copy. Ask reads the file
+  into memory (up to its attachment limit). A path that
   turns out to be a folder (the helper's `is_directory`) shows its listing. A folder row's item count waits while the
   host is offline and is asked again when it reconnects, for every row still on screen in their order (four at a
   time, none dropped).

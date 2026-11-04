@@ -1022,6 +1022,48 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("ACCEPTED_CHANGES") }
     }
 
+    /// A dropped connection to a server that kept everything: the first Reconnect restores every space, window and pane,
+    /// including tabs made just before the drop, and never reports a changed server.
+    func testReconnectAfterLiveDropRestoresEverySpaceAtOnce() async throws {
+        let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        app.controller.settings.values.hideSingleSpace = false
+        _ = try app.server(["split-window", "-h", "-t", "edge"])
+        _ = try app.server(["new-window", "-d", "-t", "edge", "/bin/sh"])
+        _ = try await connect(app, server: server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
+        try await app.attach(); try await app.ready()
+        try await app.wait { app.workspace.current?.tabs.count == 3 && app.workspace.current?.tabs.allSatisfy { !$0.isConnecting } == true }
+        let first = try XCTUnwrap(app.workspace.current)
+        app.workspace.newSpace()
+        try await app.wait { app.workspace.current?.id != first.id && app.workspace.activeTab?.isConnecting == false }
+        app.workspace.newTab()
+        try await app.wait { app.workspace.current?.tabs.count == 2 && app.workspace.activeTab?.isConnecting == false }
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 } }
+        let tabs = Set(app.workspace.spaces.flatMap(\.tabs).map(\.id))
+        let spaces = app.workspace.spaces.map(\.id)
+        let retained = try XCTUnwrap(first.tabs.first)
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[retained.id]).host
+        let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: retained.id) != nil }
+        let controller = app.runtime.hosts.reconnect
+        controller.reconnect(hostID: host, sourceSurfaceID: retained.id)
+        var changed = false
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: retained.id)?.error ?? "Reconnect pending") {
+            changed = changed || controller.state(for: retained.id)?.changed == true
+            return controller.state(for: retained.id) == nil || controller.state(for: retained.id)?.reconnecting == false
+        }
+        XCTAssertFalse(changed, "Nothing changed on the server: \(controller.state(for: retained.id)?.error ?? "")")
+        XCTAssertNil(controller.state(for: retained.id)?.error)
+        try await app.wait {
+            app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
+                && app.runtime.helpers.values.allSatisfy { $0.error == nil }
+        }
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
+        XCTAssertEqual(Set(app.workspace.spaces.flatMap(\.tabs).map(\.id)), tabs)
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes)
+    }
+
     /// A tmux space restored by a relaunch whose reconnect finds one of its panes gone: the session is attached
     /// again (its control client is live) and the space stays offline. Returns the missing pane's tab and a kept one.
     private func failedRelaunchRestore() async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {

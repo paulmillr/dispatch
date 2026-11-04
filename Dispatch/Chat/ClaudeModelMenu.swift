@@ -113,15 +113,30 @@ struct ClaudeModelMenu: Equatable {
         return rest.trimmingCharacters(in: .whitespaces)
     }
 
-    static func removingPlaceholder(_ screen: String, column: Int, row: Int, faint: Bool) -> String {
+    /// Codex's prompt line (`› text`, 0.166) with only its footer below it: the text typed there, "" when empty (its
+    /// faint placeholder removed first, `removingPlaceholder`); nil while a menu, a popup or a multiline draft shows.
+    static func codexComposerText(_ screen: String) -> String? {
+        guard screen.utf8.count <= 65_536 else { return nil }
+        let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let row = lines.lastIndex(where: { $0.hasPrefix("›") }) else { return nil }
+        let below = lines.dropFirst(row + 1).filter { !$0.isEmpty }
+        // Below the prompt: one footer line (model · folder), and a notice at most; never a popup's rows.
+        guard below.count <= 2, below.contains(where: { $0.contains(" · ") }), !below.contains(where: { $0.hasPrefix("/") }) else { return nil }
+        let rest = lines[row].dropFirst()
+        guard rest.first?.isWhitespace != false else { return nil }
+        return rest.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func removingPlaceholder(_ screen: String, column: Int, row: Int, faint: Bool, marker: String = "❯") -> String {
         guard faint else { return screen }
         var lines = screen.components(separatedBy: .newlines)
         guard lines.indices.contains(row) else { return screen }
         let line = lines[row], prefix = String(line.prefix(column))
         // Generated suggestions have the same faint style as static placeholders.
-        guard prefix.trimmingCharacters(in: .whitespaces) == "❯" else { return screen }
+        guard prefix.trimmingCharacters(in: .whitespaces) == marker else { return screen }
         lines[row] = prefix
         let result = lines.joined(separator: "\n")
+        if marker != "❯" { return codexComposerText(result) == "" ? result : screen }
         return isEmptyComposer(result) ? result : screen
     }
 }

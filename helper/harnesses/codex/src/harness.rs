@@ -69,6 +69,9 @@ pub struct Codex {
     keyed: BTreeMap<(u32, [u64; 2]), Vec<String>>,
     reading: BTreeMap<(u32, [u64; 2]), command::Reading>,
     walks: Rc<RefCell<BTreeMap<(u32, [u64; 2]), crate::menu::Walk>>>,
+    /// Per TUI (pid, start): the attention this harness set for a Codex menu covering the
+    /// composer (`menu::surface`), cleared when it closes; typed input waits for it.
+    surfaces: BTreeMap<(u32, [u64; 2]), String>,
     /// Context lines earlier pages already found (paging::Known).
     known: crate::paging::Known,
 }
@@ -229,6 +232,7 @@ impl Harness for Codex {
         self.models.borrow_mut().remove(&(process.pid, process.start));
         self.screens.remove(&(process.pid, process.start));
         self.reading.remove(&(process.pid, process.start));
+        self.surfaces.remove(&(process.pid, process.start));
         self.walks
             .borrow_mut()
             .remove(&(process.pid, process.start));
@@ -922,6 +926,35 @@ impl Harness for Codex {
         }
         drop(statuses);
         crate::menu::interaction(screen)
+    }
+
+    /// A Codex menu only the terminal can drive (`menu::surface`) asks for attention while it
+    /// covers the composer, unless a walk or command reading is driving the TUI; only the
+    /// attention set here is cleared when it closes.
+    fn screen_state(&mut self, binding: &Binding, screen: &Screen) -> Option<State> {
+        let key = (binding.process.pid, binding.process.start);
+        let driving = self.walks.borrow().contains_key(&key)
+            || self.reading.contains_key(&key)
+            || self.screens.contains_key(&key);
+        let found = if driving { None } else { crate::menu::surface(&screen.text) };
+        let ours = self.surfaces.get(&key).cloned();
+        let mut states = self.states.borrow_mut();
+        let state = states.get_mut(&binding.session)?;
+        match (found, ours) {
+            (Some(message), None) if state.attention.is_none() => {
+                state.attention = Some(message.into());
+                self.surfaces.insert(key, message.into());
+            }
+            (None, Some(message)) => {
+                self.surfaces.remove(&key);
+                if state.attention.as_ref() != Some(&message) {
+                    return None;
+                }
+                state.attention = None;
+            }
+            _ => return None,
+        }
+        Some(state.clone())
     }
 
     fn answer(

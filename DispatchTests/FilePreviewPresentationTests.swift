@@ -181,6 +181,58 @@ final class FilePreviewPresentationTests: XCTestCase {
         }
     }
 
+    /// A binary shows as hex at once, its format in the header; a click selects a byte and the inspector reads it, the
+    /// end button reaches the last row (read on demand), and Strings lists its text.
+    func testBinaryShowsHexSelectsJumpsAndListsStrings() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let path = base + "/module.wasm"
+        var bytes = Data([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+        bytes += Data((8..<300_008).map { UInt8($0 % 251) })
+        bytes.replaceSubrange(64..<79, with: Data("BOUNDARY-STRING".utf8))
+        bytes.replaceSubrange(79..<80, with: Data([0]))
+        bytes.replaceSubrange(63..<64, with: Data([0]))
+        source.file(path, bytes)
+        let (window, session) = try host(source, preview: path, size: NSSize(width: 820, height: 520))
+        try await TestSupport.eventually { if case .binary = session.preview?.kind { return true }; return false }
+        let grid = try await frame("file-preview-hex", in: window)
+        let snapshot = try await PresentationTestSupport.capture(window, named: "file-preview-hex", in: "files-audit")
+        try PresentationTestSupport.assertText("WebAssembly module, version 1", in: snapshot)
+        try PresentationTestSupport.assertText("00000000", in: snapshot)
+        try PresentationTestSupport.assertText("00 61 73 6d", in: snapshot)
+        XCTAssertFalse(try snapshot.reads(["Show first 64 KB"]), "No step before the bytes show")
+
+        // The first row's second byte: under the header row and the inset, past the offset column and byte 0.
+        let metrics = FilePreviewMetrics.metrics(ChatTypography())
+        let y = grid.maxY - (metrics.rowHeight + 1) - 4 - metrics.rowHeight / 2
+        let x = grid.minX + FileHexGridView.padding + CGFloat(8 + 2 + 3) * metrics.digitWidth + metrics.digitWidth
+        try PresentationTestSupport.click(window, at: NSPoint(x: x, y: y))
+        _ = try await frame("file-preview-hex-inspector", in: window)
+        try await TestSupport.eventually {
+            let snapshot = try await PresentationTestSupport.capture(window, published: true)
+            return try snapshot.reads(["1 byte selected"]) && snapshot.reads(["8-bit"])
+        }
+
+        try click("file-preview-hex-end", in: window)
+        do {
+            try await TestSupport.eventually(diagnostic: "The last row did not show") {
+                let snapshot = try await PresentationTestSupport.capture(window, published: true)
+                return try snapshot.reads(["000493e0"])
+            }
+        } catch {
+            _ = try? await PresentationTestSupport.capture(window, named: "file-preview-hex-end-failed", in: "files-audit",
+                                                           published: true)
+            throw error
+        }
+        _ = try await PresentationTestSupport.capture(window, named: "file-preview-hex-end", in: "files-audit", published: true)
+
+        try click("file-preview-hex-mode-strings", in: window)
+        try await TestSupport.eventually(diagnostic: "Strings did not list the text") {
+            let snapshot = try await PresentationTestSupport.capture(window, published: true)
+            return try snapshot.reads(["BOUNDARY-STRING"])
+        }
+        _ = try await PresentationTestSupport.capture(window, named: "file-preview-hex-strings", in: "files-audit", published: true)
+    }
+
     func testMarkdownShowsSourceThenRendered() async throws {
         let (window, session) = try host(FakeFilesSource.mockupAPI(), preview: base + "/README.md")
         try await TestSupport.eventually { if case .markdown = session.preview?.kind { return true }; return false }

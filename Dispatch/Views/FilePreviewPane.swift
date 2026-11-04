@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import SwiftUI
 
 /// The right pane: what the selected row is (F2a, F2d). A header as tall as the list's column header names it and
@@ -58,6 +59,7 @@ extension FilesFormatting {
         if preview.entry?.isDirectory == true { return "folder" }
         var parts: [String] = []
         if let bytes = preview.revision?.size ?? preview.entry?.size { parts.append(size(bytes)) }
+        if case .binary(_, _, let format?) = preview.kind { parts.append(format) }
         if case .image(_, let pixels) = preview.kind {
             if let kind = kindName(preview.name) { parts.append(kind) }
             parts.append("\(Int(pixels.width)) × \(Int(pixels.height))")
@@ -82,6 +84,10 @@ private struct FilePreviewDetail: View {
     @State private var zoom = FileImageZoom.fit
     @State private var headRequest: UUID?
     @State private var spinner = false
+    @State private var video = FilePreviewVideo()
+    @State private var hex = FileHexHolder()
+    /// A video's bytes were asked for in place of its Play.
+    @State private var showBytes = false
     @FocusState private var focus: Field?
 
     enum Field: Hashable { case content, find }
@@ -105,13 +111,21 @@ private struct FilePreviewDetail: View {
                     closeFind()
                     return .handled
                 }
+                .onKeyPress(phases: .down) { press in
+                    guard case .binary = preview.kind, let document = hex.document else { return .ignored }
+                    return FileHexPreview.key(press, in: document)
+                }
         }
         .onChange(of: focus) { session.previewFocused = focus != nil }
         .onChange(of: session.findRequest) {
             guard session.previewFocused else { return }
             openFind()
         }
-        .onDisappear { if focus != nil { session.previewFocused = false } }
+        .onDisappear {
+            if focus != nil { session.previewFocused = false }
+            video.stop()
+            hex.close()
+        }
         .task(id: headRequest) {
             guard headRequest != nil, let source = session.source else { return }
             await FilePreviewLoader.loadHead(preview, from: source)
@@ -329,18 +343,17 @@ private struct FilePreviewDetail: View {
                                 loading: headRequest != nil, showHead: { headRequest = System.uuid() },
                                 openTerminal: openTerminal)
             }
-        case .binary(let size, let head):
-            if let head {
-                VStack(spacing: 0) {
-                    headBar("First \(FilesFormatting.size(UInt64(head.count))) of \(FilesFormatting.size(size)) as hex · the terminal has the rest")
-                    FileTextPreview(owner: owner, content: .lines(FileTextLines.hexLines(head)), wrap: false,
-                                    find: find, highlightsQuery: find.open)
-                }
+        case .binary(let size, let head, _):
+            if FilePreviewVideo.isVideo(preview.name), !showBytes {
+                videoBody
             } else {
-                FileLargeNotice(title: "Binary file",
-                                detail: "Binary content has no text preview. The first 64 KB shows below as hex; the terminal has the rest.",
-                                loading: headRequest != nil, showHead: { headRequest = System.uuid() },
-                                openTerminal: openTerminal)
+                FileHexPreview(document: hex.document(preview, size: size, head: head, source: session.source),
+                               focused: focused, activate: { if focus != .content { focus = .content } },
+                               openTerminal: openTerminal,
+                               reload: {
+                                   guard let source = session.source else { return }
+                                   Task { await FilePreviewLoader.reload(preview, from: source) }
+                               })
             }
         case .error(let message):
             VStack(spacing: 10) {
@@ -351,6 +364,52 @@ private struct FilePreviewDetail: View {
                     .multilineTextAlignment(.center)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("file-preview-error")
+            }
+            .padding(.horizontal, 30)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// A video: Play until it is asked for (nothing is read before), then the system player (`FilePreviewVideo`).
+    @ViewBuilder private var videoBody: some View {
+        if case .playing(let player) = video.stage {
+            VideoPlayer(player: player)
+                .accessibilityIdentifier("file-preview-video-player")
+        } else {
+            let remote = session.source?.endpoint.isLocal == false
+            let detail: String = switch video.stage {
+            case .failed(let message): message
+            case .copying: "Copying it to this Mac; the row below shows how far."
+            default: remote ? "Play copies it to this Mac first, then plays the copy; leaving the preview removes it."
+                : "Nothing is read until Play."
+            }
+            VStack(spacing: 10) {
+                Image(systemName: "film").font(.system(size: 24, weight: .ultraLight)).foregroundStyle(theme.muted)
+                Text("Video")
+                    .font(theme.typography.font(offset: -0.5))
+                    .foregroundStyle(theme.ink.opacity(0.85))
+                    .accessibilityIdentifier("file-preview-video")
+                Text(detail)
+                    .font(theme.typography.font(offset: -1.5))
+                    .foregroundStyle(theme.muted)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("file-preview-video-detail")
+                HStack(spacing: 8) {
+                    Button(video.copying ? "Copying…" : "Play") { video.play(preview.path, in: session) }
+                        .buttonStyle(FilePreviewButtonStyle())
+                        .disabled(video.copying)
+                        .accessibilityIdentifier("file-preview-play")
+                    Button("Show bytes") { showBytes = true }
+                        .buttonStyle(FilePreviewButtonStyle(prominent: false))
+                        .disabled(video.copying)
+                        .accessibilityIdentifier("file-preview-show-bytes")
+                    Button("Open in terminal", action: openTerminal)
+                        .buttonStyle(FilePreviewButtonStyle(prominent: false))
+                        .help("Show this tab’s terminal")
+                        .accessibilityIdentifier("file-preview-open-terminal")
+                }
             }
             .padding(.horizontal, 30)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -393,7 +452,7 @@ private struct FilePreviewDetail: View {
     }
 }
 
-/// "Too large to preview here" / "Binary file", with Show first 64 KB and Open in terminal (F2d).
+/// "Too large to preview here", with Show first 64 KB and Open in terminal (F2d).
 private struct FileLargeNotice: View {
     @Environment(\.chatTheme) private var theme
     let title: String

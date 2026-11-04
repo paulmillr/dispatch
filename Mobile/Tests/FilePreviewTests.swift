@@ -137,9 +137,12 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(offline.content, .failed("mba2 is offline."))
     }
 
-    /// Markdown stays Markdown (rendered, with its source a toggle away); a binary has no text.
+    /// Markdown stays Markdown (rendered, with its source a toggle away); a binary has no text, and its first bytes
+    /// may name its format.
     func testMarkdownAndBinary() async throws {
-        let files = Files(["/w/README.md": Data(FilesSample.themingDoc.utf8), "/w/app.bin": Data([0, 1, 2, 3])])
+        let wasm = Data([0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00])
+        let files = Files(["/w/README.md": Data(FilesSample.themingDoc.utf8), "/w/app.bin": Data([0, 1, 2, 3]),
+                           "/w/app.wasm": wasm])
         let markdown = preview("/w/README.md", files)
         await markdown.load()
         XCTAssertEqual(markdown.content, .markdown(FilesSample.themingDoc, truncated: false))
@@ -149,6 +152,11 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(binary.content, .binary)
         let bytes = try await binary.bytes()
         XCTAssertEqual(bytes, Data([0, 1, 2, 3]), "Share reads the whole file")
+        XCTAssertNil(binary.format, "Bytes no format starts with name nothing")
+        let module = preview("/w/app.wasm", files)
+        await module.load()
+        XCTAssertEqual(module.content, .binary)
+        XCTAssertEqual(module.format, "WebAssembly module, version 1", "The first bytes name the format")
     }
 
     /// An image past the pixel cap is drawn from a smaller copy (its header read first), and Share reads the file again;

@@ -9,7 +9,7 @@ import ImageIO
     static let sniffLength: UInt64 = 8_192
     /// Text up to this size is read whole and highlighted; larger text is read on request.
     static let textLimit: UInt64 = 2 * 1_048_576
-    /// "Show first 64 KB".
+    /// "Show first 64 KB" of text too large to show.
     static let headLength: UInt64 = 65_536
     /// Images are read whole; past this they are treated as binary rather than read.
     static let imageLimit: UInt64 = 32 * 1_048_576
@@ -78,15 +78,9 @@ import ImageIO
         }
     }
 
-    /// "Show first 64 KB" of a binary or too large file.
+    /// "Show first 64 KB" of text too large to show; bytes that are not text after all show as hex.
     static func loadHead(_ preview: FilePreviewState, from source: any FilesSource) async {
-        let size: UInt64
-        let binary: Bool
-        switch preview.kind {
-        case .binary(let total, .none): size = total; binary = true
-        case .tooLarge(let total, .none): size = total; binary = false
-        default: return
-        }
+        guard case .tooLarge(let size, .none) = preview.kind else { return }
         do {
             let result = try await source.read(preview.path, offset: 0, length: headLength, revision: preview.revision)
             guard !Task.isCancelled else { return }
@@ -95,18 +89,43 @@ import ImageIO
                 throw FilesSourceError.changed(preview.path)
             }
             preview.revision = result.revision
-            preview.kind = binary ? .binary(size: size, head: result.data)
-                : textPrefix(result.data).map { .tooLarge(size: size, head: $0) }
-                    ?? .binary(size: size, head: result.data)
+            if let text = textPrefix(result.data) {
+                preview.kind = .tooLarge(size: size, head: text)
+            } else {
+                let kind = await binary(preview, size: size, head: result.data, revision: result.revision, from: source)
+                guard !Task.isCancelled else { return }
+                preview.kind = kind
+            }
         } catch FilesSourceError.changed {
             // The file is a different one now (it may even fit the preview): classify it again.
             guard !Task.isCancelled else { return }
-            preview.kind = .loading
-            preview.revision = nil
-            await load(preview, from: source)
+            await reload(preview, from: source)
         } catch {
             fail(preview, error)
         }
+    }
+
+    /// The file changed under what shows (a hex page read at another revision): read and classify it again.
+    static func reload(_ preview: FilePreviewState, from source: any FilesSource) async {
+        preview.kind = .loading
+        preview.revision = nil
+        await load(preview, from: source)
+    }
+
+    /// A binary's state: its head, and what it is. A zip's entry count is at its end, read once here (`FileFormat`);
+    /// that read failing only leaves the count out.
+    private static func binary(_ preview: FilePreviewState, size: UInt64, head: Data, revision: FileRevision,
+                               from source: any FilesSource) async -> FilePreviewState.Kind {
+        var tail: Data?
+        if FileFormat.wantsTail(head) {
+            if UInt64(head.count) >= size {
+                tail = head
+            } else {
+                let length = min(size, FileFormat.tailLength)
+                tail = try? await source.read(preview.path, offset: size - length, length: length, revision: revision).data
+            }
+        }
+        return .binary(size: size, head: head, format: FileFormat.describe(head, tail: tail))
     }
 
     private static func loadFolder(_ preview: FilePreviewState, from source: any FilesSource) async {
@@ -144,7 +163,9 @@ import ImageIO
         switch decision {
         case .binary:
             preview.revision = first.revision
-            preview.kind = .binary(size: size, head: nil)
+            let kind = await binary(preview, size: size, head: first.data, revision: first.revision, from: source)
+            try Task.checkCancellation()
+            preview.kind = kind
             return
         case .tooLarge:
             preview.revision = first.revision
@@ -173,7 +194,7 @@ import ImageIO
             let pixels = await imagePixelSize(data)
             try Task.checkCancellation()
             guard let pixels else {
-                preview.kind = .binary(size: size, head: nil)
+                preview.kind = .binary(size: size, head: data, format: FileFormat.describe(data))
                 return
             }
             guard isSafeImageSize(pixels) else {
@@ -183,13 +204,13 @@ import ImageIO
             preview.kind = .image(data, pixelSize: pixels)
         case .markdown:
             guard let text = text(data) else {
-                preview.kind = .binary(size: size, head: nil)
+                preview.kind = .binary(size: size, head: data, format: FileFormat.describe(data))
                 return
             }
             preview.kind = .markdown(text)
         case .text(let language):
             guard let text = text(data) else {
-                preview.kind = .binary(size: size, head: nil)
+                preview.kind = .binary(size: size, head: data, format: FileFormat.describe(data))
                 return
             }
             preview.kind = .text(text, language: language)

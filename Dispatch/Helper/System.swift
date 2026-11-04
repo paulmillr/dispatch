@@ -343,6 +343,11 @@ enum System {
         _ = try act("file.move", [url.path, target.path]) { try FileManager.default.moveItem(at: url, to: target); return true }
     }
 
+    /// A copy made by the app itself (a clone on APFS): what it may read and the processes it starts may not.
+    static func copy(_ url: URL, to target: URL) throws {
+        _ = try act("file.copy", [url.path, target.path]) { try FileManager.default.copyItem(at: url, to: target); return true }
+    }
+
     static func link(_ url: URL, to target: URL) throws {
         _ = try act("file.link", [url.path, target.path]) {
             try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)

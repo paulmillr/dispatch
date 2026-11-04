@@ -45,6 +45,8 @@ final class FilePreview {
     private(set) var version = 0
     /// The image shown is a smaller copy of one past `FilesImage.pixelCap`: Share and Ask read the file again.
     private(set) var downsampled = false
+    /// What a binary's first bytes say it is ("ELF 64-bit LSB pie executable, arm64"; `FileFormat`), else nil.
+    private(set) var format: String?
 
     @ObservationIgnored private let source: @MainActor () -> (any MobileFilesSource)?
     @ObservationIgnored let host: String
@@ -55,8 +57,15 @@ final class FilePreview {
     static let wholeLimit: UInt64 = 8 * 1024 * 1024
     /// Images are read whole up to this; larger ones are binary.
     static let imageLimit: UInt64 = 32 * 1024 * 1024
-    /// Share reads a binary file whole up to this.
+    /// `bytes` reads a file whole into memory up to this (Ask's attachments, the tests).
     static let shareLimit: UInt64 = 64 * 1024 * 1024
+    /// Share and Save to Photos copy a file to the phone (`download`) up to this, in `chunk` reads.
+    static let downloadLimit: UInt64 = 4 * 1024 * 1024 * 1024
+    static let chunk: UInt64 = 8 * 1024 * 1024
+    static let videoExtensions: Set<String> = ["mp4", "mov", "m4v"]
+
+    /// A video Photos takes (by its name: the preview shows a video as a binary's kind and size).
+    var isVideo: Bool { Self.videoExtensions.contains((name as NSString).pathExtension.lowercased()) }
     static let imageExtensions = FilePreviewContent.imageExtensions
     static let markdownExtensions = FilePreviewContent.markdownExtensions
 
@@ -121,6 +130,7 @@ final class FilePreview {
         // What a failed or offline load left is no revision to share from: the next read gives it.
         revision = nil
         downsampled = false
+        format = nil
         for attempt in 0..<2 {
             do {
                 try await read()
@@ -153,6 +163,7 @@ final class FilePreview {
         revision = first.revision
         switch Self.decide(name: name, size: size, head: first.data) {
         case .binary:
+            format = FileFormat.describe(first.data)
             content = .binary
         case .image:
             var data = first.data
@@ -171,15 +182,24 @@ final class FilePreview {
                 downsampled = smaller
                 content = .image(image)
             case .tooLarge, .none:
+                format = FileFormat.describe(data)
                 content = .binary
             }
         case .markdown:
             let truncated = UInt64(first.data.count) < size
-            guard let text = Self.decode(first.data, partial: truncated) else { content = .binary; return }
+            guard let text = Self.decode(first.data, partial: truncated) else {
+                format = FileFormat.describe(first.data)
+                content = .binary
+                return
+            }
             await show(.markdown(text, truncated: truncated), text: text, language: "markdown")
         case .text(let language):
             let truncated = UInt64(first.data.count) < size
-            guard let text = Self.decode(first.data, partial: truncated) else { content = .binary; return }
+            guard let text = Self.decode(first.data, partial: truncated) else {
+                format = FileFormat.describe(first.data)
+                content = .binary
+                return
+            }
             await show(.text(text, language: language, truncated: truncated), text: text, language: language)
         }
     }
@@ -227,6 +247,36 @@ final class FilePreview {
         let whole = try await source.read(path, offset: 0, length: revision.size, revision: revision)
         guard whole.revision == revision, UInt64(whole.data.count) == revision.size else { throw FilesSourceError.changed(path) }
         return whole.data
+    }
+
+    /// The revision the preview read, copied to a file on the phone (`FilesShareItem`) in `chunk` reads, each of that
+    /// revision: a video or archive need not fit in memory, and a file changed meanwhile fails instead of mixing two.
+    /// The copy is removed when this fails, is cancelled, or (by the caller) once shared.
+    func download(limit: UInt64 = FilePreview.downloadLimit) async throws -> FilesShareItem {
+        guard canShare, let revision else {
+            throw FilesSourceError.other(code: "not_loaded", message: "\(name) has not loaded: open it again to share it.")
+        }
+        guard revision.size <= limit else { throw FilesSourceError.limit("\(name) is larger than \(FilesFormatting.size(limit))") }
+        if revision.size <= Self.chunk { return try FilesShareItem.write(try await bytes(), name: name) }
+        let item = try FilesShareItem.write(Data(), name: name)
+        do {
+            let file = try FileHandle(forWritingTo: item.url)
+            defer { try? file.close() }
+            var offset: UInt64 = 0
+            while offset < revision.size {
+                try Task.checkCancellation()
+                guard let source = source() else { throw FilesSourceError.offline(host) }
+                let length = min(Self.chunk, revision.size - offset)
+                let part = try await source.read(path, offset: offset, length: length, revision: revision)
+                guard part.revision == revision, UInt64(part.data.count) == length else { throw FilesSourceError.changed(path) }
+                try file.write(contentsOf: part.data)
+                offset += length
+            }
+            return item
+        } catch {
+            item.remove()
+            throw error
+        }
     }
 
     /// The text's lines are made off the main actor (a Load all of megabytes), then they and the content change in one

@@ -273,7 +273,8 @@ struct ChatComposerActivity: View {
         let state = activity?.current ?? AgentWorkingState(session, details: false)
         if state.visible && !state.loading {
             // Motion runs in the compositor (ChatComposerMotion.swift); SwiftUI updates only the whole seconds.
-            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat
+            // The reply placeholder's ◆ moves instead (ChatReplyHalo).
+            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat && !session.replyShowsOrbit
             Button { details.toggle() } label: {
                 HStack(spacing: 8) {
                     if theme.radioLog {

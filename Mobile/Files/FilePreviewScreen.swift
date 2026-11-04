@@ -1,3 +1,4 @@
+import AVKit
 import Photos
 import SwiftUI
 import UIKit
@@ -40,6 +41,12 @@ struct FilePreviewScreen: View {
     @State private var finding = false
     @State private var find = FileFind()
     @State private var sharing: FilesShareItem?
+    /// A Share or Save to Photos copying the file to the phone; leaving the preview cancels it.
+    @State private var saving: Task<Void, Never>?
+    /// A video's Play: the copy being made, then the player of that copy (`video`).
+    @State private var playing: Task<Void, Never>?
+    @State private var player: AVPlayer?
+    @State private var videoCopy: FilesShareItem?
     @State private var problem: String?
     /// Open in Terminal waiting for the terminal's screen or the helper's answer: cancelled when the screen goes, so
     /// nothing is typed or shown for a screen no longer there.
@@ -85,6 +92,9 @@ struct FilePreviewScreen: View {
         .onDisappear {
             opening?.cancel()
             opening = nil
+            saving?.cancel()
+            saving = nil
+            stopVideo()
         }
         .sheet(item: $sharing) { item in
             FilesActivityView(items: [item.url]).ignoresSafeArea()
@@ -145,7 +155,7 @@ struct FilePreviewScreen: View {
         case .image(let data):
             FilesImageView(data: data, name: preview.name)
         case .binary:
-            binary
+            if preview.isVideo { video } else { binary }
         case .failed(let message):
             FilesStateView(symbol: "exclamationmark.triangle", title: "\(preview.name) could not be shown", message: message,
                            action: ("Try again", { Task { await preview.load() } }))
@@ -191,6 +201,74 @@ struct FilePreviewScreen: View {
         }
     }
 
+    /// A video: its name and size until Play is tapped, then the copy `FilePreview.download` made, in the system
+    /// player. Nothing is read before the tap; leaving the preview stops the copy or the playback and removes the copy.
+    @ViewBuilder private var video: some View {
+        if let player {
+            VideoPlayer(player: player)
+                .ignoresSafeArea(edges: .bottom)
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "film")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(preview.name).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                Text([FilesFormatting.kindName(preview.name) ?? "Video", preview.size.map(FilesFormatting.size)]
+                        .compactMap { $0 }.joined(separator: " · "))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button(action: play) {
+                    Group {
+                        if playing != nil {
+                            Label { Text("Loading…") } icon: { ProgressView() }
+                        } else {
+                            Label("Play", systemImage: "play.fill")
+                        }
+                    }
+                    .font(.body.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .frame(minHeight: 44)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .disabled(!preview.canShare || playing != nil)
+                .padding(.top, 6)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// Play: the video copied to the phone, then played from that copy.
+    private func play() {
+        playing = Task {
+            defer { playing = nil }
+            do {
+                let copy = try await preview.download()
+                guard !Task.isCancelled else { return copy.remove() }
+                videoCopy = copy
+                let player = AVPlayer(url: copy.url)
+                self.player = player
+                player.play()
+            } catch is CancellationError {
+            } catch {
+                problem = (error as? FilesSourceError)?.message ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// Leaving the preview: the copy in progress stops, the player too, and the copy goes.
+    private func stopVideo() {
+        playing?.cancel()
+        playing = nil
+        player?.pause()
+        player = nil
+        videoCopy?.remove()
+        videoCopy = nil
+    }
+
     private var binary: some View {
         VStack(spacing: 12) {
             Image(systemName: FilesText.symbol(name: preview.name))
@@ -198,7 +276,7 @@ struct FilePreviewScreen: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text(preview.name).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-            Text([FilesFormatting.kindName(preview.name) ?? "Binary file", preview.size.map(FilesFormatting.size)]
+            Text([preview.format ?? FilesFormatting.kindName(preview.name) ?? "Binary file", preview.size.map(FilesFormatting.size)]
                     .compactMap { $0 }.joined(separator: " · "))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -359,10 +437,10 @@ struct FilePreviewScreen: View {
                     .disabled(preview.text == nil || preview.truncated)
                 // Only with the helper's metadata of what loaded: never a failed, offline or partial read's bytes.
                 Button("Share", systemImage: "square.and.arrow.up", action: share)
-                    .disabled(!preview.canShare)
-                if isImage {
+                    .disabled(!preview.canShare || saving != nil)
+                if isImage || preview.isVideo {
                     Button("Save to Photos", systemImage: "square.and.arrow.down", action: saveToPhotos)
-                        .disabled(!preview.canShare)
+                        .disabled(!preview.canShare || saving != nil)
                 }
             }
             Section {
@@ -381,7 +459,10 @@ struct FilePreviewScreen: View {
                 }
             }
         } label: {
-            Image(systemName: "ellipsis")
+            // A large file copying for Share or Save to Photos spins here until it is ready.
+            Group {
+                if saving != nil { ProgressView() } else { Image(systemName: "ellipsis") }
+            }
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
@@ -397,27 +478,37 @@ struct FilePreviewScreen: View {
 
     // MARK: Actions
 
-    /// Share: the file's bytes (read whole when only its head is loaded) as a file named as on the host.
+    /// Share: the revision shown, copied to the phone (`FilePreview.download`) and named as on the host.
     private func share() {
-        Task {
+        saving = Task {
+            defer { saving = nil }
             do {
-                let data = try await preview.bytes()
-                sharing = try FilesShareItem.write(data, name: preview.name)
+                let item = try await preview.download()
+                if Task.isCancelled { item.remove() } else { sharing = item }
+            } catch is CancellationError {
             } catch {
                 problem = (error as? FilesSourceError)?.message ?? error.localizedDescription
             }
         }
     }
 
-    /// Save to Photos: the file's bytes (read whole when a smaller copy shows), added to the library.
+    /// Save to Photos: an image's bytes (read whole when a smaller copy shows) or a video's copy, added to the library.
     private func saveToPhotos() {
-        Task {
+        saving = Task {
+            defer { saving = nil }
             do {
-                try await FilesPhotos.save(try await preview.bytes(), name: preview.name)
+                if preview.isVideo {
+                    let item = try await preview.download()
+                    defer { item.remove() }
+                    try await FilesPhotos.saveVideo(item.url)
+                } else {
+                    try await FilesPhotos.save(try await preview.bytes(), name: preview.name)
+                }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch is CancellationError {
             } catch {
                 problem = (error as? FilesSourceError)?.message ?? (error as? FilesPhotos.Refused)?.message
-                    ?? error.localizedDescription
+                    ?? FilesPhotos.message(error) ?? error.localizedDescription
             }
         }
     }
@@ -579,6 +670,26 @@ enum FilesPhotos {
             guard let png = UIImage(data: data)?.pngData() else { throw error }
             try await add(png, name: (name as NSString).deletingPathExtension + ".png")
         }
+    }
+
+    /// A video file (`FilePreview.download`'s copy): Photos copies it in; the caller removes the copy after.
+    static func saveVideo(_ url: URL) async throws {
+        switch await PHPhotoLibrary.requestAuthorization(for: .addOnly) {
+        case .authorized, .limited: break
+        default: throw Refused()
+        }
+        try await PHPhotoLibrary.shared().performChanges {
+            let options = PHAssetResourceCreationOptions()
+            options.originalFilename = url.lastPathComponent
+            PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: url, options: options)
+        }
+    }
+
+    /// Photos' refusal of a file it cannot read as a video (a codec or container it does not take), said plainly.
+    static func message(_ error: any Error) -> String? {
+        let error = error as NSError
+        guard error.domain == PHPhotosErrorDomain || error.domain == "PHPhotosErrorDomain" else { return nil }
+        return "Photos could not import this file. Share it to Files instead."
     }
 
     private static func add(_ data: Data, name: String) async throws {

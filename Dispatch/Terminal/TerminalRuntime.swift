@@ -89,6 +89,7 @@ final class TerminalRuntime {
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
         chat.toolSteps = preferences.chatToolSteps
+        chat.replyPlaceholder = preferences.chatReplyPlaceholder
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         if !System.testing {
@@ -145,7 +146,7 @@ final class TerminalRuntime {
     var allowsClipboardWrites: Bool { preferences.allowClipboardWrites }
     var autoApprovesUnsafePastes: Bool { preferences.autoApproveUnsafePastes }
 
-    /// Settings › General › New tabs › Shell for a new local tab: nil for the login shell, or while its program is missing or
+    /// Settings › General › Tabs & spaces › Shell for a new local tab: nil for the login shell, or while its program is missing or
     /// can't run, so a moved shell never leaves tabs that close as they open.
     var shellCommand: String? {
         guard let program = preferences.shellProgram, program.hasPrefix("/"),
@@ -169,6 +170,7 @@ final class TerminalRuntime {
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
         chat.toolSteps = preferences.chatToolSteps
+        chat.replyPlaceholder = preferences.chatReplyPlaceholder
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }

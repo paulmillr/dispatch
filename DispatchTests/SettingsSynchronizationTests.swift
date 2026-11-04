@@ -34,7 +34,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(NSColor(tint.color).usingColorSpace(.sRGB), automatic)
     }
 
-    /// Settings › General › Window › Color-code remote hosts: on by default; off keeps remote chrome but draws it without hue.
+    /// Settings › Theme › Appearance › Color-code remote hosts: on by default; off keeps remote chrome but draws it without hue.
     func testHostColorsSettingDefaultsOnAndDrawsNeutralWhenOff() throws {
         XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).showHostColors)
         var preferences = Preferences(); preferences.showHostColors = false
@@ -606,6 +606,20 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertTrue(SettingsStore(file: file).values.outputWindow)
         try store.save(Preferences())
         XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
+    }
+
+    func testReplyPlaceholderDefaultOffAndPersistExplicitChoice() throws {
+        XCTAssertFalse(Preferences().chatReplyPlaceholder)
+        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).chatReplyPlaceholder)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
+        var preferences = Preferences()
+        preferences.chatReplyPlaceholder = true
+        try store.save(preferences)
+        XCTAssertTrue(SettingsStore(file: file).values.chatReplyPlaceholder)
+        try store.save(Preferences())
+        XCTAssertFalse(SettingsStore(file: file).values.chatReplyPlaceholder)
     }
 
     func testDiagnosticsDefaultOffAndPersistExplicitChoice() throws {

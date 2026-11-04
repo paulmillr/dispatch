@@ -279,6 +279,9 @@ struct Preferences: Codable, Equatable {
     /// flight to this app (`terminals.window`, HelperOutputWindow), so a keystroke or a reply never waits behind megabytes
     /// parked in SSH and TCP buffers on a slow link. Off: output streams as before.
     var outputWindow = false
+    /// Settings › Experimental › Reply placeholder (`ChatCoordinator.replyPlaceholder`): an empty reply bubble with the
+    /// working light once the agent acknowledges a prompt. Off: the composer's border carries the activity alone.
+    var chatReplyPlaceholder = false
     var hideSingleSpace = true
     /// Tabs only: no tab strips, and the sidebar lists every tab (a tmux or herdr space's windows) instead of spaces,
     /// with "+ tab" in place of "+ space". Spaces still exist underneath (⌘N, splits, layouts); they are just not shown.
@@ -392,7 +395,7 @@ struct Preferences: Codable, Equatable {
         case textContrast, colorVision, terminalOpacity
         case spaces, enableKittyGraphics
         case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, gitEnabled
-        case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatToolSteps
+        case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatToolSteps, chatReplyPlaceholder
         case dictationEnabled, dictationKey, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
@@ -478,6 +481,7 @@ struct Preferences: Codable, Equatable {
         chatAgentStart = try fields.decodeIfPresent(String.self, forKey: .chatAgentStart).flatMap(ChatAgentStart.init(rawValue:)) ?? chatAgentStart
         chatToolSteps = try fields.decodeIfPresent(String.self, forKey: .chatToolSteps)
             .flatMap(ChatToolGroupDisclosure.init(rawValue:)) ?? chatToolSteps
+        chatReplyPlaceholder = try fields.decodeIfPresent(Bool.self, forKey: .chatReplyPlaceholder) ?? chatReplyPlaceholder
         dictationEnabled = try fields.decodeIfPresent(Bool.self, forKey: .dictationEnabled) ?? dictationEnabled
         dictationKey = try fields.decodeIfPresent(String.self, forKey: .dictationKey).flatMap(VoiceKey.init(rawValue:))
             ?? dictationKey

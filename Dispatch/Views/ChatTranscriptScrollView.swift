@@ -34,7 +34,7 @@ struct ChatTranscriptRowRevision: Equatable {
     private let group: UUID?
     private let toolGroupID: String?
     private let turnID: String?
-    private let bubbleStart: Bool, bubbleEnd: Bool, signsOff: Bool
+    private let bubbleStart: Bool, bubbleEnd: Bool, signsOff: Bool, placeholder: Bool
     private let workedFor: TimeInterval?
     private let replyTime: Date?
     private let time: Date?
@@ -53,7 +53,7 @@ struct ChatTranscriptRowRevision: Equatable {
         approval = row.approval?.id
         group = row.group?.presentationID
         toolGroupID = row.toolGroupID; turnID = row.turnID
-        bubbleStart = row.bubbleStart; bubbleEnd = row.bubbleEnd; signsOff = row.signsOff
+        bubbleStart = row.bubbleStart; bubbleEnd = row.bubbleEnd; signsOff = row.signsOff; placeholder = row.placeholder
         workedFor = row.workedFor; replyTime = row.replyTime; time = row.time
         timeline = row.timeline.map {
             Step(step: $0.step, first: $0.first, last: $0.last, current: $0.current, running: $0.running,
@@ -80,6 +80,11 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     /// A row's revision: its host keeps its root while this is unchanged. Without one (nil, or nil for a row) the
     /// root is replaced on every update.
     var revision: ((String) -> ChatTranscriptRowRevision?)? = nil
+    /// The reply halo (ChatReplyHaloView), on a bubble at most `haloMaxWidth` wide.
+    var halo: ChatReplyHalo? = nil
+    var haloMaxWidth: CGFloat = .infinity
+    var haloAccent: Color = .accentColor
+    var haloLineHeight: CGFloat = 18
     let row: (String, CGFloat) -> AnyView
 
     func makeNSView(context: Context) -> TranscriptScrollView {
@@ -92,6 +97,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
         scroll.documentView = document
         document.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context,
                         revision: revision, row: row)
+        document.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent, lineHeight: haloLineHeight)
         return scroll
     }
 
@@ -103,8 +109,9 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: TranscriptScrollView, context: Context) {
-        (scroll.documentView as? ChatTranscriptDocument)?.update(ids: ids, topInset: topInset, bottomInset: bottomInset,
-                                                               context: self.context, revision: revision, row: row)
+        let document = scroll.documentView as? ChatTranscriptDocument
+        document?.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context, revision: revision, row: row)
+        document?.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent, lineHeight: haloLineHeight)
     }
 
     final class TranscriptScrollView: NSScrollView {
@@ -200,6 +207,9 @@ final class ChatTranscriptDocument: NSView {
     private(set) var createdHosts = 0
     /// Tests observe each row host's layout and the size it was laid out at.
     var hostLaidOut: ((String, NSSize) -> Void)?
+    private var halo: ChatReplyHalo?
+    private var haloMaxWidth: CGFloat = .infinity
+    private(set) var haloView: ChatReplyHaloView?
 
     init(position: ChatScrollPosition, initiallyAtBottom: Bool) {
         self.position = position
@@ -509,10 +519,40 @@ final class ChatTranscriptDocument: NSView {
                 entry.host.setFrameOrigin(NSPoint(x: 22, y: starts[index]))
             }
         }
+        positionHalo()
         #if DISPATCH_BENCHMARK
         ChatTranscriptMetrics.peak("cachedHostsPeak", Double(kept))
         ChatTranscriptMetrics.peak("hostsPeak", Double(hosts.count))
         #endif
+    }
+
+    func setHalo(_ halo: ChatReplyHalo?, maxWidth: CGFloat, accent: Color, lineHeight: CGFloat) {
+        self.halo = halo; haloMaxWidth = maxWidth
+        haloView?.accent = accent; haloView?.lineHeight = lineHeight
+        if halo != nil, haloView == nil {
+            let view = ChatReplyHaloView(accent: accent)
+            view.lineHeight = lineHeight
+            view.isHidden = true
+            addSubview(view, positioned: .above, relativeTo: nil)
+            haloView = view
+        }
+        // Rows changing with it are placed by the pass `update` asked for, which places the halo too.
+        if !dirty, !startsDirty { positionHalo() }
+    }
+
+    /// Frames the halo on its bubble: the rows from `first` to `last`, less the last row's 12 points below its bubble.
+    private func positionHalo() {
+        guard let haloView else { return }
+        guard let halo, let first = indices[halo.first], let last = indices[halo.last], first <= last,
+              last + 1 < starts.count, hosts[halo.first]?.isHidden == false, hosts[halo.last]?.isHidden == false else {
+            if !haloView.isHidden { haloView.isHidden = true; haloView.reset() }
+            return
+        }
+        let frame = NSRect(x: 22, y: starts[first], width: min(measuredWidth, haloMaxWidth),
+                           height: max(0, starts[last + 1] - starts[first] - 12))
+        if haloView.frame != frame { haloView.frame = frame }
+        if haloView.isHidden { haloView.isHidden = false }
+        haloView.apply(halo.phase, orbit: halo.orbit)
     }
 
     private func lookahead(clipY: CGFloat, viewportHeight: CGFloat) -> (lower: CGFloat, upper: CGFloat) {
@@ -704,7 +744,7 @@ final class ChatTranscriptDocument: NSView {
             host.frame = NSRect(x: 22, y: indices[id].map { starts[min($0, starts.count - 1)] } ?? 0, width: width, height: 0)
             hosts[id] = host
             createdHosts += 1
-            addSubview(host)
+            if let haloView { addSubview(host, positioned: .below, relativeTo: haloView) } else { addSubview(host) }
         }
         if host.needsMeasurement {
             #if DISPATCH_BENCHMARK

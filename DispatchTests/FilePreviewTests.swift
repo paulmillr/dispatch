@@ -35,15 +35,17 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(pixels, CGSize(width: 4, height: 3))
 
         let broken = try await loaded(base + "/assets/broken.png", in: source)
-        guard case .binary(let brokenSize, nil) = broken.kind else { return XCTFail("broken.png: \(broken.kind)") }
+        guard case .binary(let brokenSize, let brokenHead, nil) = broken.kind else { return XCTFail("broken.png: \(broken.kind)") }
         XCTAssertEqual(brokenSize, 12)
+        XCTAssertEqual(brokenHead, Data("not an image".utf8), "What was read shows as hex at once")
 
         let binary = try await loaded(base + "/data.bin", in: source)
-        guard case .binary(let size, nil) = binary.kind else { return XCTFail("data.bin: \(binary.kind)") }
+        guard case .binary(let size, let head, nil) = binary.kind else { return XCTFail("data.bin: \(binary.kind)") }
         XCTAssertEqual(size, 4)
+        XCTAssertEqual(head, Data([0x61, 0x62, 0x00, 0x63]))
 
         let malformed = try await loaded(base + "/malformed.txt", in: source)
-        guard case .binary(let malformedSize, nil) = malformed.kind else {
+        guard case .binary(let malformedSize, _, _) = malformed.kind else {
             return XCTFail("malformed.txt: \(malformed.kind)")
         }
         XCTAssertEqual(malformedSize, 4, "Malformed UTF-8 is not shown as lossy replacement text")
@@ -207,7 +209,7 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(source.calls.count, reads, "Switching back to files keeps what shows instead of blanking it")
     }
 
-    func testShowFirst64KBOfLargeTextAndBinary() async throws {
+    func testShowFirst64KBOfLargeText() async throws {
         let source = FakeFilesSource.mockupAPI()
         let largePath = base + "/bench.json", binaryPath = base + "/core.bin"
         source.file(largePath, String(repeating: "{\"n\":1}\n", count: 400_000))
@@ -229,17 +231,21 @@ final class FilePreviewTests: XCTestCase {
         let malformed = try await loaded(malformedPath, in: source)
         guard case .tooLarge = malformed.kind else { return XCTFail("malformed head: \(malformed.kind)") }
         await FilePreviewLoader.loadHead(malformed, from: source)
-        guard case .binary(let malformedSize, let malformedHead?) = malformed.kind else {
+        guard case .binary(let malformedSize, let malformedHead, _) = malformed.kind else {
             return XCTFail("malformed head: \(malformed.kind)")
         }
         XCTAssertEqual(malformedSize, FilePreviewLoader.textLimit + 1)
+        XCTAssertEqual(malformedHead.count, 65_536, "Bytes that were not text after all show as hex from what was read")
         XCTAssertEqual(malformedHead[9_000], 0xFF)
 
+        // A binary has its first window from the start; there is no head to ask for.
         let binary = try await loaded(binaryPath, in: source)
-        await FilePreviewLoader.loadHead(binary, from: source)
-        guard case .binary(200_000, let data?) = binary.kind else { return XCTFail("core.bin: \(binary.kind)") }
-        XCTAssertEqual(data.count, 65_536)
+        guard case .binary(200_000, let data, _) = binary.kind else { return XCTFail("core.bin: \(binary.kind)") }
+        XCTAssertEqual(UInt64(data.count), FilePreviewLoader.sniffLength)
         XCTAssertEqual(data[10], 0)
+        let reads = source.calls.count
+        await FilePreviewLoader.loadHead(binary, from: source)
+        XCTAssertEqual(source.calls.count, reads)
 
         // The file was replaced by a small one before the head was asked for: it is classified again.
         let replaced = try await loaded(largePath, in: source)
@@ -419,15 +425,6 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: 8_001, height: 8_000)))
         XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: 32_769, height: 1)))
         XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: CGFloat.infinity, height: 1)))
-    }
-
-    func testHexDumpRows() {
-        let rows = FileTextLines.hexLines(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x41]))
-        XCTAssertEqual(rows, [
-            "00000000  89 50 4e 47 0d 0a 1a 0a  00 00 00 0d 49 48 44 52  |.PNG........IHDR|",
-            "00000010  41                                                |A|",
-        ])
-        XCTAssertEqual(FileTextLines.hexLines(Data(count: 65_536)).count, 4_096)
     }
 
     // MARK: Open in editor and cd here

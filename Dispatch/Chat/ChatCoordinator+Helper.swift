@@ -247,9 +247,20 @@ extension ChatCoordinator {
                 if session.usage != usage { session.usage = usage }
             }
             let attention = session.modelPicker == nil ? state.attention : nil
-            if session.agentAttention != attention { session.agentAttention = attention }
+            if session.agentAttention != attention {
+                // The agent no longer asks for the terminal (its menu closed): neither does the banner it raised.
+                if attention == nil, let previous = session.agentAttention, session.terminalAttention == previous {
+                    session.terminalAttention = nil
+                }
+                session.agentAttention = attention
+            }
             if let attention = state.attention, session.modelPicker == nil {
                 requireTerminalAttention(session, status: attention)
+                // A command Chat just typed opened the agent's own menu: it is answered in Terminal.
+                if let typed = session.typedCommandAt, ContinuousClock.now - typed < .seconds(5) {
+                    session.typedCommandAt = nil
+                    showTerminal(session)
+                }
             }
             // State.goal: the harness's goal object (codex native.rs goal); nil means no goal.
             let goal = state.goal.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatGoal.init)
@@ -336,8 +347,13 @@ extension ChatCoordinator {
     /// Text typed in Terminal after the launch command, before Chat opened, sits in Claude's own
     /// prompt, where it would refuse every Chat send. When Claude's composer shows exactly that
     /// text, it moves to the Chat draft ahead of anything typed there since.
+    /// What was typed into the agent's own prompt in Terminal moves to the Chat draft when Chat shows: left there,
+    /// Chat's message would be pasted after it and arrive as one message Chat never sent (Pi refuses Chat's message
+    /// instead). Claude's and Codex's prompt lines are read back from the screen, Pi's editor from its bridge
+    /// (`chat.state` draft), so only text both the keys and the agent agree on moves.
     func adoptTerminalTypeahead(_ session: ChatSession) {
-        guard session.agentID == "claude", let terminal = TerminalRuntime.shared.views[session.id],
+        let codex = session.agentID == "codex", pi = session.agentID == "pi"
+        guard session.agentID == "claude" || codex || pi, let terminal = TerminalRuntime.shared.views[session.id],
               let typed = terminal.typeahead, !typed.trimmingCharacters(in: .whitespaces).isEmpty,
               // Delete removes one character; keep to characters that are one UTF-16 unit.
               typed.unicodeScalars.count == typed.count, typed.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF })
@@ -346,22 +362,31 @@ extension ChatCoordinator {
         let expected = typed.trimmingCharacters(in: .whitespaces)
         operations.run(for: session.id) { [weak self, weak session, weak terminal] in
             // The last keystrokes may still be on their way to Claude's screen.
-            @MainActor func settled(_ condition: (String) -> Bool) async -> Bool {
+            @MainActor func settled(_ condition: (String?) -> Bool) async -> Bool {
                 for _ in 0..<25 {
                     guard let self, let session, let terminal, self.sessions[session.id] === session,
                           session.active, session.showChat, !Task.isCancelled else { return false }
+                    if pi {
+                        struct Observed: Decodable { let state: HelperChat.State }
+                        let helper = session.helper
+                        let observed: Observed? = if let helper { try? await helper.call("chat.state", input: .init(helper.route)) } else { nil }
+                        if let observed, condition((observed.state.draft ?? "").trimmingCharacters(in: .whitespaces)) { return true }
+                        try? await Task.sleep(for: .milliseconds(40))
+                        continue
+                    }
                     // An empty composer shows a faint placeholder after the cursor.
                     let tail = terminal.surface?.cursorFaintTail()
                     let screen = ClaudeModelMenu.removingPlaceholder(terminal.agentMenuScreen, column: Int(tail?.column ?? 0),
-                                                                     row: Int(tail?.row ?? 0), faint: tail?.faint == true)
-                    if condition(screen) { return true }
+                                                                     row: Int(tail?.row ?? 0), faint: tail?.faint == true,
+                                                                     marker: codex ? "›" : "❯")
+                    if condition(codex ? ClaudeModelMenu.codexComposerText(screen) : ClaudeModelMenu.composerText(screen)) { return true }
                     try? await Task.sleep(for: .milliseconds(40))
                 }
                 return false
             }
-            guard await settled({ ClaudeModelMenu.composerText($0) == expected }), let terminal else { return }
+            guard await settled({ $0 == expected }), let terminal else { return }
             terminal.eraseTypedCharacters(typed.count)
-            guard await settled({ ClaudeModelMenu.composerText($0) == "" }), let session else { return }
+            guard await settled({ $0 == "" }), let session else { return }
             let draft = session.drafts.current, shift = typed.utf16.count
             session.drafts.edit(text: typed + draft.text,
                                 selection: NSRange(location: draft.selection.location + shift, length: draft.selection.length))
@@ -598,6 +623,12 @@ extension ChatCoordinator {
             session.observedCommand = (title: text.trimmingCharacters(in: .whitespacesAndNewlines), output: nil)
         } else {
             session.showOptimisticPrompt(text, attachments: attachments)
+            // Settings › Experimental › Reply placeholder, for a prompt that starts a turn (a steered message joins the
+            // running one). Without motion, or in the radio log, the composer keeps the activity.
+            if replyPlaceholder, session.awaitingPromptAck, !session.busy, !ChatThemeStore.shared.current.radioLog,
+               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                session.armPendingReply()
+            }
             if let prompt = session.optimisticPrompt {
                 launchFlight(session, text: text, hasAttachments: !attachments.isEmpty,
                              from: queued.map { .queued($0.id) } ?? .composer, to: .prompt(prompt.id))
@@ -612,6 +643,8 @@ extension ChatCoordinator {
         if !command { input.mode = immediately && wasBusy ? "steer" : "prompt"; session.busy = true }
         // A command is running until the harness replies.
         if command { session.command = ChatCommandRequest(text: text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        // A command Chat has no workflow for is typed into the agent, which may open a menu of its own.
+        session.typedCommandAt = command && ChatCommand(text) == nil ? ContinuousClock.now : nil
         let exits = command && ["/exit", "/quit"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines))
         if exits { session.exitRequested = true }
         session.helperTask = operations.run(for: session.id) { [weak self, weak session] in

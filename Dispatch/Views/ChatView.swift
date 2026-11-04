@@ -543,21 +543,25 @@ struct ChatView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(session.active ? "\(session.agentTitle) commands" : "Local command")
                 .font(theme.typography.detail).foregroundStyle(theme.muted)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(matchingCommands, id: \.self) { command in
-                        Button { session.commandSelection = matchingCommands.firstIndex(of: command) ?? 0; session.completeCommand() } label: {
-                            HStack(spacing: 12) {
-                                Text(command).frame(width: 106, alignment: .leading)
-                                Text(commandDescription(command)).foregroundStyle(theme.muted)
-                                Spacer(minLength: 0)
-                            }.padding(.horizontal, 8).padding(.vertical, 5)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(matchingCommands.firstIndex(of: command) == min(session.commandSelection, matchingCommands.count - 1) ? theme.selection : .clear, in: RoundedRectangle(cornerRadius: 5))
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+            // Up and Down move the selection past the visible rows (wrapping at either end): the list follows it.
+            let selected = matchingCommands[min(session.commandSelection, matchingCommands.count - 1)]
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(matchingCommands, id: \.self) { command in
+                            Button { session.commandSelection = matchingCommands.firstIndex(of: command) ?? 0; session.completeCommand() } label: {
+                                HStack(spacing: 12) {
+                                    Text(command).frame(width: 106, alignment: .leading)
+                                    Text(commandDescription(command)).foregroundStyle(theme.muted)
+                                    Spacer(minLength: 0)
+                                }.padding(.horizontal, 8).padding(.vertical, 5)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(command == selected ? theme.selection : .clear, in: RoundedRectangle(cornerRadius: 5))
+                                    .contentShape(Rectangle())
+                            }.buttonStyle(.plain).id(command)
+                        }
                     }
-                }
+                }.onChange(of: selected) { _, command in proxy.scrollTo(command) }
             }.frame(height: min(220, CGFloat(matchingCommands.count) * 32))
         }.padding(6).frame(maxWidth: .infinity, alignment: .leading).chatPanel()
     }

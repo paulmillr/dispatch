@@ -95,16 +95,6 @@ import SwiftUI
         occurrences = []
     }
 
-    func prepare(_ key: Key, lines: () -> [String]) {
-        guard key != self.key else { return }
-        self.key = key
-        self.lines = lines()
-        cut = Self.cut(self.lines)
-        highlighted = nil
-        query = ""
-        occurrences = []
-    }
-
     /// The line of each occurrence of `query`, case-insensitively, in reading order.
     func occurrences(of query: String) -> [Int] {
         guard query != self.query else { return occurrences }
@@ -159,36 +149,6 @@ import SwiftUI
     static func occurrences(of query: String, in lines: [String]) -> [Int] {
         TextOccurrences.scan(of: query, in: lines, limit: occurrencesLimit).map(\.line)
     }
-
-    /// A classic hex dump of `data`, 16 bytes a row: offset, two groups of eight, and the printable characters.
-    static func hexLines(_ data: Data) -> [String] {
-        let bytes = [UInt8](data)
-        let digits = Array("0123456789abcdef")
-        var result: [String] = []
-        result.reserveCapacity(bytes.count / 16 + 1)
-        var offset = 0
-        while offset < bytes.count {
-            let row = bytes[offset..<min(offset + 16, bytes.count)]
-            var line = String(format: "%08x ", offset)
-            for column in 0..<16 {
-                if column == 8 { line.append(" ") }
-                if column < row.count {
-                    let byte = row[row.startIndex + column]
-                    line.append(" ")
-                    line.append(digits[Int(byte >> 4)])
-                    line.append(digits[Int(byte & 0x0F)])
-                } else {
-                    line.append("   ")
-                }
-            }
-            line.append("  |")
-            for byte in row { line.append((0x20...0x7E).contains(byte) ? Character(UnicodeScalar(byte)) : ".") }
-            line.append("|")
-            result.append(line)
-            offset += 16
-        }
-        return result
-    }
 }
 
 /// Line-numbered, lazily drawn text in the chat theme's palette, as `CodeDocumentView` draws Read results, so chat
@@ -196,15 +156,13 @@ import SwiftUI
 struct FileTextPreview: View {
     enum Content {
         case text(String, language: String)
-        /// Prepared lines drawn plain (a hex dump), without line numbers.
-        case lines([String])
     }
 
     @Environment(\.chatTheme) private var theme
     let owner: ObjectIdentifier
     let content: Content
     let wrap: Bool
-    /// Text's line numbers (Settings › Files); prepared lines never have them.
+    /// Text's line numbers (Settings › Files).
     var lineNumbers = true
     var find: FilePreviewFind?
     /// Whether the query highlights (the find field is open).
@@ -213,14 +171,10 @@ struct FileTextPreview: View {
 
     var body: some View {
         let metrics = FilePreviewMetrics.metrics(theme.typography)
-        let numbered: Bool
+        let numbered = lineNumbers
         switch content {
         case .text(let text, let language):
             model.prepare(.init(owner: owner, count: text.utf8.count, language: language, theme: theme)) { text }
-            numbered = lineNumbers
-        case .lines(let lines):
-            model.prepare(.init(owner: owner, count: lines.count, language: "text", theme: theme)) { lines }
-            numbered = false
         }
         let query = highlightsQuery ? (find?.query ?? "") : ""
         let occurrences = model.occurrences(of: query)

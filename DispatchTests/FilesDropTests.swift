@@ -1,4 +1,5 @@
 import AppKit
+import os
 import XCTest
 @testable import DispatchApp
 
@@ -220,6 +221,16 @@ final class FilesDropTests: XCTestCase {
                        "Another host's same path is another folder")
     }
 
+    /// Every drag out of the list starts over it, so the list is told when it ends. NSTableView has no
+    /// `draggingEnded:` of its own: a call to `super` threw, AppKit never finished the drag, and its image stayed on
+    /// top of every window. Before the fix this test crashed with an unrecognized selector.
+    func testTheListEndsADragWithoutCallingAMissingSuper() {
+        let outline = FilesOutlineView()
+        outline.draggingEnded(EndedDrag())
+        outline.draggingExited(EndedDrag())
+        outline.concludeDragOperation(EndedDrag())
+    }
+
     func testAFinderDropStartsACopyIntoTheFolder() async throws {
         let local = FakeFilesSource(endpoint: .local)
         local.file("/Users/ivan/Downloads/report.pdf", "%PDF")
@@ -298,7 +309,7 @@ final class FilesDropTests: XCTestCase {
         local.file(resolved, "%PDF")
         try await TestSupport.eventually { session.transfers.first?.stage == .done }
         XCTAssertEqual(target.text("/home/ivan/nightly/fixtures/report.pdf"), "%PDF")
-        XCTAssertEqual(local.calls.first, "list " + (resolved as NSString).deletingLastPathComponent,
+        XCTAssertEqual(local.calls.first { $0.hasPrefix("list ") }, "list " + (resolved as NSString).deletingLastPathComponent,
                        "The copy reads the file where it is now")
     }
 
@@ -346,6 +357,61 @@ final class FilesDropTests: XCTestCase {
         XCTAssertNil(target.node("/home/ivan/in/a.png"))
     }
 
+    func testAFileTheHelperIsRefusedIsCopiedThroughTheAppsOwnCopy() async throws {
+        // Desktop denied to this app: the helper it started is refused even what the user dropped, which macOS lets
+        // the app itself read.
+        let local = FakeFilesSource(endpoint: .local)
+        local.file("/Users/ivan/Desktop/report.pdf", "%PDF")
+        local.failures["read /Users/ivan/Desktop/report.pdf"] = .permissionDenied("/Users/ivan/Desktop/report.pdf")
+        local.failures["list /Users/ivan/Desktop"] = .permissionDenied("/Users/ivan/Desktop")
+        local.file("/Users/ivan/src/notes.txt", "notes")
+        let target = FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab")
+        target.directory("/home/ivan/in")
+        let session = coordinator.session(for: System.uuid())
+        session.availability = .available(target)
+        let folder = System.temporary.appendingPathComponent(FilesDropStaging.prefix + System.uuid().uuidString)
+        try System.directory(folder)
+        let staged = folder.appendingPathComponent("report.pdf").path
+        let asked = OSAllocatedUnfairLock(initialState: [[String]]())
+        let controller = controller(local: local, stage: { paths in
+            asked.withLock { $0.append(paths) }
+            local.file(staged, "%PDF")
+            return FilesDropStaging(folder: folder, paths: [paths[0]: staged])
+        })
+        let finder = pasteboard()
+        finder.writeObjects([URL(fileURLWithPath: "/Users/ivan/Desktop/report.pdf") as NSURL,
+                             URL(fileURLWithPath: "/Users/ivan/src/notes.txt") as NSURL])
+        XCTAssertTrue(controller.accept(finder, onto: "/home/ivan/in", in: session))
+        try await TestSupport.eventually { session.transfers.first?.stage == .done }
+        XCTAssertEqual(asked.withLock { $0 }, [["/Users/ivan/Desktop/report.pdf"]], "Only what the helper is refused")
+        XCTAssertEqual(target.text("/home/ivan/in/report.pdf"), "%PDF")
+        XCTAssertEqual(target.text("/home/ivan/in/notes.txt"), "notes")
+        XCTAssertFalse(System.exists(folder), "The app's copy goes once the copy is done")
+    }
+
+    func testStagingKeepsNamesAndRemovesItsFolder() throws {
+        let first = System.temporary.appendingPathComponent("drop-a-" + System.uuid().uuidString)
+        let second = System.temporary.appendingPathComponent("drop-b-" + System.uuid().uuidString)
+        try System.directory(first.appendingPathComponent("shots"))
+        try System.directory(second)
+        try System.write(Data("one".utf8), to: first.appendingPathComponent("report.txt"))
+        try System.write(Data("png".utf8), to: first.appendingPathComponent("shots/a.png"))
+        try System.write(Data("two".utf8), to: second.appendingPathComponent("report.txt"))
+        defer { try? System.remove(first); try? System.remove(second) }
+        let items = [first.appendingPathComponent("report.txt").path, first.appendingPathComponent("shots").path,
+                     second.appendingPathComponent("report.txt").path]
+        let staging = try FilesDropStaging.make(items)
+        let copies = items.compactMap { staging.paths[$0] }
+        XCTAssertEqual(copies.count, 3)
+        XCTAssertEqual(Set(copies).count, 3, "Two report.txt stay apart")
+        XCTAssertEqual(copies.map { ($0 as NSString).lastPathComponent }, ["report.txt", "shots", "report.txt"])
+        XCTAssertEqual(try System.read(URL(fileURLWithPath: copies[0])), Data("one".utf8))
+        XCTAssertEqual(try System.read(URL(fileURLWithPath: copies[1] + "/a.png")), Data("png".utf8))
+        XCTAssertEqual(try System.read(URL(fileURLWithPath: copies[2])), Data("two".utf8))
+        staging.remove()
+        XCTAssertFalse(System.exists(staging.folder))
+    }
+
     // MARK: Support
 
     private func pasteboard() -> NSPasteboard {
@@ -356,11 +422,35 @@ final class FilesDropTests: XCTestCase {
     }
 
     private func controller(local: (any FilesSource)? = FakeFilesSource(endpoint: .local),
-                            enabled: @escaping @MainActor () -> Bool = { true }) -> FilesDragController {
+                            enabled: @escaping @MainActor () -> Bool = { true },
+                            stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make)
+        -> FilesDragController {
         let engine = FileTransferEngine(coordinator: { [unowned self] in coordinator }, asksBeforeReplacing: { true })
         // Finished rows stay to be checked.
         engine.sleep = { _, _ in throw CancellationError() }
         return FilesDragController(engine: engine, coordinator: { [unowned self] in coordinator },
-                                   localSource: { local }, enabled: enabled)
+                                   localSource: { local }, enabled: enabled, stage: stage)
     }
+}
+
+/// The least a drag can be for the list's end-of-drag calls.
+private final class EndedDrag: NSObject, NSDraggingInfo {
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    let draggingPasteboard = NSPasteboard.withUniqueName()
+    deinit { draggingPasteboard.releaseGlobally() }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?,
+                                classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:],
+                                using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }

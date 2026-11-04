@@ -74,41 +74,62 @@ struct SSHShell: Equatable, Codable, Sendable {
     }
     #endif
 
+    /// An interactive login typed as `ssh`: its options and destination, or nil for anything else (a command without
+    /// `-t`, `-N`, `-G`, a forwarding-only or multiplexing control use). As OpenSSH reads it: options, the destination,
+    /// then options again unless `--` came before the destination (`ssh host -l user`), then the remote command.
     static func parse(executable: String, arguments: [String]) -> Self? {
         guard URL(fileURLWithPath: executable).lastPathComponent == "ssh", arguments.count > 1 else { return nil }
         let takesValue = Set("BbcDEeFIiJLlmOopQRSWw"), forwarding = Set("DLR")
-        var options: [String] = [], index = 1, forcedTTY = false
-        var commandOnly = false
-        while index < arguments.count {
-            let value = arguments[index]
-            if value == "--" { index += 1; break }
-            guard value.hasPrefix("-"), value != "-" else { break }
-            let flags = Array(value.dropFirst())
-            guard !flags.isEmpty else { return nil }
-            var position = 0
-            while position < flags.count {
-                let flag = flags[position]
-                if "GNnfsV".contains(flag) { return nil }
-                if flag == "t" { forcedTTY = true; position += 1; continue }
-                if flag == "T" { commandOnly = true; position += 1; continue }
-                if takesValue.contains(flag) {
-                    let argument: String
-                    if position + 1 < flags.count { argument = String(flags[(position + 1)...]) }
-                    else { index += 1; guard index < arguments.count else { return nil }; argument = arguments[index] }
-                    if "OWQ".contains(flag) { return nil }
-                    if !forwarding.contains(flag) { options += ["-\(flag)", argument] }
-                    break
+        var index = 1, forcedTTY = false, commandOnly = false
+        /// One round of options from `index`: what they keep, and whether `--` ended it; nil refuses the command.
+        func options() -> (kept: [String], terminated: Bool)? {
+            var kept: [String] = []
+            while index < arguments.count {
+                let value = arguments[index]
+                if value == "--" { index += 1; return (kept, true) }
+                guard value.hasPrefix("-"), value != "-" else { break }
+                let flags = Array(value.dropFirst())
+                guard !flags.isEmpty else { return nil }
+                var position = 0
+                while position < flags.count {
+                    let flag = flags[position]
+                    if "GNnfsV".contains(flag) { return nil }
+                    if flag == "t" { forcedTTY = true; position += 1; continue }
+                    if flag == "T" { commandOnly = true; position += 1; continue }
+                    if takesValue.contains(flag) {
+                        let argument: String
+                        if position + 1 < flags.count { argument = String(flags[(position + 1)...]) }
+                        else { index += 1; guard index < arguments.count else { return nil }; argument = arguments[index] }
+                        if "OWQ".contains(flag) { return nil }
+                        if !forwarding.contains(flag) { kept += ["-\(flag)", argument] }
+                        break
+                    }
+                    kept.append("-\(flag)")
+                    position += 1
                 }
-                options.append("-\(flag)")
-                position += 1
+                index += 1
             }
-            index += 1
+            return (kept, false)
         }
-        // OpenSSH resumes option parsing after the destination (`host -l user`).
-        let next = index + 1 < arguments.count ? arguments[index + 1] : nil
-        guard index < arguments.count, !arguments[index].isEmpty, !arguments[index].hasPrefix("-"),
-              forcedTTY || (!commandOnly && index + 1 == arguments.count),
-              next.map({ !$0.hasPrefix("-") || $0 == "-" }) ?? true else { return nil }
-        return .init(destination: arguments[index], options: options, executable: executable)
+        guard let first = options(), index < arguments.count else { return nil }
+        let destination = arguments[index]
+        guard !destination.isEmpty, !destination.hasPrefix("-") else { return nil }
+        index += 1
+        var later: [String] = []
+        if !first.terminated, index < arguments.count {
+            guard let second = options() else { return nil }
+            // The connection's command puts every option before the destination. OpenSSH keeps the first user it
+            // reads: a `user@` destination's wins over a `-l` after it, which would win once moved in front.
+            var rest = second.kept[...]
+            while let option = rest.first {
+                let pair = takesValue.contains(option.dropFirst().first ?? " ") && option.count == 2
+                if option == "-l", destination.contains("@") { rest = rest.dropFirst(2); continue }
+                later += pair ? Array(rest.prefix(2)) : [option]
+                rest = rest.dropFirst(pair ? 2 : 1)
+            }
+        }
+        // What is left is the remote command: a login only with a forced terminal, or with none at all.
+        guard forcedTTY || (!commandOnly && index == arguments.count) else { return nil }
+        return .init(destination: destination, options: first.kept + later, executable: executable)
     }
 }

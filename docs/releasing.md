@@ -169,7 +169,7 @@ The cask's `zap` lists the files of both apps, `yachts.dispatch.app` and `yachts
 The Mac app has its own updater, using Foundation, CryptoKit, Security and macOS tools; there is no updater dependency.
 The first-launch setup sheet (`LocalAgentsConsent`, with the agents question) offers **Keep Dispatch up to date**
 checked; existing installations that have not answered get the sheet with that section alone. Nothing is requested
-until Continue saves the choice; Ask later saves nothing. Settings › General › Terminal can change the choice and
+until Continue saves the choice; Ask later saves nothing. Settings › General › Updates can change the choice and
 check manually without enabling it. Unanswered or off (also the default for older settings files), there are no
 automatic requests. On, Dispatch checks once a day
 while running and downloads newer versions, then offers **Restart and install**. Restart goes through the normal

@@ -708,7 +708,7 @@
           let local = endpoint == .local
           // The tab as it is now: its command or directory can have changed since it was shown.
           let latest = owned.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
-          // Settings › General › New tabs › Shell: a plain local tab runs it instead of the login shell, integrated as the
+          // Settings › General › Tabs & spaces › Shell: a plain local tab runs it instead of the login shell, integrated as the
           // engine would integrate it.
           let shell = local && latest.machine == .local && latest.launchCommand == nil ? TerminalRuntime.shared.shellCommand : nil
           let prepared = local ? environment(surface, shell: shell) : (variables: [], integrated: false, command: nil)
@@ -722,7 +722,7 @@
             _ = try await client.close(.init(node: terminal, policy: .terminate))
             throw CancellationError()
           }
-          // Settings › General › New tabs › Startup command: typed into a plain local shell, which reads it at its
+          // Settings › General › Tabs & spaces › Startup command: typed into a plain local shell, which reads it at its
           // first prompt.
           let startup = TerminalRuntime.shared.preferences.startupCommand.trimmingCharacters(in: .whitespaces)
           if local, latest.machine == .local, latest.launchCommand == nil, !startup.isEmpty,
@@ -970,6 +970,8 @@
       return topology.nodes.contains { $0.kind == .workspace && !$0.detached }
     }
 
+    static let nestedControl = "tmux control mode (tmux -CC) can't start inside a herdr or tmux pane. Press Return in that pane to leave it, or run tmux there without -CC."
+
     /// The renderer control protocol is tmux DCS, independently of remote statistics.
     var allowsControl: Bool { granted?.contains("tmux") ?? true }
 
@@ -1041,6 +1043,11 @@
             if let backend = controlBackends.removeValue(forKey: tab) { lost.insert(backend) }
             refused[tab] = session
             plain()
+          } catch let failure as HelperFailure where failure.code == "unsupported" && event == .start {
+            // Control mode started in a terminal its multiplexer cannot hand over (a herdr pane, a tmux pane): its
+            // stream stays out of the screen, and the tab says why instead of showing nothing.
+            controlTerminals.removeValue(forKey: tab)
+            if !stopped { fail(HerdrFailure(Self.nestedControl)) }
           } catch {
             controlTerminals.removeValue(forKey: tab)
             if let backend = controlBackends.removeValue(forKey: tab) { lost.insert(backend) }
@@ -1291,7 +1298,7 @@
         .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }, integrated, command)
     }
 
-    /// The shell a Settings › New tabs › Shell command runs, for its SHELL: the executable after any leading `env`, its
+    /// The shell a Settings › Tabs & spaces › Shell command runs, for its SHELL: the executable after any leading `env`, its
     /// options and `NAME=value` words, as Ghostty's parser reads the command; nil unless that executable is a shell (a
     /// program such as `htop` is no $SHELL for what it starts).
     static func shellExecutable(_ command: String) -> String? {
@@ -1855,6 +1862,19 @@
       }
     }
 
+    /// The pane directory each tab last took from its server (`Node.cwd`).
+    private var serverDirectories: [UUID: String] = [:]
+
+    /// A tab's directory as a topology gives it: the server's pane directory when that changed since the tab last took
+    /// it. A shell's own report (OSC 7, `Workspace.updateTab`) after a `cd` is newer than the directory tmux gave the
+    /// helper's earlier read (tmux tells a control client of no directory change), so an unchanged one keeps it.
+    private func serverDirectory(_ tab: TerminalTab, _ server: String?) -> String {
+      guard let server else { return tab.directory }
+      if serverDirectories.count > 4096 { serverDirectories.removeAll() }
+      guard serverDirectories.updateValue(server, forKey: tab.id) != server else { return tab.directory }
+      return server
+    }
+
     static let missingRetained = "A retained terminal no longer exists on the server. Its saved view remains offline."
 
     /// Reconnect anyway (`SSHReconnectController.acceptsChanges`): the saved view's tabs whose terminals the server no
@@ -1949,6 +1969,14 @@
       if let request = observations.removeValue(forKey: route) { connection?.cancel(request) }
       restored(route)
       if error == Self.missingRetained { error = nil }
+    }
+
+    /// Whether every pane of `node` sits at its shell with nothing running, as the helper's close check finds it
+    /// (`close.request` with `check`, which closes nothing); nil when the helper cannot say.
+    func idle(_ node: UInt64) async -> Bool? {
+      guard let client = try? await client(),
+            let closed = try? await client.close(.init(node: node, policy: .terminate, check: true)) else { return nil }
+      return !closed.confirmation
     }
 
     @discardableResult
@@ -2981,7 +3009,7 @@
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
-            tab.directory = node.cwd ?? tab.directory
+            tab.directory = serverDirectory(tab, node.cwd)
             tab.terminal = node.id
             // A pending tab this terminal fills (its creation's placeholder) is connected now.
             tab.isConnecting = TerminalRuntime.shared.hosts.reconnect.awaitingRestore(tab.id)
@@ -3025,7 +3053,7 @@
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
-            tab.directory = node.cwd ?? tab.directory
+            tab.directory = serverDirectory(tab, node.cwd)
             tab.terminal = node.id
             // A pending tab this terminal fills (its creation's placeholder) is connected now.
             tab.isConnecting = TerminalRuntime.shared.hosts.reconnect.awaitingRestore(tab.id)

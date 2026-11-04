@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The files tabs as a segmented control: a well with the shown tab raised, a segment's
 /// count in a pill after its title.
@@ -337,12 +338,15 @@ struct FilesHeader: View {
     }
 
     /// Finder's own icon on this Mac; on a host, a folder, the home folder or the disk drawn as Finder does.
+    /// Generic icons only, on this Mac as on a host: SwiftUI builds a context menu's items with the view, so every
+    /// header update would otherwise ask the file system about each folder above the shown one, once per crumb
+    /// (`NSWorkspace.icon(forFile:)` reads the folder and can trip the privacy prompts of protected ones).
     static func menuIcon(_ folder: String, local: Bool, home: String?) -> NSImage {
         let image: NSImage
-        if local {
-            image = NSWorkspace.shared.icon(forFile: folder)
+        if local, folder != "/", folder != home.map(FilesPath.normalized) {
+            image = NSWorkspace.shared.icon(for: .folder)
         } else {
-            let symbol = folder == "/" ? "externaldrive" : folder == home.map(FilesPath.normalized) ? "house" : "folder"
+            let symbol = folder == "/" ? (local ? "internaldrive" : "externaldrive") : folder == home.map(FilesPath.normalized) ? "house" : "folder"
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage()
         }
         let sized = image.copy() as? NSImage ?? image

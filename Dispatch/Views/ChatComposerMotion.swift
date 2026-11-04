@@ -52,7 +52,8 @@ struct ChatComposerBorder: ViewModifier {
     @State private var visible = false
 
     func body(content: Content) -> some View {
-        let working = AgentWorkingState.isWorking(session)
+        // A reply bubble that carries the activity (ChatReplyHalo) leaves the composer neutral.
+        let working = AgentWorkingState.isWorking(session) && !session.replyHaloOwnsActivity
         content
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
@@ -68,6 +69,7 @@ struct ChatComposerBorder: ViewModifier {
                                      : LiquidGlassStore.shared.active ? .clear : theme.border))
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: working)
             .overlay {
                 if working && !AgentWorkingState.isWaiting(session) && !reduceMotion && session.showChat {
                     ChatComposerAnimatedBorder(accent: theme.accent, moving: visible && active, radius: cornerRadius - 0.5)

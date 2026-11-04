@@ -43,6 +43,10 @@ impl Codex {
         let main = self.main.channels.borrow().contains_key(&binding.session);
         if self.channel(binding).is_ok() && !command && (answer || !main) {
             self.turn(io, binding, super::input(text), mode, done);
+        } else if let Some(message) = self.surfaces.get(&(binding.process.pid, binding.process.start)) {
+            // Typed now, the text and its Return would go to the open menu: Return picks its
+            // selected choice.
+            deferred(done)(io, Err(failure("attention", message.clone())));
         } else {
             if command && let Some(reading) = super::command::Reading::new(text) {
                 self.reading
@@ -86,6 +90,10 @@ impl Codex {
         if self.channel(binding).is_ok() && !main {
             let text = attachment::fallback(text, &files);
             self.turn(io, binding, super::attached(&text, attachments), mode, done);
+            return;
+        }
+        if let Some(message) = self.surfaces.get(&(binding.process.pid, binding.process.start)) {
+            deferred(done)(io, Err(failure("attention", message.clone())));
             return;
         }
         let mut keys: Vec<Input> = attachments

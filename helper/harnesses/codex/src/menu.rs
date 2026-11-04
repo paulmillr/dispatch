@@ -38,16 +38,68 @@ impl Walk {
 }
 
 /// c1654cc ChatNativePrompt (ChatCommands.swift:104-145): an agent prompt screen, numbered
-/// choices above its footer, only under a known planning/review/goal/question title.
+/// choices above its footer, under a known planning/review/goal/question title, or a
+/// single-choice settings menu (`settings`) under any title but the model picker's.
 pub struct Prompt {
     pub title: String,
     pub choices: Vec<(u32, String)>,
+    /// A settings menu's description column, with its wrapped lines; None on known prompts.
+    pub details: Vec<Option<String>>,
     pub selected: u32,
 }
 
 /// AgentModelMenu.isFooter (AgentModelMenu.swift:29-31).
 fn footer(line: &str) -> bool {
     line.contains("esc to go back") || line.starts_with("enter ") && line.ends_with(" · esc back")
+}
+
+/// The footers of Codex's single-choice settings menus (Codex 0.166 `/permissions` and its
+/// Full Access confirmation, `/usage`): Enter acts on the selected choice, Esc closes.
+fn settings(footer: &str) -> bool {
+    footer == "enter select · esc back" || footer == "enter open · esc back"
+}
+
+/// Titles of the menus `step` walks for the model picker: never a chat question or a surface.
+fn walked(line: &str) -> bool {
+    line == "Select Model"
+        || line == "Select Model and Effort"
+        || line.starts_with("Select Reasoning Level for ")
+        || line == "Advanced Reasoning"
+        || line == "Apply reasoning change"
+}
+
+/// A settings choice's label and description: the columns are two or more spaces apart.
+fn columns(label: &str) -> (&str, Option<&str>) {
+    match label.find("  ") {
+        Some(at) => (&label[..at], Some(label[at..].trim()).filter(|detail| !detail.is_empty())),
+        None => (label, None),
+    }
+}
+
+/// Codex's own screen covering the composer that only the terminal can drive (Codex 0.166:
+/// `/hooks`, `/config`, `/experimental`, the `/usage` report, the `/resume` picker, the
+/// `/diff` pager): its footer offers one of these keys. None at the composer, while a turn
+/// runs, for prompts Chat presents (`prompt`), the model picker's menus and the goal editor.
+pub fn surface(screen: &str) -> Option<&'static str> {
+    const CLOSE: [&str; 7] =
+        ["esc back", "esc close", "esc exit", "esc save/close", "esc clear search/close", "esc to go back", "q close"];
+    if screen.len() > 65_536 {
+        return None;
+    }
+    let lines = rows(screen);
+    let tail: Vec<&str> = lines.iter().rev().filter(|line| !line.is_empty()).take(3).copied().collect();
+    if tail.iter().any(|line| line.contains("esc to interrupt")) {
+        return None;
+    }
+    let covered = tail.iter().take(2).any(|line| {
+        line.split('·')
+            .flat_map(|part| part.split("  "))
+            .any(|part| CLOSE.contains(&part.trim()))
+    });
+    if !covered || prompt(screen).is_some() || editor(screen).is_some() || lines.iter().any(|line| walked(line)) {
+        return None;
+    }
+    Some("Codex has a menu open in Terminal. Finish or close it there to continue in Chat.")
 }
 
 /// `^(›\s*)?(\d{1,3})\.\s+(.+)$` on a trimmed line: (selected, number, label).
@@ -72,20 +124,28 @@ fn rows(text: &str) -> Vec<&str> {
 }
 
 pub fn prompt(screen: &str) -> Option<Prompt> {
-    let lines = rows(screen);
+    let raw: Vec<&str> = screen.split(NEWLINES).collect();
+    let lines: Vec<&str> = raw.iter().map(|line| line.trim()).collect();
     let end = lines
         .iter()
         .rposition(|line| line.contains("enter to submit answer") || footer(line))?;
     if screen.len() > 65_536 || !lines[end + 1..].iter().all(|line| line.is_empty()) {
         return None;
     }
-    let (mut choices, mut selected, mut first) = (Vec::new(), None, None);
+    let (mut choices, mut wrapped, mut selected, mut first) = (Vec::new(), Vec::new(), None, None);
+    // A description that wraps continues under its column, indented past the choice's number.
+    let mut continued: Vec<&str> = Vec::new();
     for index in (0..end).rev() {
         match numbered(lines[index]) {
             Some((marked, number, label)) => {
                 choices.insert(0, (number, label.to_owned()));
+                continued.reverse();
+                wrapped.insert(0, std::mem::take(&mut continued));
                 selected = marked.then_some(number).or(selected);
                 first = Some(index);
+            }
+            None if !lines[index].is_empty() && raw[index].len() - raw[index].trim_start().len() >= 6 => {
+                continued.push(lines[index]);
             }
             None if !choices.is_empty() && !lines[index].is_empty() => break,
             None => {}
@@ -98,8 +158,9 @@ pub fn prompt(screen: &str) -> Option<Prompt> {
     if numbers.len() != choices.len() || choices.len() > 20 {
         return None;
     }
-    // Only known planning/review/goal surfaces may own these buttons.
-    let start = (0..first).rev().find(|&index| {
+    // Known planning/review/goal surfaces own these buttons, and settings menus under the
+    // heading right above their choices (the model picker's menus are walked instead).
+    let known = (0..first).rev().find(|&index| {
         let line = lines[index];
         line.starts_with("Question ")
             || line.contains("Implement this plan?")
@@ -108,11 +169,31 @@ pub fn prompt(screen: &str) -> Option<Prompt> {
             || line.starts_with("Replace goal")
             || line.starts_with("Replace the current goal")
             || line == "Resume paused goal?"
+    });
+    let menu = known.is_none() && settings(lines[end]);
+    let start = known.or_else(|| {
+        if !menu || lines.iter().any(|line| line.contains("esc to interrupt")) {
+            return None;
+        }
+        let bottom = (0..first).rev().find(|&index| !lines[index].is_empty())?;
+        let top = (0..=bottom).rev().take_while(|&index| !lines[index].is_empty()).last()?;
+        (!lines[top..=bottom].iter().any(|line| walked(line))).then_some(top)
     })?;
     let title = lines[start..first].iter().filter(|line| !line.is_empty());
+    let (choices, details) = if menu {
+        choices.into_iter().zip(wrapped).map(|((number, label), more)| {
+            let (label, detail) = columns(&label);
+            let detail = detail.into_iter().chain(more).collect::<Vec<_>>().join(" ");
+            ((number, label.to_owned()), (!detail.is_empty()).then_some(detail))
+        }).unzip()
+    } else {
+        let details = vec![None; choices.len()];
+        (choices, details)
+    };
     Some(Prompt {
         title: title.copied().collect::<Vec<_>>().join("\n"),
         choices,
+        details,
         selected,
     })
 }
@@ -368,10 +449,10 @@ pub fn status(screen: &str) -> Option<Status> {
 
 pub fn interaction(screen: &Screen) -> Option<Interaction> {
     let prompt = prompt(&screen.text)?;
-    let options = prompt.choices.iter().map(|(number, label)| Choice {
+    let options = prompt.choices.iter().zip(&prompt.details).map(|((number, label), detail)| Choice {
         id: number.to_string(),
         label: label.clone(),
-        detail: None,
+        detail: detail.clone(),
     });
     Some(Interaction {
         key: None,
@@ -674,3 +755,7 @@ pub(crate) fn step(binding: &Binding, goal: &Goal, screen: &Screen, walk: &mut W
         _ => Step::Fail(failure("menu", "Unexpected Codex menu.")),
     }
 }
+
+#[cfg(test)]
+#[path = "menu.test.rs"]
+mod tests;

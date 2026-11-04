@@ -281,8 +281,9 @@ final class FilesOutlineView: NSOutlineView {
         controller?.clearDropTarget()
     }
 
+    // No `super`: NSTableView does not implement this optional method, and calling it throws. A drag out starts over
+    // the list, so it ends here too; the exception stopped AppKit from ending the drag and left its image on screen.
     override func draggingEnded(_ sender: any NSDraggingInfo) {
-        super.draggingEnded(sender)
         controller?.clearDropTarget()
     }
 

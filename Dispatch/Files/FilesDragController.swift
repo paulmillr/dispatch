@@ -1,4 +1,5 @@
 import AppKit
+import os
 import UniformTypeIdentifiers
 
 extension NSPasteboard.PasteboardType {
@@ -72,17 +73,20 @@ struct FilesDragPayload: Equatable, Sendable {
     private let coordinator: @MainActor () -> FilesCoordinator
     private let localSource: @MainActor () -> (any FilesSource)?
     private let enabled: @MainActor () -> Bool
+    private let stage: @Sendable ([String]) throws -> FilesDropStaging
     /// The promises of the drag being started, by tab: every row dragged together arrives as one copy.
     private var openBatches: [UUID: FilesPromiseBatch] = [:]
 
     init(engine: FileTransferEngine = .shared,
          coordinator: @escaping @MainActor () -> FilesCoordinator = { TerminalRuntime.shared.files },
          localSource: @escaping @MainActor () -> (any FilesSource)? = { FilesSources.local() },
-         enabled: @escaping @MainActor () -> Bool = FilesTransferSettings.enabled) {
+         enabled: @escaping @MainActor () -> Bool = FilesTransferSettings.enabled,
+         stage: @escaping @Sendable ([String]) throws -> FilesDropStaging = FilesDropStaging.make) {
         self.engine = engine
         self.coordinator = coordinator
         self.localSource = localSource
         self.enabled = enabled
+        self.stage = stage
     }
 
     var dragEnabled: Bool { enabled() }
@@ -181,20 +185,57 @@ struct FilesDragPayload: Equatable, Sendable {
         Task { @MainActor [weak self, weak session] in
             let paths = await Task.detached { Self.resolve(files) }.value
             guard let self, let session else { return }
-            self.copyIn(paths, into: directory, in: session)
+            await self.copyInDropped(paths, into: directory, in: session)
         }
         return true
+    }
+
+    /// Files the user dropped or pasted, which macOS lets this app read even in a folder it was denied (Desktop,
+    /// Documents, Downloads), but not the helper it started. Those the helper is refused (`permission_denied`) the
+    /// app copies itself into a private folder in its temporary folder (`FilesDropStaging`, a clone on APFS), and the
+    /// copy reads them from there; the folder goes when the copy settles. Nothing is staged when the helper may read.
+    private func copyInDropped(_ paths: [String], into directory: String, in session: FilesSession) async {
+        guard let local = localSource() else { return }
+        var denied: [String] = []
+        for path in paths {
+            do {
+                _ = try await local.read(path, offset: 0, length: 0, revision: nil)
+            } catch FilesSourceError.permissionDenied {
+                denied.append(path)
+            } catch {}
+        }
+        guard !denied.isEmpty else {
+            copyIn(paths, into: directory, in: session)
+            return
+        }
+        let stage = self.stage
+        let staged: FilesDropStaging
+        do {
+            staged = try await Task.detached { try stage(denied) }.value
+        } catch {
+            // The app may not read them either: the copy goes as asked and fails with the setting's message.
+            copyIn(paths, into: directory, in: session)
+            return
+        }
+        let items = paths.map { staged.paths[$0] ?? $0 }
+        guard copyIn(items, into: directory, in: session, finished: { transfer in
+            switch transfer.stage {
+            case .failed(_, true): break  // Retry reads the staged copies again; the next drop sweeps them.
+            default: staged.remove()
+            }
+        }) else { return staged.remove() }
     }
 
     /// Copies files of this Mac into `directory` of the tab's host (a Finder drop, ⌘V). Refused, as a drop would
     /// be, when the tab shows this Mac and a file would land where it is or a folder inside itself.
     @discardableResult
-    func copyIn(_ paths: [String], into directory: String, in session: FilesSession) -> Bool {
+    func copyIn(_ paths: [String], into directory: String, in session: FilesSession,
+                finished: (@MainActor (FileTransfer) -> Void)? = nil) -> Bool {
         guard !paths.isEmpty, let target = session.source, let local = localSource() else { return false }
         if target.readOnly { refuse(session, target); return false }
         if target.endpoint.isLocal, paths.contains(where: { Self.contains($0, directory) }) { return false }
         engine.copy(items: paths, from: local, to: target, directory: directory, in: session,
-                    kind: target.endpoint.isLocal ? .local : .copyIn)
+                    kind: target.endpoint.isLocal ? .local : .copyIn, finished: finished)
         return true
     }
 
@@ -347,6 +388,60 @@ struct FilesDragPayload: Equatable, Sendable {
                 }
             }
             try? System.remove(folder)
+        }
+    }
+}
+
+/// Dropped items the app copied for the helper (`FilesDragController.copyInDropped`): one private folder in the app's
+/// temporary folder, each item under its own name (a name already taken goes in a numbered subfolder, so names stay
+/// as dropped). A failed copy removes what it made; staging sweeps folders an earlier run or retry left behind.
+struct FilesDropStaging: Sendable {
+    static let prefix = "dispatch-drop-"
+
+    let folder: URL
+    /// Each dropped path → its copy.
+    let paths: [String: String]
+
+    func remove() {
+        try? System.remove(folder)
+        Self.live.withLock { _ = $0.remove(folder.path) }
+    }
+
+    private static let live = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    static func make(_ items: [String]) throws -> FilesDropStaging {
+        sweep()
+        let folder = System.temporary.appendingPathComponent(prefix + System.uuid().uuidString)
+        try System.directory(folder)
+        live.withLock { _ = $0.insert(folder.path) }
+        let staging = FilesDropStaging(folder: folder, paths: [:])
+        do {
+            var paths: [String: String] = [:]
+            var taken: Set<String> = []
+            for (index, item) in items.enumerated() {
+                let name = (item as NSString).lastPathComponent
+                var parent = folder
+                if !taken.insert(name).inserted {
+                    parent = folder.appendingPathComponent(String(index))
+                    try System.directory(parent)
+                }
+                let copy = parent.appendingPathComponent(name)
+                try System.copy(URL(fileURLWithPath: item), to: copy)
+                paths[item] = copy.path
+            }
+            return FilesDropStaging(folder: folder, paths: paths)
+        } catch {
+            staging.remove()
+            throw error
+        }
+    }
+
+    /// Staging folders no copy uses any more (a failed copy dismissed without a retry, a quit mid-copy).
+    private static func sweep() {
+        let live = live.withLock { $0 }
+        for name in (try? System.list(System.temporary)) ?? [] where name.hasPrefix(prefix) {
+            let path = System.temporary.appendingPathComponent(name).path
+            if !live.contains(path) { try? System.remove(URL(fileURLWithPath: path)) }
         }
     }
 }

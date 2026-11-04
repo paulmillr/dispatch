@@ -51,6 +51,24 @@ final class SSHConfigurationIntegrationTests: XCTestCase {
         XCTAssertFalse(app.runtime.ssh.links.values.contains { $0.launch.tabID == source })
     }
 
+    /// `ssh host -l user`: OpenSSH reads options after the destination, so Dispatch must too. The configuration names
+    /// no user here: the login, its helper and a new tab's clone all take it from the `-l` typed after the host.
+    func testOptionsTypedAfterTheHostAreFollowed() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let server = try await SSHTestServer(grant: .init(profile: .statistics)); defer { server.stop() }
+        let arguments = try configure(server, "dispatch-test-late-user", user: false) + ["-l", System.machine.name]
+        try await server.authorize(.init(profile: .statistics), arguments: arguments)
+        let source = try XCTUnwrap(app.workspace.activeTab?.id)
+        let terminal = try await origin(app, id: source)
+        TerminalTestSupport.send(command(arguments), to: terminal)
+        try await connected(app, source: source)
+        let link = try XCTUnwrap(app.runtime.ssh.links.values.first { $0.launch.tabID == source })
+        XCTAssertEqual(link.launch.shell.destination, "dispatch-test-late-user")
+        XCTAssertEqual(Array(link.launch.shell.options.suffix(2)), ["-l", System.machine.name])
+        TerminalTestSupport.send("printf 'LATE_%s\\n' \"${DISPATCH_SSH_HELPER:+helper}\"", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("LATE_helper") }
+    }
+
     func testSendEnvAndRequestedAgentForwardingReachHelperAndResumedChannels() async throws {
         try await checkSessionOptions(forwardAgent: true)
     }
@@ -182,13 +200,14 @@ final class SSHConfigurationIntegrationTests: XCTestCase {
 
     /// A configuration for `name` on `server` in its root, with `before` ahead of the host's block (a Match there wins:
     /// OpenSSH keeps the first value) and `after` inside it. Returns the ssh arguments.
-    private func configure(_ server: SSHTestServer, _ name: String, before: String = "", after: String = "") throws -> [String] {
+    private func configure(_ server: SSHTestServer, _ name: String, before: String = "", after: String = "",
+                           user: Bool = true) throws -> [String] {
         let configuration = server.root.appendingPathComponent(name + ".config")
         try System.write(Data((before + """
             Host \(name)
               HostName 127.0.0.1
               Port \(server.port)
-              User \(System.machine.name)
+            \(user ? "  User \(System.machine.name)\n" : "")\
               IdentityFile \(server.root.appendingPathComponent("key").path)
               UserKnownHostsFile \(server.root.appendingPathComponent("known_hosts").path)
               StrictHostKeyChecking yes

@@ -54,6 +54,9 @@ final class ChatCoordinator {
     var toolSteps = ChatToolGroupDisclosure.current {
         didSet { for session in sessions.values where session.toolSteps != toolSteps { session.toolSteps = toolSteps } }
     }
+    /// Settings › Experimental › Reply placeholder: a sent prompt's reply shows as an empty bubble once the agent
+    /// acknowledges it, carrying the working light until its first words (ChatPendingReply).
+    var replyPlaceholder = false
     /// The first queued message showed its steering tip (once, ever).
     var queueTipShown: Bool { didSet { defaults?.set(queueTipShown, forKey: "chatQueueSteerTipShown") } }
     @ObservationIgnored private var owners: [String: UUID] = [:]
@@ -197,7 +200,7 @@ final class ChatCoordinator {
         session.manualViewChoice = true
         if value { session.terminalAttention = nil }
         setChatVisible(value, session: session, reason: "user")
-        if !value { leaveChat(session) }
+        if !value { leaveChat(session) } else if session.helper != nil, session.active { adoptTerminalTypeahead(session) }
     }
     /// The user chose the terminal over this chat: what chat started gives way to it. Also run when files, which hid
     /// the chat, gives way to the terminal, where `showChat` is already false.

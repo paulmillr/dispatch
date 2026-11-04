@@ -13,8 +13,10 @@ import Foundation
         case image(Data, pixelSize: CGSize)
         /// A folder; the summary arrives after the bounded walk (nil while it runs).
         case folder(FolderSummary?)
-        /// Binary content: `head` is the first bytes, for the "Show first 64 KB" offer.
-        case binary(size: UInt64, head: Data?)
+        /// Binary content, shown as hex (`FileHexDocument` reads the rest a page at a time): `head` is the start of the
+        /// file the loader already read (at least its first window, or the whole file), `format` what the bytes say it
+        /// is (`FileFormat`).
+        case binary(size: UInt64, head: Data, format: String?)
         /// Text over 2 MB: `head` holds the first 64 KB once requested.
         case tooLarge(size: UInt64, head: String?)
         case error(String)
@@ -39,7 +41,6 @@ import Foundation
         switch kind {
         case .text, .markdown: true
         case .tooLarge(_, let head): head != nil
-        case .binary(_, let head): head != nil
         default: false
         }
     }

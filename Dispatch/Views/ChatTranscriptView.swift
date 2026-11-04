@@ -61,7 +61,10 @@ struct ChatTranscriptView: View {
                         receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
                         streaming: ChatTypedMarkdown.streaming(row, in: typingTurn))
                 }
-            }) { id, width in
+            },
+            halo: reduceMotion || theme.radioLog || !session.showChat ? nil : ChatReplyHalo.target(session, rows: rows),
+            haloMaxWidth: theme.typography.characterWidth * 80, haloAccent: theme.accent,
+            haloLineHeight: theme.typography.replyLineHeight) { id, width in
             let content: AnyView
             if id == "earlier" { content = AnyView(earlierMessages) }
             else if id == "radio-header" { content = AnyView(ChatRadioLogHeader(surface: session.id)) }
@@ -527,7 +530,9 @@ private struct ChatTranscriptRowView: View {
         theme.radioLog ? ChatRadioLog.messageWidth(contentWidth, theme: theme) + 32 - (row.item?.kind == .tool ? 10 : 0)
             : min(contentWidth, theme.typography.characterWidth * 80)
     }
-    private var isBubble: Bool { row.group != nil || row.item?.kind == .assistant || row.item?.kind == .tool || row.item?.isNarration == true }
+    private var isBubble: Bool {
+        row.placeholder || row.group != nil || row.item?.kind == .assistant || row.item?.kind == .tool || row.item?.isNarration == true
+    }
     var body: some View {
         if theme.radioLog { radioBody } else { standardBody }
     }
@@ -535,7 +540,9 @@ private struct ChatTranscriptRowView: View {
     /// Nautical: one log line per transmission, its time and call sign in columns beside the message. A bubble's
     /// rows share the line, so only its first names the station and only its last draws the rule below.
     @ViewBuilder private var radioBody: some View {
-        if let duration = row.workedFor {
+        if row.placeholder {
+            EmptyView()
+        } else if let duration = row.workedFor {
             ChatRadioLog.line(time: nil, station: nil, theme: theme) {
                 Text("moored · \(AgentWorkingAnimation.elapsedText(duration)) on passage").font(theme.typography.detail).foregroundStyle(theme.muted)
             }.padding(.vertical, 6).overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
@@ -599,6 +606,13 @@ private struct ChatTranscriptRowView: View {
                                 timeline.replaced.map(replacedStep)
                             })
                     } else if let item = row.item { itemView(item) }
+                    else if row.placeholder {
+                        // A one-line reply's height, its time's line included, so a short first reply takes its place
+                        // without moving.
+                        Text("\u{00A0}").frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityLabel("\(session.agentTitle) is replying")
+                        Text("\u{00A0}").font(theme.typography.detail).accessibilityHidden(true)
+                    }
                     if let group = row.group {
                         VStack(alignment: .leading, spacing: 0) {
                             groupHeader(group, replyTime: row.replyTime)
@@ -617,7 +631,10 @@ private struct ChatTranscriptRowView: View {
                 .padding(.bottom, row.bubbleEnd ? 12 : 3)
                 .frame(maxWidth: bubbleWidth, alignment: .leading)
                 .background(theme.sidebar, in: bubbleShape)
-                .overlay { ChatBubbleOutline(start: row.bubbleStart, end: row.bubbleEnd).stroke(theme.border, lineWidth: 1) }
+                .overlay {
+                    ChatBubbleOutline(start: row.bubbleStart, end: row.bubbleEnd)
+                        .stroke(theme.border, lineWidth: 1)
+                }
                 .accessibilityIdentifier("chat-message-\(row.id)")
             } else if let item = row.item { itemView(item) }
             else if let approval = row.approval {

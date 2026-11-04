@@ -627,9 +627,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertFalse(stopped.contains("Copy path"), stopped)
     }
 
-    /// The space list is a stepped slider from the densest list to the roomiest: it starts on the default, steps with
-    /// the arrow keys, snaps a drag to the nearest style, reads the style's name to VoiceOver, and saves the choice.
-    /// The font size slider beside it keeps its half-point steps.
+    /// The space list is a stepped slider from the densest list to the roomiest, under Theme › Appearance: it starts on
+    /// the default, steps with the arrow keys, snaps a drag to the nearest style, reads the style's name to VoiceOver,
+    /// and saves the choice. General's font size slider keeps its half-point steps.
     func testSpaceListPickerStepsThroughStylesBySize() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
@@ -659,17 +659,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
         func slider(_ identifier: String) throws -> NSSlider {
             try XCTUnwrap(find(identifier), "\(identifier) among \(PresentationTestSupport.views(of: NSSlider.self, in: root).map { $0.accessibilityIdentifier() })")
         }
-        // The space list's options start folded under Window: scrolled into view, its button opens them.
-        try await TestSupport.eventually {
-            root.layoutSubtreeIfNeeded()
-            guard let scroll = PresentationTestSupport.views(of: NSScrollView.self, in: root).first(where: { !$0.isHiddenOrHasHiddenAncestor })
-            else { return false }
-            let document = scroll.documentView?.bounds.height ?? 0
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document - scroll.contentView.bounds.height)))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            return !PresentationTestSupport.accessibilityFrames("settings-options-Window", in: window).isEmpty
-        }
-        let fold = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("settings-options-Window", in: window).first)
+        // Space size starts folded under Theme › Appearance, near the page's top: its button opens it.
+        try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
+        try await TestSupport.eventually { !PresentationTestSupport.accessibilityFrames("settings-options-Appearance", in: window).isEmpty }
+        let fold = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("settings-options-Appearance", in: window).first)
         try PresentationTestSupport.click(window, at: NSPoint(x: fold.midX, y: fold.midY))
         try await TestSupport.eventually { root.layoutSubtreeIfNeeded(); return find("space-list-style") != nil }
         let styles = try slider("space-list-style")
@@ -696,6 +689,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
         styles.scrollToVisible(styles.bounds.insetBy(dx: 0, dy: -60))
         _ = try await PresentationTestSupport.capture(window, named: "space-list-picker", in: "settings-validation")
 
+        // Back on General, Text's size slider.
+        try await PresentationTestSupport.selectSettingsTab("General", in: window)
+        try await TestSupport.eventually { root.layoutSubtreeIfNeeded(); return find("settings-font-size") != nil }
         let font = try slider("settings-font-size")
         font.doubleValue = 13.3
         font.sendAction(font.action, to: font.target)
@@ -782,11 +778,12 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal", "Window", "tab names, git branches, host colors, glass and contrast",
-                         "On launch", "Reopen spaces", "Scrollback", "New tabs", "login shell", "Startup command",
+            ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal",
+                         "On launch", "Reopen spaces", "Scrollback", "Tabs & spaces", "login shell", "automatic scrollback", "Startup command",
+                         "Show git branch in spaces", "Show sidebar with one space", "Automatic tab names", "Vertical tabs, no spaces",
                          "Security", "programs can copy"]),
-            ("Theme", ["Colors", "App theme", "app, terminal and chat", "Terminal opacity", "Colorblind-friendly",
-                       "Dark color scheme", "Dispatch", "Light color scheme", "Your color schemes"]),
+            ("Theme", ["Colors", "App theme", "app, terminal and chat", "Appearance", "space size, opacity, contrast, host colors and glass",
+                       "Colorblind-friendly", "Dark color scheme", "Dispatch", "Light color scheme", "Your color schemes"]),
             ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Key bindings", "Prefix keys", "Dictate", "Option as Alt"]),
             ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "git with review mode", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device", "Notifications"]),
             ("Hosts", ["Hosts", "This Mac"])
@@ -794,9 +791,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
             if tab != "General" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             else {
                 try await TestSupport.eventually {
-                    !PresentationTestSupport.accessibilityFrames(label: "New tabs", in: window).isEmpty
+                    !PresentationTestSupport.accessibilityFrames(label: "Tabs & spaces", in: window).isEmpty
                 }
-                let options = try XCTUnwrap(PresentationTestSupport.accessibilityFrames(label: "New tabs", in: window).first)
+                let options = try XCTUnwrap(PresentationTestSupport.accessibilityFrames(label: "Tabs & spaces", in: window).first)
                 try PresentationTestSupport.click(window, at: NSPoint(x: options.midX, y: options.midY))
                 try await TestSupport.eventually {
                     PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
@@ -824,17 +821,20 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertFalse(text.contains("Option as Alt"), "Keyboard behaviour lives under Keyboard")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
                 XCTAssertFalse(text.contains("Colorblind-friendly"), "Colors live under Theme")
-                XCTAssertFalse(text.contains("Improve text contrast"), "Text contrast starts folded under Window")
-                XCTAssertFalse(text.contains("Liquid Glass"), "Window starts collapsed")
-                XCTAssertFalse(text.contains("a program's own"), "Tab names start folded under Window")
+                XCTAssertFalse(text.contains("Improve text contrast"), "Text contrast lives under Theme › Appearance")
+                XCTAssertFalse(text.contains("Liquid Glass"), "Liquid Glass lives under Theme › Appearance")
                 XCTAssertFalse(text.contains("Same as code follows"), "Chat font starts folded under Font")
                 XCTAssertFalse(text.contains("terminal rows and chat lines"), "Line spacing starts folded under Size")
-                XCTAssertFalse(text.contains("Space size"), "Window starts collapsed")
+                XCTAssertFalse(text.contains("Space size"), "Space size lives under Theme › Appearance")
                 XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
                 XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
                 XCTAssertFalse(text.contains("dock badge and banner"), "Notifications live under Features")
                 XCTAssertFalse(text.contains("via OSC 52"), "Security starts collapsed")
                 XCTAssertFalse(text.contains("Kitty graphics"), "Security starts collapsed")
+            }
+            if tab == "Theme" {
+                XCTAssertFalse(text.contains("Terminal opacity"), "Appearance starts collapsed")
+                XCTAssertFalse(text.contains("Improve text contrast"), "Appearance starts collapsed")
             }
             if tab == "Features" {
                 XCTAssertFalse(text.contains("Auto-confirm"), "Card options start folded")
@@ -961,7 +961,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             let fillsScreen = window.frame.height >= screen.visibleFrame.height - 2
             return (fitsPage || fillsScreen)
                 // Settings opens on General.
-                && text.contains("Font") && text.contains("New tabs")
+                && text.contains("Font") && text.contains("Tabs & spaces")
                 // The last row is below the fold when a short screen caps the window.
                 && (!fitsPage || text.contains("programs can copy"))
                 && !text.contains("Improve text contrast")

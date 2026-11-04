@@ -169,7 +169,7 @@ enum LocalAgentsConsent {
             }
             stack.addArrangedSubview(Self.group([updates], width: contentWidth))
             let explanation = Style.label(agents ? "SSH hosts ask for themselves. Change either later in Settings."
-                                                 : "Change this later in Settings › General › Terminal.", size: 11)
+                                                 : "Change this later in Settings › General › Updates.", size: 11)
             explanation.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
             stack.addArrangedSubview(explanation)
 

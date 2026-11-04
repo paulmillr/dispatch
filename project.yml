@@ -322,6 +322,7 @@ targets:
       - Dispatch/Chat/ToolPresentation.swift
       - Dispatch/Chat/ToolPresentationCache.swift
       - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Files/FileFormat.swift
       - Dispatch/Files/FilePreviewContent.swift
       - Dispatch/Files/FilePreviewImage.swift
       - Dispatch/Files/FilesFormatting.swift

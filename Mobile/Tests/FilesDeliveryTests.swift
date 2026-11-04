@@ -82,6 +82,43 @@ final class FilesDeliveryTests: XCTestCase {
         XCTAssertEqual(whole.count, 1_025, "At the limit it is shared whole")
     }
 
+    /// Share and Save to Photos copy a file larger than one read to the phone in `chunk` reads of the revision shown,
+    /// byte for byte; a file rewritten midway fails and leaves no copy behind. A video is one by its name.
+    func testDownloadCopiesALargeFileInChunksOfOneRevision() async throws {
+        let size = Int(FilePreview.chunk) * 2 + 5
+        let video = Data((0..<size).map { UInt8($0 % 251) })
+        let files = Files(["/w/clip.MP4": video])
+        let clip = preview("/w/clip.MP4", files)
+        await clip.load()
+        XCTAssertTrue(clip.canShare)
+        XCTAssertTrue(clip.isVideo)
+        XCTAssertFalse(preview("/w/clip.mp4.txt", files).isVideo)
+        let before = files.reads.count
+        let item = try await clip.download()
+        defer { item.remove() }
+        XCTAssertEqual(item.url.lastPathComponent, "clip.MP4")
+        XCTAssertEqual(try Data(contentsOf: item.url), video)
+        XCTAssertEqual(files.reads.dropFirst(before).map(\.length), [FilePreview.chunk, FilePreview.chunk, 5])
+
+        let changing = Files(["/w/big.mov": video])
+        let moved = preview("/w/big.mov", changing)
+        await moved.load()
+        changing.changeAfter["/w/big.mov"] = changing.reads.count + 1
+        do {
+            let copy = try await moved.download()
+            copy.remove()
+            XCTFail("A file changed midway was copied")
+        } catch FilesSourceError.changed {}
+        let left = (try? FileManager.default.contentsOfDirectory(at: FilesShareItem.folder, includingPropertiesForKeys: nil)) ?? []
+        XCTAssertFalse(try left.contains { try FileManager.default.contentsOfDirectory(atPath: $0.path).contains("big.mov") },
+                       "A failed copy is removed")
+        do {
+            let copy = try await clip.download(limit: UInt64(size - 1))
+            copy.remove()
+            XCTFail("A file past the limit was copied")
+        } catch FilesSourceError.limit {}
+    }
+
     /// A preview that failed or loaded offline has no revision: Share is off, and asking anyway reads nothing, even once
     /// the host is back; loading again (Try again) brings it.
     func testFailedAndOfflinePreviewsShareNothingAfterAReconnect() async throws {

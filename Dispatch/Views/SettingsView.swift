@@ -2,7 +2,7 @@ import Dictation
 import SwiftUI
 import CoreText
 
-/// Compact settings grouped into General (text, the window and terminals, notifications), Theme, Features, Keyboard,
+/// Compact settings grouped into General (text, the window and terminals, updates), Theme, Features, Keyboard,
 /// Extra (imports, export and troubleshooting), and Hosts.
 struct SettingsView: View {
     // Keep the controls stable while the user adjusts content typography: half a point under the app's default, so
@@ -37,8 +37,8 @@ struct SettingsView: View {
     @State private var multiplexersExpanded = false
     @State private var remoteHelperExpanded = false
     @State private var dictationExpanded = false
-    @State private var windowExpanded = false
-    @State private var newTabsExpanded = false
+    @State private var appearanceExpanded = false
+    @State private var tabsAndSpacesExpanded = false
     /// Startup command as typed, saved on Return.
     @State private var startupDraft: String?
     @State private var fontExpanded = false
@@ -230,10 +230,10 @@ struct SettingsView: View {
         })
     }
 
-    /// Text; then the window and terminals: the window around them, what survives a relaunch, how terminals behave and
-    /// what programs in them may do, with the rows few change folded under their options buttons; then where new spaces
-    /// start and what they run. Every row applies immediately. Colors are under Theme; whole features, notifications
-    /// included, are under Features; troubleshooting is under Extra.
+    /// Text; then the terminals: what survives a relaunch, what new tabs start and how tabs and spaces are listed, and
+    /// what programs in them may do, with the rows few change folded under their options buttons; then updates. Every
+    /// row applies immediately. Colors and the window's look are under Theme; whole features, notifications included,
+    /// are under Features; troubleshooting is under Extra.
     private var generalSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Text") {
@@ -251,33 +251,36 @@ struct SettingsView: View {
             }
             settingsGroup("Terminal") {
                 launchRow
-                windowOptions
-                newTabOptions
+                tabsAndSpacesOptions
                 securityOptions
-                updateOptions
             }
+            updateOptions
         }
     }
 
+    /// General's last group, only where the app can update itself: the switch, then the version with the one action
+    /// its update's state allows.
     @ViewBuilder private var updateOptions: some View {
         if let updater {
-            row("Automatic updates", detail: "downloads new releases; asks before restarting",
-                privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
-                settingToggle("Automatic updates", isOn: Binding(
-                    get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
-                    .accessibilityIdentifier("settings-automatic-updates")
-            }
-            row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
-                if updater.state == .ready {
-                    Button("Restart and install") { updater.restart() }
-                        .accessibilityIdentifier("settings-install-update")
-                } else if updater.state == .available {
-                    Button("Download update") { updater.download() }
-                        .accessibilityIdentifier("settings-download-update")
-                } else {
-                    Button("Check for updates") { updater.check() }
-                        .disabled(updater.busy)
-                        .accessibilityIdentifier("settings-check-updates")
+            settingsGroup("Updates") {
+                row("Automatic updates", detail: "downloads new releases; asks before restarting",
+                    privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
+                    settingToggle("Automatic updates", isOn: Binding(
+                        get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
+                        .accessibilityIdentifier("settings-automatic-updates")
+                }
+                row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
+                    if updater.state == .ready {
+                        Button("Restart and install") { updater.restart() }
+                            .accessibilityIdentifier("settings-install-update")
+                    } else if updater.state == .available {
+                        Button("Download update") { updater.download() }
+                            .accessibilityIdentifier("settings-download-update")
+                    } else {
+                        Button("Check for updates") { updater.check() }
+                            .disabled(updater.busy)
+                            .accessibilityIdentifier("settings-check-updates")
+                    }
                 }
             }
         }
@@ -291,6 +294,12 @@ struct SettingsView: View {
                 settingToggle("Slow connection mode", isOn: $draft.outputWindow)
                     .accessibilityIdentifier("settings-output-window")
                     .help("Off: output streams as fast as the connection takes it. On: at most 256 KB in flight per connection.")
+            }
+            row("Reply placeholder", detail: "an empty reply bubble carries the working light until the first words · Chat",
+                info: "Once the agent takes a message you sent in Chat, an empty reply bubble appears where its answer will be, with the working light going around it instead of around the message box. When the first words arrive they fill that bubble and the light fades out. Not shown with Reduce Motion or in the radio log theme.") {
+                settingToggle("Reply placeholder", isOn: $draft.chatReplyPlaceholder)
+                    .accessibilityIdentifier("settings-reply-placeholder")
+                    .help("Off: the message box shows the agent is working. On: an empty reply bubble does, until the reply arrives.")
             }
         }
     }
@@ -431,30 +440,18 @@ struct SettingsView: View {
     /// The Cursor menu's checked item, below the shapes.
     private static let blinkingCursor = "Blinking"
 
-    /// Terminal's row above Security: the window around the terminals, folded like it; its title opens it too. The
-    /// labels first (tab names, git branches), then the sidebar's options, then the chrome's and text contrast. The detail
-    /// leads with tab names and git branches, the options most come looking for.
-    @ViewBuilder private var windowOptions: some View {
-        // Switches that can't be changed here (git off, no Liquid Glass on this system) aren't counted.
-        let fold = Fold(title: "Window", changed: changed {
-            [$0.automaticTabNames, $0.sidebarStyle, $0.hideSingleSpace, $0.tabsOnly, $0.showHostColors, $0.textContrast]
-                + (draft.gitEnabled ? [$0.showGitBranches] : [])
+    /// Colors' row under App theme: how the window and its terminals look, folded like General's Tabs & spaces; its
+    /// title opens it too. The sidebar's size, terminal opacity, text contrast, host colors, then Liquid Glass.
+    @ViewBuilder private var appearanceOptions: some View {
+        // A switch that can't be changed here (no Liquid Glass on this system) isn't counted.
+        let fold = Fold(title: "Appearance", changed: changed {
+            [$0.terminalOpacity, $0.showHostColors, $0.textContrast, $0.sidebarStyle]
                 + (LiquidGlassStore.supported ? [$0.liquidGlass] : [])
-        }, isExpanded: $windowExpanded)
-        row("Window", detail: "tab names, git branches, host colors, glass and contrast") { foldButton(fold, card: "Window") }
+        }, isExpanded: $appearanceExpanded)
+        row("Appearance", detail: "space size, opacity, contrast, host colors and glass") { foldButton(fold, card: "Appearance") }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
-        if windowExpanded {
+        if appearanceExpanded {
             foldedOptions {
-                cardOption("Automatic tab names", detail: "an agent's title, a program's own, or the folder", detailBelow: true) {
-                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
-                        .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
-                }
-                cardOption("Show git branch", detail: draft.gitEnabled ? "each folder's current branch, in the sidebar" : "needs Git, in Features › Files",
-                           detailBelow: true) {
-                    settingToggle("Show git branch", isOn: $draft.showGitBranches)
-                        .disabled(!draft.gitEnabled)
-                        .accessibilityIdentifier("show-git-branch")
-                }
                 // From the densest list to the roomiest, read out by name.
                 cardOption("Space size") {
                     let order = SidebarStyle.bySize
@@ -470,26 +467,15 @@ struct SettingsView: View {
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
-                // Off by default: one space needs no sidebar until asked for (the setting is stored as hiding).
-                cardOption(draft.tabsOnly ? "Show with one tab" : "Show with one space") {
-                    settingToggle("Show with one space", isOn: Binding(get: { !draft.hideSingleSpace }, set: { draft.hideSingleSpace = !$0 }))
-                }
-                cardOption("Disable spaces", detail: "the sidebar lists tabs, no tab strips", detailBelow: true) {
-                    settingToggle("Disable spaces", isOn: $draft.tabsOnly)
-                        .accessibilityIdentifier("settings-tabs-only")
-                        .help("Lists every tab in the sidebar instead of tab strips. ⌘T adds a tab and ⌘1…9 jump through the list.")
-                }
-                Rectangle().fill(SettingsControlStyle.border).frame(height: 0.5).padding(.vertical, 6)
-                // Only an older system, where the switch is off and disabled, says why.
-                cardOption("Liquid Glass", detail: LiquidGlassStore.supported ? nil : "requires macOS 26 or later", detailBelow: true) {
-                    settingToggle("Liquid Glass", isOn: $draft.liquidGlass)
-                        .disabled(!LiquidGlassStore.supported)
-                        .accessibilityIdentifier("settings-liquid-glass")
-                }
-                cardOption("Color-code remote hosts", detail: "colored or gray icons, tabs and borders", detailBelow: true) {
-                    settingToggle("Color-code remote hosts", isOn: $draft.showHostColors)
-                        .accessibilityIdentifier("settings-host-colors")
-                        .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
+                cardOption("Terminal opacity", detail: draft.terminalOpacity < 1 ? "the desktop shows through terminals" : nil,
+                           detailBelow: true) {
+                    HStack(spacing: 12) {
+                        SettingsSlider(value: $draft.terminalOpacity, range: Preferences.terminalOpacityRange, step: 0.05,
+                                       label: "Terminal opacity", identifier: "settings-terminal-opacity").frame(height: 20)
+                        Text(draft.terminalOpacity.formatted(.percent.precision(.fractionLength(0))))
+                            .foregroundColor(Chrome.ink).font(typography.font(.label)).monospacedDigit().fixedSize()
+                            .frame(width: sliderValueWidth, alignment: .trailing)
+                    }.frame(width: pickerWidth)
                 }
                 cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
                     dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
@@ -498,11 +484,22 @@ struct SettingsView: View {
                         .accessibilityIdentifier("improve-text-contrast")
                         .help("Raises faint terminal text to 4.5:1 against its background. Applies at once to open terminals.")
                 }
+                cardOption("Color-code remote hosts", detail: "colored or gray icons, tabs and borders", detailBelow: true) {
+                    settingToggle("Color-code remote hosts", isOn: $draft.showHostColors)
+                        .accessibilityIdentifier("settings-host-colors")
+                        .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
+                }
+                // Only an older system, where the switch is off and disabled, says why.
+                cardOption("Liquid Glass", detail: LiquidGlassStore.supported ? nil : "requires macOS 26 or later", detailBelow: true) {
+                    settingToggle("Liquid Glass", isOn: $draft.liquidGlass)
+                        .disabled(!LiquidGlassStore.supported)
+                        .accessibilityIdentifier("settings-liquid-glass")
+                }
             }
         }
     }
 
-    /// The app theme, opacity and colorblind mode; then every color scheme for each side in use, drawn in its own
+    /// The app theme, its appearance and colorblind mode; then every color scheme for each side in use, drawn in its own
     /// colors, a click choosing it; then New…, Add File… and Import….
     private var themeSettings: some View {
         VStack(spacing: 8) {
@@ -513,15 +510,7 @@ struct SettingsView: View {
                     }), choices: AppTheme.offered(selected: draft.appTheme,
                                                   nauticalUnlocked: SidebarThemeStore.shared.nauticalUnlocked).map(\.label))
                 }
-                row("Terminal opacity", detail: draft.terminalOpacity < 1 ? "the desktop shows through terminals" : nil) {
-                    HStack(spacing: 12) {
-                        SettingsSlider(value: $draft.terminalOpacity, range: Preferences.terminalOpacityRange, step: 0.05,
-                                       label: "Terminal opacity", identifier: "settings-terminal-opacity").frame(height: 20)
-                        Text(draft.terminalOpacity.formatted(.percent.precision(.fractionLength(0))))
-                            .foregroundColor(Chrome.ink).font(typography.font(.label)).monospacedDigit().fixedSize()
-                            .frame(width: sliderValueWidth, alignment: .trailing)
-                    }.frame(width: pickerWidth)
-                }
+                appearanceOptions
                 row("Colorblind-friendly", detail: "lists and makes only colorblind-safe schemes") {
                     settingToggle("Colorblind-friendly", isOn: Binding(get: { draft.colorVision != .typical },
                                                                        set: { draft.colorVision = $0 ? .redGreen : .typical }))
@@ -779,19 +768,35 @@ struct SettingsView: View {
         }.accessibilityIdentifier("settings-dictation")
     }
 
-    /// New tabs' starting folder, shell, initial command and scrollback, folded like Window. The detail summarizes
-    /// the launch settings; the badge counts all choices that differ from defaults.
-    @ViewBuilder private var newTabOptions: some View {
-        let fold = Fold(title: "New tabs", changed: changed { [$0.startingDirectory, $0.shell, $0.startupCommand, $0.scrollback.rawValue] }, isExpanded: $newTabsExpanded)
+    /// Scrollback as Tabs & spaces' detail names it: "automatic scrollback", "10 MB scrollback", "10,000-line scrollback".
+    private var scrollbackDetail: String {
+        switch draft.scrollback {
+        case .automatic, .unlimited: "\(draft.scrollback.title.lowercased()) scrollback"
+        case .small, .large: "\(draft.scrollback.title) scrollback"
+        case .lines10k, .lines100k: draft.scrollback.title.replacingOccurrences(of: " lines", with: "-line") + " scrollback"
+        }
+    }
+
+    /// Terminal's row above Security, folded; its title opens it too: what a new tab starts (folder, shell, startup
+    /// command, scrollback), then how tabs and spaces are listed (git branches, the sidebar with one space, tab names,
+    /// vertical tabs). The detail summarizes the launch settings; the badge counts the choices that differ from
+    /// defaults. How the window looks is under Theme › Appearance.
+    @ViewBuilder private var tabsAndSpacesOptions: some View {
+        // A switch that can't be changed here (git off) isn't counted.
+        let fold = Fold(title: "Tabs & spaces", changed: changed {
+            [$0.startingDirectory, $0.shell, $0.startupCommand, $0.scrollback.rawValue,
+             $0.hideSingleSpace, $0.automaticTabNames, $0.tabsOnly] + (draft.gitEnabled ? [$0.showGitBranches] : [])
+        }, isExpanded: $tabsAndSpacesExpanded)
         let folder = draft.startingDirectory == "/" ? "/" : draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~")
         let shell = draft.shellProgram.map { ($0 as NSString).lastPathComponent } ?? "login shell"
         let command = draft.startupCommand.trimmingCharacters(in: .whitespaces)
-        row("New tabs", detail: ([folder, shell] + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
-            foldButton(fold, card: "New tabs")
+        // The startup command last: the longest, it is the one cut short.
+        row("Tabs & spaces", detail: ([folder, shell, scrollbackDetail] + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
+            foldButton(fold, card: "Tabs & spaces")
         }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
-            .accessibilityIdentifier("settings-new-tabs")
-        if newTabsExpanded {
+            .accessibilityIdentifier("settings-tabs-and-spaces")
+        if tabsAndSpacesExpanded {
             foldedOptions {
                 startingFolderOption
                 shellOption
@@ -803,6 +808,25 @@ struct SettingsView: View {
                         if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }
                     }), choices: Scrollback.sizes.map(\.title) + [SettingsDropdown.separator] + Scrollback.lineCounts.map(\.title))
                         .help("Unlimited keeps every line until the tab closes, in memory. A number of lines also keeps the automatic size limit: the first one reached drops the oldest lines.")
+                }
+                cardOption("Show git branch in spaces", detail: draft.gitEnabled ? "each folder's current branch, in the sidebar" : "needs Git, in Features › Files",
+                           detailBelow: true) {
+                    settingToggle("Show git branch in spaces", isOn: $draft.showGitBranches)
+                        .disabled(!draft.gitEnabled)
+                        .accessibilityIdentifier("show-git-branch")
+                }
+                // Off by default: one space needs no sidebar until asked for (the setting is stored as hiding).
+                cardOption(draft.tabsOnly ? "Show sidebar with one tab" : "Show sidebar with one space") {
+                    settingToggle("Show sidebar with one space", isOn: Binding(get: { !draft.hideSingleSpace }, set: { draft.hideSingleSpace = !$0 }))
+                }
+                cardOption("Automatic tab names", detail: "an agent's title, a program's own, or the folder", detailBelow: true) {
+                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
+                        .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
+                }
+                cardOption("Vertical tabs, no spaces", detail: "the sidebar lists tabs, no tab strips", detailBelow: true) {
+                    settingToggle("Vertical tabs, no spaces", isOn: $draft.tabsOnly)
+                        .accessibilityIdentifier("settings-tabs-only")
+                        .help("Lists every tab in the sidebar instead of tab strips. ⌘T adds a tab and ⌘1…9 jump through the list.")
                 }
             }
         }
@@ -868,7 +892,7 @@ struct SettingsView: View {
         }
     }
 
-    /// What programs in terminals may do, folded like Window; its title opens it too. The detail reads out each switch's
+    /// What programs in terminals may do, folded like Tabs & spaces; its title opens it too. The detail reads out each switch's
     /// state, so folding hides the switches but not where they stand, the permissive default included.
     @ViewBuilder private var securityOptions: some View {
         let fold = Fold(title: "Security", changed: changed { [$0.allowClipboardWrites, $0.autoApproveUnsafePastes, $0.secureKeyboardEntry, $0.enableKittyGraphics] },

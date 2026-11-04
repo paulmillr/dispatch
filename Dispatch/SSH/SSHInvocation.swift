@@ -9,52 +9,72 @@ struct SSHInvocation: Equatable, Sendable {
     let command: String?
     let forcedTTY: Bool
 
+    /// As OpenSSH reads its arguments: options, the destination, options again unless `--` came before the
+    /// destination (`ssh host -l user`), then the remote command's words.
     static func parse(_ arguments: [String], isTerminal: Bool) -> Self? {
         guard isTerminal else { return nil }
         let values = Set("BbcDEeFIiJLlmopPRw")
         let simple = Set("46AaCKkqvXxYy")
-        var options: [String] = [], index = 0, tty = false
-        while index < arguments.count {
-            let value = arguments[index]
-            if value == "--" { index += 1; break }
-            guard value.hasPrefix("-"), value != "-" else { break }
-            let flags = Array(value.dropFirst())
-            guard !flags.isEmpty else { return nil }
-            var position = 0
-            while position < flags.count {
-                let flag = flags[position]
-                if flag == "t" { tty = true; position += 1; continue }
-                // No commands, subsystem, background, multiplex management, or
-                // explicit master settings; these must go to ssh unchanged.
-                guard flag != "T", !"GNnfsVMOSQW".contains(flag) else { return nil }
-                if values.contains(flag) {
-                    let argument: String
-                    if position + 1 < flags.count { argument = String(flags[(position + 1)...]) }
-                    else {
-                        index += 1
-                        guard index < arguments.count else { return nil }
-                        argument = arguments[index]
+        var index = 0, tty = false
+        /// One round of options from `index`: what they are, and whether `--` ended it; nil keeps ssh unchanged.
+        func options() -> (kept: [String], terminated: Bool)? {
+            var kept: [String] = []
+            while index < arguments.count {
+                let value = arguments[index]
+                if value == "--" { index += 1; return (kept, true) }
+                guard value.hasPrefix("-"), value != "-" else { break }
+                let flags = Array(value.dropFirst())
+                guard !flags.isEmpty else { return nil }
+                var position = 0
+                while position < flags.count {
+                    let flag = flags[position]
+                    if flag == "t" { tty = true; position += 1; continue }
+                    // No commands, subsystem, background, multiplex management, or
+                    // explicit master settings; these must go to ssh unchanged.
+                    guard flag != "T", !"GNnfsVMOSQW".contains(flag) else { return nil }
+                    if values.contains(flag) {
+                        let argument: String
+                        if position + 1 < flags.count { argument = String(flags[(position + 1)...]) }
+                        else {
+                            index += 1
+                            guard index < arguments.count else { return nil }
+                            argument = arguments[index]
+                        }
+                        if flag == "o" {
+                            let fields = argument.split(whereSeparator: { $0 == "=" || $0.isWhitespace })
+                            let key = fields.first?.lowercased() ?? ""
+                            guard !["controlmaster", "controlpath", "controlpersist", "sessiontype", "requesttty", "stdinnull", "forkafterauthentication"].contains(key) else { return nil }
+                            if key == "remotecommand", fields.dropFirst().map(String.init).joined(separator: " ").lowercased() != "none" { return nil }
+                        }
+                        kept += ["-\(flag)", argument]
+                        break
                     }
-                    if flag == "o" {
-                        let fields = argument.split(whereSeparator: { $0 == "=" || $0.isWhitespace })
-                        let key = fields.first?.lowercased() ?? ""
-                        guard !["controlmaster", "controlpath", "controlpersist", "sessiontype", "requesttty", "stdinnull", "forkafterauthentication"].contains(key) else { return nil }
-                        if key == "remotecommand", fields.dropFirst().map(String.init).joined(separator: " ").lowercased() != "none" { return nil }
-                    }
-                    options += ["-\(flag)", argument]
-                    break
+                    guard simple.contains(flag) else { return nil }
+                    kept.append("-\(flag)"); position += 1
                 }
-                guard simple.contains(flag) else { return nil }
-                options.append("-\(flag)"); position += 1
+                index += 1
             }
-            index += 1
+            return (kept, false)
         }
-        guard index < arguments.count, !arguments[index].isEmpty, !arguments[index].hasPrefix("-") else { return nil }
+        guard let first = options(), index < arguments.count, !arguments[index].isEmpty, !arguments[index].hasPrefix("-") else { return nil }
         let destination = arguments[index]
-        let words = Array(arguments.dropFirst(index + 1))
-        // OpenSSH resumes option parsing after the destination (`host -l user`).
-        guard words.isEmpty || tty, words.first.map({ !$0.hasPrefix("-") || $0 == "-" }) ?? true else { return nil }
-        return .init(options: options, destination: destination,
+        index += 1
+        var later: [String] = []
+        if !first.terminated, index < arguments.count {
+            guard let second = options() else { return nil }
+            // Dispatch's commands put every option before the destination. OpenSSH keeps the first user it reads: a
+            // `user@` destination's wins over a `-l` after it, which would win once moved in front.
+            var rest = second.kept[...]
+            while let option = rest.first {
+                let pair = option.count == 2 && values.contains(option.dropFirst().first ?? " ")
+                if option == "-l", destination.contains("@") { rest = rest.dropFirst(2); continue }
+                later += pair ? Array(rest.prefix(2)) : [option]
+                rest = rest.dropFirst(pair ? 2 : 1)
+            }
+        }
+        let words = Array(arguments.dropFirst(index))
+        guard words.isEmpty || tty else { return nil }
+        return .init(options: first.kept + later, destination: destination,
                      command: words.isEmpty ? nil : words.joined(separator: " "), forcedTTY: tty)
     }
 

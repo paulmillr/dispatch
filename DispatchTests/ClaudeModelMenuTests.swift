@@ -20,6 +20,22 @@ final class ClaudeModelMenuTests: XCTestCase {
         }
     }
 
+    /// Codex 0.166's prompt line, as its TUI drew it (folder and model replaced): typed text moves to Chat only from it.
+    func testCodexComposerTextReadsOnlyThePromptAboveItsFooter() {
+        let empty = "  >_ OpenAI Codex (v0.166.0)\n     ~/work/example\n\n\n› Ask Codex to do anything\n\n  Model-A high · ~/work/example · ← for agents\n"
+        // The placeholder is faint: removed at the cursor (column 2 of row 4) it leaves an empty prompt.
+        let placeholderless = ClaudeModelMenu.removingPlaceholder(empty, column: 2, row: 4, faint: true, marker: "›")
+        XCTAssertEqual(ClaudeModelMenu.codexComposerText(placeholderless), "")
+        XCTAssertEqual(ClaudeModelMenu.codexComposerText(empty.replacingOccurrences(of: "Ask Codex to do anything", with: "fix the build")),
+                       "fix the build")
+        // The slash popup, a menu and a running turn are not the bare prompt.
+        let popup = "› /\n\n  /model         choose what model and reasoning effort to use\n  /fast          2x speed\n"
+        XCTAssertNil(ClaudeModelMenu.codexComposerText(popup))
+        let menu = "  Update Model Permissions\n\n› 2. Approve for me (current)  Only ask\n  3. Full Access\n  4. Read Only\n\n  enter select · esc back\n"
+        XCTAssertNil(ClaudeModelMenu.codexComposerText(menu))
+        XCTAssertNil(ClaudeModelMenu.codexComposerText(empty.replacingOccurrences(of: "›", with: "›x")))
+    }
+
     func testObservedComposerFooters() {
         // Footer text captured from the native 2.1.282 and 2.1.283 terminals.
         // Borders are shortened; the prompt and footer text are preserved.

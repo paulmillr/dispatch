@@ -445,6 +445,8 @@ struct ChatTranscriptRow: Identifiable {
     var time: Date? = nil
     /// The agent's last message in a finished turn: the radio log signs it off with "out".
     var signsOff = false
+    /// The reply placeholder (`ChatSession.pendingReply`): an empty assistant bubble.
+    var placeholder = false
     /// A shown step of a tool group: its place on the expanded group's timeline.
     var timeline: Timeline? = nil
 
@@ -824,6 +826,13 @@ final class ChatSession: Identifiable {
         }
     }
     @ObservationIgnored private var cachedRows: [ChatTranscriptRow]?
+    /// Settings › Experimental › Reply placeholder (ChatPendingReply.swift): the empty reply bubble shown once the agent
+    /// acknowledged a prompt, until its first content takes over its row.
+    var pendingReply: ChatPendingReply? { didSet { cachedRows = nil; cachedVisibleRows = nil } }
+    /// The reply that took over the placeholder's row: its row, turn and when, for the halo's later phases.
+    var landedReply: ChatLandedReply?
+    /// Armed by a sent prompt: the placeholder shows once both the delay passed and the agent acknowledged.
+    private var replyArm: (afterTurn: String?, delayed: Bool, token: UUID)?
     @ObservationIgnored private var cachedVisibleRows: [ChatTranscriptRow]?
     @ObservationIgnored let toolLayouts = ChatToolLayoutCache()
     @ObservationIgnored let transcriptArrivals = ChatTranscriptArrivals()
@@ -969,7 +978,7 @@ final class ChatSession: Identifiable {
     @ObservationIgnored private var shownSteps: [String: ShownStep] = [:]
     var transcriptRows: [ChatTranscriptRow] {
         // Register dependencies, but flatten only when the conversation changes.
-        let turns = turns, approvals = approvals, optimisticPrompt = optimisticPrompt
+        let turns = turns, approvals = approvals, optimisticPrompt = optimisticPrompt, pendingReply = pendingReply
         if let cachedRows { return cachedRows }
         var grouped = Dictionary(grouping: approvals, by: \.turnID)
         // A request can arrive before its tool call is read (Claude writes the call only after the reply). Once the
@@ -1021,6 +1030,9 @@ final class ChatSession: Identifiable {
         if displayedTurns.count > turns.count { displayedTurns.retain(Set(turns.map(\.id))) }
         if let prompt = optimisticPrompt {
             rows.append(ChatTranscriptRow(id: prompt.id, item: prompt, approval: nil))
+        }
+        if let pendingReply {
+            rows.append(ChatTranscriptRow(id: pendingReply.id, item: nil, approval: nil, placeholder: true))
         }
         for approval in grouped[nil] ?? [] {
             rows.append(ChatTranscriptRow(id: "approval-\(approval.id)", item: nil, approval: approval))
@@ -1156,7 +1168,7 @@ final class ChatSession: Identifiable {
     var agentExited = false
     var busy = false { didSet {
         cachedVisibleRows = nil
-        if !busy { submittedThinkingAt = nil }
+        if !busy { submittedThinkingAt = nil; endPendingReply() }
         updateWorkingSince()
     } }
     // Keep a locally submitted turn on one clock across remote acknowledgement.
@@ -1182,13 +1194,16 @@ final class ChatSession: Identifiable {
     var activeTurnID: String? { didSet { cachedVisibleRows = nil } }
     /// An unresolved interaction from a disconnected helper cannot regain authority as a native card.
     var retiredInteraction = false
-    var awaitingPromptAck = false
+    var awaitingPromptAck = false { didSet { if !awaitingPromptAck { showPendingReplyIfDue() } } }
     /// A helper chat's prompt started its turn and the helper has not reported its state since: the last state (often
     /// still idle) says nothing about that turn, so the chat counts as busy until the next state or the turn's end.
     var starting = false
     /// A Claude or Pi slash command awaiting its turn, output, or menu.
     /// A native command sent to the agent whose printed output has not arrived yet (its result's title).
     @ObservationIgnored var observedCommand: (title: String, output: String?)?
+    /// When Chat last typed a command it has no workflow for (`ChatCommand` nil): the agent's menu it opens takes the
+    /// terminal (`receiveHelper` state attention).
+    @ObservationIgnored var typedCommandAt: ContinuousClock.Instant?
     /// Command output records Chat has taken (record id and text): a page that reads them again (a re-read transcript, as
     /// compaction causes) must not make an earlier command's output the pending command's result.
     @ObservationIgnored var receivedCommandOutputs: Set<String> = []
@@ -1425,6 +1440,7 @@ final class ChatSession: Identifiable {
         relinquish()
         retiredInteraction = false
         optimisticPrompt = nil
+        replyArm = nil; pendingReply = nil; landedReply = nil
         approvals = []
         if !keepingTranscript {
             turns = []; transcriptIndex = ChatTranscript.Index(); toolLayouts.removeAll()
@@ -1523,6 +1539,15 @@ final class ChatSession: Identifiable {
     /// The shared merge (`ChatTranscript.insert`), then this view's part of a live arrival: its entrance, unread and
     /// the follow revision.
     func insert(_ item: ChatItem, turnID: String, at date: Date = Date(), historical: Bool = false, fileOffset: UInt64? = nil) {
+        var item = item
+        // The new turn's first content takes over the placeholder's row; content before it shows skips it.
+        if !historical, item.kind != .user, item.kind != .notice {
+            if let pending = pendingReply, turnID != pending.afterTurn {
+                item.rowID = item.rowID ?? pending.id
+                pendingReply = nil
+                landedReply = ChatLandedReply(rowID: pending.id, at: ProcessInfo.processInfo.systemUptime)
+            } else if let arm = replyArm, turnID != arm.afterTurn { replyArm = nil }
+        }
         let result = ChatTranscript.insert(item, turnID: turnID, at: date, historical: historical, fileOffset: fileOffset,
                                            turns: &turns, index: &transcriptIndex)
         // An acknowledged optimistic prompt already animated under its rowID.
@@ -1554,6 +1579,48 @@ final class ChatSession: Identifiable {
         ChatTranscript.mergeHistorical(records, turns: &turns, index: &transcriptIndex)
     }
 
+    /// Arms the reply placeholder for a prompt just sent: it shows `delay` after this, once the agent acknowledged it.
+    func armPendingReply(delay: TimeInterval = ChatPendingReply.delay) {
+        let token = System.uuid()
+        replyArm = (turns.last?.id, false, token)
+        pendingReply = nil; landedReply = nil
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, self.replyArm?.token == token else { return }
+            self.replyArm?.delayed = true
+            self.showPendingReplyIfDue()
+        }
+    }
+
+    private func showPendingReplyIfDue() {
+        guard let arm = replyArm, arm.delayed, !awaitingPromptAck, active, busy || starting else { return }
+        replyArm = nil
+        let reply = ChatPendingReply(id: "pending-reply-" + System.uuid().uuidString, afterTurn: arm.afterTurn)
+        if showChat, atBottom {
+            transcriptArrivals.noteMotion()
+            transcriptArrivals.record(reply.id)
+            scrollPosition.expectArrival()
+        }
+        pendingReply = reply
+        followRevision = atBottom ? revision + 1 : nil
+        revision += 1
+    }
+
+    /// The turn ended: a placeholder nothing took over goes, and the composer has the activity again.
+    private func endPendingReply() {
+        replyArm = nil
+        if pendingReply != nil { pendingReply = nil; followRevision = atBottom ? revision + 1 : nil; revision += 1 }
+        if landedReply != nil, landedReply?.ended == nil { landedReply?.ended = ProcessInfo.processInfo.systemUptime }
+    }
+
+    /// A prompt's reply shows (or is about to show) where the agent's activity is: the composer's border stays neutral
+    /// from the send to the turn's end, so only one light moves.
+    var replyHaloOwnsActivity: Bool {
+        replyArm != nil || pendingReply != nil || (landedReply != nil && landedReply?.ended == nil && busy)
+    }
+    /// The placeholder shows the ◆ and its orbit: the composer footer's stays still meanwhile.
+    var replyShowsOrbit: Bool { pendingReply != nil }
+
     func showOptimisticPrompt(_ text: String, attachments: [ChatAttachment] = [], at date: Date = .now) {
         optimisticPromptDelivered = false
         optimisticPromptRetained = false
@@ -1582,6 +1649,7 @@ final class ChatSession: Identifiable {
 
     func failOptimisticPrompt(restoreDraft: Bool) {
         submittedThinkingAt = nil
+        replyArm = nil; pendingReply = nil
         // Confirmed input remains part of the read-only conversation even if
         // its transcript record has not arrived. Reconcile it when that record
         // becomes available instead of hiding it or recreating a draft.
