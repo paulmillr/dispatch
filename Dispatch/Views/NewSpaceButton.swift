@@ -192,7 +192,8 @@ struct NewSpaceButton: View {
     /// A tree group's header button: a plus in the header's own control style, a soft capsule under the pointer and no
     /// glass of its own; in Large's host chip, a small circle at the chip's trailing end.
     private var headerLabel: some View {
-        let side = metrics.cards ? metrics.headerHeight - 6 : metrics.headerHeight
+        // The icons style's heading: the plus takes the host disc's place, at its size.
+        let side = metrics.cards ? metrics.headerHeight - 6 : metrics.hostInHeader ? metrics.discSize : metrics.headerHeight
         return Image(systemName: "plus")
             .font(.system(size: (metrics.headerSize * (metrics.cards ? 0.9 : 1)).rounded(), weight: .semibold))
             .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.secondary)

@@ -16,12 +16,13 @@ struct SidebarMetrics: Equatable, Sendable {
     let cornerRadius: CGFloat
     let headerSize: CGFloat
     let headerHeight: CGFloat
-    /// The host picker's rows (SidebarStyle.icons): each led by its host's icon, groups headed by name alone.
+    /// The host picker's rows (SidebarStyle.icons): each led by its host's icon, groups headed by name alone (the
+    /// sidebar's groups end their heading with the icon instead: `hostInHeader`).
     var icons = false
     /// The icon's disc, in the icons style.
     var discSize: CGFloat = 0
-    /// The icons style grouped by host with Settings › Experimental › Host icons in group headings: each host's icon
-    /// once, at the end of its group's heading; rows lead with their activity in a `markColumn` wide column.
+    /// The icons style grouped by host (SpaceSidebar): each host's disc once, at the end of its group's heading; rows,
+    /// and each line of a split, lead with their activity in a `markColumn` wide column.
     var hostInHeader = false
     var markColumn: CGFloat = 0
 
@@ -56,14 +57,14 @@ struct SidebarMetrics: Equatable, Sendable {
     }
 
     /// The icons style with the host's icon in its group's heading (`hostInHeader`; mockups/Mac, D8 B″): the heading
-    /// ends in the host's disc, as tall as the disc; rows keep their height and lead with their activity in a 16-point
-    /// column (at the default size) under the heading's name.
+    /// ends in the host's disc, with about 3 points (at the default size) above and below it so it stays off the first
+    /// row's fill; rows keep their height and lead with their activity in a 16-point column under the heading's name.
     func hostInHeaders(contentSize: CGFloat) -> SidebarMetrics {
         let scale = max(1, contentSize / 12.5)
         return SidebarMetrics(large: large, nameSize: nameSize, detailSize: detailSize, shortcutSize: shortcutSize,
                               rowHeight: rowHeight, rowSpacing: rowSpacing, groupSpacing: groupSpacing,
                               activitySize: activitySize, hostIconSize: hostIconSize, cornerRadius: cornerRadius,
-                              headerSize: headerSize, headerHeight: max(headerHeight, discSize), icons: icons,
+                              headerSize: headerSize, headerHeight: discSize + (6 * scale).rounded(), icons: icons,
                               discSize: discSize, hostInHeader: true, markColumn: (14 * scale).rounded())
     }
 
@@ -130,7 +131,7 @@ struct SidebarEntry: Equatable {
 }
 
 /// The icons style's disc: the host's icon on a circle (glass on Liquid Glass), plain on the selected row's fill.
-/// A row leads with it; with host icons in group headings the heading ends with it instead.
+/// A row leads with it in flat order and the host picker; grouped by host, its group's heading ends with it instead.
 struct HostDisc: View {
     let host: HostRecord
     let metrics: SidebarMetrics
@@ -207,8 +208,8 @@ struct SidebarSpaceTile: View {
     }
 
     /// The icons style, as the host picker draws a space: its host's icon on a disc, the name and branch, then any
-    /// other host its terminals reach, its activity and its jump shortcut. Every row carries its icon, in groups too;
-    /// with the icon in its group's heading (`hostInHeader`) the activity leads the row in the disc's place.
+    /// other host its terminals reach, its activity and its jump shortcut. Grouped by host, the icon is in its group's
+    /// heading instead (`hostInHeader`) and the activity leads the row in the disc's place.
     private var iconsRow: some View {
         HStack(spacing: metrics.hostInHeader ? 8 : 9) {
             if metrics.hostInHeader {
@@ -249,15 +250,17 @@ struct SidebarSpaceTile: View {
 
     /// A split's lines in the compact and icons styles, one row's height each: the pane's glyph and its tab's name,
     /// with its activity; the first line ends with the host icons and the shortcut, and in the icons style starts
-    /// with the disc.
+    /// with the disc. With the host's disc in its group's heading (`hostInHeader`) each line leads with its activity,
+    /// as a row does.
     private var memberLines: some View {
         VStack(spacing: 0) {
             ForEach(Array(entry.members.enumerated()), id: \.element.id) { index, member in
                 let line = HStack(spacing: 6) {
-                    if metrics.icons {
-                        // With the host's icon in its group's heading the lines keep the activity column, empty.
-                        if metrics.hostInHeader { Color.clear.frame(width: metrics.markColumn, height: 1) }
-                        else if index == 0 { disc } else { Color.clear.frame(width: metrics.discSize, height: 1) }
+                    if metrics.hostInHeader {
+                        AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
+                            .fixedSize().frame(width: metrics.markColumn)
+                    } else if metrics.icons {
+                        if index == 0 { disc } else { Color.clear.frame(width: metrics.discSize, height: 1) }
                     } else {
                         AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
                             .fixedSize()
@@ -267,7 +270,7 @@ struct SidebarSpaceTile: View {
                         .foregroundStyle(selected && member.focused ? Chrome.ink : Chrome.palette.secondary)
                         .lineLimit(1).truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if metrics.icons {
+                    if metrics.icons && !metrics.hostInHeader {
                         AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
                             .fixedSize()
                     }

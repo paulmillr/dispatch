@@ -6,8 +6,8 @@ struct SpaceSidebar: View {
     /// Both densities share every layout below; only these numbers differ.
     private var metrics: SidebarMetrics {
         var metrics = settings.values.sidebarMetrics(glass: glass)
-        // Settings › Experimental: the icons style grouped by host draws each host's icon once, in its heading.
-        if metrics.icons && settings.values.spaceOrder == .tree && settings.values.hostHeaderIcons {
+        // The icons style grouped by host draws each host's icon once, in its heading, and its rows lead with activity.
+        if metrics.icons && settings.values.spaceOrder == .tree {
             metrics = metrics.hostInHeaders(contentSize: settings.values.fontSize)
         }
         return glass ? metrics.nested(cornerRadius: Self.glassRadius - Self.glassRowInset) : metrics
@@ -315,11 +315,7 @@ struct SpaceSidebar: View {
     private var windowRow: some View {
         HStack(spacing: 0) {
             SidebarToggle(controller: controller)
-            Spacer(minLength: 0)
-            HStack(spacing: 4) {
-                if harbour { harbourTitle } else { groupingToggle }
-                shortcutsButton
-            }
+            headerControls
         }
         .padding(.leading, controller.windowState.controlsInset).padding(.trailing, glass ? 8 + Self.glassRowInset : 8)
         .frame(height: StripTab.titleRowHeight(typography))
@@ -336,9 +332,7 @@ struct SpaceSidebar: View {
                 // The persistent full-screen toggle occupies this slot.
                 Color.clear.frame(width: 32, height: 20)
             }
-            Spacer(minLength: 0)
-            if harbour { harbourTitle } else { groupingToggle }
-            shortcutsButton
+            headerControls
         }
         .padding(.horizontal, 8)
         .frame(height: headerHeight)
@@ -352,6 +346,80 @@ struct SpaceSidebar: View {
     private func headerGap(rowHeight: CGFloat) -> CGFloat {
         let controls = glass ? StripTab.glassTrackHeight(typography) : Self.headerButtonSize
         return max(metrics.rowSpacing, Self.glassRowInset) - (rowHeight - controls) / 2
+    }
+
+    /// The header row after the sidebar toggle (or the full-screen slot): the sidebar's mode, then the grouping and
+    /// shortcuts buttons at the end. Where the row is tight the shortcuts button goes first (Help › Keyboard Shortcuts,
+    /// ⌘/, still opens the sheet), then the mode's name gives way to an icon among the buttons (mockups/Mac, G3).
+    /// Nautical's radar keeps its title instead.
+    @ViewBuilder private var headerControls: some View {
+        if harbour {
+            Spacer(minLength: 0)
+            HStack(spacing: 4) { harbourTitle; shortcutsButton }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                headerControls(named: true, shortcuts: true)
+                headerControls(named: true, shortcuts: false)
+                headerControls(named: false, shortcuts: true)
+            }
+        }
+    }
+
+    private func headerControls(named: Bool, shortcuts: Bool) -> some View {
+        HStack(spacing: 0) {
+            if named { modeMenu.padding(.leading, 8) }
+            Spacer(minLength: named ? 8 : 0)
+            HStack(spacing: 4) {
+                if !named { modeToggle }
+                groupingToggle
+                if shortcuts { shortcutsButton }
+            }
+        }
+    }
+
+    /// Spaces or tabs only (Preferences.tabsOnly, also Settings' "Vertical tabs, no spaces"): the current one's name
+    /// and ⌄, a menu of both. As wide as "Spaces" in either mode, so switching never moves the row's buttons.
+    private var modeMenu: some View {
+        Menu {
+            Picker("Sidebar", selection: Binding(get: { tabsOnly }, set: { saveTabsOnly($0) })) {
+                Text("Spaces").tag(false)
+                Text("Tabs").tag(true)
+            }
+            .pickerStyle(.inline).labelsHidden()
+        } label: {
+            HStack(spacing: 4) {
+                ReservedText(text: tabsOnly ? "Tabs" : "Spaces", variants: ["Spaces", "Tabs"])
+                    .interfaceFont(size: typography.size(.body), weight: .semibold)
+                    .foregroundStyle(Chrome.ink)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Chrome.palette.detail)
+            }
+            .padding(.horizontal, 7).frame(height: typography.expanded(20))
+            .background(Chrome.ink.opacity(0.05), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        .fixedSize()
+        .help(tabsOnly ? "Listing every tab · choose Spaces to group tabs into spaces" : "Listing spaces · choose Tabs to list every tab")
+        .accessibilityLabel("Sidebar lists")
+        .accessibilityValue(tabsOnly ? "Tabs" : "Spaces")
+        .accessibilityIdentifier("sidebar-mode-menu")
+    }
+
+    /// The mode where its name doesn't fit: one button, lit while tabs only lists every tab, a click flips it.
+    private var modeToggle: some View {
+        Button { saveTabsOnly(!tabsOnly) } label: {
+            let glyph = Image(systemName: "rectangle.stack.badge.minus")
+            if glass {
+                glyph.modifier(GlassPanelControl(active: tabsOnly))
+            } else {
+                headerButton(active: tabsOnly) { glyph }
+            }
+        }
+        .help(tabsOnly ? "Tabs, no spaces · click to list spaces" : "Spaces · click to list every tab")
+        .accessibilityLabel("List tabs, no spaces")
+        .accessibilityValue(tabsOnly ? "On" : "Off")
+        .accessibilityIdentifier("sidebar-mode-toggle")
     }
 
     /// Tree groups spaces under their hosts; flat is one list.
@@ -511,8 +579,8 @@ struct SpaceSidebar: View {
     }
 
     /// A tree group's heading: the host's name in title case, its connection state while not connected after it in a
-    /// quieter tone. Compact leads with the host's icon; the icons style's rows carry it instead. Remote hosts keep
-    /// their color.
+    /// quieter tone. Compact leads with the host's icon; the icons style's heading ends with the host's disc
+    /// (hostGroup), its rows leading with their activity instead. Remote hosts keep their color.
     private func hostHeading(_ host: HostRecord) -> some View {
         let state = workspace.hosts.state(host.id)
         return HStack(spacing: 6) {
@@ -587,20 +655,18 @@ struct SpaceSidebar: View {
                         hostHeader(host) { hostHeading(host) }
                             .help(host.id == .local ? "Local" : host.details)
                             .accessibilityIdentifier("host-card-\(host.id.rawValue)")
-                        ZStack(alignment: .trailing) {
-                            // Host icons in group headings (Experimental): the host's disc, as rows draw it without
-                            // the setting, ends where the rows' shortcuts do and gives its place to the plus while
-                            // that shows.
+                        // The icons style's heading: the host's disc, as flat order's rows draw it, ends where the
+                        // rows' shortcuts do; the plus, at the disc's size, takes the same spot while it shows.
+                        ZStack {
                             if metrics.hostInHeader {
                                 HostDisc(host: host, metrics: metrics)
-                                    .padding(.trailing, min(6, metrics.shortcutInset))
                                     .opacity(revealed ? 0 : 1)
                                     .animation(.easeOut(duration: 0.12), value: revealed)
                                     .allowsHitTesting(false).accessibilityHidden(true)
                             }
                             newSpace
                         }
-                        .padding(.trailing, max(0, metrics.shortcutInset - 6))
+                        .padding(.trailing, metrics.hostInHeader ? metrics.shortcutInset : max(0, metrics.shortcutInset - 6))
                     }
                 }
             }
@@ -1255,6 +1321,15 @@ struct SpaceSidebar: View {
         var values = settings.values
         values.spaceOrder = order
         workspace.spaceOrder = order
+        do { try settings.save(values) } catch { settings.error = error.localizedDescription }
+    }
+
+    /// The header's mode: Settings' "Vertical tabs, no spaces", saved as that toggle saves it.
+    private func saveTabsOnly(_ on: Bool) {
+        guard on != settings.values.tabsOnly else { return }
+        var values = settings.values
+        values.tabsOnly = on
+        workspace.tabsOnly = on
         do { try settings.save(values) } catch { settings.error = error.localizedDescription }
     }
 }

@@ -608,22 +608,10 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
     }
 
-    /// Settings › Experimental › Host icons in group headings: off by default and saved when chosen; on, the icons
-    /// style's rows keep their height and lead with a 16-point activity column (at 14), the heading grows to hold the
-    /// host's disc, and Liquid Glass's nesting keeps all of it.
-    func testHostHeaderIconsDefaultOffPersistAndMetrics() throws {
-        XCTAssertFalse(Preferences().hostHeaderIcons)
-        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).hostHeaderIcons)
-        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
-        var preferences = Preferences()
-        preferences.hostHeaderIcons = true
-        try store.save(preferences)
-        XCTAssertTrue(SettingsStore(file: file).values.hostHeaderIcons)
-        try store.save(Preferences())
-        XCTAssertFalse(SettingsStore(file: file).values.hostHeaderIcons)
-
+    /// The icons style grouped by host puts the host's disc in its group's heading: rows keep their height and lead
+    /// with a 16-point activity column (at 14), the heading grows to hold the disc, and Liquid Glass's nesting keeps
+    /// all of it. The host picker's icons metrics keep the disc on every row.
+    func testIconsTreeMetricsPutHostDiscInHeading() throws {
         let icons = SidebarMetrics.icons(contentSize: 14)
         XCTAssertFalse(icons.hostInHeader)
         let headed = icons.hostInHeaders(contentSize: 14)
@@ -631,7 +619,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(headed.rowHeight, icons.rowHeight)
         XCTAssertEqual(headed.groupSpacing, icons.groupSpacing)
         XCTAssertEqual(headed.markColumn, 16)
-        XCTAssertEqual(headed.headerHeight, icons.discSize)
+        XCTAssertEqual(headed.headerHeight, icons.discSize + 7)
         let nested = headed.nested(cornerRadius: 9)
         XCTAssertTrue(nested.hostInHeader)
         XCTAssertEqual(nested.markColumn, headed.markColumn)

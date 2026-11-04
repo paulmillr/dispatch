@@ -1473,6 +1473,7 @@
     "DispatchTests/TabsOnlyTests/testSplitsFromSpacesModeLiftTheirHiddenTabsAndSteppingWraps": "fast",
     "DispatchTests/TabsOnlyTests/testSteppingFollowsTheHostGroups": "fast",
     "DispatchTests/TabsOnlyTests/testSpaceKeysChooseRows": "fast",
+    "DispatchTests/TabsOnlyTests/testStepAndDigitItemsCountRows": "full",
     "DispatchTests/TabsOnlyTests/testTmuxWindowRowsReorderAcrossSpaces": "full",
     "DispatchTests/TabsOnlyTests/testWindowGroupsAreSplitsOrFold": "fast",
     "DispatchTests/TabsOnlyTests/testTmuxWindowsSplitInDispatch": "full",

@@ -462,6 +462,55 @@ final class TabsOnlyTests: XCTestCase {
         for label in titles { XCTAssertTrue(tree.contains(label), tree) }
     }
 
+    /// The Next / Previous Tab and Space items (⌘] ⌘[ ⌘⇧] ⌘⇧[) and the digits' items stay enabled while the active
+    /// row is a space's only tab or a split: tabs only steps and numbers the rows, not the current space's tabs.
+    func testStepAndDigitItemsCountRows() async throws {
+        let restoreRuntime = TestSupport.preserveRuntime()
+        defer { restoreRuntime() }
+        try DesktopTestSupport.requireUnlocked()
+        let runtime = TerminalRuntime.shared, controller = AppDelegate()
+        let workspace = controller.workspace
+        var preferences = Preferences.flat
+        preferences.tabsOnly = true
+        runtime.workspace = workspace; runtime.start(preferences: preferences)
+        workspace.onCloseTabs = { runtime.close($0) }
+        controller.settings.values = preferences
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; controller.window = window
+        window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; runtime.stop(); HostStats.shared.stop() }
+        try await TestSupport.eventually { NSApp.keyWindow === window }
+        workspace.newSpace(); workspace.newSpace(); workspace.newTab()
+        let rows = workspace.sidebarTabs.map(\.id)
+        XCTAssertEqual(rows.count, 3)
+        func enabled(_ action: Selector, tag: Int = 0) -> Bool {
+            let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
+            item.tag = tag
+            return controller.validateMenuItem(item)
+        }
+        workspace.selectSidebarTab(rows[0])
+        XCTAssertEqual(workspace.currentTabs.count, 1, "The first space holds one tab")
+        XCTAssertTrue(enabled(#selector(AppDelegate.nextTab)))
+        XCTAssertTrue(enabled(#selector(AppDelegate.previousTab)))
+        XCTAssertTrue(enabled(#selector(AppDelegate.nextSpace)))
+        XCTAssertTrue(enabled(#selector(AppDelegate.selectNumberedItem(_:)), tag: 2))
+        XCTAssertFalse(enabled(#selector(AppDelegate.selectNumberedItem(_:)), tag: 3))
+        XCTAssertTrue(enabled(#selector(AppDelegate.selectSpace(_:)), tag: 2))
+        XCTAssertTrue(enabled(#selector(AppDelegate.selectSpace(_:)), tag: 8))
+        controller.nextTab()
+        XCTAssertEqual(workspace.selectedSidebarTab, rows[1])
+        XCTAssertTrue(workspace.splitSidebarRows([rows[1], rows[2]]))
+        let split = try XCTUnwrap(workspace.current).id
+        XCTAssertEqual(workspace.sidebarTabs.map(\.id), [rows[0], split])
+        XCTAssertTrue(enabled(#selector(AppDelegate.nextTab)), "A split is a row to step from")
+        controller.nextTab()
+        XCTAssertEqual(workspace.selectedSidebarTab, rows[0])
+        workspace.tabsOnly = false
+        workspace.selectSpace(workspace.spaces[0].id)
+        XCTAssertFalse(enabled(#selector(AppDelegate.nextTab)), "Listing spaces, a space of one tab has none to step to")
+    }
+
     /// The window: ⌘-clicks mark rows without choosing one; a split is one row with a line per tab, in every sidebar
     /// style, and a line's click focuses its pane.
     func testSplitRowInTheWindow() async throws {

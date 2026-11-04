@@ -24,5 +24,6 @@ enum Screens {
     static var all: [Screen] {
         Reference.screens
             + TreeHostIcon.screens + TreeHostIcon.variants
+            + SidebarModeToggle.screens + SidebarModeText.screens + SidebarModeHeader.screens
     }
 }

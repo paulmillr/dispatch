@@ -96,6 +96,9 @@ def mac(*args, capture=False):
     result = run('swift', 'build', '--package-path', str(ROOT / 'Mac'), '--scratch-path', str(ROOT / 'build/mac'), '--quiet',
                  check=False, capture_output=True)
     if result.returncode:
+        # --quiet drops the compiler's diagnostics: build again without it to show them.
+        result = run('swift', 'build', '--package-path', str(ROOT / 'Mac'), '--scratch-path', str(ROOT / 'build/mac'),
+                     check=False, capture_output=True)
         output = re.sub(r'\x1b\[[0-9;]*m', '', result.stdout + result.stderr)
         errors = [line for line in output.splitlines() if re.search(r'\.swift:\d+:\d+: error:', line)]
         sys.exit('\n'.join(dict.fromkeys(errors)) or output)

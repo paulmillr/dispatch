@@ -11,6 +11,8 @@ struct SpaceItem: Identifiable {
     var activity = Activity.none
     /// 1…9; nil draws "·" as a space without a shortcut.
     var shortcut: Int?
+    /// The shortcut's modifiers: spaces ⇧⌘, tabs only's tabs ⌘.
+    var keys = "⇧⌘"
     var selected = false
     var hovered = false
 }
@@ -48,7 +50,7 @@ struct Sidebar: View {
             ForEach(model.groups, id: \.0) { host, spaces in
                 VStack(spacing: 2) {
                     TreeGroupHeader(host: host)
-                    ForEach(spaces) { SpaceRow(space: $0) }
+                    ForEach(spaces) { SpaceRow(space: $0, lead: .activity) }
                 }
                 .opacity(host.offline ? 0.65 : 1)
             }
@@ -68,12 +70,13 @@ extension SidebarModel {
 
 /// The sidebar around its list: background, the top row, the list 10 points in, the footer. A sidebar proposal swaps
 /// the list and keeps the rest as the app draws it.
-struct SidebarColumn<List: View>: View {
+struct SidebarColumn<Header: View, List: View>: View {
     let model: SidebarModel
-    @ViewBuilder let list: List
+    let header: Header
+    let list: List
     var body: some View {
         VStack(spacing: 0) {
-            SidebarTopRow(tree: model.tree)
+            header
             ScrollView { list.padding(.horizontal, 10) }.scrollDisabled(true)
             SidebarFooter(hosts: model.hosts)
         }
@@ -84,47 +87,61 @@ struct SidebarColumn<List: View>: View {
     }
 }
 
-/// The traffic lights' row: sidebar toggle after them, the tree toggle and the shortcuts button at the end.
-struct SidebarTopRow: View {
-    var tree = false
-    var body: some View {
-        let p = Chrome.palette, glass = Mock.glass
-        HStack(spacing: 0) {
-            Image(systemName: "sidebar.left").font(.system(size: 14)).foregroundStyle(p.ink).frame(width: 22, height: 20)
-            Spacer()
-            HStack(spacing: 12) {
-                HostTreeGlyph().frame(width: 13.5, height: 13.5).foregroundStyle(tree ? p.ink : p.detail)
-                    .frame(width: 24, height: 24)
-                    .background(tree ? p.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
-                Image(systemName: "keyboard").font(.system(size: 12.5, design: .monospaced)).foregroundStyle(p.detail)
-                    .frame(minWidth: 24, minHeight: 24)
-            }
-        }
-        // Glass rows are taller (the 38-point strip) and its controls sit further in (measured from the capture).
-        .padding(.leading, glass ? 89 : 82).padding(.trailing, glass ? 16 : 8)
-        .frame(height: glass ? Mock.typography.expanded(38) : Mock.typography.expanded(30))
-        .padding(.bottom, glass ? 0 : -0.8)
+extension SidebarColumn where Header == SidebarTopRow {
+    init(model: SidebarModel, @ViewBuilder list: () -> List) {
+        self.init(model: model, header: SidebarTopRow(tree: model.tree), list: list())
     }
 }
 
-/// A host's header in tree order, as the app draws it: the name (semibold 12, in the host's colour), "offline" when it
-/// is, and the + that appears on hover (or with no spaces).
+extension SidebarColumn {
+    /// A proposal's own header row in place of the app's.
+    init(model: SidebarModel, @ViewBuilder header: () -> Header, @ViewBuilder list: () -> List) {
+        self.init(model: model, header: header(), list: list())
+    }
+}
+
+/// The traffic lights' row, as the app draws it (SpaceSidebar.headerControls): sidebar toggle, the mode's menu
+/// (Spaces ⌄ or Tabs ⌄), then the tree toggle and the shortcuts button; tight, the shortcuts button goes, then the
+/// name becomes an icon among the buttons (Screens/SidebarModeHeader.swift).
+struct SidebarTopRow: View {
+    var tree = false
+    var tabs = false
+    var body: some View { ModeWordsHeader(tabs: tabs, tree: tree, menu: true) }
+}
+
+/// A host's heading in tree order, as the app draws it (SpaceSidebar.hostGroup with `hostInHeader`): the name
+/// (semibold 12, in the host's colour) 10 in, "offline" after it when it is, and at the end the host's disc, which
+/// the + replaces on hover (or with no spaces). 32 tall: the disc and about 3 points above and below.
 struct TreeGroupHeader: View {
     let host: MockHost
     var hovered = false
     var body: some View {
         let p = Chrome.palette
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Text(host.local ? "Local" : host.name).font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(host.tint?.foreground ?? p.secondary)
-                if host.offline { Text("offline").font(.system(size: 11)).foregroundStyle(p.muted) }
-                Spacer()
+        HStack(spacing: 6) {
+            Text(host.local ? "Local" : host.name).font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(host.tint?.foreground ?? p.secondary)
+            if host.offline { Text("offline").font(.system(size: 11)).foregroundStyle(p.muted) }
+            Spacer()
+            ZStack {
+                HostDiscMark(host: host).opacity(hovered ? 0 : 1)
+                TreeGroupPlus(hovered: hovered).frame(width: 25, height: 25)
             }
-            .padding(.leading, 10)
-            TreeGroupPlus(hovered: hovered)
         }
-        .frame(height: 20)
+        .padding(.leading, 10).padding(.trailing, 10)
+        .frame(height: 32)
+    }
+}
+
+/// The icons style's disc: the host's glyph on a faint circle (the host's wash when its row is selected).
+struct HostDiscMark: View {
+    let host: MockHost
+    var selected = false
+    var body: some View {
+        let p = Chrome.palette
+        MockHostGlyph(system: host.system, size: Mock.typography.hostIconSize)
+            .foregroundStyle(host.tint?.foreground ?? p.secondary)
+            .frame(width: 25, height: 25)
+            .background(Circle().fill(selected ? (host.tint?.glassWash ?? p.hover) : p.hover))
     }
 }
 
@@ -134,9 +151,8 @@ struct TreeGroupPlus: View {
     var body: some View {
         let p = Chrome.palette
         Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).foregroundStyle(hovered ? p.ink : p.secondary)
-            .frame(width: 20, height: 20)
+            .frame(width: 25, height: 25)
             .background(Circle().fill(hovered ? p.hover : .clear))
-            .padding(.trailing, 4)
             .opacity(hovered ? 1 : 0)
     }
 }
@@ -168,22 +184,19 @@ struct SidebarFooter: View {
 /// A space's row: host disc, name (and branch), activity, ⇧⌘ shortcut; selected on a fill the host's colour tints.
 struct SpaceRow: View {
     let space: SpaceItem
-    /// What the leading 25-point column holds: the host's disc (the app's), or the activity mark moved there from
-    /// before the shortcut.
+    /// What leads the row: the host's disc (flat order), or grouped by host the activity in a 16-point column, the
+    /// disc being in the group's heading (the app's `hostInHeader`).
     var lead = Lead.host
     enum Lead { case host, activity }
     private var p: SidebarPalette { Chrome.palette }
     var body: some View {
         let tint = space.host.tint
         let activity = space.activity == .quiet ? Activity.none : space.activity
-        HStack(spacing: 9) {
+        HStack(spacing: lead == .host ? 9 : 8) {
             if lead == .host {
-                MockHostGlyph(system: space.host.system, size: Mock.typography.hostIconSize)
-                    .foregroundStyle(tint?.foreground ?? p.secondary)
-                    .frame(width: 25, height: 25)
-                    .background(Circle().fill(space.selected ? (tint?.glassWash ?? p.hover) : p.hover))
+                HostDiscMark(host: space.host, selected: space.selected)
             } else {
-                activity.glyph().frame(width: 25, height: 25)
+                activity.glyph().frame(width: 16)
             }
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(space.name).lineLimit(1)
@@ -193,12 +206,12 @@ struct SpaceRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if lead == .host { activity.glyph() }
-            Text(space.shortcut.map { "⇧⌘\($0)" } ?? "·")
+            Text(space.shortcut.map { "\(space.keys)\($0)" } ?? "·")
                 .font(.system(size: 12.5).monospacedDigit()).tracking(0.75).foregroundStyle(p.secondary.opacity(0.7))
         }
         .interfaceFont(size: 13.5)
         .foregroundStyle(space.selected ? p.ink : p.secondary)
-        .padding(.leading, 5).padding(.trailing, 10)
+        .padding(.leading, lead == .host ? 5 : 10).padding(.trailing, 10)
         .frame(height: 33)
         .background(RoundedRectangle(cornerRadius: 13).fill(
             space.selected ? (tint.map { $0.foreground.opacity(0.16) } ?? p.selection) : space.hovered ? p.hover : .clear))
@@ -208,10 +221,13 @@ struct SpaceRow: View {
 /// "+ space ⌘N" in the left half of its row (the right half is "+ local" when a remote host is connected).
 struct NewSpaceRow: View {
     var local = false
+    /// "space" and ⌘N; tabs only's "tab" and ⌘T.
+    var title = "space"
+    var shortcut = "⌘N"
     private var p: SidebarPalette { Chrome.palette }
     var body: some View {
         HStack(spacing: 6) {
-            tile("space", shortcut: "⌘N")
+            tile(title, shortcut: shortcut)
             if local { tile("local", shortcut: "⇧⌘N", glyph: true) } else { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
         }
     }

@@ -301,12 +301,6 @@ struct SettingsView: View {
                     .accessibilityIdentifier("settings-output-window")
                     .help("Off: output streams as fast as the connection takes it. On: at most 256 KB in flight per connection.")
             }
-            row("Host icons in group headings", detail: "sidebar grouped by host · icons style",
-                info: "With spaces grouped by host, each host's icon shows once, at the end of its group's heading, instead of on every space. A space's row starts with its agent's status instead, and rows are a little shorter.") {
-                settingToggle("Host icons in group headings", isOn: $draft.hostHeaderIcons)
-                    .accessibilityIdentifier("settings-host-header-icons")
-                    .help("Off: every space shows its host's icon. On: each group's heading shows it once.")
-            }
         }
     }
 
