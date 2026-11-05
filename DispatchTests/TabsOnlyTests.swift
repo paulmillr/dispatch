@@ -462,6 +462,78 @@ final class TabsOnlyTests: XCTestCase {
         for label in titles { XCTAssertTrue(tree.contains(label), tree) }
     }
 
+    /// Tabs only has no strip: a title row over the content names the tab, the sidebar shown or not, so toggling the
+    /// sidebar slides it sideways and leaves the terminal's top edge where it was; with the sidebar hidden the row
+    /// spans the window (and leads with the sidebar toggle, which the accessibility lookup doesn't reach).
+    func testTitleRowStaysAsTheSidebarToggles() async throws {
+        let restoreRuntime = TestSupport.preserveRuntime()
+        defer { restoreRuntime() }
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let runtime = TerminalRuntime.shared, controller = AppDelegate()
+        let workspace = controller.workspace
+        var preferences = Preferences.flat
+        preferences.tabsOnly = true
+        preferences.hideSingleSpace = false
+        runtime.workspace = workspace; runtime.start(preferences: preferences)
+        workspace.onCloseTabs = { runtime.close($0) }
+        controller.settings.values = preferences
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 740), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; controller.window = window
+        window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; runtime.stop(); HostStats.shared.stop() }
+        workspace.newSpace(); workspace.newTab()
+        func row() -> NSRect? { PresentationTestSupport.accessibilityFrames("main-title-bar", in: window).first }
+        try await TestSupport.eventually { controller.sidebarVisible }
+        _ = try await capture(window, "tabs-only-title-sidebar")
+        let shown = try XCTUnwrap(row(), "The title row shows beside the sidebar")
+        controller.toggleSidebar()
+        try await TestSupport.eventually { !controller.sidebarVisible }
+        _ = try await capture(window, "tabs-only-title-hidden")
+        let hidden = try XCTUnwrap(row(), "The title row stays with the sidebar hidden")
+        XCTAssertEqual(hidden.minY, shown.minY, "The content's top edge holds: \(shown) → \(hidden)")
+        XCTAssertEqual(hidden.height, shown.height)
+        XCTAssertLessThan(hidden.minX, shown.minX, "The row widens over the sidebar's place")
+        controller.toggleSidebar()
+        try await TestSupport.eventually { controller.sidebarVisible }
+        _ = try await capture(window, "tabs-only-title-shown-again")
+        XCTAssertEqual(try XCTUnwrap(row()).minY, shown.minY)
+    }
+
+    /// Back to spaces from tabs only, grouped by host: every row is a space's again, a split's too. The groups' rows are
+    /// lazy and kept by id, and a split's row has its space's id in both lists, so the window split's row kept its
+    /// lines and its tab shortcut.
+    func testSpacesReturnInTheTreeAfterASplit() async throws {
+        let app = try TmuxWalkthrough(liquidGlass: false); defer { app.close() }
+        let workspace = app.workspace
+        let names = try await tmuxRows(app)
+        let ids = Dictionary(uniqueKeysWithValues: names.map { ($1, $0) })
+        app.controller.settings.values.spaceOrder = .tree
+        workspace.spaceOrder = .tree
+        let a1 = try XCTUnwrap(ids["A1"]), b1 = try XCTUnwrap(ids["B1"])
+        workspace.sidebarMarks = [a1, b1]
+        workspace.toggleSplit(.columns)
+        try await TestSupport.eventually {
+            app.runtime.helpers.values.allSatisfy { $0.operations == 0 } && workspace.spaces.contains { Workspace.windowSplit($0) }
+        }
+        let split = try XCTUnwrap(workspace.spaces.first { Workspace.windowSplit($0) }).id
+        func lines() -> [NSRect] {
+            PresentationTestSupport.accessibilityFrames(matching: { $0.hasPrefix("sidebar-split-member-") }, in: app.window)
+        }
+        try await TestSupport.eventually { lines().count == 2 }
+        _ = try await PresentationTestSupport.capture(app.window, named: "tree-split-tabs", in: "tabs-only-validation")
+        app.controller.settings.values.tabsOnly = false
+        workspace.tabsOnly = false
+        try await TestSupport.eventually(diagnostic: "lines \(lines())") {
+            lines().isEmpty && !PresentationTestSupport.accessibilityFrames("space-\(split)", in: app.window).isEmpty
+        }
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames(matching: { $0.hasPrefix("sidebar-tab-") }, in: app.window).isEmpty)
+        XCTAssertEqual(PresentationTestSupport.accessibilityFrames(matching: { $0.hasPrefix("space-") && $0 != "space-overflow" }, in: app.window).count,
+                       workspace.spaces.count, "A row per space")
+        _ = try await PresentationTestSupport.capture(app.window, named: "tree-split-spaces", in: "tabs-only-validation")
+    }
+
     /// The Next / Previous Tab and Space items (⌘] ⌘[ ⌘⇧] ⌘⇧[) and the digits' items stay enabled while the active
     /// row is a space's only tab or a split: tabs only steps and numbers the rows, not the current space's tabs.
     func testStepAndDigitItemsCountRows() async throws {

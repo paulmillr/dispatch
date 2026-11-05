@@ -29,7 +29,10 @@ look, in the app's accent, without taking focus or activating anything.
 
 `mac` builds the package first (incremental: about a second, then under a second a screen). Options: `--themes`
 (dark, light, graphite, lavender, nautical), `--flat` (flat chrome; Liquid Glass is the app's default), `--font code`
-(Source Code Pro interface), `--size` (Settings › Font size, 14), `--scale`, `--out`. A selector is an id, its part
+(Source Code Pro interface), `--size` (Settings › Font size, 14), `--scale`, `--out`, `--scheme "Catppuccin Latte"`
+(the terminal and chat in a bundled scheme from `Vendor/Term/Resources/ghostty/themes` instead of dispatch-black,
+without the theme's overrides, as the app does; the file name gains `-catppuccin-latte`; the glowing schemes, Root
+Access, Red Alert and Bluescreen, get the terminal's phosphor pass, `PhosphorGlow` after `GlowShaders.swift`). A selector is an id, its part
 before the first dash (`K2`), or a group.
 
 **Drawn with the app's values, not copies.** `Mac/Sources/MacMockups/App/` links the app's `Chrome.swift` (every

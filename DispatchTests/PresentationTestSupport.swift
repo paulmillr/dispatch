@@ -519,7 +519,8 @@ extension PresentationTestSupport {
     }
 
     /// Runs `request` on `image` off the calling thread and waits at most `ocrTimeout`; a request that doesn't
-    /// answer by then is cancelled and throws.
+    /// answer by then is cancelled and throws. Live work the journal does not see (`AppReplay.live`): a guest without
+    /// a Neural Engine reads on the CPU, near a second a pass, and replay's watchdog must not call that time idle.
     nonisolated static func recognize(_ request: VNRecognizeTextRequest, in image: CGImage) throws {
         final class Outcome: @unchecked Sendable { var error: Error? }
         nonisolated(unsafe) let request = request
@@ -528,7 +529,8 @@ extension PresentationTestSupport {
             do { try VNImageRequestHandler(cgImage: image).perform([request]) } catch { outcome.error = error }
             done.signal()
         }
-        guard done.wait(timeout: .now() + ocrTimeout) == .success else {
+        let answered = AppReplay.live { done.wait(timeout: .now() + ocrTimeout) == .success }
+        guard answered else {
             request.cancel()
             throw OCRTimeout()
         }

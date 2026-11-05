@@ -11,14 +11,28 @@ struct TerminalScheme {
     var foreground: Color
     var palette: [Color]
     fileprivate var raw: (background: NSColor, foreground: NSColor)
+    /// The background's sRGB components (0...1), for passes over a rendered screen.
+    var backgroundComponents: (CGFloat, CGFloat, CGFloat) {
+        let c = raw.background.usingColorSpace(.sRGB) ?? raw.background
+        return (c.redComponent, c.greenComponent, c.blueComponent)
+    }
 
-    @MainActor static var current: TerminalScheme { cached[SidebarThemeStore.shared.current] ?? load(SidebarThemeStore.shared.current) }
-    @MainActor private static var cached: [SidebarTheme: TerminalScheme] = [:]
+    @MainActor static var current: TerminalScheme {
+        let key = "\(SidebarThemeStore.shared.current.rawValue)/\(Mock.scheme ?? "")"
+        return cached[key] ?? load(SidebarThemeStore.shared.current, scheme: Mock.scheme, key: key)
+    }
+    @MainActor private static var cached: [String: TerminalScheme] = [:]
 
-    @MainActor private static func load(_ theme: SidebarTheme) -> TerminalScheme {
-        let file = Paths.mockups.appendingPathComponent("../extras/ghostty/dispatch-black")
+    /// dispatch-black under the theme's overrides, or (`--scheme`) a bundled scheme as is: the app applies the overrides
+    /// only to its default scheme (TerminalRuntime).
+    @MainActor private static func load(_ theme: SidebarTheme, scheme: String?, key: String) -> TerminalScheme {
+        let file = scheme.map { name in
+            [Paths.mockups.appendingPathComponent("../Vendor/Term/Resources/ghostty/themes/\(name)"),
+             Paths.mockups.appendingPathComponent("../extras/ghostty/\(name)")]
+                .first { FileManager.default.fileExists(atPath: $0.path) } ?? URL(fileURLWithPath: "/nonexistent")
+        } ?? Paths.mockups.appendingPathComponent("../extras/ghostty/dispatch-black")
         var values: [String: String] = [:], palette: [Int: String] = [:]
-        let text = ((try? String(contentsOf: file, encoding: .utf8)) ?? "") + "\n" + theme.defaultColorSchemeOverrides
+        let text = ((try? String(contentsOf: file, encoding: .utf8)) ?? "") + "\n" + (scheme == nil ? theme.defaultColorSchemeOverrides : "")
         for line in text.split(separator: "\n") {
             let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             guard parts.count == 2, !parts[0].hasPrefix("#") else { continue }
@@ -38,7 +52,7 @@ struct TerminalScheme {
         let scheme = TerminalScheme(background: Color(nsColor: background), foreground: Color(nsColor: foreground),
                                     palette: (0..<16).map { Color(nsColor: color(palette[$0])) },
                                     raw: (background, foreground))
-        cached[theme] = scheme
+        cached[key] = scheme
         return scheme
     }
 }
@@ -101,4 +115,11 @@ extension Color {
     static var glass: Bool { LiquidGlassStore.shared.active }
     static var typography: AppTypography { AppTypography(contentSize: contentSize) }
     static var contentSize: CGFloat = 14
+    /// `--scheme`: a bundled terminal scheme (Vendor/Term/Resources/ghostty/themes, extras/ghostty) in place of
+    /// dispatch-black.
+    static var scheme: String?
+    /// The render's scale (`--scale`), for screens drawn as bitmaps.
+    static var scale: CGFloat = 2
+    /// The scheme draws with the phosphor glow and scanlines: the app's `SchemeGroup.glowing`.
+    static var glowing: Bool { scheme.map { ["Root Access", "Red Alert", "Bluescreen"].contains($0) } ?? false }
 }

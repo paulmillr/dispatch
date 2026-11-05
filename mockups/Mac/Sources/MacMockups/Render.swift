@@ -32,6 +32,8 @@ struct RenderOptions {
     var glass = true
     var scale: CGFloat = 2
     var output = Paths.shots
+    /// `--scheme`: the terminal and chat in a bundled scheme instead of dispatch-black.
+    var scheme: String?
 }
 
 enum Paths {
@@ -39,8 +41,10 @@ enum Paths {
         .standardizedFileURL
     static let shots = mockups.appendingPathComponent("shots/mac")
     static let sheets = mockups.appendingPathComponent("sheets")
-    static func shot(_ id: String, _ theme: SidebarTheme, in directory: URL = shots) -> URL {
-        directory.appendingPathComponent("\(id)-\(theme.rawValue).png")
+    /// `<id>-<theme>.png`, or `<id>-<theme>-<scheme>.png` under `--scheme` (lowercased, spaces as dashes).
+    static func shot(_ id: String, _ theme: SidebarTheme, in directory: URL = shots, scheme: String? = nil) -> URL {
+        let suffix = scheme.map { "-" + $0.lowercased().replacingOccurrences(of: " ", with: "-") } ?? ""
+        return directory.appendingPathComponent("\(id)-\(theme.rawValue)\(suffix).png")
     }
 }
 
@@ -52,6 +56,8 @@ enum Paths {
         InterfaceFontStore.shared.current = options.interfaceFont
         LiquidGlassStore.shared.active = options.glass
         Mock.contentSize = options.contentSize
+        Mock.scheme = options.scheme
+        Mock.scale = options.scale
         let typography = AppTypography(contentSize: options.contentSize)
         let content = screen.make()
         let root = Group {
@@ -88,7 +94,7 @@ enum Paths {
         host.cacheDisplay(in: host.bounds, to: bitmap)
         guard let png = bitmap.representation(using: .png, properties: [:]) else { throw Failure("no PNG for \(screen.id)") }
         try FileManager.default.createDirectory(at: options.output, withIntermediateDirectories: true)
-        let url = Paths.shot(screen.id, theme, in: options.output)
+        let url = Paths.shot(screen.id, theme, in: options.output, scheme: options.scheme)
         try png.write(to: url)
         return url
     }

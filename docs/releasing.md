@@ -2,164 +2,236 @@
 
 A release takes three machines and GitHub, and no single one of them can ship a build on its own:
 
-- **The commit machine** holds the OpenPGP key that signs commits and tags. It sets the version, signs, and pushes.
-- **GitHub** keeps the source and, from the signed tag, makes one of the two builds (Actions, attested).
-- **The signing machine** holds the Apple keys. It checks the signatures, makes the second build itself in a
-  throwaway VM, signs only when both builds match, and publishes: the GitHub release, the Homebrew cask, the Ad Hoc
-  iPhone build and, on request, TestFlight.
+- **The commit machine** holds the OpenPGP key that signs commits. It sets the version in a signed commit, the version
+  commit, and pushes it to `main`.
+- **GitHub** keeps the source and, from the version commit, makes one of the two builds (Actions, attested).
+- **The signing machine** holds the Apple keys. It checks the signature, makes the second build itself (as you, or
+  with `--build-as-user` as a macOS user that has no keys), signs only when both builds are the same app (or GitHub's
+  alone, `--trust-ci`), and publishes: the GitHub release, whose publication creates the tag `X.Y.Z`, then the
+  Homebrew cask.
+
+Two commands: `scripts/release.sh X.Y.Z` on the commit machine pushes the version commit, then
+`scripts/release-publish.sh X.Y.Z` on the signing machine, run there by hand, waits for GitHub's build and does the
+rest. The commit machine has no way into the signing machine. No tag exists before its release does: a version that
+fails on the way leaves a version commit on `main` and nothing else; fix the problem and run the same command again.
+
+The iPhone app has no published release for now ([iPhone](#iphone)).
 
 The maintainer's everyday Mac takes no part: it builds nothing that ships and holds no key. Anyone can check a
-published release afterwards with `scripts/release-verify.sh`.
+published release afterwards with `scripts/release/verify.sh`, and with `--reproduce` rebuild it byte for byte
+([Checking a release](#checking-a-release)).
 
 ```
 commit machine              GitHub                               signing machine
-scripts/set-version.sh
-git commit -S, git tag -s
-git push main X.Y.Z   ──▶   tag X.Y.Z starts release.yml:
-                            scripts/release-build.sh, attested
-                            artifact                       ──▶   scripts/release-publish.sh X.Y.Z
-                                                                   the tag and commit signed by the pinned key?
+scripts/release.sh X.Y.Z
+  checks, then commit -S,
+  push main ─────────────▶  a version commit on main starts
+                            release.yml: release/build.sh,
+                            attested artifact              ──▶   scripts/release-publish.sh X.Y.Z (by hand)
+                                                                   the version commit signed by the pinned key?
                                                                    GitHub's build attested?
-                                                                   the same build in a throwaway VM?
-                                                                   type X.Y.Z to confirm
+                                                                   the same build here?
+                                                                   ship X.Y.Z? [y/N]
                                                                    Developer ID, notarized DMG
-                            release X.Y.Z with the DMG     ◀──     gh release create
+                            release X.Y.Z with the DMG,    ◀──     a draft release, then published
+                            which creates the tag X.Y.Z
                             homebrew-tap: a new commit     ◀──     the cask's version and sha256
-                                                                   Ad Hoc to its private host; TestFlight
-                                                                   dispatch-release: the record
 ```
 
-The Pilot account's apps (`yachts.dispatch.pilot.*`) are the default and the published ones: the GitHub release, the
-Homebrew cask, Ad Hoc and TestFlight. The stable account's (`yachts.dispatch.*`) take `--stable` and are published
-nowhere yet ([ios.md](ios.md), Pilot and stable). Every app of a release has one build number, `CFBundleVersion`: the
-commit's UTC time (`20261104.0002`), so both builders stamp the same one.
+What is Dispatch's own is in `scripts/release/app.json` and `scripts/release/app.sh`; every other release script is the
+same for any app ([Another app](#another-app)). Its variants are the Pilot account's app (`yachts.dispatch.pilot.app`),
+the default and the published one (the GitHub release and the Homebrew cask), and the stable account's
+(`yachts.dispatch.app`, `--variant stable`), published nowhere yet ([ios.md](ios.md), Pilot and stable). The build
+number, `CFBundleVersion`, is the commit's UTC time (`20261104.0002`), so both builders stamp the same one.
 
 ## Commit machine
 
-`scripts/set-version.sh X.Y.Z` sets `MARKETING_VERSION` of all four apps in `project.yml` and
-`Dispatch.xcodeproj/project.pbxproj` (refusing a version that is not newer) and prints the rest:
+`scripts/release.sh X.Y.Z`, from the commit you want to release (main, or ahead of it). First it checks, and lists
+every problem at once: `git`, `gh` (logged in), `gpg`; X.Y.Z newer than the apps' version and not released (no tag
+`X.Y.Z` on GitHub), the version files unchanged; main fast-forwarding to HEAD and every commit to push signed (main
+accepts only signed commits); GitHub's checks on HEAD green, a rehearsal of the release build included. Once those pass, it signs a throwaway commit object (nothing points to it) to prove signing works
+and shows the key's fingerprint: the one the signing machine pins. Then it shows the plan and asks `push X.Y.Z?`. On
+yes:
 
-```sh
-git commit -S -m 'X.Y.Z' project.yml Dispatch.xcodeproj/project.pbxproj
-git tag -s X.Y.Z -m 'Dispatch X.Y.Z'      # annotated and signed: the signing machine refuses anything else
-git push origin HEAD:main X.Y.Z
-```
+1. `MARKETING_VERSION` of all four apps (the iPhone, watch and widget ones keep in step) set to X.Y.Z in `project.yml`
+   and `Dispatch.xcodeproj/project.pbxproj`;
+2. the version commit: a signed commit `X.Y.Z` of those two files only (other uncommitted changes stay out, and are
+   listed), dated in UTC;
+3. `git push origin HEAD:refs/heads/main`, which starts the release build, and its link;
+4. the next step: `scripts/release-publish.sh X.Y.Z` on the signing machine ([Signing machine](#signing-machine)),
+   run there by hand; it waits for GitHub's build.
 
-Tags are `X.Y.Z`, no `v`. A tag never moves once pushed: a broken release gets the next version.
+The version commit is the one commit on `main` that sets the version files to X.Y.Z
+(`scripts/release/config.py version-commit X.Y.Z origin/main`): the newest whose parent has another version. Run
+`release.sh X.Y.Z` again after anything fails: a version commit made but not pushed is pushed; for one already on `main`,
+it only prints the publish command again (only for `main`'s own version; an older one is refused). A step that fails
+after something changed says what exists and how to go on.
+
+Versions are `X.Y.Z`, no `v`. A version commit never changes once pushed: a broken one gets the next version. The
+release's tag `X.Y.Z` is created on GitHub when its release is published, at the version commit, and never moves.
+Before releasing a change to the release build, rehearse it (below).
 
 ## Two builders
 
-`scripts/release-build.sh OUT --commit SHA --build-number N [--stable]` is the whole build, the same on both builders:
-`./run.sh --prod --just-build` for the Mac app and `./run.sh --archive` for the iPhone app with its watch app, built
-unsigned and then signed ad hoc with each target's entitlements (Xcode signs iOS code only with a team; the watch's App
-Group, `group.<prefix>.mobile`, has to survive the signing machine's export). It insists on a fresh tree (`git
-archive` of the commit, no `build/`) at `/private/tmp/dispatch-build`, because source paths end up in the binaries.
-`OUT` gets `Dispatch-Pilot-unsigned.zip` (stable: `Dispatch-unsigned.zip`), `Dispatch.app.dSYM.zip`,
-`DispatchMobile.xcarchive.zip` and `build.json`: variant, version, build number, commit, builder, the Xcode and macOS
-builds, and each zip's bundle id and SHA-256.
+`scripts/release/build.sh OUT --commit SHA --build-number N [--variant NAME]` is the whole build, the same on both
+builders. It insists on a fresh tree (`git archive` of the commit, no `build/`) at `/private/tmp/release-build`,
+because source paths end up in the binaries, and it restarts itself in a fixed environment: only `DEVELOPER_DIR` and
+`RELEASE_BUILDER` kept, `PATH` the system's folders alone (so `python3` is Xcode's), `LANG=en_US.UTF-8` and a fresh
+`HOME`, `/private/tmp/release-build-home`. GitHub's runner otherwise brings Homebrew's tools, rustup and its own
+settings, which the signing machine's build lacks. Then `scripts/release/app.sh`, the app's own part, builds: for Dispatch
+`./run.sh --prod --just-build`, the Mac app. Its setup still builds the iPhone app's SSH engine (russh, into
+`build/mobile-ssh`): `Mobile/Transport` is a package of the whole project, and Xcode resolves it, binary target and
+all, for every scheme, the Mac app's too, which does not link it. Then `scripts/release/normalize.py` removes the one
+thing the app takes from the machine that built it: Xcode writes that machine's macOS build, `BuildMachineOSBuild`,
+into every `Info.plist`, which the ad hoc signature seals, so it removes the key and signs those bundles again, ad
+hoc, keeping their identifiers, entitlements and flags (the release's Developer ID signature replaces it anyway).
+`scripts/release/zip.py` packs the app byte-reproducibly: entries sorted, every date the build number's time, the
+files' permissions and nothing else of the file system, stored rather than compressed. `OUT` gets
+`Dispatch-<variant>-unsigned.zip`, `Dispatch.app.dSYM.zip` and `build.json`: variant, version, build number, commit,
+builder, the Xcode and macOS builds, the app's bundle id and minimum macOS, and the zips' SHA-256. The same commit
+with the same Xcode build makes the same app zip on any Mac: its SHA-256 is the comparison. The dSYM is not: its debug
+map records offsets in the intermediate object files, which vary between builds whose linked app is the same; it is
+never shipped or signed.
 
-- **GitHub.** `.github/workflows/release.yml` runs on every pushed `X.Y.Z` tag (and by hand, from the tag, for
-  `--stable`'s apps). It checks the tag matches `project.yml`, selects the Xcode named in `scripts/release.lock.json`
-  (`/Applications/Xcode_<version>.app`; only the `xcode-27` runner image, a public preview, has Xcode 27), builds,
-  attests every file (`actions/attest-build-provenance`: GitHub signs that this workflow made it from this tag and
-  commit on a GitHub-hosted runner) and keeps them as the artifact `dispatch-<variant>-X.Y.Z` for 90 days. It uses no
-  secret; its actions are pinned by commit.
-- **The VM.** `scripts/release-vm-build.sh`, run by `release-publish.sh`, clones a Tart VM from the image pinned in
-  `scripts/release.lock.json` (`vm_image`, by digest; `DISPATCH_BUILD_IMAGE` overrides it), copies the verified tree in,
-  builds with the guest's Xcode whose build is the one GitHub's `build.json` names, copies the result out and deletes
-  the VM. Nothing of the signing machine (keys, keychain, settings) enters it.
+- **GitHub.** `.github/workflows/release.yml` runs on every push to `main`. A first job on a small Linux runner
+  checks whether the pushed commit is a version commit (`release/config.py changes-version`); other pushes build
+  nothing. A version commit is built for the default variant, and by hand from `main` (while it is `main`'s head) or
+  from its tag, for another: `-f variant=stable`. It selects the Xcode whose
+  build is `xcode_build` in `scripts/release/app.json` (by build, not folder name: the image may call a release candidate `Xcode_27.2.app`;
+  only the `xcode-27` runner image, a public preview, has Xcode 27) and stops at once without it, builds,
+  attests every file (`actions/attest-build-provenance`: GitHub signs that this workflow made it from this commit on
+  a GitHub-hosted runner) and keeps them as the artifact `<cask>-<variant>-X.Y.Z` for 90 days. It uses no
+  secret; its actions are pinned by commit. It runs Xcode's first launch if the image has not, and its log shows
+  `xcodebuild -version` and `-showsdks`.
+- **The signing machine.** `scripts/release/rebuild.sh`, shared by `release-publish.sh` and `release/verify.sh
+  --reproduce`, runs `scripts/release/builder.sh` once GitHub's build is downloaded: it builds the verified tree with
+  this Mac's Xcode whose build is `xcode_build`, copies the result out and removes the build's files. As you by
+  default: the build (setup's downloads, the Rust and Xcode builds, the build's own scripts) then runs with access to
+  your keys, and the checklist says so. `--build-as-user builder` builds as a standard macOS user (made by
+  `release/signer-setup.sh builder`) that can read neither your login keychain nor the release settings, so nothing
+  the build runs reaches a key. That is no virtual machine: a flaw in macOS itself that lets one user act as another
+  would cross that line, which a VM would make harder.
 
-`scripts/release-compare.py A.app B.app` decides whether two builds are the same: the same files and links with the
+Identical zips are the expected result. When the two differ, `scripts/release/compare.py A.app B.app` decides
+whether they hold the same app, which is accepted with a warning (a build step stopped being deterministic: fix it),
+and says how they differ: the same files and links with the
 same executable bits and contents, Mach-O files compared without their signatures (but with the same entitlements),
-`Info.plist` files without `BuildMachineOSBuild` (the runner's macOS differs from the VM's), and compiled asset
-catalogs by their renditions and SHA-1s (`assetutil --info`: actool stores the same renditions in a varying order).
-It compares both Mac apps and both iPhone apps. When they differ, nothing is signed. Expect that when the two used different Xcode builds (GitHub
-moves its image to a newer Xcode build about weekly: give the VM image that build too, or wait) and whenever a build
-step stops being deterministic: fix the build, never the comparison.
+`Info.plist` files without `BuildMachineOSBuild` (the runner's macOS differs from the signing machine's), and compiled asset
+catalogs by their renditions and SHA-1s (`assetutil --info`: actool can store the same renditions in a varying
+order). When the two Mac apps differ, nothing is signed. Expect that whenever a build step stops being deterministic:
+fix the build, never the comparison. Two Xcode builds always differ: the SDK and Xcode builds in every `Info.plist`,
+the asset catalog's `AssetStorageVersion` and the C compiler's version in the Linux helpers' `.comment` (the Mach-O
+files matched between 27B48 and 27B52). Hence `xcode_build` in `release/app.json`: change it only once GitHub's image has that build,
+and install it on the signing machine (`release/signer-setup.sh builder` again, with `xcodes`).
+
+**Rehearsal.** Run the workflow by hand from a branch (Actions, Release build, Run workflow, "Use workflow from" the
+branch, or `gh workflow run release.yml --ref BRANCH`): the same build of the branch's commit, kept for a week as
+`<cask>-rehearsal-<variant>-<commit>`, not attested, so `release-publish.sh` never takes it for a release. On the
+signing machine, `scripts/release/builder.sh` builds the same commit (a `git archive` of it as SOURCE, `--commit`,
+`--build-number` from `build.json`, `--xcode-build` its `xcode.build`); the two zips' SHA-256 must match
+(`release/compare.py` on the apps says what differs when they do not).
+Do that before releasing a change to the build, the workflow or `release/app.json`.
 
 ## Signing machine
 
-macOS on Apple Silicon with Xcode (export needs it, not just the Command Line Tools), [Tart](vm_testing.md) for the VM
-build (the image is about 60 GB, downloaded on the first build), GnuPG (`gpg`) and `gh`. Three clones side by side:
-`dispatch` (this repository; its checkout only bootstraps the checks, see below), `dispatch-release` (private: the
-record and the work folders) and `homebrew-tap`; `DISPATCH_RELEASE_REPO` and `DISPATCH_TAP` in
-`~/.config/dispatch-release/release.env` move the last two. `gh` is logged in with a token that may create releases in
-`paulmillr/dispatch` and read its Actions artifacts; git may push to `dispatch-release` and `homebrew-tap`. Per account:
+macOS on Apple Silicon with the Xcode `release/app.json` pins (`release/signer-setup.sh builder` installs it with
+`xcodes`), GnuPG (`gpg`) and `gh`. Two clones side by side:
+`dispatch` (this repository; its checkout only bootstraps the checks, see below) and `homebrew-tap`
+(`RELEASE_TAP` in `~/.config/dispatch-release/release.env` moves it). `gh` is logged in with a token that may create
+releases in `paulmillr/dispatch` and read its Actions artifacts; git may push to `homebrew-tap`, with a `user.name`
+and `user.email` to commit with (`release-publish.sh` checks both before building). Run it in a login shell: over
+SSH, `ssh -t signer zsh -lc '…'`, or `gpg` and `gh` from Homebrew are not on `PATH`. Each release works in
+`~/.config/dispatch-release/work/<variant>/X.Y.Z/`, on this machine only. Per account:
 
 | What | Where |
 | --- | --- |
-| The commit key: an OpenPGP public key and its pinned fingerprint | `~/.config/dispatch-release/gnupg`, `release.env` (`DISPATCH_COMMIT_KEY`) |
+| The commit key: an OpenPGP public key and its pinned fingerprint | `~/.config/dispatch-release/gnupg`, `release.env` (`RELEASE_COMMIT_KEY`) |
 | Developer ID Application and Apple Distribution certificates with their private key | Login keychain, from the account's `.p12` |
 | Apple's intermediates (Developer ID G2, WWDR G3) | Login keychain |
-| App Store Connect API key (Users and Access, Integrations, Team Keys; App Manager role) | `~/.config/dispatch-release/AuthKey_<KEY ID>.p8` |
-| notarytool credentials from that key | Keychain, profile `dispatch-<variant>-notary` |
-| Ad Hoc profiles of the phone app, the watch app and its widgets | `~/.config/dispatch-release/<variant>-adhoc-profiles/*.mobileprovision` |
-| App Store profiles of the same three (TestFlight only) | `~/.config/dispatch-release/<variant>-profiles/*.mobileprovision` |
-| Settings | `~/.config/dispatch-release/<variant>.env`, `<variant>-adhoc.env` |
+| App Store Connect API key (Users and Access, Integrations, Team Keys; App Manager role), for notarization | `~/.config/dispatch-release/AuthKey_<KEY ID>.p8` |
+| notarytool credentials from that key | Keychain, profile `dispatch-<variant>-notary` (`<cask>-<variant>-notary`) |
+| Settings | `~/.config/dispatch-release/<variant>.env` |
+| Optionally, a build user: a standard macOS user without keys, and running commands as it (`--build-as-user`) | `/etc/sudoers.d/release-builder-<user>` |
 
 Once:
 
-1. `scripts/release-signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT`: the commit machine's public key
+1. `scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT`: the commit machine's public key
    (`gpg --export --armor KEYID`) and the fingerprint as that machine shows it (`gpg --fingerprint KEYID`), read off
    its screen rather than copied with the file. Only this key is in the keyring the checks use.
-2. `scripts/release-signer-setup.sh pilot KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID`: KEYS_DIR is the unzipped keys folder,
-   one `.p12` and the intermediates (macOS asks for the `.p12`'s password). In App Store Connect the app must exist
-   first for TestFlight (My Apps, +, New App: iOS, bundle id `yachts.dispatch.pilot.mobile`, any SKU).
-3. The profiles, made in the developer portal (Certificates, Identifiers & Profiles), once and again when the
-   certificate expires, a capability changes or (Ad Hoc) a device is added:
-   1. Identifiers: the App Group `group.yachts.dispatch.pilot.mobile`, and the App IDs `yachts.dispatch.pilot.mobile`
-      (no capabilities), `….mobile.watchkitapp` and `….mobile.watchkitapp.widgets` (App Groups, with that group).
-   2. Profiles, +, Distribution: Ad Hoc (and for TestFlight: App Store Connect), one per App ID, certificate Apple
-      Distribution. Download them into the folders above.
+2. `scripts/release/signer-setup.sh pilot KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID`: KEYS_DIR is the unzipped keys folder,
+   one `.p12` and the intermediates (macOS asks for the `.p12`'s password).
+3. Optionally, `scripts/release/signer-setup.sh builder`: a build user and the pinned Xcode, re-runnable (without it,
+   install the Xcode with `xcodes`, and the build runs as you). It creates `builder`,
+   a hidden standard user nobody logs in as (a random password, never stored); installs one sudoers line letting you
+   run commands as it without a password (checked by `visudo` first); installs the Xcode whose build `release/app.json`
+   pins with `xcodes` (from Homebrew; your Apple ID) unless `/Applications` has it, then accepts its license and runs
+   its first launch; checks that `builder` can read neither your login keychain nor `~/.config/dispatch-release`;
+   and offers to make your home folder private (`chmod 700 ~`), since `builder` can read whatever it lets everyone
+   read. Then publish with `--build-as-user builder`. `sudo` asks for your password.
 
-   `release-publish.sh` checks them (team, kind, not expired, the App Group on the two watch ones, made for this
-   machine's Apple Distribution certificate; it names what is wrong), installs them where Xcode looks and names them
-   in the export options. Signing is manual because automatic signing from the command line needs an Admin API key
-   (Apple's cloud-managed certificates; an App Manager key gets "Cloud signing permission error"). Xcode's own profiles
-   ("iOS Team Store Provisioning Profile: …") do not serve: Xcode refuses an Xcode-managed profile for manual signing.
+Each release: `scripts/release-publish.sh X.Y.Z [--variant NAME] [--no-push] [--trust-ci] [--build-as-user USER]`, in the style of `release.sh`: a checklist,
+every problem listed at once, one line per step with its time, each step's output in a log in the work folder (named
+when the step fails, with how to go on).
 
-Each release: `scripts/release-publish.sh X.Y.Z [--stable] [--no-push] [--yes] [--no-ad-hoc] [--testflight]`.
+1. **Checks.** `main` fetched, the version commit of X.Y.Z found on it and signed by the pinned key alone (a tag
+   `X.Y.Z`, there once published, must be that commit). Then the commit's own copy of the scripts carries on (the tree is exported
+   to the work folder's `source/`): what runs with the keys comes from a signed commit, whatever this clone has checked
+   out, so only those checks run from the clone. It checks the rest before anything long starts: `gh` (logged in,
+   reads Actions), the login keychain (unlocked now if it is locked: the one password prompt), the Developer ID
+   identity, notarytool's credentials, the tap (clean, a git author, push access), the pinned Xcode and the build user.
+2. **Builds.** GitHub's build of the version commit is waited for (up to 10 minutes for it to appear, then while it runs),
+   downloaded and checked against its attestation; then the same build here (`release/rebuild.sh`, as `release/verify.sh
+   --reproduce` does it). Both `build.json` must name this version, commit, build number, bundle id and Xcode build;
+   identical zips pass, the same app in zips that differ is a warning, different apps stop it.
+3. **Ship.** It shows the plan and asks `ship X.Y.Z? [y/N]`. Then `scripts/release/notarize.sh` re-signs every
+   Mach-O and the app with the hardened runtime, a secure timestamp and the microphone entitlement, notarizes and
+   staples the app, packs an LZMA DMG, signs, notarizes and staples that; the DMG is checked as `release/verify.sh`
+   checks it. Pilot only: the GitHub release `X.Y.Z` with the DMG (its notes give the SHA-256 and the GitHub run),
+   created as a draft targeting the version commit and published once the DMG is up, which creates the tag `X.Y.Z`
+   there (checked); right after, a new commit "Dispatch X.Y.Z" in the `homebrew-tap` clone with the cask's `version`
+   and `sha256`, pushed (never amended or forced).
+4. **Record.** `published.json` in the work folder (team, time, the DMG's SHA-256, the release, the cask commit), next
+   to both builders' `build.json`. Nothing reads it back: the attestation, the release notes and the cask are what
+   anyone can check.
 
-1. **Source.** It fetches `main` and the tag, and checks with the pinned key alone that the tag is annotated and signed,
-   that its commit is signed, that the commit is on `main` and that its apps are `X.Y.Z`. Then the commit's own copy of
-   the scripts carries on (the tree is exported to `dispatch-release/work/<variant>/X.Y.Z/source`): what runs with the
-   keys comes from a signed commit, whatever this clone has checked out, so only the check above runs from the clone.
-2. **Builds.** GitHub's build of that tag, downloaded and checked against its attestation; the VM build; the comparison.
-   Then it shows the version, commit, builds and identities and asks for `X.Y.Z` to be typed (`--yes` skips that).
-3. **Mac.** `scripts/release-notarize.sh` re-signs every Mach-O and the app with the hardened runtime, a secure
-   timestamp and the microphone entitlement, notarizes and staples the app, packs an LZMA DMG, signs, notarizes and
-   staples that; the DMG is then checked as `release-verify.sh` checks it. Pilot only: the GitHub release `X.Y.Z` with
-   the DMG (its notes give the SHA-256 and the GitHub run), then a new commit "Dispatch X.Y.Z" in the `homebrew-tap`
-   clone with the cask's `version` and `sha256`, pushed (never amended or forced).
-4. **iPhone.** The Ad Hoc build (below) unless `--no-ad-hoc` or without `<variant>-adhoc.env`. With `--testflight`:
-   `xcodebuild -exportArchive` with `method app-store-connect`, `destination upload` and the App Store profiles, then the
-   upload with its symbols through the API key; the build appears in TestFlight after Apple's processing, with no
-   export compliance question (`Mobile/App/Info.plist` declares `ITSAppUsesNonExemptEncryption` false: SSH is exempt).
-   Once, `--testflight --admin-key AuthKey_<ID>.p8` with an Admin key signs automatically instead; revoke the key after.
-5. **Record.** `dispatch-release/<variant>/X.Y.Z/`: both builders' `build.json`, `published.json` (team, time, the DMG's
-   SHA-256, the release, the cask commit, the upload, the Ad Hoc build and its install page) and `adhoc/`; committed and
-   pushed.
-
-`--no-push` does every check and signs, but publishes nothing (no GitHub release, no push, no Ad Hoc deploy, no
-upload). After a failure, run it again: notarization resumes from its saved submission ids and a finished part is
-skipped (markers in `dispatch-release/work/<variant>/X.Y.Z/`, git-ignored; delete `adhoc.done` there to sign the Ad Hoc
-build again, for instance after its address changed). The signer's own clone of `dispatch` is updated only to signed
-tags (`git fetch --tags && git verify-tag X.Y.Z && git checkout X.Y.Z`): the signature check runs from it.
+`--no-push` checks, builds and signs, but publishes nothing. `--trust-ci` builds nothing here: it skips the build
+user, the Xcode check and the comparison, and signs GitHub's attested build as it is. That build is then the only one,
+so a compromised GitHub build or runner would be signed; the release notes say the app was built once, and
+`published.json` records `"signed_build": "github"` (`"local"` otherwise). `--variant stable` signs the stable account's app, which
+is published nowhere (`"publish": false`). After a failure, run it again: a finished step is skipped (markers in the work folder) and
+notarization resumes from its saved submission ids; a release left a draft is published. The signer's own clone of
+`dispatch` is updated only to signed commits (`git fetch && git verify-commit COMMIT && git checkout COMMIT`, a
+version commit): the signature check runs from it.
 
 ### GitHub settings
 
 The checks above hold even if GitHub or the token on the signing machine is misused; these make misuse harder and
 visible. In `paulmillr/dispatch`, a ruleset for `main` (require signed commits, block force pushes and deletion) and one
-for tags `*.*.*` (only the maintainer creates them; block updates and deletion). `paulmillr/homebrew-tap`: block force
+for tags `*.*.*` (only the maintainer creates them, by publishing a release; block updates and deletion). `paulmillr/homebrew-tap`: block force
 pushes on `main`. Two-factor authentication with a hardware key on the GitHub and Apple accounts. Watch for releases,
 tags and tap commits you did not make.
 
 ## Checking a release
 
-`scripts/release-verify.sh X.Y.Z --team TEAMID`, on any Mac with `gh` logged in, downloads the GitHub release's DMG
-and GitHub's attested build of the tag, and checks that the DMG is an LZMA image of `Dispatch.app` and an
-`Applications` link, both signed by `TEAMID`'s Developer ID, notarized, stapled and accepted by Gatekeeper, that its
+`scripts/release/verify.sh X.Y.Z [--team TEAMID] [--reproduce]`, on any Mac with `gh` logged in, downloads the GitHub
+release's DMG and GitHub's attested build of the tag's commit, and checks that the DMG is an LZMA image of `Dispatch.app` and an
+`Applications` link, both signed by `TEAMID`'s Developer ID (without `--team`, by the team that signed the DMG, which
+it names), notarized, stapled and accepted by Gatekeeper, that its
 app is GitHub's build with only signatures and the stapled ticket changed, and that the Homebrew cask names this DMG.
+GitHub keeps the build for 90 days (its limit for artifacts), so a release can be checked this way for 90 days.
+
+`--reproduce [--build-as-user USER]` also builds the release on your Mac, the way the signing machine does
+(`release/rebuild.sh`, the same code), and needs `git`, `gpg`, Apple Silicon and the Xcode build the commit's
+`release/app.json` pins in `/Applications` (`brew install xcodes; xcodes install 27.1`; found by build, whatever its folder
+is called). First, with the other checks, the commit as the signing machine checks it: the tag's commit must be the
+version commit of X.Y.Z on `main` (fetched from GitHub into `refs/release-verify/main`, removed afterwards), signed by
+the commit key this checkout pins (`commit_key` in `scripts/release/app.json`, the public key in
+`scripts/release/commit-key.asc`, imported into a keyring of its own). Last, after the DMG and
+cask, the commit's tree built with its own scripts at `/private/tmp/release-build`, as you (or as USER), about five
+minutes, and compared with GitHub's build: identical zips pass, the same app in zips that differ is a warning,
+different apps fail. Its work, the zip made here included, stays in `tmp/release-verify/X.Y.Z`. With the DMG checks
+(the DMG is GitHub's build, signed), that shows the published app came from the signed commit's source. Releases made
+before `release/rebuild.sh` cannot be rebuilt this way: `--reproduce` says so and stops.
 Test the download on a disposable Mac too ([vm_testing.md](vm_testing.md), Checking a release by hand in a clean VM).
 The cask's `zap` lists the files of both apps, `yachts.dispatch.app` and `yachts.dispatch.pilot.app` (and the old
 `dev.dispatch.local`): keep it that way when either changes what it stores.
@@ -210,34 +282,37 @@ cannot trust the new identity automatically and must install that release manual
 the switch. A bundle ID change also changes UserDefaults and OS permissions: migrate those separately when making
 that transition. The updater does not silently broaden trust to any notarized app.
 
-## Ad Hoc builds
+## Another app
 
-For people who should not join App Store Connect (internal TestFlight testers accept Apple's developer terms) or wait
-for Beta App Review (external testers). Each iPhone, and each Apple Watch that should get the watch app, is registered
-by UDID (Finder: the phone, click the line under its name; at most 100 iPhones per membership year, a removed one
-frees its slot only at renewal). Ad Hoc profiles last a year or until the certificate expires; an installed build stops
-launching then, and does not update itself.
+The release scripts are the same for every app: copy `scripts/release.sh`, `scripts/release-publish.sh`, the folder
+`scripts/release/` without the app's own three files (below) and `.github/workflows/release.yml` into its repository
+(a copy, not a shared checkout or a submodule: the signing machine runs only what the app's own signed version commit
+holds, and `git archive` leaves submodules out). The two at the top are the two steps: `release.sh` (the commit
+machine) and `release-publish.sh` (the signing machine). In `scripts/release/`: `source.sh` (the signed version
+commit, then its own scripts), `build.sh` (with `normalize.py` and `zip.py`), `builder.sh` and `rebuild.sh` (the second
+build and the comparison, `compare.py`), `notarize.sh`, `verify.sh` (also `--reproduce`), `config.py` (reads
+`app.json`), `ui.sh` (the checklist) and `signer-setup.sh`. The app's own:
 
-After registering a device (developer portal, Devices, +), make the three Ad Hoc profiles again with all the devices and
-replace the old ones in `~/.config/dispatch-release/pilot-adhoc-profiles/`. The script prints how many devices each
-lists. The export signs the VM's archive with Apple Distribution and those profiles: no Apple review, nothing sent to
-Apple, no TestFlight. `dispatch-release/<variant>/X.Y.Z/adhoc/` gets `Dispatch.ipa`, `manifest.plist` and
-`index.html`, an install page whose `itms-services://` link installs it from Safari on a listed iPhone (and the watch
-app on a listed watch).
+- **`scripts/release/app.json`**: `name` (the `.app`, the DMG `<name>-X.Y.Z.dmg`), `repository`, `tap` and `cask`
+  (`Casks/<cask>.rb` there: one tap holds every app's cask), `version_files` (where `MARKETING_VERSION` is set),
+  `build_log` (optional: shown when GitHub's build fails), `variants` (name to `bundle_id`; the first is the default, `"publish": false` signs without publishing), `entitlements` (the app's, signed in by the signing machine),
+  `xcode` and `xcode_build`, and `commit_key`, the fingerprint of the key that signs version commits, with
+  that public key in `scripts/release/commit-key.asc` (`gpg --armor --export --export-options export-minimal KEY`), for
+  `release/verify.sh --reproduce`.
+- **`scripts/release/app.sh`**: builds `<name>.app` and `<name>.app.dSYM` for `RELEASE_VARIANT` with
+  `CFBundleVersion` `RELEASE_BUILD_NUMBER` and leaves them in `RELEASE_PRODUCTS`, from a fresh tree, without asking
+  anything.
 
-The `.ipa` lists every registered device's UDID: each app in it carries its profile (`embedded.mobileprovision`), which
-anyone holding the file can read. Serve it only from HTTPS that nobody can list or browse (a valid certificate: an
-iPhone installs over nothing else), and share the link only with the testers; the script refuses to publish into a
-public GitHub repository.
+The signing machine keeps each app's settings apart, in `~/.config/<cask>-release` (`release/signer-setup.sh` from that
+app's clone), with the tap's clone next to the app's. The cask's `url` must end in `<name>-#{version}.dmg`; an app
+updating itself reads the cask the way Dispatch does ([Mac automatic updates](#mac-automatic-updates)).
 
-The install page and the manifest name their addresses, `DISPATCH_ADHOC_URL/<variant>/X.Y.Z/`, from
-`~/.config/dispatch-release/pilot-adhoc.env` on the signing machine (`release-signer-setup.sh` leaves it alone).
-With `DISPATCH_ADHOC_SITE` there too, the folder of a git clone that the host serves at `DISPATCH_ADHOC_URL`, the
-three files go to `<variant>/X.Y.Z/` in it as the variant's only build, `<variant>/index.html` becomes the newest
-build's install page, and the clone's branch is rewritten to one commit, pushed with `--force-with-lease`, so no older
-`.ipa` stays in its history. A plain folder works too (no commit); then `DISPATCH_ADHOC_DEPLOY`, a shell command run
-after the copy, puts it online, for a host that deploys from a folder. Without either, serve `adhoc/` at that address
-yourself. Testers open `DISPATCH_ADHOC_URL/pilot/` in Safari on their iPhone and tap Install.
+## iPhone
+
+The iPhone app has no published release for now: a build Apple re-signs (Ad Hoc) or re-signs and encrypts (the App
+Store, TestFlight) is no build anyone could check against GitHub's attested one the way `release/verify.sh` checks the
+DMG. iPhones get local device installs ([ios.md](ios.md), Signing and a device). The last flow that published it
+(Ad Hoc, TestFlight) is commit f2a66190 (`scripts/release-publish.sh`).
 
 ## Builds that are not notarized
 

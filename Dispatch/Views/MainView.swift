@@ -34,9 +34,16 @@ struct MainView: View {
     }
 
     /// The window header row exists only when no tab strip carries the window controls:
-    /// a visible sidebar does, and so does the title row.
+    /// a visible sidebar does, and so does the title row. Tabs only has its own, over the content.
     private var showsHeader: Bool {
-        !controller.windowState.isFullScreen && !sidebarVisible && !titlebarTabs
+        !controller.windowState.isFullScreen && !sidebarVisible && !titlebarTabs && !contentTitleRow
+    }
+
+    /// Tabs only (outside full screen) keeps a title row over the content column, the sidebar shown or not, as a
+    /// pane's strip does in spaces: toggling the sidebar slides it sideways and never moves the terminal's top edge.
+    /// The row leads with the window controls' gap and the sidebar toggle only while the sidebar is hidden.
+    private var contentTitleRow: Bool {
+        workspace.tabsOnly && !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil
     }
 
     private var hasLeadingTabRow: Bool {
@@ -88,10 +95,10 @@ struct MainView: View {
     private var workspaceContent: some View {
         VStack(spacing: 0) {
             if showsHeader {
-                titleBar
+                titleBar()
                 Rectangle().fill(Chrome.border).frame(height: 1)
             }
-            NativeSplit(first: AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)), second: AnyView(content),
+            NativeSplit(first: AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)), second: AnyView(contentColumn),
                         axis: .columns, sidebar: true, firstHidden: !sidebarVisible, sidebarWidth: $sidebarWidth,
                         firstMinimumSize: CGSize(width: typography.expanded(200), height: 120),
                         secondMinimumSize: minimumTerminalSize)
@@ -159,7 +166,7 @@ struct MainView: View {
     private var minimumContentSize: CGSize {
         let panes = minimumTerminalSize
         return CGSize(width: max(620, (sidebarVisible ? max(420, panes.width) + typography.expanded(200) + 1 : panes.width)),
-                      height: max(400, panes.height + (showsHeader ? StripTab.titleRowHeight(typography) + 1 : 0)))
+                      height: max(400, panes.height + (showsHeader || contentTitleRow ? StripTab.titleRowHeight(typography) + 1 : 0)))
     }
 
     /// With Liquid Glass, tmux strips lie over the panes instead of taking their own row, in full screen too.
@@ -179,10 +186,23 @@ struct MainView: View {
         return CGSize(width: panes.width, height: panes.height + (showTmuxTabs ? tmuxStripHeight : 0))
     }
 
-    private var titleBar: some View {
+    private var contentColumn: some View {
+        VStack(spacing: 0) {
+            if contentTitleRow {
+                titleBar(controls: !sidebarVisible)
+                Rectangle().fill(Chrome.border).frame(height: 1)
+            }
+            content
+        }
+    }
+
+    /// `controls`: the row leads the window, after the traffic lights, with the sidebar toggle.
+    private func titleBar(controls: Bool = true) -> some View {
         HStack(spacing: 12) {
-            Color.clear.frame(width: sidebarToggleLeadingSpace)
-            SidebarToggle(controller: controller)
+            if controls {
+                Color.clear.frame(width: sidebarToggleLeadingSpace)
+                SidebarToggle(controller: controller)
+            }
             Spacer(minLength: 0)
             MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography, .title).lineLimit(1).truncationMode(.middle)
                 .id(workspace.selectedSpace)

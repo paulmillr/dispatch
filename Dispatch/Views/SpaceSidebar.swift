@@ -554,6 +554,9 @@ struct SpaceSidebar: View {
                                 }
                             }
                         }
+                        // The group's rows are lazy and kept by id, and a split's row has its space's id in both
+                        // lists: without a group per list, switching to spaces kept the split's tab row.
+                        .id(tabsOnly)
                     }
                 }
             } else {

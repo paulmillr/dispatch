@@ -39,6 +39,9 @@ struct StripModel {
     var paneBadge: Int?
     var focused = true
     var host: MockHost?
+    /// The strip leads the window with the sidebar hidden (TitlebarPlacement.leading): it starts after the traffic
+    /// lights (`controlsInset`, 82), with the host mark standing in for the sidebar toggle (other spaces to switch to).
+    var titleRow = false
 }
 
 struct TabStrip: View {
@@ -54,6 +57,14 @@ struct TabStrip: View {
     private var glass: some View {
         let track = StripTab.glassTrackHeight(t)
         return HStack(spacing: 4) {
+            if model.titleRow {
+                Color.clear.frame(width: 82 - Chrome.stripInset)
+                Image(systemName: "apple.logo").font(.system(size: 13))
+                    .frame(width: track, height: track)
+                    .background(Circle().fill(GlassTone.track)).overlay(Circle().strokeBorder(GlassTone.trackEdge, lineWidth: 0.5))
+                    .shadow(color: GlassTone.shadow, radius: 2, y: 1)
+                    .padding(.trailing, 4)
+            }
             HStack(spacing: 0) {
                 badge
                 ForEach(model.tabs) { tab in
@@ -89,6 +100,10 @@ struct TabStrip: View {
 
     private var flat: some View {
         HStack(spacing: 0) {
+            if model.titleRow {
+                Color.clear.frame(width: 82 - Chrome.stripInset)
+                Image(systemName: "apple.logo").font(.system(size: 13)).foregroundStyle(p.muted).padding(.trailing, 14)
+            }
             badge
             HStack(spacing: 0) {
                 ForEach(model.tabs) { TabCell(tab: $0, alone: model.tabs.count == 1, glass: false) }

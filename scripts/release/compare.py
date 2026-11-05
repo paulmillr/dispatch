@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Whether two app bundles are the same build (docs/releasing.md, Two builders).
 
-    release-compare.py A.app B.app            two builders' unsigned builds of one commit
-    release-compare.py --signed BUILD.app SIGNED.app   a build and the signing machine's signed copy of it
+    release/compare.py A.app B.app            two builders' unsigned builds of one commit
+    release/compare.py --signed BUILD.app SIGNED.app   a build and the signing machine's signed copy of it
 
 Every file and link must exist in both, with the same executable bits, and the same contents, with these exceptions:
 - Signatures: `_CodeSignature/` folders, the stapled ticket (`Contents/CodeResources`) and, with --signed, profiles
@@ -14,8 +14,7 @@ Every file and link must exist in both, with the same executable bits, and the s
 - Compiled asset catalogs (`.car`) of the same size are compared by what `assetutil --info` lists: every rendition with
   its metadata and SHA-1, without the Timestamp it reports. actool stores the same renditions in a varying order (the
   iPhone app's, from one commit, on one Mac), so their bytes may differ.
-Without --signed, every Mach-O's entitlements (from its ad hoc signature) must match too: the signing machine's iPhone
-export keeps them.
+Without --signed, every Mach-O's entitlements (from its ad hoc signature) must match too: they are part of the build.
 
 Prints each difference and exits 1 if there is any.
 """

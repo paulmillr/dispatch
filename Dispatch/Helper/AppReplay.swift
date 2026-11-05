@@ -314,8 +314,12 @@ final class AppReplay: @unchecked Sendable {
     private var failures: [Int: [String: (any Error) -> Void]] = [:]
     private var closed = false
     private var pumping = false
-    /// Live work in flight (`live`): the app is not idle meanwhile.
+    /// Live work in flight (`live`): the app is not idle meanwhile. `lived` counts it begun, and `livedSeen` is the count
+    /// the watchdog last saw: live work that blocks the main queue ends before the watchdog's ping comes back, and the
+    /// time it took is not idle either.
     private var working = 0
+    private var lived = 0
+    private var livedSeen = 0
     private var steps: [Int: () -> Void] = [:]
     private var gates: [Int: (Event, AnySequence<Event>) -> String?] = [:]
     /// Lifetimes whose view is off screen (Ticket.offscreen): their gates hold only their own records meanwhile.
@@ -647,7 +651,7 @@ final class AppReplay: @unchecked Sendable {
     }
 
     func live<Value>(_ body: () throws -> Value) rethrows -> Value {
-        lock.withLock { working += 1 }
+        lock.withLock { working += 1; lived += 1 }
         defer { lock.withLock { working -= 1 } }
         return try body()
     }
@@ -881,13 +885,16 @@ final class AppReplay: @unchecked Sendable {
                 // A main queue that does not answer within a second is the app working (laying out a large session
                 // took 90s in capture too): that time is not idle. So is a queue the journal feeds (replay hands input
                 // over at once, and a helper connection still decoding that burst holds what the app sends after it), and
-                // work a test does live (`live`: real shells).
+                // work a test does live (`live`: real shells, text recognition), in flight or done since the last look.
                 let answered = DispatchGroup()
                 for queue in [DispatchQueue.main] + self.lock.withLock({ self.consumers.values.flatMap(\.values) }) {
                     answered.enter()
                     queue.async { answered.leave() }
                 }
-                let busy = answered.wait(timeout: .now() + 1) == .timedOut || self.lock.withLock({ self.working > 0 }),
+                let busy = answered.wait(timeout: .now() + 1) == .timedOut || self.lock.withLock({
+                        defer { self.livedSeen = self.lived }
+                        return self.working > 0 || self.lived != self.livedSeen
+                    }),
                     now = DispatchTime.now().uptimeNanoseconds
                 let stalled = self.lock.withLock { () -> (idle: UInt64, gap: UInt64)? in
                     if self.line != self.watched.line,

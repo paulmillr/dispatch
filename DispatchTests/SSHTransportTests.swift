@@ -101,6 +101,9 @@ final class SSHTransportTests: XCTestCase {
         XCTAssertEqual(parsed.command, "printf '%s' hello")
         XCTAssertTrue(parsed.forcedTTY)
         XCTAssertEqual(SSHInvocation.parse(["-t", "host", "ls", "-la"], isTerminal: true)?.command, "ls -la")
+        // OpenSSH reads options after the destination too, until `--`.
+        XCTAssertEqual(SSHInvocation.parse(["-t", "host", "-l", "alice"], isTerminal: true)?.options, ["-l", "alice"])
+        XCTAssertEqual(SSHInvocation.parse(["-t", "host", "--", "top"], isTerminal: true)?.command, "top")
         XCTAssertNotNil(SSHInvocation.parse(["host"], isTerminal: true))
         XCTAssertNil(SSHInvocation.parse(["host"], isTerminal: false))
     }
@@ -109,9 +112,7 @@ final class SSHTransportTests: XCTestCase {
         for args in [["-N", "host"], ["-T", "host"], ["-f", "host"], ["-s", "host", "sftp"], ["-G", "host"], ["-O", "check", "host"],
                      ["-S", "/tmp/control", "host"], ["-M", "host"], ["host", "uptime"], ["-W", "host:80", "jump"],
                      ["-o", "RemoteCommand=top", "host"], ["-oControlMaster=auto", "host"], ["-o", "controlpath /tmp/socket", "host"],
-                     ["-t", "-o", "SessionType=none", "host"], ["-p"], ["--"], ["-Z", "host"],
-                     // OpenSSH reads these as options, not a remote command.
-                     ["-t", "host", "-l", "alice"], ["-t", "host", "--", "top"]] {
+                     ["-t", "-o", "SessionType=none", "host"], ["-p"], ["--"], ["-Z", "host"]] {
             XCTAssertNil(SSHInvocation.parse(args, isTerminal: true), args.description)
         }
     }

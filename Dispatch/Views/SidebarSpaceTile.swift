@@ -265,7 +265,7 @@ struct SidebarSpaceTile: View {
                         AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
                             .fixedSize()
                     }
-                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: member.focused, size: metrics.nameSize)
+                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: selected && member.focused, size: metrics.nameSize)
                     Text(member.name)
                         .foregroundStyle(selected && member.focused ? Chrome.ink : Chrome.palette.secondary)
                         .lineLimit(1).truncationMode(.middle)
@@ -424,7 +424,7 @@ struct SidebarSpaceCard: View {
             ForEach(Array(entry.members.enumerated()), id: \.element.id) { index, member in
                 let bright = selected && member.focused
                 let line = HStack(spacing: 7) {
-                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: member.focused, size: metrics.nameSize)
+                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: selected && member.focused, size: metrics.nameSize)
                     Text(member.name)
                         .font(Font(AppFont.native(size: metrics.nameSize, semibold: bright)))
                         .tracking(bright ? AppFont.semiboldTracking(member.name, size: metrics.nameSize) : 0)
@@ -574,8 +574,8 @@ struct SidebarSpaceCard: View {
 /// What the sidebar wraps around a split member's line: its click, drag and menu.
 typealias SidebarMemberDecoration = (SidebarEntry.Member, AnyView) -> AnyView
 
-/// A split's layout in miniature with one pane filled: where a split row's line sits on screen. The focused pane's
-/// is filled with the accent, another's dimly.
+/// A split's layout in miniature with one pane filled: where a split row's line sits on screen. The focused pane's,
+/// on the selected row only, is filled with the accent, another's dimly.
 struct SidebarPaneGlyph: View {
     let cells: [CGRect]
     let cell: Int

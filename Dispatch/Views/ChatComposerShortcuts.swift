@@ -246,9 +246,11 @@ struct ChatShellList: View {
             AgentWorkingState(session, details: false)
         } onChange: { [weak self] in
             // Before the change is stored; read it after, before the run loop next waits. A block on the loop it runs
-            // on, not the main queue: that would wake the loop again for every streamed record.
+            // on, not the main queue: that would wake the loop again for every streamed record. A constant, not the
+            // weak capture: Swift 6.2's optimized build rejects sending that into the main-actor closure.
+            let owner = self
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
-                MainActor.assumeIsolated { self?.refresh() }
+                MainActor.assumeIsolated { owner?.refresh() }
             }
         }
         if value != current { current = value }

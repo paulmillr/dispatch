@@ -2,8 +2,8 @@
 
 A thin client for SSH hosts. The device has no shell and starts no processes: the Rust helper on each host does the
 work, and the app speaks the helper protocol (`helper/PROTOCOL.md`) over one in-process SSH connection per host.
-iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), with local device installs and a TestFlight release
-pipeline ([Release](#release)). Sources are in `Mobile/`; privacy, trust, keys and the helper's
+iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), with local device installs (no published
+release for now: [releasing](releasing.md#iphone)). Sources are in `Mobile/`; privacy, trust, keys and the helper's
 grant are in [security](security.md#dispatch-for-iphone); the Apple Watch companion in [watch](watch.md).
 
 **Hosts need** SSH (password, key or keyboard-interactive), macOS 14+ on Apple silicon or Linux arm64/x86-64, and
@@ -59,9 +59,9 @@ installs and launches through `devicectl`.
 Two Apple accounts, each with its own apps; nothing is transferred between them. Every bundle id starts with
 `DISPATCH_BUNDLE_ID_PREFIX` (`project.yml`): `yachts.dispatch.pilot` by default, the Pilot account's apps
 (`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`, `….mobile.watchkitapp.widgets`,
-`group.yachts.dispatch.pilot.mobile`). `--stable` on `./run.sh` and `scripts/release-build.sh` passes
+`group.yachts.dispatch.pilot.mobile`). `--stable` on `./run.sh` passes
 `DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch` to xcodebuild for the stable account's (`yachts.dispatch.app`,
-`yachts.dispatch.mobile`, …; published nowhere yet: the GitHub release, Homebrew and TestFlight are Pilot's). Both are named Dispatch and install side by side as
+`yachts.dispatch.mobile`, …; published nowhere yet: the GitHub release and Homebrew are Pilot's). Both are named Dispatch and install side by side as
 separate apps with separate data (UserDefaults, Keychain, containers); the Mac ones still share
 `~/Library/Application Support/Dispatch`. `build/signing.xcconfig` holds the Pilot team;
 `ios-signing.py TEAMID --stable` writes the stable team to `build/signing-stable.xcconfig`, whose team and suffix
@@ -80,10 +80,9 @@ size and SHA-256 are the expanded file's (`GzipMember`, shared with the Mac's `S
 builds Release for simulator and device, checks the helpers' architectures and versions, Info.plist's device keys, the
 privacy manifest, and that every required-reason API the executable imports is declared in
 `Mobile/App/PrivacyInfo.xcprivacy`; the same for the embedded watch app. The fast suite cannot run against Release
-(`@testable`, Debug-only demos). Ad Hoc and TestFlight builds come from `scripts/release-build.sh`: `./run.sh --archive` builds
-Release for any iPhone without signing (`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team), the script
-signs it ad hoc with the targets' entitlements, and the signing machine exports it
-([releasing.md](releasing.md)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
+(`@testable`, Debug-only demos). `./run.sh --archive` builds Release for any iPhone without signing
+(`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team); there is no published iPhone release for now
+([releasing.md](releasing.md#iphone)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
 code.
 
 ## Architecture and data flow

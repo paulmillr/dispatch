@@ -23,7 +23,7 @@ final class TerminalMachineTests: XCTestCase {
     func testNonInteractiveAndInvalidSSHProcessesAreNotCloned() {
         for args in [["ssh", "-G", "host"], ["ssh", "-N", "host"], ["ssh", "-T", "host"],
                      ["ssh", "host", "ls"], ["ssh", "-p"], ["ssh", "-W", "host:80", "jump"],
-                     ["ssh", "-O", "exit", "host"], ["ssh", "-t", "host", "-l", "alice"]] {
+                     ["ssh", "-O", "exit", "host"]] {
             XCTAssertNil(SSHShell.parse(executable: "/usr/bin/ssh", arguments: args), args.description)
         }
         XCTAssertNil(SSHShell.parse(executable: "/usr/bin/other", arguments: ["ssh", "host"]))

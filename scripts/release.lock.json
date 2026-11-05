@@ -1,4 +1,0 @@
-{
-  "xcode": "27.2",
-  "vm_image": "ghcr.io/cirruslabs/macos-golden-gate-xcode@sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9"
-}

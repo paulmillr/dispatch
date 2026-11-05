@@ -25,5 +25,6 @@ enum Screens {
         Reference.screens
             + TreeHostIcon.screens + TreeHostIcon.variants
             + SidebarModeToggle.screens + SidebarModeText.screens + SidebarModeHeader.screens
+            + FilesModes.screens
     }
 }

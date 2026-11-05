@@ -1,31 +1,31 @@
 #!/bin/bash
-# The Mac part of scripts/release-publish.sh, on the signing machine (docs/releasing.md). Self-contained: needs only this file, Xcode's command line tools, a
-# Developer ID Application identity and a notarytool keychain profile, stored once with
-#   xcrun notarytool store-credentials dispatch-notary --apple-id APPLE_ID --team-id TEAMID
+# The signing part of scripts/release-publish.sh, on the signing machine (docs/releasing.md). Self-contained: needs
+# only this file, Xcode's command line tools, a Developer ID Application identity and a notarytool keychain profile,
+# stored once with
+#   xcrun notarytool store-credentials NAME --apple-id APPLE_ID --team-id TEAMID
 #
-#   scripts/release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)'
+#   scripts/release/notarize.sh APP-VARIANT-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)' \
+#     [--profile NAME] [--entitlements PLIST] [--sha256 HASH]
 #
-# The Pilot account's zip is Dispatch-Pilot-unsigned.zip, the stable one's Dispatch-unsigned.zip; each signs into its
-# own folder (Dispatch-Pilot-signed/, Dispatch-signed/). A signer for both accounts stores the second account's
-# credentials under another name and adds --profile NAME.
+# The zip holds one app, NAME.app (scripts/release/build.sh makes it). First it shows the zip's SHA-256: on its own,
+# continue only if it matches the hash you got over a separate channel; with --sha256 HASH it compares instead of
+# asking (release-publish.sh passes the build it signs: its own, or GitHub's with --trust-ci). Everything it makes
+# goes to APP-VARIANT-signed/, next to the zip.
+# Re-signs the given build (never rebuilds it): every Mach-O, deepest first, then the app, with the hardened runtime, a
+# secure timestamp and each binary's own identifier; the app alone gets the entitlements in --entitlements PLIST
+# (release-publish.sh writes them from scripts/release/app.json), none without it. Notarizes and staples the app, so it
+# launches offline once copied out, then packs it into an LZMA DMG with an Applications link, signs, notarizes and
+# staples that. APP-VARIANT-signed/NAME-<version>.dmg is the release download as it is: repacking it (a Finder zip,
+# say) adds junk and discards nothing useful.
 #
-# First it shows the zip's SHA-256: on its own, continue only if it matches the hash you got over a separate
-# channel. With --sha256 HASH it compares instead of asking (release-publish.sh passes the VM build's). Everything it makes goes to Dispatch-signed/, next to the zip.
-# Re-signs the given build (never rebuilds it): every Mach-O, deepest first, then the app,
-# with the hardened runtime, a secure timestamp and each binary's own identifier (yachts.dispatch.app,
-# yachts.dispatch.helper); the app alone gets one entitlement, written below (the microphone, for dictation). Notarizes and staples the app,
-# so it launches offline once copied out, then packs it into an LZMA DMG with an Applications link,
-# signs, notarizes and staples that. Dispatch-signed/Dispatch-<version>.dmg is the release download as it is:
-# repacking it (a Finder zip, say) adds junk and discards nothing useful.
-#
-# Each Apple submission is uploaded once and its ID saved in Dispatch-signed/ before waiting. If anything is
-# interrupted, run the same command again: it resumes, and never uploads a step twice.
+# Each Apple submission is uploaded once and its ID saved before waiting. If anything is interrupted, run the same
+# command again: it resumes, and never uploads a step twice.
 set -euo pipefail
 
 fail() { echo "error: $*" >&2; exit 1; }
-usage() { fail "usage: release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)' [--profile NAME] [--sha256 HASH]"; }
+usage() { fail "usage: release/notarize.sh APP-VARIANT-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)' [--profile NAME] [--entitlements PLIST] [--sha256 HASH]"; }
 # The credentials stored in the one-time setup above, unless --profile names others.
-PROFILE=dispatch-notary
+PROFILE=notary
 
 is_macho() {
   case "$(od -An -tx1 -N4 "$1" | tr -d ' \n')" in
@@ -44,11 +44,11 @@ identity_hash() {
   echo "$matches"
 }
 
-# The app's only entitlement: the hardened runtime blocks the microphone (chat dictation) without it. Written here,
-# not taken from the build's signature, so the signer's identity vouches for exactly this.
+# The app's entitlements come from --entitlements, never from the build's own signature: the signer's identity vouches
+# for exactly those. None by default.
 ENTITLEMENTS='<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>com.apple.security.device.audio-input</key><true/></dict></plist>'
+<plist version="1.0"><dict/></plist>'
 
 # Nested code before what encloses it: Mach-O files and bundles, deepest first, then the app.
 sign_app() {
@@ -92,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --identity) IDENTITY="$(identity_hash "$2")" ;;
     --profile) PROFILE="$2" ;;
     --sha256) EXPECTED="$2" ;;
+    --entitlements) [[ -f "$2" ]] || usage; ENTITLEMENTS="$(cat "$2")" ;;
     *) usage ;;
   esac
   shift 2
@@ -109,27 +110,31 @@ fi
 # Credentials work before anything is signed; no password or key on the command line.
 xcrun notarytool history --keychain-profile "$PROFILE" --output-format json > /dev/null ||
   fail "no working notarytool credentials named $PROFILE; store them as shown at the top of this script"
-# Dispatch-unsigned.zip signs into Dispatch-signed/, Dispatch-Pilot-unsigned.zip into Dispatch-Pilot-signed/.
+# APP-VARIANT-unsigned.zip signs into APP-VARIANT-signed/, next to it.
 name="$(basename "$ARCHIVE" .zip)"
 OUTPUT="$(cd "$(dirname "$ARCHIVE")" && pwd)/${name%-unsigned}-signed"
 mkdir -p "$OUTPUT"
-app="$OUTPUT/Dispatch.app"
+# The one app in the zip: NAME.app.
+apps="$(zipinfo -1 "$ARCHIVE" | sed -nE 's#^([^/]+\.app)/.*#\1#p' | sort -u)"
+[[ -n "$apps" && "$apps" != *$'\n'* ]] || fail "$ARCHIVE must hold exactly one app, not: ${apps:-none}"
+app_name="${apps%.app}"
+app="$OUTPUT/$app_name.app"
 
 # 1. Sign a fresh copy of the build's app. Published only once completely signed.
 if [[ ! -d "$app" ]]; then
   rm -rf "$OUTPUT/unpacked" "$app.signing"
   mkdir "$OUTPUT/unpacked"
   ditto -x -k "$ARCHIVE" "$OUTPUT/unpacked"
-  [[ "$(ls "$OUTPUT/unpacked")" == Dispatch.app ]] || fail "$ARCHIVE must contain exactly Dispatch.app"
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$OUTPUT/unpacked/Dispatch.app/Contents/Info.plist")" == APPL ]] ||
+  [[ "$(ls "$OUTPUT/unpacked")" == "$app_name.app" ]] || fail "$ARCHIVE must contain exactly $app_name.app"
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$OUTPUT/unpacked/$app_name.app/Contents/Info.plist")" == APPL ]] ||
     fail "$ARCHIVE does not contain a macOS application"
-  mv "$OUTPUT/unpacked/Dispatch.app" "$app.signing"
+  mv "$OUTPUT/unpacked/$app_name.app" "$app.signing"
   rmdir "$OUTPUT/unpacked"
   sign_app "$app.signing" "$IDENTITY"
   mv "$app.signing" "$app"
 fi
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
-dmg="$OUTPUT/Dispatch-$version.dmg"
+dmg="$OUTPUT/$app_name-$version.dmg"
 
 # 2. Notarize and staple the app itself: Gatekeeper accepts it offline after it leaves the DMG.
 if ! xcrun stapler validate -q "$app" 2>/dev/null; then
@@ -143,15 +148,15 @@ spctl --assess --type execute --verbose=2 "$app"
 # 3. The download: an LZMA-compressed DMG of the stapled app, signed with the same identity.
 if [[ ! -f "$dmg" ]]; then
   stage="$OUTPUT/dmg-contents"
-  rm -rf "$stage" "$OUTPUT/Dispatch.next.dmg"
+  rm -rf "$stage" "$OUTPUT/$app_name.next.dmg"
   mkdir "$stage"
-  ditto "$app" "$stage/Dispatch.app"
+  ditto "$app" "$stage/$app_name.app"
   ln -s /Applications "$stage/Applications"
-  hdiutil create -quiet -volname Dispatch -srcfolder "$stage" -fs HFS+ -format ULMO "$OUTPUT/Dispatch.next.dmg"
-  codesign --sign "$IDENTITY" --timestamp "$OUTPUT/Dispatch.next.dmg"
-  codesign --verify --strict --verbose=2 "$OUTPUT/Dispatch.next.dmg"
+  hdiutil create -quiet -volname "$app_name" -srcfolder "$stage" -fs HFS+ -format ULMO "$OUTPUT/$app_name.next.dmg"
+  codesign --sign "$IDENTITY" --timestamp "$OUTPUT/$app_name.next.dmg"
+  codesign --verify --strict --verbose=2 "$OUTPUT/$app_name.next.dmg"
   rm -rf "$stage"
-  mv "$OUTPUT/Dispatch.next.dmg" "$dmg"
+  mv "$OUTPUT/$app_name.next.dmg" "$dmg"
 fi
 
 # 4. Notarize and staple the DMG: it opens without a network check too.

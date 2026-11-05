@@ -9,9 +9,10 @@ import AppKit
 // A selector is an id (M1-main), an id's leading part before its dash (M1), or a group (main).
 // Options: --themes dark,light (also graphite, lavender, nautical) · --font system|code (Source Code Pro interface)
 //          --size 14 (Settings › Font size) · --flat (no Liquid Glass) · --scale 2 · --out <dir>
+//          --scheme "Catppuccin Latte" (a bundled terminal scheme instead of dispatch-black; adds it to the file name)
 
 let usage = """
-usage: MacMockups list | render [--themes dark,light] [--font system|code] [--size 14] [--flat] [--scale 2] [--out DIR] [selector…]
+usage: MacMockups list | render [--themes dark,light] [--font system|code] [--size 14] [--flat] [--scale 2] [--out DIR] [--scheme NAME] [selector…]
                        | sheets [--themes dark,light] [group…]
 """
 
@@ -33,6 +34,13 @@ func parse(_ arguments: ArraySlice<String>) throws -> (RenderOptions, [String]) 
         case "--scale": options.scale = CGFloat(Double(try value()) ?? 2)
         case "--out": options.output = URL(fileURLWithPath: try value())
         case "--flat": options.glass = false
+        case "--scheme":
+            let name = try value()
+            let found = ["../Vendor/Term/Resources/ghostty/themes/", "../extras/ghostty/"].contains {
+                FileManager.default.fileExists(atPath: Paths.mockups.appendingPathComponent($0 + name).path)
+            }
+            if !found { throw Failure("unknown scheme \(name): see Vendor/Term/Resources/ghostty/themes") }
+            options.scheme = name
         default:
             if argument.hasPrefix("--") { throw Failure("unknown option \(argument)") }
             rest.append(argument)
