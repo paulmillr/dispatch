@@ -150,6 +150,12 @@ h2 em { font-style: normal; color: var(--accent); }
 .sub strong { color: var(--fg); font-weight: 500; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: end; }
 .frame { margin-top: 56px; }
+.versus { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 56px; }
+.versus figure { margin: 0; }
+.versus img { display: block; width: 100%; height: auto; border-radius: 1.86% / 3.33%; box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 30px 80px -30px rgba(0,0,0,.9); }
+.versus figcaption { margin: 14px 0 0; font: 13px/1.5 var(--mono); color: var(--faint); text-align: center; }
+.versus figcaption b { font-weight: 500; color: var(--dim); margin-right: 8px; }
+.versus figure + figure figcaption b { color: var(--accent); }
 
 /* tool-card list, styled like the app's tool rows */
 .tools { margin: 0; padding: 0; list-style: none; border: 1px solid var(--line2); border-radius: 14px; background: color-mix(in oklab, var(--panel) 86%, transparent); overflow: hidden; }
@@ -235,15 +241,6 @@ h2 em { font-style: normal; color: var(--accent); }
 .stack picture { grid-area: 1 / 1; display: block; transition: opacity .35s ease; }
 .stack picture[hidden] { display: block; opacity: 0; pointer-events: none; }
 
-/* why */
-.why { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; margin-top: 48px; align-items: start; }
-.why p { color: var(--dim); margin: 0 0 18px; text-wrap: pretty; }
-.why p strong { color: var(--fg); font-weight: 500; }
-.diff pre { line-height: 1.9; }
-.diff .del, .diff .add { display: inline-block; width: calc(100% + 44px); margin: 0 -22px; padding: 0 22px; }
-.diff .del { color: var(--red); background: rgba(240,128,122,.07); }
-.diff .add { color: var(--green); background: rgba(116,214,156,.07); }
-.diff .hunk { color: var(--cyan); }
 
 /* doctor */
 .doctor .k { color: var(--fg); display: inline-block; min-width: 11ch; }
@@ -267,7 +264,8 @@ footer .r { margin-left: auto; }
 .js .rv.in { opacity: 1; transform: none; }
 
 @media (max-width: 900px) {
-  .split, .why { grid-template-columns: 1fr; gap: 32px; }
+  .split { grid-template-columns: 1fr; gap: 32px; }
+  .versus { grid-template-columns: 1fr; gap: 28px; }
   .points { grid-template-columns: 1fr 1fr; }
   nav .links a:not(.gh) { display: none; }
   section { padding-top: 104px; }
@@ -299,7 +297,6 @@ footer .r { margin-left: auto; }
   .swipe { display: block; margin: 12px 0 0; font-size: 12px; color: var(--faint); text-align: center; }
   .swipe + .caption { margin-top: 4px; }
   .term pre { font-size: 11.5px; padding: 16px; }
-  .diff .del, .diff .add { margin: 0 -16px; padding: 0 16px; }
   footer .r { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -386,23 +383,22 @@ footer .r { margin-left: auto; }
 
 <section id="tabs">
   <div class="wrap">
-    <div class="split">
+    <div>
       <div class="rv">
         <p class="kicker"><span class="n">02</span><span class="p">$</span>tmux -CC attach</p>
         <h2>Keep tmux. Keep herdr. <em>Get native tabs.</em></h2>
         <p class="sub">Dispatch maps your multiplexer onto the Mac: sessions become spaces, windows become tabs, and selecting, scrolling and editing text work the way macOS does. SSH into a host and its spaces group under it.</p>
       </div>
-      <div class="term rv" role="img" aria-label="How tmux, herdr and SSH map onto Dispatch spaces and tabs">
-        <div class="bar"><i></i><i></i><i></i><span>dispatch — mapping</span></div>
-<pre><span class="c-d"># what you run               what you get</span>
-<span class="c-g">tmux</span>  session <span class="c-y">billing</span>      <span class="c-d">→</span> space <span class="c-a">◆</span> billing
-      window  <span class="c-y">server</span>       <span class="c-d">→</span> tab   server  <span class="c-d">⌘1</span>
-      window  <span class="c-y">tests</span>        <span class="c-d">→</span> tab   tests   <span class="c-d">⌘2</span>
-<span class="c-v">herdr</span> workspace <span class="c-y">app</span>        <span class="c-d">→</span> space <span class="c-g">●</span> app
-<span class="c-c">ssh</span>   <span class="c-y">build-box</span>            <span class="c-d">→</span> host  <span class="c-c">build-box</span>
-                             <span class="c-d">├─</span> billing <span class="c-d">⇧⌘3</span>
-                             <span class="c-d">└─</span> e2e     <span class="c-d">⇧⌘4</span></pre>
-      </div>
+    </div>
+    <div class="versus rv">
+      <figure>
+        <picture><source srcset="img/L2-herdr.avif" type="image/avif"><img src="img/L2-herdr.jpg" width="1720" height="960" loading="lazy" alt="herdr in a plain terminal: workspaces app, billing and docs and the tabs server, tests and claude, drawn as text"></picture>
+        <figcaption class="mono"><b>before</b> herdr in a terminal: tabs and spaces drawn in text</figcaption>
+      </figure>
+      <figure>
+        <picture><source srcset="img/L3-herdr-dispatch.avif" type="image/avif"><img src="img/L3-herdr-dispatch.jpg" width="1720" height="960" loading="lazy" alt="The same herdr session in Dispatch: app, billing and docs as sidebar spaces, server, tests and claude as native tabs"></picture>
+        <figcaption class="mono"><b>after</b> the same session in Dispatch: native spaces and tabs</figcaption>
+      </figure>
     </div>
     <div class="points rv">
       <div style="--c: var(--cyan)"><h3><span class="dot"></span>Per-host SSH</h3><p>Colour-coded hosts with live stats, auto-reconnect with an overlay, and a slow-connection mode.</p></div>
@@ -428,18 +424,16 @@ footer .r { margin-left: auto; }
     </div>
     <div class="seg rv" role="group" aria-label="Show a view" data-stack="review-stack">
       <button type="button" aria-pressed="true" data-show="review">review</button>
-      <button type="button" aria-pressed="false" data-show="finish">send</button>
       <button type="button" aria-pressed="false" data-show="files">files</button>
       <button type="button" aria-pressed="false" data-show="commits">commits</button>
     </div>
     <div class="stack frame rv" id="review-stack">
-      <picture data-name="review" data-focus="0.73" data-caption="Review: the changes, a comment under line 18, another being written on line 32"><source srcset="img/J2-review.avif" type="image/avif"><img src="img/J2-review.jpg" width="2360" height="1560" loading="lazy" alt="Review mode: changed files on the left, a diff on the right with an inline comment card and a comment being written"></picture>
-      <picture data-name="finish" data-focus="0.3" hidden data-caption="Finish your review: three comments on two files, sent to Claude Code"><source srcset="img/J2b-review-finish.avif" type="image/avif"><img src="img/J2b-review-finish.jpg" width="2360" height="1560" loading="lazy" alt="The Finish your review popover listing three comments with a Send to Claude Code button"></picture>
+      <picture data-name="review" data-focus="0.3" data-caption="Review: three comments on two files, sent to Claude Code in one go"><source srcset="img/J2b-review-finish.avif" type="image/avif"><img src="img/J2b-review-finish.jpg" width="2360" height="1560" loading="lazy" alt="The Finish your review popover listing three comments with a Send to Claude Code button"></picture>
       <picture data-name="files" data-focus="0.22" hidden data-caption="Files: a tree with columns, a preview, and a drop copying files to an SSH host"><source srcset="img/J1-files.avif" type="image/avif"><img src="img/J1-files.jpg" width="2360" height="1560" loading="lazy" alt="Files mode: a folder tree with modified and size columns, a Swift file previewed, and a transfer to build-box in progress"></picture>
       <picture data-name="commits" data-focus="0.2" hidden data-caption="Commits: the branch graph, signed commits, a commit's files and diff"><source srcset="img/J3-commits.avif" type="image/avif"><img src="img/J3-commits.jpg" width="2360" height="1560" loading="lazy" alt="Commits view: a commit list with a branch graph and ref chips, and the selected commit's summary, changed files and diff"></picture>
     </div>
     <p class="swipe mono">↔ swipe to see the whole window</p>
-    <p class="caption mono" data-caption-for="review-stack">Review: the changes, a comment under line 18, another being written on line 32</p>
+    <p class="caption mono" data-caption-for="review-stack">Review: three comments on two files, sent to Claude Code in one go</p>
     <div class="points three rv">
       <div style="--c: var(--accent)"><h3><span class="dot"></span>Review</h3><p>Line and file comments on staged, unstaged and untracked changes. Send to the tab's agent or any other, or copy the review.</p></div>
       <div style="--c: var(--green)"><h3><span class="dot"></span>Files</h3><p>A tree with previews for code, Markdown, images and folders. Drag files in and out, even to and from SSH hosts.</p></div>
@@ -493,7 +487,7 @@ footer .r { margin-left: auto; }
       <h2>Liquid Glass. <em>Classic themes.</em></h2>
       <p class="sub">A design that follows Apple's guidelines, with bundled coding fonts, Ghostty's themes and config syntax, schemes made for color blindness, and a theme creator with <strong>oklch / P3</strong> colours.</p>
       <div class="themes" role="group" aria-label="Preview a theme" data-stack="theme-stack">
-        <button type="button" aria-pressed="true" data-show="oled" style="--sw:#000000"><i></i>oled</button>
+        <button type="button" aria-pressed="true" data-show="oled" style="--sw:#000000"><i></i>OLED</button>
         <button type="button" aria-pressed="false" data-show="latte" style="--sw:#eff1f5"><i></i>catppuccin</button>
         <button type="button" aria-pressed="false" data-show="spectrum" style="--sw:#222222"><i></i>monokai</button>
         <button type="button" aria-pressed="false" data-show="vaporwave" style="--sw:#180827"><i></i>vaporwave</button>
@@ -514,55 +508,23 @@ footer .r { margin-left: auto; }
   </div>
 </section>
 
-<section id="why">
-  <div class="wrap">
-    <div class="rv">
-      <p class="kicker"><span class="n">06</span><span class="p">$</span>git log --why</p>
-      <h2>A terminal for <em>how we work now</em>.</h2>
-    </div>
-    <div class="why">
-      <div class="rv">
-        <p>We used <strong>herdr</strong> and saw something new coming. It's like tmux, but better in a few ways: it groups tabs into spaces, it's easy to move around, it names spaces for you, and it shows what every agent is doing.</p>
-        <p>But herdr, like tmux, draws everything inside the terminal. You can't select text across panes, scrolling doesn't feel native, and editing text is hard. And many people will keep using tmux.</p>
-        <p>Most new tools are chat apps, not terminals. We think people will still need a terminal. It just needs to <strong>understand agents</strong>. Dispatch has a lot of features, but it stays simple.</p>
-      </div>
-      <div class="term diff rv">
-        <div class="bar"><i></i><i></i><i></i><span>other-terminals.diff</span></div>
-<pre><span class="hunk">@@ multiplexer @@</span>
-<span class="del">- Rex: needs its own multiplexer</span>
-<span class="add">+ Dispatch: works with tmux and herdr</span>
-
-<span class="hunk">@@ chat @@</span>
-<span class="del">- Tern: chat only for omp</span>
-<span class="add">+ Dispatch: Codex, Claude Code and Pi</span>
-
-<span class="hunk">@@ platform @@</span>
-<span class="add">+ native Mac tabs, spaces and text editing</span>
-<span class="add">+ GPU-accelerated, Ghostty-compatible engine</span></pre>
-      </div>
-    </div>
-  </div>
-</section>
-
 <section id="privacy">
   <div class="wrap">
     <div class="split">
       <div class="rv">
-        <p class="kicker"><span class="n">07</span><span class="p">$</span>dispatch doctor</p>
+        <p class="kicker"><span class="n">06</span><span class="p">$</span>dispatch doctor</p>
         <h2>Local-first. <em>No telemetry.</em> No dependencies.</h2>
-        <p class="sub">The engine is a <strong>zero-dependency Swift port of libghostty</strong>; the original needs 37 dependencies, from a Zig compiler to 15 C libraries. A dependency-free Rust helper does the heavy lifting on your Mac and on SSH hosts, over the SSH stream you already have.</p>
+        <p class="sub">The engine is a <strong>zero-dependency Swift port of libghostty</strong> (which we love!); the original needs 37 dependencies, from a Zig compiler to 15 C libraries. A dependency-free Rust helper does the heavy lifting on your Mac and on SSH hosts, over the SSH stream you already have.</p>
         <p class="more"><a href="https://github.com/paulmillr/dispatch/blob/main/docs/security.md">→ everything Dispatch reads, writes and runs</a></p>
       </div>
       <div class="term doctor rv">
         <div class="bar"><i></i><i></i><i></i><span>dispatch doctor</span></div>
 <pre><span class="c-g">✓</span> <span class="k">telemetry</span><span class="c-m">none: no analytics, no crash reports</span>
-<span class="c-g">✓</span> <span class="k">ports</span><span class="c-m">helper opens none; talks over ssh</span>
-<span class="c-g">✓</span> <span class="k">helper</span><span class="c-m">Rust; macOS, Linux x86_64 + arm64</span>
+<span class="c-g">✓</span> <span class="k">helper</span><span class="c-m">opens no ports; talks over ssh</span>
 <span class="c-g">✓</span> <span class="k">engine</span><span class="c-m">libghostty port, 0 third-party deps</span>
 <span class="c-g">✓</span> <span class="k">dictation</span><span class="c-m">on-device: Apple, Whisper, Parakeet</span>
 <span class="c-g">✓</span> <span class="k">models</span><span class="c-m">no API calls; agents use their own</span>
 <span class="c-g">✓</span> <span class="k">updates</span><span class="c-m">opt-in, signed and notarized</span>
-<span class="c-g">✓</span> <span class="k">kitty gfx</span><span class="c-m">off by default</span>
 
 <span class="c-a">◆</span> all good</pre>
       </div>
