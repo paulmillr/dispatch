@@ -194,6 +194,7 @@ h2 em { font-style: normal; color: var(--accent); }
 .seg + .stack { margin-top: 20px; }
 .caption { margin: 16px 0 0; font: 13px/1.5 var(--mono); color: var(--faint); text-align: center; }
 .caption::before { content: "↑ "; color: var(--accent); }
+.swipe { display: none; }
 
 /* review steps */
 .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line2); border-radius: 14px; overflow: hidden; }
@@ -288,7 +289,15 @@ footer .r { margin-left: auto; }
   .seg button { flex: 1; padding: 9px 8px; }
   .cmd-copy { width: 100%; font-size: 12.5px; gap: 10px; padding-left: 14px; }
   .btn { width: 100%; justify-content: center; }
-  .shot { margin-top: 48px; padding: 0 12px; }
+  /* Screenshots at a readable size: wider than the phone, scrolled sideways, opened at their focus (data-focus). */
+  .shot, .frame { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .shot::-webkit-scrollbar, .frame::-webkit-scrollbar { display: none; }
+  .shot { margin-top: 48px; padding: 0 24px; }
+  .frame { margin-left: -24px; margin-right: -24px; padding: 0 24px; }
+  .shot picture, .frame picture { display: block; width: 1000px; max-width: none; }
+  .shot img, .frame img { box-shadow: 0 0 0 1px rgba(255,255,255,.1); }
+  .swipe { display: block; margin: 12px 0 0; font-size: 12px; color: var(--faint); text-align: center; }
+  .swipe + .caption { margin-top: 4px; }
   .term pre { font-size: 11.5px; padding: 16px; }
   .diff .del, .diff .add { margin: 0 -16px; padding: 0 16px; }
   footer .r { margin-left: 0; }
@@ -336,11 +345,13 @@ footer .r { margin-left: auto; }
     <p class="fine"><span>Apple Silicon</span><span>macOS 14+</span><span>MIT license</span></p>
   </div>
   <div class="shot rv">
-    <picture>
+    <picture data-focus="0.79">
       <source srcset="img/K3-split-dark.avif" type="image/avif">
       <img src="img/K3-split-dark.jpg" width="2360" height="1480" alt="Dispatch window: spaces grouped by host in the sidebar, a terminal running git status, and an agent chat editing a file next to it" fetchpriority="high">
     </picture>
   </div>
+  <p class="swipe mono">↔ swipe to see the whole window</p>
+
 </header>
 
 <main>
@@ -363,11 +374,13 @@ footer .r { margin-left: auto; }
       </ul>
     </div>
     <div class="frame rv">
-      <picture>
+      <picture data-focus="0.6">
         <source srcset="img/K2-chat-dark.avif" type="image/avif">
         <img src="img/K2-chat-dark.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch chat mode: a user message, tool cards for Search, Read, Edit and Run with timings, the agent's reply, and a composer with model and effort">
       </picture>
     </div>
+    <p class="swipe mono">↔ swipe to see the whole window</p>
+
   </div>
 </section>
 
@@ -420,11 +433,12 @@ footer .r { margin-left: auto; }
       <button type="button" aria-pressed="false" data-show="commits">commits</button>
     </div>
     <div class="stack frame rv" id="review-stack">
-      <picture data-name="review" data-caption="Review: the changes, a comment under line 18, another being written on line 32"><source srcset="img/J2-review.avif" type="image/avif"><img src="img/J2-review.jpg" width="2760" height="1640" loading="lazy" alt="Review mode: changed files on the left, a diff on the right with an inline comment card and a comment being written"></picture>
-      <picture data-name="finish" hidden data-caption="Finish your review: three comments on two files, sent to Claude Code"><source srcset="img/J2b-review-finish.avif" type="image/avif"><img src="img/J2b-review-finish.jpg" width="2760" height="1640" loading="lazy" alt="The Finish your review popover listing three comments with a Send to Claude Code button"></picture>
-      <picture data-name="files" hidden data-caption="Files: a tree with columns, a preview, and a drop copying files to an SSH host"><source srcset="img/J1-files.avif" type="image/avif"><img src="img/J1-files.jpg" width="2760" height="1640" loading="lazy" alt="Files mode: a folder tree with modified and size columns, a Swift file previewed, and a transfer to build-box in progress"></picture>
-      <picture data-name="commits" hidden data-caption="Commits: the branch graph, signed commits, a commit's files and diff"><source srcset="img/J3-commits.avif" type="image/avif"><img src="img/J3-commits.jpg" width="2760" height="1640" loading="lazy" alt="Commits view: a commit list with a branch graph and ref chips, and the selected commit's summary, changed files and diff"></picture>
+      <picture data-name="review" data-focus="0.73" data-caption="Review: the changes, a comment under line 18, another being written on line 32"><source srcset="img/J2-review.avif" type="image/avif"><img src="img/J2-review.jpg" width="2360" height="1560" loading="lazy" alt="Review mode: changed files on the left, a diff on the right with an inline comment card and a comment being written"></picture>
+      <picture data-name="finish" data-focus="0.3" hidden data-caption="Finish your review: three comments on two files, sent to Claude Code"><source srcset="img/J2b-review-finish.avif" type="image/avif"><img src="img/J2b-review-finish.jpg" width="2360" height="1560" loading="lazy" alt="The Finish your review popover listing three comments with a Send to Claude Code button"></picture>
+      <picture data-name="files" data-focus="0.22" hidden data-caption="Files: a tree with columns, a preview, and a drop copying files to an SSH host"><source srcset="img/J1-files.avif" type="image/avif"><img src="img/J1-files.jpg" width="2360" height="1560" loading="lazy" alt="Files mode: a folder tree with modified and size columns, a Swift file previewed, and a transfer to build-box in progress"></picture>
+      <picture data-name="commits" data-focus="0.2" hidden data-caption="Commits: the branch graph, signed commits, a commit's files and diff"><source srcset="img/J3-commits.avif" type="image/avif"><img src="img/J3-commits.jpg" width="2360" height="1560" loading="lazy" alt="Commits view: a commit list with a branch graph and ref chips, and the selected commit's summary, changed files and diff"></picture>
     </div>
+    <p class="swipe mono">↔ swipe to see the whole window</p>
     <p class="caption mono" data-caption-for="review-stack">Review: the changes, a comment under line 18, another being written on line 32</p>
     <div class="points three rv">
       <div style="--c: var(--accent)"><h3><span class="dot"></span>Review</h3><p>Line and file comments on staged, unstaged and untracked changes. Send to the tab's agent or any other, or copy the review.</p></div>
@@ -488,13 +502,14 @@ footer .r { margin-left: auto; }
       </div>
     </div>
     <div class="stack frame rv" id="theme-stack">
-      <picture data-name="oled" data-caption="Dispatch (OLED)"><source srcset="img/K1-terminal-oled.avif" type="image/avif"><img src="img/K1-terminal-oled.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Dispatch (OLED) scheme"></picture>
-      <picture data-name="latte" hidden data-caption="Catppuccin Latte"><source srcset="img/K1-terminal-latte.avif" type="image/avif"><img src="img/K1-terminal-latte.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Catppuccin Latte scheme"></picture>
-      <picture data-name="spectrum" hidden data-caption="Monokai Pro Spectrum"><source srcset="img/K1-terminal-spectrum.avif" type="image/avif"><img src="img/K1-terminal-spectrum.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Monokai Pro Spectrum scheme"></picture>
-      <picture data-name="vaporwave" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
-      <picture data-name="colorblind" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif" type="image/avif"><img src="img/K1-terminal-colorblind.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
-      <picture data-name="rootaccess" hidden data-caption="Root Access"><source srcset="img/K1-terminal-rootaccess.avif" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
+      <picture data-name="oled" data-focus="0.42" data-caption="Dispatch (OLED)"><source srcset="img/K1-terminal-oled.avif" type="image/avif"><img src="img/K1-terminal-oled.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Dispatch (OLED) scheme"></picture>
+      <picture data-name="latte" data-focus="0.42" hidden data-caption="Catppuccin Latte"><source srcset="img/K1-terminal-latte.avif" type="image/avif"><img src="img/K1-terminal-latte.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Catppuccin Latte scheme"></picture>
+      <picture data-name="spectrum" data-focus="0.42" hidden data-caption="Monokai Pro Spectrum"><source srcset="img/K1-terminal-spectrum.avif" type="image/avif"><img src="img/K1-terminal-spectrum.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Monokai Pro Spectrum scheme"></picture>
+      <picture data-name="vaporwave" data-focus="0.42" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
+      <picture data-name="colorblind" data-focus="0.42" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif" type="image/avif"><img src="img/K1-terminal-colorblind.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
+      <picture data-name="rootaccess" data-focus="0.42" hidden data-caption="Root Access, with its phosphor glow and scanlines"><source srcset="img/K1-terminal-rootaccess.avif" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
     </div>
+    <p class="swipe mono">↔ swipe to see the whole window</p>
     <p class="caption mono" data-caption-for="theme-stack">Dispatch (OLED)</p>
   </div>
 </section>
@@ -612,6 +627,22 @@ footer .r { margin-left: auto; }
       });
     }
   }
+  const phone = matchMedia('(max-width: 600px)');
+  const focus = (strip) => {
+    if (!phone.matches) return;
+    const pic = [...strip.querySelectorAll('picture')].find((p) => !p.hidden);
+    // data-focus: the point across the image (0 to 1) to centre in the phone's width.
+    const f = parseFloat(pic?.dataset.focus ?? '0.5');
+    const img = pic?.querySelector('img');
+    if (img) strip.scrollLeft = img.offsetLeft + f * img.offsetWidth - strip.clientWidth / 2;
+  };
+  const strips = document.querySelectorAll('.shot, .frame');
+  for (const strip of strips) focus(strip);
+  phone.addEventListener('change', () => strips.forEach(focus));
+  document.addEventListener('click', (e) => {
+    const group = e.target.closest('[data-stack]');
+    if (group) focus(document.getElementById(group.dataset.stack));
+  });
   const io = 'IntersectionObserver' in window && new IntersectionObserver((es) => {
     for (const e of es) if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
   }, { rootMargin: '0px 0px -8% 0px' });
