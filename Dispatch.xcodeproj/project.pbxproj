@@ -6467,7 +6467,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets";
 				PRODUCT_NAME = DispatchWatchWidgets;
 				SDKROOT = watchos;
@@ -6520,7 +6520,7 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = Watch/App/Info.plist;
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp";
 				PRODUCT_MODULE_NAME = DispatchWatch;
 				PRODUCT_NAME = DispatchWatch;
@@ -6570,7 +6570,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -6703,7 +6703,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)";
 				PRODUCT_MODULE_NAME = DispatchMobile;
 				PRODUCT_NAME = DispatchMobile;
@@ -6846,7 +6846,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -6931,7 +6931,7 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = Watch/App/Info.plist;
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp";
 				PRODUCT_MODULE_NAME = DispatchWatch;
 				PRODUCT_NAME = DispatchWatch;
@@ -7061,7 +7061,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets";
 				PRODUCT_NAME = DispatchWatchWidgets;
 				SDKROOT = watchos;
@@ -7195,7 +7195,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.4;
+				MARKETING_VERSION = 0.1.5;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)";
 				PRODUCT_MODULE_NAME = DispatchMobile;
 				PRODUCT_NAME = DispatchMobile;
