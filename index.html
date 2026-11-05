@@ -152,7 +152,7 @@ h2 em { font-style: normal; color: var(--accent); }
 .frame { margin-top: 56px; }
 .versus { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 56px; }
 .versus figure { margin: 0; }
-.versus img { display: block; width: 100%; height: auto; border-radius: 1.86% / 3.33%; box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 30px 80px -30px rgba(0,0,0,.9); }
+.versus img { display: block; width: 100%; height: auto; border-radius: var(--r, 1.86% / 3.33%); box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 30px 80px -30px rgba(0,0,0,.9); }
 .versus figcaption { margin: 14px 0 0; font: 13px/1.5 var(--mono); color: var(--faint); text-align: center; }
 .versus figcaption b { font-weight: 500; color: var(--dim); margin-right: 8px; }
 .versus figure + figure figcaption b { color: var(--accent); }
@@ -240,6 +240,9 @@ h2 em { font-style: normal; color: var(--accent); }
 .stack { display: grid; margin-top: 28px; }
 .stack picture { grid-area: 1 / 1; display: block; transition: opacity .35s ease; }
 .stack picture[hidden] { display: block; opacity: 0; pointer-events: none; }
+/* A window small enough to show whole on a phone. */
+.stack.fit { max-width: 760px; margin-left: auto; margin-right: auto; }
+.fit img { border-radius: 2.86% / 4.21%; }
 
 
 /* doctor */
@@ -294,6 +297,8 @@ footer .r { margin-left: auto; }
   .frame { margin-left: -24px; margin-right: -24px; padding: 0 24px; }
   .shot picture, .frame picture { display: block; width: 1000px; max-width: none; }
   .shot img, .frame img { box-shadow: 0 0 0 1px rgba(255,255,255,.1); }
+  .frame.fit { overflow: visible; margin-left: 0; margin-right: 0; padding: 0; }
+  .frame.fit picture { width: auto; max-width: 100%; }
   .swipe { display: block; margin: 12px 0 0; font-size: 12px; color: var(--faint); text-align: center; }
   .swipe + .caption { margin-top: 4px; }
   .term pre { font-size: 11.5px; padding: 16px; }
@@ -370,13 +375,16 @@ footer .r { margin-left: auto; }
         <li><span class="ic">⌘</span><b>Pick</b><span class="d">model and effort, goals, attachments</span><span class="ok"></span></li>
       </ul>
     </div>
-    <div class="frame rv">
-      <picture data-focus="0.6">
-        <source srcset="img/K2-chat-dark.avif" type="image/avif">
-        <img src="img/K2-chat-dark.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch chat mode: a user message, tool cards for Search, Read, Edit and Run with timings, the agent's reply, and a composer with model and effort">
-      </picture>
+    <div class="versus rv" style="--r: 2.11% / 3.33%">
+      <figure>
+        <picture><source srcset="img/L4-claude-terminal.avif" type="image/avif"><img src="img/L4-claude-terminal.jpg" width="1520" height="960" loading="lazy" alt="Claude Code in the terminal: tool calls as text lines, the reply, and its prompt"></picture>
+        <figcaption class="mono"><b>terminal</b> Claude Code as it draws itself</figcaption>
+      </figure>
+      <figure>
+        <picture><source srcset="img/L5-claude-chat.avif" type="image/avif"><img src="img/L5-claude-chat.jpg" width="1520" height="960" loading="lazy" alt="The same session in chat mode: the message as a bubble, four steps on a timeline with their times, the reply, and a composer"></picture>
+        <figcaption class="mono"><b>chat</b> the same session, one click away</figcaption>
+      </figure>
     </div>
-    <p class="swipe mono">↔ swipe to see the whole window</p>
 
   </div>
 </section>
@@ -495,15 +503,14 @@ footer .r { margin-left: auto; }
         <button type="button" aria-pressed="false" data-show="rootaccess" style="--sw:#030a04"><i></i>root access</button>
       </div>
     </div>
-    <div class="stack frame rv" id="theme-stack">
-      <picture data-name="oled" data-focus="0.42" data-caption="Dispatch (OLED)"><source srcset="img/K1-terminal-oled.avif" type="image/avif"><img src="img/K1-terminal-oled.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Dispatch (OLED) scheme"></picture>
-      <picture data-name="latte" data-focus="0.42" hidden data-caption="Catppuccin Latte"><source srcset="img/K1-terminal-latte.avif" type="image/avif"><img src="img/K1-terminal-latte.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Catppuccin Latte scheme"></picture>
-      <picture data-name="spectrum" data-focus="0.42" hidden data-caption="Monokai Pro Spectrum"><source srcset="img/K1-terminal-spectrum.avif" type="image/avif"><img src="img/K1-terminal-spectrum.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Monokai Pro Spectrum scheme"></picture>
-      <picture data-name="vaporwave" data-focus="0.42" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
-      <picture data-name="colorblind" data-focus="0.42" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif" type="image/avif"><img src="img/K1-terminal-colorblind.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
-      <picture data-name="rootaccess" data-focus="0.42" hidden data-caption="Root Access, with its phosphor glow and scanlines"><source srcset="img/K1-terminal-rootaccess.avif" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg" width="2360" height="1480" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
+    <div class="stack frame fit rv" id="theme-stack">
+      <picture data-name="oled" data-focus="0.42" data-caption="Dispatch (OLED)"><source srcset="img/K1-terminal-oled.avif" type="image/avif"><img src="img/K1-terminal-oled.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Dispatch (OLED) scheme"></picture>
+      <picture data-name="latte" data-focus="0.42" hidden data-caption="Catppuccin Latte"><source srcset="img/K1-terminal-latte.avif" type="image/avif"><img src="img/K1-terminal-latte.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Catppuccin Latte scheme"></picture>
+      <picture data-name="spectrum" data-focus="0.42" hidden data-caption="Monokai Pro Spectrum"><source srcset="img/K1-terminal-spectrum.avif" type="image/avif"><img src="img/K1-terminal-spectrum.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Monokai Pro Spectrum scheme"></picture>
+      <picture data-name="vaporwave" data-focus="0.42" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
+      <picture data-name="colorblind" data-focus="0.42" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif" type="image/avif"><img src="img/K1-terminal-colorblind.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
+      <picture data-name="rootaccess" data-focus="0.42" hidden data-caption="Root Access, with its phosphor glow and scanlines"><source srcset="img/K1-terminal-rootaccess.avif" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg" width="1120" height="760" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
     </div>
-    <p class="swipe mono">↔ swipe to see the whole window</p>
     <p class="caption mono" data-caption-for="theme-stack">Dispatch (OLED)</p>
   </div>
 </section>
