@@ -100,12 +100,12 @@ enum TabsSample {
                                  tint: Color(red: 0xc9 / 255, green: 0xc9 / 255, blue: 0xce / 255), system: .mac, home: "/Users/alex", order: 1)
     static let ai = TabsHost(id: UUID(uuidString: "00000000-0000-0000-0000-00000000A001")!, name: "ai",
                              tint: Color(red: 0xa9 / 255, green: 0x8a / 255, blue: 0xe0 / 255),
-                             system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04"), home: "/home/alex", order: 2)
+                             system: HostSystem(os: "Linux", distribution: "debian", name: "Debian GNU/Linux 13 (trixie)"), home: "/home/alex", order: 2)
 
     /// A connected host with no spaces yet (`-DispatchTabsEmptyHost YES`): M2b's New space line.
     static let vps = TabsHost(id: UUID(uuidString: "00000000-0000-0000-0000-00000000A004")!, name: "vps",
                               tint: Color(red: 0x8f / 255, green: 0xc9 / 255, blue: 0x9b / 255),
-                              system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04"), home: "/root", order: 3)
+                              system: HostSystem(os: "Linux", distribution: "debian", name: "Debian GNU/Linux 13 (trixie)"), home: "/root", order: 3)
 
     /// The sample's multiplexers: herdr shown where its keys say so, tmux beside it on mba2 and ai.
     static func multiplexers(_ names: [String]) -> [MultiplexerChoice] {

@@ -43,7 +43,7 @@ The design follows Apple's guidelines. **It has a lot of features, but it stays 
 - **Per-host stats for SSH:** color-coded remote hosts, auto-reconnect with an overlay, and a slow-connection mode
 - One window to rule them all, for simplicity. Instead of creating a new window, create a second space.
 - Cool theme picker: classic themes and theme creator with oklch / P3 colors
-- Zero-dependency Swift port of libghostty. libghostty is great and fast engine, but it requires 37 dependencies: Zig compiler, 10 Zig libs, 15 C libs, etc. Our version has no third-party code dependencies.
+- Zero-dependency Swift port of libghostty. libghostty is great and fast engine, but on the Mac it requires 23 dependencies (14 C/C++, 9 Zig, plus the Zig compiler), and 10 more if we count non-Mac code. Our version has no third-party code dependencies.
 
 ### Non-unique features
 

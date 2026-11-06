@@ -40,7 +40,7 @@ final class HelperSession: @unchecked Sendable {
       let os: String
       let distribution: String?
       let os_name: String?
-      /// "26.1", "24.04" and "macOS 26.1", "Ubuntu 24.04" (newer helpers; the iPhone app's host rows show the label).
+      /// "26.1", "24.04" and "macOS 26.1", "Debian 13" (newer helpers; the iPhone app's host rows show the label).
       var os_version: String? = nil
       var os_label: String? = nil
 

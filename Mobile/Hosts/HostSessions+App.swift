@@ -115,7 +115,7 @@ extension HostSessions {
                        lastConnected: now.addingTimeInterval(-1800), tintSeed: "demo-studio", system: .mac, osLabel: "macOS 26.1"),
             HostRecord(name: "vps", address: "vps.example.net", user: "root", auth: .password, order: 3,
                        lastConnected: now.addingTimeInterval(-5 * 86_400), tintSeed: "demo-vps",
-                       system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04.1 LTS"), osLabel: "Ubuntu 24.04"),
+                       system: HostSystem(os: "Linux", distribution: "debian", name: "Debian GNU/Linux 13 (trixie)"), osLabel: "Debian 13"),
         ]
         let driver = ScriptedHostSessionDriver { host in
             switch host.name {

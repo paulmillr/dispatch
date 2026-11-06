@@ -156,9 +156,9 @@ enum DemoScenario {
         let ai = Host(
             record: HostRecord(name: "ai", address: "ai.tail3f.ts.net", user: "alex", auth: .password, order: 2,
                                lastConnected: now.addingTimeInterval(-7200), tintSeed: "demo-ai",
-                               system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04.1 LTS"), osLabel: "Ubuntu 24.04"),
-            hello: HostFixture.hello(identity: "demo-ai", hostname: "ai", os: "Linux", distribution: "ubuntu",
-                                     osName: "Ubuntu 24.04.1 LTS", label: "Ubuntu 24.04", version: "24.04", home: "/home/alex"),
+                               system: HostSystem(os: "Linux", distribution: "debian", name: "Debian GNU/Linux 13 (trixie)"), osLabel: "Debian 13"),
+            hello: HostFixture.hello(identity: "demo-ai", hostname: "ai", os: "Linux", distribution: "debian",
+                                     osName: "Debian GNU/Linux 13 (trixie)", label: "Debian 13", version: "13", home: "/home/alex"),
             multiplexer: "tmux", version: "3.7", latency: .milliseconds(46),
             sketch: TopologySketch(backend: 1, first: 200, spaces: [
                 .init(key: "tmux:train", name: "train", cwd: "/home/alex/train", tabs: [

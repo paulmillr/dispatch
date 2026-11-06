@@ -128,7 +128,7 @@ enum HostFixture {
                                      "hostname": hostname, "os": os,
                                      "distribution": distribution.map { $0 as Any } ?? NSNull(),
                                      "os_name": osName.map { $0 as Any } ?? NSNull()]
-        // Newer helpers (host.identity): "macOS 26.1" or "Ubuntu 24.04", and the version.
+        // Newer helpers (host.identity): "macOS 26.1" or "Debian 13", and the version.
         if let label { fields["os_label"] = label }
         if let version { fields["os_version"] = version }
         return fields

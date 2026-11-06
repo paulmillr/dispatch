@@ -3,7 +3,7 @@ import SwiftUI
 /// A machine as the mockups show it: its glyph and, for a remote one, its colour (the app's HostTint, linked, so the
 /// tones are the app's).
 struct MockHost: Hashable {
-    enum System: Hashable { case mac, ubuntu, server }
+    enum System: Hashable { case mac, debian, server }
     var name: String
     var system = System.mac
     var color: HostColor?
@@ -22,7 +22,8 @@ struct MockHost: Hashable {
     @MainActor var foreground: Color { tint?.foreground ?? Chrome.palette.secondary }
 }
 
-/// HostGlyph's artwork: the Apple logo, Ubuntu's circle of friends, a server rack; 0.82 of the frame.
+/// HostGlyph's artwork: the Apple logo, Debian's swirl (the app's HostDebian asset, read from the checkout), a server
+/// rack; 0.82 of the frame.
 struct MockHostGlyph: View {
     let system: MockHost.System
     var size: CGFloat = 16.8
@@ -31,26 +32,19 @@ struct MockHostGlyph: View {
             switch system {
             case .mac: Image(systemName: "apple.logo").resizable().scaledToFit().frame(width: size * 0.82 / 0.965, height: size * 0.82 / 0.965)
             case .server: Image(systemName: "server.rack").resizable().scaledToFit().frame(width: size * 0.82, height: size * 0.82)
-            case .ubuntu: Canvas { context, box in Self.ubuntu(context, size: box) }.frame(width: size * 0.82 / 0.95, height: size * 0.82 / 0.95)
+            case .debian:
+                if let debian = Self.debian {
+                    Image(nsImage: debian).renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: size * 0.82 / 0.745, height: size * 0.82 / 0.745)
+                }
             }
         }
         .frame(width: size, height: size)
     }
 
-    private static func ubuntu(_ context: GraphicsContext, size: CGSize) {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let radius = min(size.width, size.height) * 0.28
-        let scale = min(size.width, size.height) / 15
-        for index in 0..<3 {
-            let angle = Double(index) * 120 + 180
-            var arc = Path()
-            arc.addArc(center: center, radius: radius, startAngle: .degrees(angle + 24), endAngle: .degrees(angle + 96), clockwise: false)
-            context.stroke(arc, with: .foreground, lineWidth: 1.7 * scale)
-            let x = center.x + CGFloat(cos(angle * .pi / 180)) * radius * 1.5
-            let y = center.y + CGFloat(sin(angle * .pi / 180)) * radius * 1.5
-            context.fill(Path(ellipseIn: CGRect(x: x - 1.6 * scale, y: y - 1.6 * scale, width: 3.2 * scale, height: 3.2 * scale)), with: .foreground)
-        }
-    }
+    /// HostGlyph's Extent.debian: the swirl fills 0.745 of its 14-point viewBox.
+    @MainActor private static let debian: NSImage? = NSImage(contentsOf: Paths.mockups
+        .appendingPathComponent("../Dispatch/Resources/Assets.xcassets/HostDebian.imageset/HostDebian.svg"))
 }
 
 /// An agent's state as the sidebar and tabs mark it (AgentActivityGlyph): ◆ finished, ● waiting on you, ◐ working.
@@ -79,7 +73,7 @@ enum Activity: Hashable {
 enum Hosts {
     static let local = MockHost.local
     static let studio = MockHost(name: "studio", system: .mac, color: .purple)
-    static let buildBox = MockHost(name: "build-box", system: .ubuntu, color: .cyan)
+    static let buildBox = MockHost(name: "build-box", system: .debian, color: .cyan)
     static let ai = MockHost(name: "ai", system: .server, color: .orange)
     static let staging = MockHost(name: "staging", system: .server, color: .green, offline: true)
 }

@@ -63,7 +63,7 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     var colorPicked = false
     /// What the helper last reported about the operating system: the glyph and line three of an offline row.
     var system: HostSystem?
-    /// "macOS 26.1", "Ubuntu 24.04".
+    /// "macOS 26.1", "Debian 13".
     var osLabel: String?
 
     init(id: UUID = UUID(), name: String, address: String, port: Int = 22, user: String, auth: Auth,

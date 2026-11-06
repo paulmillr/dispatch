@@ -138,7 +138,7 @@ struct WatchHost: Codable, Equatable, Sendable, Identifiable {
     var tint: String?
     /// The glyph's system (`HostSystem`): "macos" or "linux"; nil before the host was reached.
     var system: String?
-    /// "macOS 26.1", "Ubuntu 24.04" (`HostSummary.osLabel`), for the host's detail line.
+    /// "macOS 26.1", "Debian 13" (`HostSummary.osLabel`), for the host's detail line.
     var osLabel: String?
     /// Why it is not connected (`HostSession.problem`, or the failure of a `.failed` link), as the phone words it.
     var problem: String?

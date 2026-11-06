@@ -19,9 +19,16 @@ struct TermLine: ExpressibleByStringLiteral {
     init(_ spans: [TermSpan]) { self.spans = spans }
     init(stringLiteral value: String) { spans = [TermSpan(text: value)] }
 
-    /// A zsh prompt as the fictional user's: `alex@mba2 app %` then the command.
-    static func prompt(_ command: String = "", user: String = "alex", host: String = "mba2", folder: String = "app") -> TermLine {
-        TermLine([TermSpan(text: "\(user)@\(host) \(folder) % "), TermSpan(text: command)])
+    /// The zsh prompt from paulmillr/dotfiles (config/shell/zsh/zshrc.zsh), then the command: the folder in bright blue,
+    /// the git branch with `*` when the tree is dirty, and a bold ❯, green after a command that succeeded and red after
+    /// one that failed (`app dark-mode* ❯ `). No user@host on a local shell.
+    static func prompt(_ command: String = "", folder: String = "app", branch: String? = "dark-mode", dirty: Bool = true,
+                       failed: Bool = false) -> TermLine {
+        var spans = [TermSpan(text: folder, color: 12)]
+        if let branch { spans.append(TermSpan(text: " " + branch + (dirty ? "*" : ""))) }
+        spans.append(TermSpan(text: " ❯", color: failed ? 1 : 2, bold: true))
+        spans.append(TermSpan(text: " " + command))
+        return TermLine(spans)
     }
 }
 
@@ -36,9 +43,12 @@ extension TermSpan: ExpressibleByStringLiteral {
 
 struct TerminalScreen: View {
     var lines: [TermLine]
-    /// The cursor after the last line's text: a bar, as the app's terminal draws it focused.
+    /// The cursor after the last line's text: a bar, as zsh's shell integration sets it at the prompt (the app's own
+    /// default is a block: Settings.cursor).
     var cursor = true
     var blockCursor = false
+    /// An unfocused pane's terminal draws its cursor as a hollow block (captures: ui-audit/main-grid.png).
+    var focused = true
     var fontSize: CGFloat = 14
     var lineHeight: CGFloat = 17.7
     var body: some View {
@@ -68,7 +78,11 @@ struct TerminalScreen: View {
                             .background(span.inverse ? color : .clear)
                     }
                     if cursor && index == lines.count - 1 {
-                        Rectangle().fill(scheme.foreground).frame(width: blockCursor ? fontSize * 0.6 : 1.5, height: lineHeight - 2).padding(.leading, blockCursor ? 0 : 1)
+                        if focused {
+                            Rectangle().fill(scheme.foreground).frame(width: blockCursor ? fontSize * 0.6 : 1.5, height: lineHeight - 2).padding(.leading, blockCursor ? 0 : 1)
+                        } else {
+                            Rectangle().strokeBorder(scheme.foreground, lineWidth: 1).frame(width: fontSize * 0.6, height: lineHeight - 2)
+                        }
                     }
                 }
                 .frame(height: lineHeight, alignment: .leading)

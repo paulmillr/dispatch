@@ -42,25 +42,45 @@ what they reach elsewhere, at the app's defaults. The terminal and chat colours 
 under the theme's overrides, as the app derives them. When one of those sources gains a dependency, the build names it:
 add it to `Shims.swift`.
 
-**The kit** (`Kit/`), at the app's defaults (content size 14, icons sidebar, Liquid Glass):
+**The kit** (`Kit/`), at the app's defaults (content size 14, icons sidebar, flat order, git branches hidden, Liquid
+Glass, chat in San Francisco, Settings › Tool steps at Current step):
 
 | Piece | Draws |
 |---|---|
 | `DispatchWindow`, `MacWindow` | the main window (sidebar, divider, content) in a window with traffic lights and shadow |
-| `Sidebar`, `SpaceRow`, `NewSpaceRow` | spaces (host disc, name, branch, activity, ⇧⌘ shortcut), flat or by host (`tree`), the footer's hosts |
-| `Pane`, `TabStrip`, `TabCell`, `Split` | a pane's strip (glass track and pill, or flat underline), +, mode and layout buttons, pane badge, focus edge; splits |
-| `TerminalScreen`, `T`, `c` | a terminal in Source Code Pro with ANSI colours from the theme's scheme; `.prompt(…)` |
-| `ChatPane`, `ComposerCard`, `ToolRow`, `WorkingRow` | user bubbles, agent replies with times, tool cards, working row, composer with Send |
+| `Sidebar`, `SidebarTopRow`, `SpaceRow`, `NewSpaceRow` | the glass panel; the header row (sidebar toggle, Spaces ⌄ menu, tree toggle, shortcuts; tight, the shortcuts go, then the menu becomes an icon); spaces (host disc, name, branch when a screen sets one, activity, ⇧⌘ shortcut), flat or by host (`tree`: the disc in each heading, Local always listed); "+ space", with "+ local" while a remote host is connected; the footer's hosts |
+| `Pane`, `TabStrip`, `TabCell`, `Split` | a pane's strip: lone, the glass track and pill with the + circle and the mode · layout pill; in a split (`paneBadge`), one capsule holding the badge, tabs and buttons, and no ⌘N on the tabs; flat, an underline; leading the window (`titleRow`), the host mark or the sidebar toggle, and a lone tab's bare title; focus edge only where no badge shows; splits |
+| `TerminalScreen`, `T`, `c` | a terminal in Source Code Pro with ANSI colours from the theme's scheme, a bar cursor at the prompt (`focused: false`: the hollow block); `.prompt(…)`, the zsh prompt from paulmillr/dotfiles (`app dark-mode* ❯`); `Sample.gitLog`, `.tests`, `.server` |
+| `ChatPane`, `AgentBubble`, `ToolGroupHeader`, `ToolRow`, `ComposerCard` | the transcript grouped as the app's rows are: tool steps after an agent message join its bubble under the text, the message's time at the end of their header; other steps a bubble of their own; a reply after steps its own bubble. A group's steps show as Tool steps does by default (`live`: the newest group's current step alone; otherwise none), or `shown:` as opened; the reply placeholder (`.pending`). The composer: glass, its footer's model · effort, the agent's activity and Stop, Send (Queue while working), giving way as the footer narrows |
 | `SheetOver`, `MacMenu`, `Callout` | a sheet over a window, an opaque menu, numbered notes for review |
+| `PlainTerminalWindow`, `CapturedScreen`, `R` | another terminal app's window; a screen captured with `tmux capture-pane -e` (`Screens/Landing.swift`'s herdr) |
 | `Hosts`, `Activity`, `Sample` | fictional hosts (local, studio, build-box, ai, staging), agent states, sample spaces/terminal/chat |
 
 Real SwiftUI controls (`Toggle`, `TextField`, `Picker`, `Button`, `Form`) go straight into a screen. Materials and Liquid
-Glass do not draw offscreen: glass surfaces are drawn as `GlassTone`'s tones, sampled from the app's capture.
+Glass do not draw offscreen: glass surfaces are drawn as `GlassTone`'s tones, sampled from the app's capture as ColorSync
+renders it into sRGB (`build/ui-audit/main-sidebar-*.png` carries the test VM display's profile: read it through a
+`CGContext` in sRGB, not `NSColor.usingColorSpace`, which reads it lighter). The glass changes with macOS: after a
+macOS update, take the capture again (below) and resample. `Mock.controlsInset` (where the title row's controls start)
+is measured from the same capture.
 
 **A new topic** is a file in `Mac/Sources/MacMockups/Screens/` with `static let screens: [Screen]`, listed in
 `Screens.all` (`Screen.swift`). Start from `Reference.swift`'s screens (K0–K4); K9 redraws the app's own capture
 (`build/ui-audit/main-sidebar-dark.png` from `MainMockupPresentationTests`) to check the kit against the app. Ids are a
-letter and number, then a name; ones the iOS screens use cannot be reused.
+letter and number, then a name; ones the iOS screens use cannot be reused. Once a design ships, delete its exploration
+screens: the kit draws what shipped.
+
+**The app's captures** to check against come from its presentation tests, run in the test VM (no host focus taken):
+`python3 test/vm.py --vm NAME test MainMockupPresentationTests ChatToolGroupingTests ChatPresentationTests
+FilesPresentationTests GitChangesPresentationTests GitCommitsPresentationTests` (more in `DispatchTests/*Presentation*`);
+the PNGs land in the run's `build/vm-tests/<run>/build/` (`ui-audit`, `chat-group-validation`, `chat-footer-validation`,
+`files-audit`, …). Check a capture's date against the app's commits before trusting it.
+
+The landing page (dispatch.yachts, the `gh-pages` branch) uses K3, the `files` group (J1, J2b, J3) and the `landing`
+group: L1 the terminal with the sidebar hidden, rendered once per scheme for the theme picker; L2 herdr in a plain
+terminal and L3 the same session in Dispatch (branches shown, Settings › Show git branches on); L4 Claude Code in the
+terminal and L5 the same session in Chat, its steps opened; L6 the theme creator, the app's own `ThemeMakerView` linked
+into `App/` with the Themes sources it needs (`Shims.swift` stands in for Settings and the custom-scheme store). Shots
+are cropped 80 pixels on each side to the window.
 
 ## Screens
 

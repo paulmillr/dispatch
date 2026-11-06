@@ -273,7 +273,7 @@ enum WatchFixtures {
             WatchHost(id: studio, name: "studio", order: 0, state: .connected, tint: "#C98BD9", system: "macos", osLabel: "macOS 26.1",
                       multiplexer: "tmux", lastConnected: now, latency: 18,
                       stats: stats(cpu: 34, memory: 11, of: 32, disk: 48, of: 512, warnings: [.disk], seed: 11, now: now)),
-            WatchHost(id: lab, name: "lab", order: 1, state: .connected, tint: "#6FB7A8", system: "linux", osLabel: "Ubuntu 24.04",
+            WatchHost(id: lab, name: "lab", order: 1, state: .connected, tint: "#6FB7A8", system: "linux", osLabel: "Debian 13",
                       multiplexer: "herdr", lastConnected: now, latency: 41,
                       stats: stats(cpu: 12, memory: 6.5, of: 16, disk: 210, of: 480, seed: 5, now: now)),
             WatchHost(id: pi, name: "pi", order: 2, state: .offline, tint: nil, system: "linux", osLabel: "Debian 13",
@@ -529,7 +529,7 @@ enum WatchFixtures {
                                        memoryTotal: Int64(32 * gib), diskFree: Int64(48.7 * gib) + Int64(h), diskTotal: Int64(494 * gib),
                                        warnings: [.cpu, .memory, .disk], history: history, sampled: now)
             hosts.append(WatchHost(id: id, name: "host-\(h)", order: h, state: h % 2 == 0 ? .connected : .connecting, tint: "#C98BD9",
-                                   system: "linux", osLabel: "Ubuntu 24.04", problem: h % 2 == 0 ? nil : "Reconnecting after the network changed",
+                                   system: "linux", osLabel: "Debian 13", problem: h % 2 == 0 ? nil : "Reconnecting after the network changed",
                                    multiplexer: "tmux", lastConnected: now, latency: 18.123456789 + Double(h),
                                    offlineSince: now.addingTimeInterval(-Double(h) * 60), stats: stats))
             for s in 0..<2 {

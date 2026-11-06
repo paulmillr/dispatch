@@ -84,21 +84,52 @@ struct ChatColors {
     static var detail: Font { font(12).monospacedDigit() }
     static var reply: Font { font(15) }
     static var bodyLine: CGFloat { AppFont.lineHeight(size: 14) + 4 }
+
+    // ChatTypography.init(preferences:)'s measurements, for San Francisco (drawn in SF Rounded) at size 14.
+    private static func rounded(_ size: CGFloat) -> NSFont {
+        let font = NSFont.systemFont(ofSize: size)
+        return font.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? font
+    }
+    private static var selected: NSFont { rounded(14 * scale) }
+    static var detailSize: CGFloat { 12 * scale }
+    /// The code font's detail size (code stays unscaled): keycaps and the like.
+    static let codeDetailSize: CGFloat = 12
+    /// A "0"'s width: bubbles keep to 80 of them, a group's run chart is 16.
+    static var characterWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: selected]).width }
+    static var detailLineHeight: CGFloat {
+        NSLayoutManager().defaultLineHeight(for: NSFont(descriptor: selected.fontDescriptor, size: detailSize) ?? rounded(detailSize))
+    }
+    static var replyLineHeight: CGFloat { NSLayoutManager().defaultLineHeight(for: rounded(15 * scale)) }
+    /// An opened group's title column: the widest common step name in semibold detail text, plus a point.
+    static var stepTitleWidth: CGFloat {
+        let detail = NSFont(descriptor: selected.fontDescriptor, size: detailSize) ?? rounded(detailSize)
+        let semibold = NSFont(descriptor: detail.fontDescriptor.addingAttributes(
+            [.traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold]]), size: detailSize) ?? detail
+        let names = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Locate"]
+        return ceil(names.map { ($0 as NSString).size(withAttributes: [.font: semibold]).width }.max() ?? 64) + 1
+    }
 }
 
 /// Liquid Glass does not draw offscreen, so glass surfaces are drawn as the app's capture shows them over a dark or
-/// light window (build/ui-audit/main-sidebar-*.png): opaque tones, sampled.
+/// light window: opaque tones, sampled from build/ui-audit/main-sidebar-*.png (MainMockupPresentationTests, macOS 26.6
+/// in the test VM, 2026-11-06) as ColorSync renders them into sRGB (a CGContext in sRGB, as a browser shows the PNG; the
+/// capture carries the VM display's profile). Another macOS draws its glass in other tones: sample a new capture again.
 @MainActor enum GlassTone {
     static var dark: Bool { Chrome.palette.isDark }
-    /// The sidebar under glass: the system's material, not the palette's sidebar.
-    static var sidebar: Color { dark ? Color(hex: 0x2c2c2e) : Color(hex: 0xeeeff0) }
-    /// The strip's capsule track, and the button capsules beside it.
-    static var track: Color { dark ? Color(hex: 0x3a3a3c) : Color(hex: 0xfbfbfc) }
-    static var trackEdge: Color { dark ? Color.white.opacity(0.07) : Color.black.opacity(0.08) }
+    /// The sidebar's glass panel (AppKit's sidebar glass, SpaceSidebar.glassPanel): the system's material, not the
+    /// palette's sidebar. It floats 8 points in from the window's leading, top and bottom edges, with a 10-point
+    /// corner and a hairline rim, on `sidebarWindow`.
+    static var sidebar: Color { dark ? Color(hex: 0x171719) : Color(hex: 0xf8f8f9) }
+    static var sidebarWindow: Color { dark ? Color(hex: 0x121214) : Color(hex: 0xededef) }
+    static var sidebarEdge: Color { dark ? Color(hex: 0x353538) : Color(hex: 0xffffff) }
+    /// The strip's capsule track, and the glass buttons beside it (and the sidebar's glass capsules and discs).
+    static var track: Color { dark ? Color(hex: 0x161617) : Color(hex: 0xf6f6f7) }
+    /// The glass's rim, a hairline brighter than its fill.
+    static var trackEdge: Color { dark ? Color(hex: 0x2b2b2e) : Color(hex: 0xfefeff) }
     /// The selected tab's pill on the track.
-    static var selected: Color { dark ? Color(hex: 0x505052) : Color(hex: 0xffffff) }
+    static var selected: Color { dark ? Color(hex: 0x1d1d1d) : Color(hex: 0xb8b8b9) }
     /// The strip's background behind the glass: the window's.
-    static var bar: Color { dark ? Color(hex: 0x0e0e12) : Chrome.window }
+    static var bar: Color { dark ? Color(hex: 0x0d0d0f) : Color(hex: 0xeeeef0) }
     static var shadow: Color { .black.opacity(dark ? 0.35 : 0.1) }
 }
 
@@ -113,8 +144,14 @@ extension Color {
 @MainActor enum Mock {
     /// Liquid Glass, as the app ships by default; `--flat` draws flat chrome (LiquidGlassStore.active off).
     static var glass: Bool { LiquidGlassStore.shared.active }
+    /// The sidebar's glass as macOS 26 draws it, a panel inset 8 points with a corner and rim; off, as macOS 27 draws
+    /// it, a flush full-height column (SystemSidebarGlass in LiquidGlass.swift). macOS 27 is the current system.
+    static var insetSidebar = false
     static var typography: AppTypography { AppTypography(contentSize: contentSize) }
     static var contentSize: CGFloat = 14
+    /// The window's controlsInset (the zoom button's end + 16, AppDelegate), where the title row's controls start:
+    /// measured from the app's captures, 85 on glass (main-sidebar-dark.png, 2026-11-06), 82 flat.
+    static var controlsInset: CGFloat { glass ? 85 : 82 }
     /// `--scheme`: a bundled terminal scheme (Vendor/Term/Resources/ghostty/themes, extras/ghostty) in place of
     /// dispatch-black.
     static var scheme: String?

@@ -19,7 +19,7 @@ struct HostSummary {
 
     var tint: Color { offline ? Color(uiColor: .systemGray) : host.tint.color }
 
-    /// The helper's `os_label` ("macOS 26.1", "Ubuntu 24.04"), live or as last saved.
+    /// The helper's `os_label` ("macOS 26.1", "Debian 13"), live or as last saved.
     var osLabel: String? { session.hello?.identity.map(HostRecord.osLabel) ?? host.osLabel ?? host.system?.label }
 
     /// The transport word in the status line. The connection is SSH with reconnect and reattach; the copy keeps the

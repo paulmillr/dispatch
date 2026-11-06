@@ -73,7 +73,7 @@ enum OKLCHDisc {
     }
 
     /// A point on a disc of `radius` around `center` for hue `hue` (0° up) at `fraction` of the radius.
-    static func point(center: CGPoint, radius: CGFloat, hue: Double, fraction: Double) -> CGPoint {
+    nonisolated static func point(center: CGPoint, radius: CGFloat, hue: Double, fraction: Double) -> CGPoint {
         let angle = (hue - 90) * .pi / 180
         return CGPoint(x: center.x + radius * fraction * cos(angle), y: center.y + radius * fraction * sin(angle))
     }

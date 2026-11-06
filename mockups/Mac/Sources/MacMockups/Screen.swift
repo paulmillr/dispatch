@@ -22,9 +22,6 @@ struct Screen {
 /// here.
 enum Screens {
     static var all: [Screen] {
-        Reference.screens
-            + TreeHostIcon.screens + TreeHostIcon.variants
-            + SidebarModeToggle.screens + SidebarModeText.screens + SidebarModeHeader.screens
-            + FilesModes.screens
+        Reference.screens + FilesModes.screens + Landing.screens
     }
 }
