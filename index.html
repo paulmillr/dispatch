@@ -118,10 +118,13 @@ h1 .grad { background: linear-gradient(100deg, #ff9be9, var(--accent) 45%, #8f5c
 }
 .cmd-copy:hover { border-color: rgba(228,111,214,.6); box-shadow: 0 0 0 4px rgba(228,111,214,.12); }
 .cmd-copy .p { color: var(--accent); user-select: none; }
-.cmd-copy .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.cmd-copy .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; position: relative; }
 .cmd-copy .icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: rgba(255,255,255,.05); color: var(--dim); flex: none; }
 .cmd-copy .icon svg { width: 16px; height: 16px; }
-.cmd-copy.copied .icon, .cmd-copy.copied .t { color: var(--green); }
+.cmd-copy.copied .icon { color: var(--green); }
+/* The command stays in place, hidden, so the button keeps its width while it says it copied. */
+.cmd-copy.copied .t { color: transparent; }
+.cmd-copy.copied .t::after { content: 'copied to clipboard'; position: absolute; top: 0; left: 0; color: var(--green); }
 .btn {
   display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 22px; border-radius: 12px;
   font: 600 15px/1 var(--sans); text-decoration: none; color: #1a0717;
@@ -649,10 +652,8 @@ footer .r { margin-left: auto; }
   for (const b of document.querySelectorAll('[data-copy]')) {
     b.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(b.dataset.copy); } catch (e) { return; }
-      const t = b.querySelector('.t');
       b.classList.add('copied');
-      t.textContent = 'copied to clipboard';
-      setTimeout(() => { b.classList.remove('copied'); t.textContent = b.dataset.copy; }, 1400);
+      setTimeout(() => b.classList.remove('copied'), 1400);
     });
   }
   for (const group of document.querySelectorAll('[data-stack]')) {
