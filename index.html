@@ -17,20 +17,20 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Dispatch">
-<meta property="og:title" content="Dispatch — a Mac terminal, fluent in agents">
+<meta property="og:title" content="Dispatch: a native Mac terminal for the agent era">
 <meta property="og:description" content="A native macOS terminal. Codex, Claude Code and Pi become real chats; tmux and herdr tabs become real Mac tabs; review agents like pull requests and talk to them hands-free.">
 <meta property="og:url" content="https://dispatch.yachts/">
-<meta property="og:image" content="https://dispatch.yachts/og.png?v=5e94634a">
+<meta property="og:image" content="https://dispatch.yachts/og.png?v=28bf5570">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Dispatch: your terminal, fluent in agents. Codex, Claude and Pi become real chats; tmux and herdr become real Mac tabs; review, files and voice built in.">
+<meta property="og:image:alt" content="Dispatch, free and open source. A terminal: dispatch, your terminal, fluent in agents. Codex, Claude and Pi become real chats; tmux and herdr become real Mac tabs; review, files and voice built in.">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Dispatch — a Mac terminal, fluent in agents">
+<meta name="twitter:title" content="Dispatch: a native Mac terminal for the agent era">
 <meta name="twitter:description" content="A native macOS terminal. Codex, Claude Code and Pi become real chats; tmux and herdr tabs become real Mac tabs; review agents like pull requests and talk to them hands-free.">
-<meta name="twitter:image" content="https://dispatch.yachts/og.png?v=5e94634a">
-<meta name="twitter:image:alt" content="Dispatch: your terminal, fluent in agents. Codex, Claude and Pi become real chats; tmux and herdr become real Mac tabs; review, files and voice built in.">
+<meta name="twitter:image" content="https://dispatch.yachts/og.png?v=28bf5570">
+<meta name="twitter:image:alt" content="Dispatch, free and open source. A terminal: dispatch, your terminal, fluent in agents. Codex, Claude and Pi become real chats; tmux and herdr become real Mac tabs; review, files and voice built in.">
 
 <style>
 :root {
@@ -244,6 +244,10 @@ h2 em { font-style: normal; color: var(--accent); }
 /* A window small enough to show whole on a phone. */
 .stack.fit { max-width: 620px; margin-left: auto; margin-right: auto; }
 .fit img { border-radius: 3.33% / 6.67%; }
+/* Pictures of different heights: the stack takes the shown one's, the others lie over it without taking room. */
+.stack.fit { position: relative; align-items: start; }
+.stack.fit picture[hidden] { position: absolute; inset: 0 0 auto 0; }
+.themes button.creator i { background: conic-gradient(from 90deg, #f38ba8, #fab387, #f9e2af, #a6e3a1, #89dceb, #b4befe, #cba6f7, #f38ba8); }
 
 
 /* doctor */
@@ -502,6 +506,7 @@ footer .r { margin-left: auto; }
         <button type="button" aria-pressed="false" data-show="vaporwave" style="--sw:#180827"><i></i>vaporwave</button>
         <button type="button" aria-pressed="false" data-show="colorblind" style="--sw:#000000;--sw2:#feacd0"><i></i>colorblind</button>
         <button type="button" aria-pressed="false" data-show="rootaccess" style="--sw:#030a04"><i></i>root access</button>
+        <button type="button" aria-pressed="false" data-show="creator" class="creator"><i></i>theme creator</button>
       </div>
     </div>
     <div class="stack frame fit rv" id="theme-stack">
@@ -511,6 +516,7 @@ footer .r { margin-left: auto; }
       <picture data-name="vaporwave" data-focus="0.42" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif?v=09986960" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg?v=0c1a0e89" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
       <picture data-name="colorblind" data-focus="0.42" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif?v=eb33cc50" type="image/avif"><img src="img/K1-terminal-colorblind.jpg?v=5004e7e4" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
       <picture data-name="rootaccess" data-focus="0.42" hidden data-caption="Root Access, with its phosphor glow and scanlines"><source srcset="img/K1-terminal-rootaccess.avif?v=97a69e73" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg?v=1833aa73" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
+      <picture data-name="creator" data-focus="0.5" hidden data-caption="Theme creator: a readable scheme grown from one color, in OKLCH"><source srcset="img/K1-theme-creator.avif?v=16a56810" type="image/avif"><img src="img/K1-theme-creator.jpg?v=73d45663" width="1240" height="1172" loading="lazy" style="border-radius: 2.58% / 2.73%" alt="The theme creator: style chips, a live terminal preview with its sixteen colors, an OKLCH color wheel, and Lightness, Vibrancy, Contrast and Tint sliders"></picture>
     </div>
     <p class="caption mono" data-caption-for="theme-stack">Dispatch (OLED)</p>
   </div>
