@@ -46,7 +46,7 @@ number, `CFBundleVersion`, is the commit's UTC time (`20261104.0002`), so both b
 
 ## Commit machine
 
-`scripts/release.sh X.Y.Z`, from the commit you want to release (main, or ahead of it). First it checks, and lists
+`scripts/release.sh X.Y.Z [-m NOTES]`, from the commit you want to release (main, or ahead of it). First it checks, and lists
 every problem at once: `git`, `gh` (logged in), `gpg`; X.Y.Z newer than the apps' version and not released (no tag
 `X.Y.Z` on GitHub), the version files unchanged; main fast-forwarding to HEAD and every commit to push signed (main
 accepts only signed commits); GitHub's checks on HEAD green, a rehearsal of the release build included. Once those pass, it signs a throwaway commit object (nothing points to it) to prove signing works
@@ -56,7 +56,8 @@ yes:
 1. `MARKETING_VERSION` of all four apps (the iPhone, watch and widget ones keep in step) set to X.Y.Z in `project.yml`
    and `Dispatch.xcodeproj/project.pbxproj`;
 2. the version commit: a signed commit `X.Y.Z` of those two files only (other uncommitted changes stay out, and are
-   listed), dated in UTC;
+   listed), dated in UTC; `-m NOTES` is its body, signed with it: the summary at the top of the release notes
+   (`-m "Stability improvements"`);
 3. `git push origin HEAD:refs/heads/main`, which starts the release build, and its link;
 4. the next step: `scripts/release-publish.sh X.Y.Z` on the signing machine ([Signing machine](#signing-machine)),
    run there by hand; it waits for GitHub's build.
@@ -137,8 +138,9 @@ Do that before releasing a change to the build, the workflow or `release/app.jso
 macOS on Apple Silicon with the Xcode `release/app.json` pins (`release/signer-setup.sh builder` installs it with
 `xcodes`), GnuPG (`gpg`) and `gh`. Two clones side by side:
 `dispatch` (this repository; its checkout only bootstraps the checks, see below) and `homebrew-tap`
-(`RELEASE_TAP` in `~/.config/dispatch-release/release.env` moves it). `gh` is logged in with a token that may create
-releases in `paulmillr/dispatch` and read its Actions artifacts; git may push to `homebrew-tap`, with a `user.name`
+(`RELEASE_TAP` in `~/.config/dispatch-release/release.env` moves it). `gh` is logged in with a fine-grained token for
+`paulmillr/dispatch` with Contents: read+write (releases; publishing one creates its tag) and Actions/Attestations:
+read (the build and its attestation); git may push to `homebrew-tap`, with a `user.name`
 and `user.email` to commit with (`release-publish.sh` checks both before building). Run it in a login shell: over
 SSH, `ssh -t signer zsh -lc '…'`, or `gpg` and `gh` from Homebrew are not on `PATH`. Each release works in
 `~/.config/dispatch-release/work/<variant>/X.Y.Z/`, on this machine only. Per account:
@@ -155,9 +157,11 @@ SSH, `ssh -t signer zsh -lc '…'`, or `gpg` and `gh` from Homebrew are not on `
 
 Once:
 
-1. `scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT`: the commit machine's public key
-   (`gpg --export --armor KEYID`) and the fingerprint as that machine shows it (`gpg --fingerprint KEYID`), read off
-   its screen rather than copied with the file. Only this key is in the keyring the checks use.
+1. `scripts/release/signer-setup.sh trust`: pins the commit key, `scripts/release/commit-key.asc` of this clone (or a
+   file given after `trust`, `gpg --export --armor KEYID` on the commit machine), exactly one key. It shows the
+   fingerprint: compare it once with `gpg --fingerprint` on the commit machine, since the clone came from GitHub. The
+   pin stays until `trust` runs again, whatever the repository says later. Only this key is in the keyring the checks
+   use.
 2. `scripts/release/signer-setup.sh pilot KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID`: KEYS_DIR is the unzipped keys folder,
    one `.p12` and the intermediates (macOS asks for the `.p12`'s password).
 3. Optionally, `scripts/release/signer-setup.sh builder`: a build user and the pinned Xcode, re-runnable (without it,
@@ -186,7 +190,8 @@ when the step fails, with how to go on).
 3. **Ship.** It shows the plan and asks `ship X.Y.Z? [y/N]`. Then `scripts/release/notarize.sh` re-signs every
    Mach-O and the app with the hardened runtime, a secure timestamp and the microphone entitlement, notarizes and
    staples the app, packs an LZMA DMG, signs, notarizes and staples that; the DMG is checked as `release/verify.sh`
-   checks it. Pilot only: the GitHub release `X.Y.Z` with the DMG (its notes give the SHA-256 and the GitHub run),
+   checks it. Pilot only: the GitHub release `X.Y.Z` with the DMG (its notes: the version commit's summary, then
+   `---`, how to install, the commit and the GitHub run, and how to check it; GitHub shows the DMG's SHA-256),
    created as a draft targeting the version commit and published once the DMG is up, which creates the tag `X.Y.Z`
    there (checked); right after, a new commit "Dispatch X.Y.Z" in the `homebrew-tap` clone with the cask's `version`
    and `sha256`, pushed (never amended or forced).

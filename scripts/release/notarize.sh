@@ -68,15 +68,23 @@ sign_app() {
   codesign --verify --deep --strict --verbose=2 "$app"
 }
 
-# Uploads $2 once (the ID goes to $1 first), then waits for Apple's verdict; reruns wait on the saved ID.
+# A stage, in the log, and on the checklist line when release-publish.sh runs this (its progress function).
+report() {
+  echo "$1"
+  if declare -F progress > /dev/null; then progress "$1"; fi
+}
+
+# Uploads $2, $3 (the app or the DMG), once (the ID goes to $1 first), then waits for Apple's verdict; reruns wait on
+# the saved ID.
 notarize() {
-  local receipt="$1" file="$2" id status
+  local receipt="$1" file="$2" what="$3" id status
   if [[ ! -f "$receipt" ]]; then
+    report "uploading $what to Apple's notary service"
     xcrun notarytool submit "$file" --keychain-profile "$PROFILE" --output-format json > "$receipt.next"
     mv "$receipt.next" "$receipt"
   fi
   id="$(plutil -extract id raw "$receipt")"
-  echo "Notarizing $(basename "$file"): submission $id"
+  report "$what sent to Apple (submission $id), waiting for notarization: usually a few minutes"
   xcrun notarytool wait "$id" --keychain-profile "$PROFILE" --output-format json > "$receipt.status" || true
   status="$(plutil -extract status raw "$receipt.status" 2>/dev/null || echo unknown)"
   [[ "$status" == Accepted ]] ||
@@ -130,6 +138,7 @@ if [[ ! -d "$app" ]]; then
     fail "$ARCHIVE does not contain a macOS application"
   mv "$OUTPUT/unpacked/$app_name.app" "$app.signing"
   rmdir "$OUTPUT/unpacked"
+  report "signing the app"
   sign_app "$app.signing" "$IDENTITY"
   mv "$app.signing" "$app"
 fi
@@ -139,7 +148,8 @@ dmg="$OUTPUT/$app_name-$version.dmg"
 # 2. Notarize and staple the app itself: Gatekeeper accepts it offline after it leaves the DMG.
 if ! xcrun stapler validate -q "$app" 2>/dev/null; then
   [[ -f "$OUTPUT/app-submission.zip" ]] || ditto -c -k --keepParent "$app" "$OUTPUT/app-submission.zip"
-  notarize "$OUTPUT/app-notarization.json" "$OUTPUT/app-submission.zip"
+  notarize "$OUTPUT/app-notarization.json" "$OUTPUT/app-submission.zip" "the app"
+  report "the app notarized, stapling it"
   xcrun stapler staple "$app"
   xcrun stapler validate "$app"
 fi
@@ -152,6 +162,7 @@ if [[ ! -f "$dmg" ]]; then
   mkdir "$stage"
   ditto "$app" "$stage/$app_name.app"
   ln -s /Applications "$stage/Applications"
+  report "packing and signing the DMG"
   hdiutil create -quiet -volname "$app_name" -srcfolder "$stage" -fs HFS+ -format ULMO "$OUTPUT/$app_name.next.dmg"
   codesign --sign "$IDENTITY" --timestamp "$OUTPUT/$app_name.next.dmg"
   codesign --verify --strict --verbose=2 "$OUTPUT/$app_name.next.dmg"
@@ -161,7 +172,8 @@ fi
 
 # 4. Notarize and staple the DMG: it opens without a network check too.
 if ! xcrun stapler validate -q "$dmg" 2>/dev/null; then
-  notarize "$OUTPUT/dmg-notarization.json" "$dmg"
+  notarize "$OUTPUT/dmg-notarization.json" "$dmg" "the DMG"
+  report "the DMG notarized, stapling it"
   xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"
 fi

@@ -1,14 +1,15 @@
 #!/bin/bash
 # Release, on the machine that signs commits (docs/releasing.md, Commit machine):
 #
-#   scripts/release.sh X.Y.Z
+#   scripts/release.sh X.Y.Z [-m NOTES]
 #
 # Checks everything first and lists every problem at once: tools and gh's login, X.Y.Z newer than the apps' version
 # and not released yet, the version files unchanged, main fast-forwarding to HEAD, the commits to push signed,
 # GitHub's checks on HEAD green (a rehearsal of the release build counts), git signing commits (it may ask for the
 # key) and with which key. Then it shows what it is about to do and asks.
 # Then: MARKETING_VERSION set to X.Y.Z in the version files scripts/release/app.json lists, a signed commit "X.Y.Z" of
-# those files only (the version commit, dated in UTC), pushed to main. That starts GitHub's release build
+# those files only (the version commit, dated in UTC; -m NOTES, the release notes' summary, is its body: signed with
+# it, and put at the top of the GitHub release), pushed to main. That starts GitHub's release build
 # (.github/workflows/release.yml). No tag: publishing the release on the signing machine creates it, so a version that
 # fails before then leaves no tag behind.
 #
@@ -30,8 +31,14 @@ utc() {
   GIT_AUTHOR_DATE="$now" GIT_COMMITTER_DATE="$now" TZ=UTC "$@"
 }
 
-[[ $# == 1 && "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: scripts/release.sh X.Y.Z (three numbers, no v)"
-version="$1"
+usage="usage: scripts/release.sh X.Y.Z [-m NOTES] (three numbers, no v; NOTES: the release's summary)"
+[[ $# -ge 1 && "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$usage"
+version="$1" notes=""
+shift
+if [[ $# -gt 0 ]]; then
+  [[ $# == 2 && "$1" == -m && -n "$2" ]] || die "$usage"
+  notes="$2"
+fi
 cd "$ROOT"
 title "$NAME $version"
 
@@ -171,7 +178,7 @@ publish="scripts/release-publish.sh $version"
 if [[ "$stage" != published ]]; then
   if [[ "$stage" == new ]]; then
     plan="MARKETING_VERSION $old → $version ($counts)
-commit $version, the version commit (the version files only, signed)
+commit $version, the version commit (the version files only, signed)${notes:+, notes: $notes}
 push it to main: that starts GitHub's release build"
   else
     plan="push the version commit ${local_commit:0:8} to main: that starts GitHub's release build"
@@ -195,10 +202,10 @@ if [[ "$stage" == new ]]; then
   config version --set "$version" > /dev/null
   ok "version  $old → $version"
   pending "commit"
-  if ! output="$(utc git commit -S -q -m "$version" -- "${FILES[@]}" 2>&1)"; then
+  if ! output="$(utc git commit -S -q -m "$version" ${notes:+-m "$notes"} -- "${FILES[@]}" 2>&1)"; then
     bad "commit failed; the version files are changed, nothing is committed"
     note "$output"
-    resume "git commit -S -m '$version' -- ${FILES[*]}, then scripts/release.sh $version"
+    resume "git commit -S -m '$version'${notes:+ -m $(printf %q "$notes")} -- ${FILES[*]}, then scripts/release.sh $version"
     exit 1
   fi
   ok "commit   $version" "$(git rev-parse --short HEAD)"

@@ -86,8 +86,10 @@ else
 fi
 
 pending "gh"
-if ! gh auth status > /dev/null 2>&1; then bad "gh is not logged in; run: gh auth login"
-elif ! gh run list -R "$REPOSITORY" --workflow release.yml --limit 1 > /dev/null 2>&1; then bad "gh cannot read $REPOSITORY's Actions"
+# A fine-grained token for the repository needs only these (docs/releasing.md, Signing machine).
+token="a token for $REPOSITORY with Contents: read+write; Actions/Attestations: read"
+if ! gh auth status > /dev/null 2>&1; then bad "gh is not logged in; run: gh auth login, with $token"
+elif ! gh run list -R "$REPOSITORY" --workflow release.yml --limit 1 > /dev/null 2>&1; then bad "gh cannot read $REPOSITORY's Actions; it needs $token"
 else ok "gh logged in, reads Actions"; fi
 
 # Signing over SSH needs the login keychain unlocked, and macOS cannot ask in a dialog there: asked now, not later.
@@ -226,27 +228,21 @@ release_state() {
     \"\(.id) \(.draft) \([.assets[] | select(.name == \"$NAME-$version.dmg\")] | length) \([.assets[] | select(.name == \"$NAME-$version.dmg\") | .digest // \"\"] | join(\"\"))\""
 }
 publish_release() {
-  local state id draft assets existing minimum tagged
+  local state id draft assets existing tagged summary run_link built
   state="$(release_state)"
   if [[ -z "$state" ]]; then
-    minimum="$(field "$work/github" mac.minimum_macos)"
-    if [[ "$from" == github ]]; then
-      built="Built from the signed version commit $commit by [GitHub Actions](https://github.com/$REPOSITORY/actions/runs/$(cat "$work/github.run"))
-(attested: \`gh attestation verify\`); the signing machine signed that build without building it again."
-    else
-      built="Built from the signed version commit $commit twice, by [GitHub Actions](https://github.com/$REPOSITORY/actions/runs/$(cat "$work/github.run"))
-(attested: \`gh attestation verify\`) and independently on the signing machine; the two builds matched before signing."
-    fi
-    cat > "$work/notes.md" <<EOF
-$NAME.app for macOS $minimum and later, notarized. \`brew install --cask $(python3 -I "$scripts/release/config.py" brew)\`, or open the DMG.
-
-SHA-256 of $NAME-$version.dmg: \`$digest\`
-
-$built
-\`scripts/release/verify.sh $version --team $team\` checks this DMG against GitHub's build; with \`--reproduce\` it also
-builds the commit again and compares the two byte for byte.
-EOF
-    gh release create "$version" "$dmg" -R "$REPOSITORY" --draft --target "$commit" --title "$NAME $version" --notes-file "$work/notes.md"
+    # The summary: the version commit's body (scripts/release.sh -m), signed with it. One line per paragraph: GitHub
+    # shows every newline of the notes as a line break.
+    summary="$(git -C "$clone" show -s --format=%b "$commit")"
+    run_link="[GitHub Actions](https://github.com/$REPOSITORY/actions/runs/$(cat "$work/github.run"))"
+    if [[ "$from" == github ]]; then built="Built once from signed commit $commit by $run_link, attested; not rebuilt before signing."
+    else built="Built twice from signed commit $commit, by $run_link, attested, and on the signing machine; both builds matched."; fi
+    {
+      [[ -z "$summary" ]] || printf '%s\n\n---\n\n' "$summary"
+      printf '`brew install --cask %s` or open `.dmg`.\n\n' "$(python3 -I "$scripts/release/config.py" brew)"
+      printf '%s Check: `scripts/release/verify.sh %s`, add `--reproduce` to rebuild it.\n' "$built" "$version"
+    } > "$work/notes.md"
+    gh release create "$version" "$dmg" -R "$REPOSITORY" --draft --target "$commit" --title "$version" --notes-file "$work/notes.md"
     state="$(release_state)"
   fi
   read -r id draft assets existing <<< "$state"

@@ -2,13 +2,13 @@
 # One-time setup of the signing machine for this app (docs/releasing.md, Signing machine), from its clone of the app's
 # repository. Its settings go to ~/.config/<cask>-release (the cask in scripts/release/app.json):
 #
-#   scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT
+#   scripts/release/signer-setup.sh trust [COMMIT_KEY.asc]
 #   scripts/release/signer-setup.sh builder [USER]
 #   scripts/release/signer-setup.sh VARIANT KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID
 #
-# trust: the OpenPGP public key that signs release commits (gpg --export --armor KEYID on the machine that
-# signs commits), and its primary key's fingerprint as that machine shows it (gpg --fingerprint KEYID), compared here,
-# not taken from the file. Imports it into gnupg/ there, a keyring holding only that key, and pins the fingerprint as
+# trust: the OpenPGP public key that signs release commits, exactly one key: scripts/release/commit-key.asc of this
+# clone, or a file (gpg --export --armor KEYID on the machine that signs commits). Shows its fingerprint, to compare
+# with that machine's gpg --fingerprint, and warns when app.json's commit_key is another. Imports it into gnupg/ there, a keyring holding only that key, and pins the fingerprint as
 # RELEASE_COMMIT_KEY in release.env there: scripts/release-publish.sh signs nothing whose version commit another key
 # signed. Run it again after the key changes.
 #
@@ -37,9 +37,9 @@ KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 fail() { echo "error: $*" >&2; exit 1; }
 
 if [[ "${1:-}" == trust ]]; then
-  [[ $# == 3 && -f "$2" ]] || fail "usage: scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT"
-  fingerprint="$(tr -d ' ' <<< "$3" | tr a-f A-F)"
-  [[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]] || fail "'$3' is not a 40-digit OpenPGP fingerprint (gpg --fingerprint KEYID)"
+  [[ $# -le 2 ]] || fail "usage: scripts/release/signer-setup.sh trust [COMMIT_KEY.asc]"
+  set -- trust "${2:-$(dirname "${BASH_SOURCE[0]}")/commit-key.asc}"
+  [[ -f "$2" ]] || fail "no $2"
   command -v gpg > /dev/null || fail "no gpg: brew install gnupg"
   rm -rf "$CONFIG/gnupg.next"
   mkdir -p "$CONFIG"
@@ -47,7 +47,8 @@ if [[ "${1:-}" == trust ]]; then
   mkdir -m 700 "$CONFIG/gnupg.next"
   GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --quiet --import "$2"
   keys="$(GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --with-colons --fingerprint 2> /dev/null | awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }')"
-  [[ "$keys" == "$fingerprint" ]] || fail "$2 holds ${keys:-no key}${keys:+ (primary fingerprints)}, not exactly $fingerprint"
+  [[ "$keys" =~ ^[0-9A-F]{40}$ ]] || { rm -rf "$CONFIG/gnupg.next"; fail "$2 must hold exactly one public key, not: ${keys:-none}"; }
+  fingerprint="$keys"
   echo "$fingerprint:6:" | GNUPGHOME="$CONFIG/gnupg.next" gpg --batch --quiet --import-ownertrust
   rm -rf "$CONFIG/gnupg"
   mv "$CONFIG/gnupg.next" "$CONFIG/gnupg"
@@ -58,6 +59,9 @@ if [[ "${1:-}" == trust ]]; then
   mv "$CONFIG/release.env.next" "$CONFIG/release.env"
   GNUPGHOME="$CONFIG/gnupg" gpg --batch --fingerprint "$fingerprint"
   echo "Pinned the commit key $fingerprint in $CONFIG/release.env."
+  pinned="$(config get commit_key 2> /dev/null || true)"
+  [[ "$pinned" == "$fingerprint" ]] ||
+    echo "warning: scripts/release/app.json pins ${pinned:-no commit_key}, not this key: release/verify.sh --reproduce would refuse the releases"
   for tool in gh; do
     command -v "$tool" > /dev/null || echo "note: $tool is not installed (docs/releasing.md, Signing machine)"
   done
@@ -140,7 +144,7 @@ pin the build GitHub's runner has (docs/releasing.md, Two builders)"
   echo "Build as it: scripts/release-publish.sh X.Y.Z --build-as-user $user"
   exit 0
 fi
-usage="usage: scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT | builder [USER] | VARIANT KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID"
+usage="usage: scripts/release/signer-setup.sh trust [COMMIT_KEY.asc] | builder [USER] | VARIANT KEYS_DIR AuthKey_KEYID.p8 ISSUER_ID"
 [[ $# == 4 ]] || fail "expected 4 arguments, got $#: $*
 $usage"
 variant="$1" keys="$2" key="$3" issuer="$4"

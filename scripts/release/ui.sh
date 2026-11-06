@@ -65,13 +65,27 @@ logged() {
   set -e
 }
 
+# progress TEXT: a stage of the step running (its pending line again, with TEXT), for the scripts a step runs: step
+# exports it, writing to file descriptor 3, the terminal. A plain line when that is not a terminal.
+progress() {
+  if [[ -n "${RELEASE_PROGRESS_TTY:-}" ]]; then
+    printf '\r\033[2K  \033[38;5;8m· %s…  %s\033[0m' "$RELEASE_PROGRESS_LABEL" "$1" >&3
+  else
+    printf '    %s\n' "$1" >&3
+  fi
+}
+
 # step LABEL LOG COMMAND...: one line with its time; a failure stops the script with the log's tail, the log and how
 # to go on (the same command again: finished steps are skipped).
 step() {
   local label="$1" log="$2" begun=$SECONDS
   shift 2
   pending "$label"
-  logged "$log" "$@"
+  export RELEASE_PROGRESS_LABEL="$label" RELEASE_PROGRESS_TTY="$tty"
+  export -f progress
+  logged "$log" "$@" 3>&1
+  export -n -f progress
+  unset RELEASE_PROGRESS_LABEL RELEASE_PROGRESS_TTY
   if [[ $status != 0 ]]; then
     bad "$label failed"
     note "$(tail -15 "$log")"

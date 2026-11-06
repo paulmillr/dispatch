@@ -39,7 +39,7 @@ source_checks() {
     key="${RELEASE_COMMIT_KEY:-}"
     [[ "$key" =~ ^[0-9A-F]{40}$ ]] || { bad "RELEASE_COMMIT_KEY in $CONFIG/release.env is not a 40-digit fingerprint"; key=""; }
   else
-    bad "no commit key pinned; run: scripts/release/signer-setup.sh trust COMMIT_KEY.asc FINGERPRINT"
+    bad "no commit key pinned; run: scripts/release/signer-setup.sh trust"
   fi
 
   commit="" number=""
@@ -86,6 +86,9 @@ source_hand_over() {
     if [[ -f "$work/commit" && "$(cat "$work/commit")" != "$commit" ]]; then
       die "the version commit of $version is now ${commit:0:8}, but $work was made for $(cut -c1-8 "$work/commit"). Find out why; move that folder away to start over."
     fi
+    # Its own scripts take over: a commit from before these (no scripts/release/) has others, which this cannot run.
+    git -C "$clone" cat-file -e "$commit:scripts/release/source.sh" 2> /dev/null ||
+      die "the version commit of $version, ${commit:0:8}, predates scripts/release/: these scripts cannot release it"
     mkdir -p "$work"
     echo "$commit" > "$work/commit"
     rm -rf "$work/source"
