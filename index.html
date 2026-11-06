@@ -247,6 +247,7 @@ h2 em { font-style: normal; color: var(--accent); }
 /* Pictures of different heights: the stack takes the shown one's, the others lie over it without taking room. */
 .stack.fit { position: relative; align-items: start; }
 .stack.fit picture[hidden] { position: absolute; inset: 0 0 auto 0; }
+.themes button.glow i { box-shadow: inset 0 0 0 1px rgba(255,255,255,.25), 0 0 8px #33ff55; }
 .themes button.creator i { background: conic-gradient(from 90deg, #f38ba8, #fab387, #f9e2af, #a6e3a1, #89dceb, #b4befe, #cba6f7, #f38ba8); }
 
 
@@ -293,7 +294,9 @@ footer .r { margin-left: auto; }
   .doctor pre { line-height: 1.2; }
   .seg { display: flex; }
   .seg button { flex: 1; padding: 9px 8px; }
-  .cmd-copy { width: 100%; font-size: 12.5px; gap: 10px; padding-left: 14px; }
+  /* The whole command on one line at any phone width: 42 monospace characters share what the box, $ and icon leave. */
+  .cmd-copy { width: 100%; font-size: clamp(9px, calc((100vw - 120px) / 26.5), 12.5px); letter-spacing: -.02em; gap: 8px; padding-left: 12px; }
+  .cmd-copy .icon { width: 30px; height: 30px; }
   .btn { width: 100%; justify-content: center; }
   /* Screenshots at a readable size: wider than the phone, scrolled sideways, opened at their focus (data-focus). */
   .shot, .frame { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
@@ -502,10 +505,10 @@ footer .r { margin-left: auto; }
       <div class="themes" role="group" aria-label="Preview a theme" data-stack="theme-stack">
         <button type="button" aria-pressed="true" data-show="oled" style="--sw:#000000"><i></i>OLED</button>
         <button type="button" aria-pressed="false" data-show="latte" style="--sw:#eff1f5"><i></i>catppuccin</button>
-        <button type="button" aria-pressed="false" data-show="spectrum" style="--sw:#222222"><i></i>monokai</button>
-        <button type="button" aria-pressed="false" data-show="vaporwave" style="--sw:#180827"><i></i>vaporwave</button>
-        <button type="button" aria-pressed="false" data-show="colorblind" style="--sw:#000000;--sw2:#feacd0"><i></i>colorblind</button>
-        <button type="button" aria-pressed="false" data-show="rootaccess" style="--sw:#030a04"><i></i>root access</button>
+        <button type="button" aria-pressed="false" data-show="spectrum" style="--sw:#fc618d;--sw2:#fce566"><i></i>monokai</button>
+        <button type="button" aria-pressed="false" data-show="vaporwave" style="--sw:#ff4fd8;--sw2:#fb923c"><i></i>vaporwave</button>
+        <button type="button" aria-pressed="false" data-show="colorblind" style="--sw:#2fafff;--sw2:#cabf00"><i></i>colorblind</button>
+        <button type="button" aria-pressed="false" data-show="rootaccess" style="--sw:#33ff55" class="glow"><i></i>root access</button>
         <button type="button" aria-pressed="false" data-show="creator" class="creator"><i></i>theme creator</button>
       </div>
     </div>
@@ -516,7 +519,7 @@ footer .r { margin-left: auto; }
       <picture data-name="vaporwave" data-focus="0.42" hidden data-caption="Vaporwave Sunset"><source srcset="img/K1-terminal-vaporwave.avif?v=09986960" type="image/avif"><img src="img/K1-terminal-vaporwave.jpg?v=0c1a0e89" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Vaporwave Sunset scheme"></picture>
       <picture data-name="colorblind" data-focus="0.42" hidden data-caption="Modus Vivendi Deuteranopia"><source srcset="img/K1-terminal-colorblind.avif?v=eb33cc50" type="image/avif"><img src="img/K1-terminal-colorblind.jpg?v=5004e7e4" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Modus Vivendi Deuteranopia scheme"></picture>
       <picture data-name="rootaccess" data-focus="0.42" hidden data-caption="Root Access, with its phosphor glow and scanlines"><source srcset="img/K1-terminal-rootaccess.avif?v=97a69e73" type="image/avif"><img src="img/K1-terminal-rootaccess.jpg?v=1833aa73" width="960" height="480" loading="lazy" alt="Dispatch terminal in the Root Access scheme"></picture>
-      <picture data-name="creator" data-focus="0.5" hidden data-caption="Theme creator: a readable scheme grown from one color, in OKLCH"><source srcset="img/K1-theme-creator.avif?v=16a56810" type="image/avif"><img src="img/K1-theme-creator.jpg?v=73d45663" width="1240" height="1172" loading="lazy" style="border-radius: 2.58% / 2.73%" alt="The theme creator: style chips, a live terminal preview with its sixteen colors, an OKLCH color wheel, and Lightness, Vibrancy, Contrast and Tint sliders"></picture>
+      <picture data-name="creator" data-focus="0.5" hidden data-caption="Theme creator: a readable scheme grown from one color, in OKLCH"><source srcset="img/K1-theme-creator.avif?v=647abb87" type="image/avif"><img src="img/K1-theme-creator.jpg?v=dad028d9" width="1240" height="1172" loading="lazy" style="border-radius: 2.58% / 2.73%" alt="The theme creator: style chips, a live terminal preview with its sixteen colors, an OKLCH color wheel with a triadic harmony, and Lightness, Vibrancy, Contrast and Tint sliders"></picture>
     </div>
     <p class="caption mono" data-caption-for="theme-stack">Dispatch (OLED)</p>
   </div>
