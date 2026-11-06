@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#202027"/><stop offset="1" stop-color="#121219"/></linearGradient>
+    <linearGradient id="gem" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f4a6f2"/><stop offset="1" stop-color="#d46ed4"/></linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect x=".5" y=".5" width="63" height="63" rx="13.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
+  <path d="M32 15 49 32 32 49 15 32Z" fill="#e589e3" opacity=".55" filter="url(#glow)"/>
+  <path d="M32 15 49 32 32 49 15 32Z" fill="url(#gem)" stroke="url(#gem)" stroke-width="3" stroke-linejoin="round"/>
+</svg>
