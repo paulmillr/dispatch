@@ -49,24 +49,6 @@ class SigningConfigTests(unittest.TestCase):
             self.assertEqual(signing.parse(path.read_text())[0], {'DEVELOPMENT_TEAM': 'ZYXWV98765'})
             self.assertEqual(list(Path(directory, 'build').iterdir()), [path])
 
-    def test_the_stable_account_signs_from_its_own_file_through_command_line_settings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'signing-stable.xcconfig'
-            signing.write('ZYXWV98765', '.sam', path, stable=True)
-            self.assertIn('--stable', path.read_text())
-            settings = signing.parse(path.read_text())[0]
-            self.assertEqual(signing.bundle_id(settings, stable=True), 'yachts.dispatch.mobile.sam')
-            self.assertEqual(signing.stable_overrides(settings), ['DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch',
-                                                                  'DEVELOPMENT_TEAM=ZYXWV98765',
-                                                                  'DISPATCH_BUNDLE_ID_SUFFIX=.sam'])
-            # Without a suffix the stable build still overrides the Pilot file's: an empty one.
-            signing.write('ZYXWV98765', '', path, stable=True)
-            self.assertEqual(signing.stable_overrides(signing.parse(path.read_text())[0])[-1], 'DISPATCH_BUNDLE_ID_SUFFIX=')
-            # The simulator and the Mac need no team: the prefix alone.
-            self.assertEqual(signing.stable_overrides(), ['DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch'])
-        self.assertEqual(signing.main(['--stable', '--path', '/dev/null/x', '--remove']), 0)
-        self.assertEqual(signing.STABLE_CONFIG.name, 'signing-stable.xcconfig')
-
     def test_refuses_what_cannot_sign(self):
         for team, suffix in (('abcde12345', ''), ('ABCDE1234', ''), ('', ''), ('ABCDE12345', 'paul'),
                              ('ABCDE12345', '.pa ul'), ('ABCDE12345', '.'), ('ABCDE12345', '.a..b')):
@@ -274,7 +256,6 @@ class DeviceDiscoveryTests(unittest.TestCase):
             self.assertIn('not a team id', runner.signing_problem(path))
             signing.write('ABCDE12345', '', path)
             self.assertIsNone(runner.signing_problem(path))
-        self.assertIn('--stable', runner.signing_problem(Path('/dev/null/missing'), stable=True))
 
 
 class EngineFrameworkTests(unittest.TestCase):
@@ -353,10 +334,10 @@ class ReleaseBundleTests(unittest.TestCase):
     IPHONE = ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight']
 
     def info(self, **changes):
-        info = {'CFBundleIdentifier': 'yachts.dispatch.mobile', 'NSFaceIDUsageDescription': 'Keys',
+        info = {'CFBundleIdentifier': 'yachts.dispatch.pilot.mobile', 'NSFaceIDUsageDescription': 'Keys',
                 'NSLocalNetworkUsageDescription': 'Hosts', 'NSMicrophoneUsageDescription': 'Dictation',
                 'NSSpeechRecognitionUsageDescription': 'Dictation on this device', 'UIBackgroundModes': ['fetch'],
-                'BGTaskSchedulerPermittedIdentifiers': ['yachts.dispatch.mobile.refresh'], 'UIDeviceFamily': [1, 2],
+                'BGTaskSchedulerPermittedIdentifiers': ['yachts.dispatch.pilot.mobile.refresh'], 'UIDeviceFamily': [1, 2],
                 'UISupportedInterfaceOrientations': self.IPHONE,
                 'UISupportedInterfaceOrientations~ipad': self.IPHONE + ['UIInterfaceOrientationPortraitUpsideDown']}
         info.update(changes)
@@ -388,8 +369,8 @@ class ReleaseBundleTests(unittest.TestCase):
         project = (ROOT / 'project.yml').read_text()
         self.assertIn('TARGETED_DEVICE_FAMILY: "1,2"', project)
         source = plistlib.loads((ROOT / 'Mobile/App/Info.plist').read_bytes())
-        source['CFBundleIdentifier'] = 'yachts.dispatch.mobile'
-        source['BGTaskSchedulerPermittedIdentifiers'] = ['yachts.dispatch.mobile.refresh']
+        source['CFBundleIdentifier'] = 'yachts.dispatch.pilot.mobile'
+        source['BGTaskSchedulerPermittedIdentifiers'] = ['yachts.dispatch.pilot.mobile.refresh']
         source['UIDeviceFamily'] = [1, 2]
         self.assertEqual(release.info_problems(source), [])
 

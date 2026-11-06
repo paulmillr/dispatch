@@ -32,6 +32,18 @@ HELPERS = {
 }
 # What a helper build reads besides the crate itself, Cargo's caches and the pinned toolchain.
 INPUTS = ("Vendor/Zstd", "scripts/build-ssh-helper.py", "scripts/setup-ssh-rust.py")
+# The apps' shared version (scripts/release.sh keeps every MARKETING_VERSION in step), stamped into the helper: on a
+# host, the stable hook command never moves from a newer version's build to an older one's (helper/core/src/system/
+# executable.rs), whichever app, Mac or iPhone, and whichever device set the host up.
+VERSION_FILE = "project.yml"
+
+
+def release():
+    versions = set(re.findall(r'(?m)^\s*MARKETING_VERSION:\s*"([0-9]+(?:\.[0-9]+){0,3})"\s*$',
+                              (ROOT / VERSION_FILE).read_text()))
+    if len(versions) != 1:
+        raise SystemExit(f"{VERSION_FILE}: expected one MARKETING_VERSION for every app, found {sorted(versions) or 'none'}")
+    return versions.pop()
 # The wire registry: the build appends to it (helper/core/build/schema.rs `registered`), so it may differ after a build.
 REGISTRY = "helper/core/src/wire/registry.txt"
 # The last corpus replay that passed (verify): the helper and corpus it passed on.
@@ -156,8 +168,9 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
     cache = target_dir if capture else target_dir / "without-capture"
     if not dry_run:
         cache.mkdir(parents=True, exist_ok=True)
+    app_version = release()
     env = dict(os.environ, PATH=str(toolchain / "bin") + os.pathsep + os.environ.get("PATH", ""),
-               CARGO_HOME=str(ROOT / "build/cargo"), CARGO_TARGET_DIR=str(cache),
+               CARGO_HOME=str(ROOT / "build/cargo"), CARGO_TARGET_DIR=str(cache), DISPATCH_HELPER_RELEASE=app_version,
                MACOSX_DEPLOYMENT_TARGET="14.0",
                DYLD_FALLBACK_LIBRARY_PATH=str(toolchain / "lib") +
                (os.pathsep + os.environ["DYLD_FALLBACK_LIBRARY_PATH"] if os.environ.get("DYLD_FALLBACK_LIBRARY_PATH") else ""))
@@ -211,7 +224,7 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
         # building unchanged sources (a Swift edit, a VM given the host's build), runs no Cargo.
         variant = target_dir / "variants" / (profile + ("-capture" if capture else ""))
         stamp = variant / "inputs"
-        parameters = [helper, profile, capture, darwin, mac_flags, rustc]
+        parameters = [helper, profile, capture, darwin, mac_flags, rustc, app_version]
         before = sources(helper, settings.get("codec"))
         if (stamp.is_file() and stamp.read_text() == inputs_key(parameters, before)
                 and all((variant / name).is_file() for name in ARTIFACTS)):

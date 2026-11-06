@@ -2570,7 +2570,6 @@
     "DispatchMobileScripts/SigningConfigTests/test_check_fails_without_a_config_and_passes_with_one": "fast",
     "DispatchMobileScripts/SigningConfigTests/test_parses_comments_conditions_and_includes_and_flags_other_lines": "fast",
     "DispatchMobileScripts/SigningConfigTests/test_refuses_what_cannot_sign": "fast",
-    "DispatchMobileScripts/SigningConfigTests/test_the_stable_account_signs_from_its_own_file_through_command_line_settings": "fast",
     "DispatchMobileScripts/SigningConfigTests/test_the_tracked_xcconfig_includes_the_written_one_and_names_the_suffix": "fast",
     "DispatchMobileScripts/SigningConfigTests/test_writes_a_config_the_check_accepts_and_reports_what_it_replaced": "fast",
     "DispatchMobileScripts/SigningTeamTests/test_a_certificates_team_is_its_organisational_unit_not_the_name": "fast",

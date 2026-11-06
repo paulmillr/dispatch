@@ -49,7 +49,7 @@ The `watchApp` setting group mirrors `mobileApp` (`$(ARCHS_STANDARD)`, automatic
 `Mobile/Config/Signing.xcconfig`, the same team and `DISPATCH_BUNDLE_ID_SUFFIX`). `Watch/App/Info.plist` names the
 phone in `WKCompanionAppBundleIdentifier` and sets `WKRunsIndependentlyOfCompanionApp` false. The watch app and its
 widget extension share one App Group, `group.$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)`, by default
-`group.yachts.dispatch.pilot.mobile` (`DISPATCH_APP_GROUP`; docs/ios.md, Pilot and stable;
+`group.yachts.dispatch.pilot.mobile` (`DISPATCH_APP_GROUP`; docs/ios.md, Bundle ids;
 a device build needs it on the team, the simulator signs ad hoc); without its container the complications say
 "Nothing waiting". The watch app has no `PrivacyInfo.xcprivacy` and must get one in `Watch/App` as soon as it uses a
 required-reason API; `test/ios-release.py` checks the embedded executable against it.

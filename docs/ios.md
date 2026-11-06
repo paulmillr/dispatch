@@ -54,19 +54,12 @@ trust the developer on first launch (General, VPN & Device Management). `--ios-d
 config, finds real devices only, builds with `-allowProvisioningUpdates -allowProvisioningDeviceRegistration`, then
 installs and launches through `devicectl`.
 
-### Pilot and stable
+### Bundle ids
 
-Two Apple accounts, each with its own apps; nothing is transferred between them. Every bundle id starts with
-`DISPATCH_BUNDLE_ID_PREFIX` (`project.yml`): `yachts.dispatch.pilot` by default, the Pilot account's apps
-(`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`, `….mobile.watchkitapp.widgets`,
-`group.yachts.dispatch.pilot.mobile`). `--stable` on `./run.sh` passes
-`DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch` to xcodebuild for the stable account's (`yachts.dispatch.app`,
-`yachts.dispatch.mobile`, …; published nowhere yet: the GitHub release and Homebrew are Pilot's). Both are named Dispatch and install side by side as
-separate apps with separate data (UserDefaults, Keychain, containers); the Mac ones still share
-`~/Library/Application Support/Dispatch`. `build/signing.xcconfig` holds the Pilot team;
-`ios-signing.py TEAMID --stable` writes the stable team to `build/signing-stable.xcconfig`, whose team and suffix
-`./run.sh --ios-device --stable` passes on the command line (over `build/signing.xcconfig`). A command-line setting
-changes every target's build description, so switching between the two rebuilds everything.
+Every bundle id starts with `DISPATCH_BUNDLE_ID_PREFIX` (`project.yml`), `yachts.dispatch.pilot`: the Pilot account's
+apps (`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`,
+`….mobile.watchkitapp.widgets`, `group.yachts.dispatch.pilot.mobile`), the ones the GitHub release and Homebrew
+publish. `build/signing.xcconfig` holds the team that signs them for a device.
 
 ### Release
 
@@ -89,7 +82,7 @@ code.
 
 | Target | What |
 | --- | --- |
-| `DispatchMobile` | The app, bundle id `yachts.dispatch.pilot.mobile` + suffix (Pilot and stable), iOS 26.0, iPhone and iPad. Embeds the watch app. |
+| `DispatchMobile` | The app, bundle id `yachts.dispatch.pilot.mobile` + suffix (Bundle ids), iOS 26.0, iPhone and iPad. Embeds the watch app. |
 | `DispatchMobileTests` | Unit tests hosted by the app: `Mobile/Tests` plus the Mac's Foundation-only tests by path. |
 | `DispatchMobileUITests` | XCUITests, own scheme so unit runs never start the app. |
 | `TermMobile`, `TermAppleMobile` | `Vendor/Term` and `TermApple` for iOS, without `Launch`, `Pty`, `Frames`, `Session`, `TerminalView`. Fonts are `TermFonts`: a top-level `Resources` folder breaks an iOS bundle's signature. |

@@ -39,9 +39,8 @@ scripts/release.sh X.Y.Z
 ```
 
 What is Dispatch's own is in `scripts/release/app.json` and `scripts/release/app.sh`; every other release script is the
-same for any app ([Another app](#another-app)). Its variants are the Pilot account's app (`yachts.dispatch.pilot.app`),
-the default and the published one (the GitHub release and the Homebrew cask), and the stable account's
-(`yachts.dispatch.app`, `--variant stable`), published nowhere yet ([ios.md](ios.md), Pilot and stable). The build
+same for any app ([Another app](#another-app)). Its one variant is `pilot`, the Pilot account's app
+(`yachts.dispatch.pilot.app`, [ios.md](ios.md), Bundle ids): the GitHub release and the Homebrew cask. The build
 number, `CFBundleVersion`, is the commit's UTC time (`20261104.0002`), so both builders stamp the same one.
 
 ## Commit machine
@@ -97,7 +96,7 @@ never shipped or signed.
 - **GitHub.** `.github/workflows/release.yml` runs on every push to `main`. A first job on a small Linux runner
   checks whether the pushed commit is a version commit (`release/config.py changes-version`); other pushes build
   nothing. A version commit is built for the default variant, and by hand from `main` (while it is `main`'s head) or
-  from its tag, for another: `-f variant=stable`. It selects the Xcode whose
+  from its tag, for another variant if `app.json` has one: `-f variant=NAME`. It selects the Xcode whose
   build is `xcode_build` in `scripts/release/app.json` (by build, not folder name: the image may call a release candidate `Xcode_27.2.app`;
   only the `xcode-27` runner image, a public preview, has Xcode 27) and stops at once without it, builds,
   attests every file (`actions/attest-build-provenance`: GitHub signs that this workflow made it from this commit on
@@ -202,8 +201,7 @@ when the step fails, with how to go on).
 `--no-push` checks, builds and signs, but publishes nothing. `--trust-ci` builds nothing here: it skips the build
 user, the Xcode check and the comparison, and signs GitHub's attested build as it is. That build is then the only one,
 so a compromised GitHub build or runner would be signed; the release notes say the app was built once, and
-`published.json` records `"signed_build": "github"` (`"local"` otherwise). `--variant stable` signs the stable account's app, which
-is published nowhere (`"publish": false`). After a failure, run it again: a finished step is skipped (markers in the work folder) and
+`published.json` records `"signed_build": "github"` (`"local"` otherwise). After a failure, run it again: a finished step is skipped (markers in the work folder) and
 notarization resumes from its saved submission ids; a release left a draft is published. The signer's own clone of
 `dispatch` is updated only to signed commits (`git fetch && git verify-commit COMMIT && git checkout COMMIT`, a
 version commit): the signature check runs from it.
@@ -238,8 +236,14 @@ different apps fail. Its work, the zip made here included, stays in `tmp/release
 (the DMG is GitHub's build, signed), that shows the published app came from the signed commit's source. Releases made
 before `release/rebuild.sh` cannot be rebuilt this way: `--reproduce` says so and stops.
 Test the download on a disposable Mac too ([vm_testing.md](vm_testing.md), Checking a release by hand in a clean VM).
-The cask's `zap` lists the files of both apps, `yachts.dispatch.app` and `yachts.dispatch.pilot.app` (and the old
-`dev.dispatch.local`): keep it that way when either changes what it stores.
+The cask's `zap` (`brew uninstall --zap dispatch`) first runs `~/.dispatch/bin/dispatch-helper uninstall`, when
+there is one ([security](security.md#removing-dispatch): hooks, Pi's extension and `~/.dispatch` go together, or stay
+together while a helper runs, with a line saying so), then trashes the app's files, `yachts.dispatch.pilot.app` (and
+those of the older `dev.dispatch.local` and `yachts.dispatch.app` builds), `~/.config/dispatch/themes` and the
+updater's leftover `.Dispatch-update-*` folders beside the app. It never trashes `~/.dispatch` itself: hooks would
+then run a helper that is gone. Keep it that way when the app changes what it stores. The cask has no
+`auto_updates true` on purpose: with it, `brew upgrade` skips Dispatch, and users who left the app's updates off
+would get none.
 
 ## Mac automatic updates
 
@@ -277,7 +281,7 @@ with an entry in `Dispatch/Info.plist`'s `DispatchUpdateTrustedIdentities` array
 ```xml
 <dict>
     <key>team</key><string>NEWTEAM123</string>
-    <key>bundle</key><string>yachts.dispatch.app</string>
+    <key>bundle</key><string>yachts.dispatch.pilot.app</string>
 </dict>
 ```
 

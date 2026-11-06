@@ -4,7 +4,7 @@
 # the same app; publishing the release then creates the version's tag. No secret is used or reachable here.
 # A version commit is one that sets the version files to a new version (scripts/release.sh makes it): pushed to main, it
 # is built as a release, kept for 90 days as <cask>-<variant>-<version>. Other pushes build nothing. Started by hand from
-# main or a version tag on a version commit, it builds that (another variant: -f variant=stable); from anywhere else,
+# main or a version tag on a version commit, it builds that (another variant, if app.json has one: -f variant=NAME); from anywhere else,
 # it is a rehearsal: the same build, kept for a week as <cask>-rehearsal-<variant>-<commit>, without an attestation,
 # so the signing machine never takes it for a release. The same file in every app: what is the app's own comes from
 # scripts/release/app.json.

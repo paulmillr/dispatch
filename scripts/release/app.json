@@ -6,8 +6,7 @@
   "version_files": ["project.yml", "Dispatch.xcodeproj/project.pbxproj"],
   "build_log": "build/logs/latest.log",
   "variants": {
-    "pilot": {"bundle_id": "yachts.dispatch.pilot.app", "ios_bundle_id": "yachts.dispatch.pilot.mobile"},
-    "stable": {"bundle_id": "yachts.dispatch.app", "ios_bundle_id": "yachts.dispatch.mobile", "publish": false}
+    "pilot": {"bundle_id": "yachts.dispatch.pilot.app", "ios_bundle_id": "yachts.dispatch.pilot.mobile"}
   },
   "entitlements": {"com.apple.security.device.audio-input": true},
   "commit_key": "78A89CD10959782E23FF8447697079DA6878B89B",

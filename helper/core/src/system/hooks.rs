@@ -117,7 +117,8 @@ pub(super) struct Hooks {
 }
 
 /// Every Dispatch file in an account lives under `<home>/.dispatch` (all folders 0700):
-/// - `bin/dispatch-helper`: the stable helper copy that hook entries and startup files run;
+/// - `bin/dispatch-helper`: the stable helper copy that hook entries and startup files run, a link
+///   to the newest version's `bin/launchers/<sha256>/` build (`release` stamps; executable.rs);
 /// - `bin/versions/<sha256>/dispatch-helper`: builds the SSH bootstrap uploaded;
 /// - `sessions/<id>/`: an SSH login's `ready` hand-off, `bus` socket and `exit` status;
 /// - `run/<random>/`: one per helper: hook sockets and shell startup folders;

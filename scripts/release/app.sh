@@ -1,6 +1,6 @@
 #!/bin/bash
 # Dispatch's part of the release build: scripts/release/build.sh runs it in a fresh tree (docs/releasing.md, Two
-# builders). For RELEASE_VARIANT (pilot or stable), with CFBundleVersion RELEASE_BUILD_NUMBER, it leaves in
+# builders). For RELEASE_VARIANT (pilot, the only one), with CFBundleVersion RELEASE_BUILD_NUMBER, it leaves in
 # RELEASE_PRODUCTS:
 #   RELEASE_PLATFORM=mac   Dispatch.app and Dispatch.app.dSYM, the Mac app
 #   RELEASE_PLATFORM=ios   DispatchMobile.xcarchive, the iPhone app with its watch app (no flow publishes it
@@ -13,8 +13,8 @@ cd "$(dirname "$0")/../.."
 # setup.sh asks once before its downloads, all pinned and SHA-256-checked (scripts/build.lock.json); after it, run.sh
 # finds nothing missing and asks nothing.
 echo y | bash scripts/setup.sh
+[[ "$RELEASE_VARIANT" == pilot ]] || { echo "error: no variant $RELEASE_VARIANT (scripts/release/app.json)" >&2; exit 1; }
 flags=(--build-number "$RELEASE_BUILD_NUMBER")
-[[ "$RELEASE_VARIANT" == pilot ]] || flags+=(--stable)
 
 if [[ "${RELEASE_PLATFORM:-mac}" == mac ]]; then
   ./run.sh --prod --just-build "${flags[@]}" < /dev/null

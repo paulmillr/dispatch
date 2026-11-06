@@ -20,8 +20,7 @@ settings:
     # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
     # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
     DISPATCH_STRIP_APP: NO
-    # Every app's bundle id starts with this: the Pilot account's apps. `./run.sh --stable` sets yachts.dispatch, the
-    # stable account's (docs/ios.md, Pilot and stable); both are named Dispatch and install side by side.
+    # Every app's bundle id starts with this: the Pilot account's apps (docs/ios.md, Bundle ids).
     DISPATCH_BUNDLE_ID_PREFIX: yachts.dispatch.pilot
   configs:
     # Xcode otherwise injects get-task-allow, which notarization rejects.

@@ -15,10 +15,14 @@ impl Scratch {
         Self(path)
     }
     fn publish(&self, bytes: &[u8]) -> PathBuf {
+        self.release(bytes, None)
+    }
+    /// Publishes a build stamped with `release`, as an app of that version does.
+    fn release(&self, bytes: &[u8], release: Option<&str>) -> PathBuf {
         let bin = self.0.join("bin");
         let _lock =
             native::advisory(&bin.join(".lock"), Instant::now() + Duration::from_secs(30)).unwrap();
-        publish(&bin, bytes).unwrap();
+        publish(&bin, bytes, release).unwrap();
         bin.join("dispatch-helper")
     }
 }
@@ -56,7 +60,7 @@ fn migration_replaces_legacy_file_and_refuses_corrupt_immutable_build() {
     let target = stable.canonicalize().unwrap();
     fs::write(&target, b"corrupt").unwrap();
     assert_eq!(
-        publish(&scratch.0.join("bin"), b"new").unwrap_err().kind(),
+        publish(&scratch.0.join("bin"), b"new", None).unwrap_err().kind(),
         io::ErrorKind::InvalidData
     );
     assert_eq!(fs::read(&stable).unwrap(), b"corrupt");
@@ -64,7 +68,7 @@ fn migration_replaces_legacy_file_and_refuses_corrupt_immutable_build() {
     let victim = scratch.0.join("victim");
     fs::write(&victim, b"keep").unwrap();
     symlink(&victim, &target).unwrap();
-    assert!(publish(&scratch.0.join("bin"), b"new").is_err());
+    assert!(publish(&scratch.0.join("bin"), b"new", None).is_err());
     assert_eq!(fs::read(victim).unwrap(), b"keep");
 }
 
@@ -74,7 +78,7 @@ fn unsafe_build_permissions_are_not_silently_repaired() {
     let stable = scratch.publish(b"build");
     fs::set_permissions(&stable, fs::Permissions::from_mode(0o777)).unwrap();
     assert_eq!(
-        publish(&scratch.0.join("bin"), b"build")
+        publish(&scratch.0.join("bin"), b"build", None)
             .unwrap_err()
             .kind(),
         io::ErrorKind::PermissionDenied
@@ -174,19 +178,19 @@ fn a_known_build_relinks_without_reading_hashing_or_rewriting_its_image() {
     let bin = scratch.0.join("bin");
     let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
     let mut memo = None;
-    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let stable = resolve(&bin, &mut memo, &|| image.read(), None).unwrap();
     assert_eq!(stable, bin.join("dispatch-helper"));
     assert_eq!(image.0.get(), 1);
     let target = stable.canonicalize().unwrap();
     let before = fs::metadata(&target).unwrap();
     assert_eq!(fs::read(&stable).unwrap(), b"mine");
     // Already linked: nothing but a link read.
-    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), None).unwrap(), stable);
     assert_eq!(image.0.get(), 1);
     // Another process published its build: ours relinks and reads nothing.
     scratch.publish(b"theirs");
     assert_eq!(fs::read(&stable).unwrap(), b"theirs");
-    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), None).unwrap(), stable);
     assert_eq!(image.0.get(), 1);
     assert_eq!(fs::read(&stable).unwrap(), b"mine");
     assert_eq!(stable.canonicalize().unwrap(), target);
@@ -201,10 +205,10 @@ fn a_collected_build_is_published_again() {
     let bin = scratch.0.join("bin");
     let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
     let mut memo = None;
-    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let stable = resolve(&bin, &mut memo, &|| image.read(), None).unwrap();
     let target = stable.canonicalize().unwrap();
     fs::remove_dir_all(target.parent().unwrap()).unwrap();
-    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), None).unwrap(), stable);
     assert_eq!(image.0.get(), 2);
     assert_eq!(fs::read(&stable).unwrap(), b"mine");
 }
@@ -215,12 +219,12 @@ fn a_held_link_lock_yields_the_immutable_path_promptly() {
     let bin = scratch.0.join("bin");
     let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
     let mut memo = None;
-    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let stable = resolve(&bin, &mut memo, &|| image.read(), None).unwrap();
     let mine = stable.canonicalize().unwrap();
     scratch.publish(b"theirs");
     let held = native::advisory(&bin.join(".lock"), Instant::now() + Duration::from_secs(30)).unwrap();
     let started = Instant::now();
-    let path = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let path = resolve(&bin, &mut memo, &|| image.read(), None).unwrap();
     let elapsed = started.elapsed();
     assert!(elapsed >= Duration::from_millis(1900) && elapsed < Duration::from_secs(10), "{elapsed:?}");
     assert_eq!(path.canonicalize().unwrap(), mine);
@@ -228,6 +232,80 @@ fn a_held_link_lock_yields_the_immutable_path_promptly() {
     assert_eq!(fs::read(&stable).unwrap(), b"theirs");
     assert_eq!(image.0.get(), 1);
     drop(held);
-    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), None).unwrap(), stable);
     assert_eq!(fs::read(&stable).unwrap(), b"mine");
+}
+
+#[test]
+fn versions_compare_numerically_and_unstamped_builds_are_oldest() {
+    assert!(newer(Some("0.1.10"), Some("0.1.9")));
+    assert!(newer(Some("1.0"), Some("0.99.99")));
+    assert!(!newer(Some("0.1.6"), Some("0.1.6.0")));
+    assert!(!newer(Some("0.1.5"), Some("0.1.6")));
+    assert!(newer(Some("0.1.5"), None));
+    assert!(!newer(None, Some("0.1.5")));
+    assert!(!newer(None, None));
+    // An unreadable stamp is no stamp: never newer, and anything readable beats it.
+    assert!(!newer(Some("1.0-beta"), Some("0.1.5")));
+    assert!(newer(Some("0.0.1"), Some("x")));
+    assert!(!newer(Some("1.2.3.4.5"), None));
+}
+
+#[test]
+fn an_older_version_never_takes_the_link_from_a_newer_one() {
+    // Another device's newer app published first; an older app connecting later stores its build
+    // (its running helper and anything it launched directly still use it) but leaves the link.
+    let scratch = Scratch::new();
+    let stable = scratch.release(b"new", Some("0.1.7"));
+    let newest = stable.canonicalize().unwrap();
+    assert_eq!(fs::read_to_string(newest.with_file_name("release")).unwrap(), "0.1.7\n");
+    scratch.release(b"old", Some("0.1.6"));
+    assert_eq!(stable.canonicalize().unwrap(), newest);
+    // An unstamped build (an app from before stamps) yields too.
+    scratch.publish(b"legacy");
+    assert_eq!(stable.canonicalize().unwrap(), newest);
+    assert_eq!(fs::read_dir(scratch.0.join("bin/launchers")).unwrap().count(), 3);
+    // A newer one still takes over, and the same version relinks as before: the last one wins.
+    scratch.release(b"newer", Some("0.2"));
+    assert_eq!(fs::read(&stable).unwrap(), b"newer");
+    scratch.release(b"rebuilt", Some("0.2.0"));
+    assert_eq!(fs::read(&stable).unwrap(), b"rebuilt");
+    scratch.release(b"newer", Some("0.2"));
+    assert_eq!(fs::read(&stable).unwrap(), b"newer");
+}
+
+#[test]
+fn a_stamped_build_replaces_an_unstamped_link() {
+    let scratch = Scratch::new();
+    let stable = scratch.publish(b"legacy");
+    assert!(!stable.canonicalize().unwrap().with_file_name("release").exists());
+    scratch.release(b"stamped", Some("0.1.6"));
+    assert_eq!(fs::read(&stable).unwrap(), b"stamped");
+    // A link that names no published build (a legacy copy, a foreign target) is always replaced.
+    let foreign = scratch.0.join("foreign");
+    fs::write(&foreign, b"foreign").unwrap();
+    let bin = scratch.0.join("bin");
+    fs::remove_file(bin.join("dispatch-helper")).unwrap();
+    symlink(&foreign, bin.join("dispatch-helper")).unwrap();
+    scratch.release(b"old", Some("0.0.1"));
+    assert_eq!(fs::read(&stable).unwrap(), b"old");
+}
+
+#[test]
+fn a_known_older_build_keeps_the_newer_link_and_still_returns_the_stable_path() {
+    let scratch = Scratch::new();
+    let bin = scratch.0.join("bin");
+    let image = Image(std::cell::Cell::new(0), b"old".to_vec());
+    let mut memo = None;
+    let stable = resolve(&bin, &mut memo, &|| image.read(), Some("0.1.6")).unwrap();
+    assert_eq!(fs::read(&stable).unwrap(), b"old");
+    scratch.release(b"new", Some("0.1.7"));
+    // The stable path, which runs the newer build, without relinking or reading the image again.
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), Some("0.1.6")).unwrap(), stable);
+    assert_eq!(fs::read(&stable).unwrap(), b"new");
+    assert_eq!(image.0.get(), 1);
+    // Once the newer build's link is gone (say, removed by hand), the older one links again.
+    fs::remove_file(&stable).unwrap();
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read(), Some("0.1.6")).unwrap(), stable);
+    assert_eq!(fs::read(&stable).unwrap(), b"old");
 }
