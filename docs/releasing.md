@@ -255,7 +255,11 @@ The sheet shows once per Mac, answered or not: `settings.json` records it (`setu
 builds, which keep separate defaults. Settings › General › Updates can change the choice and
 check manually without enabling it. Unanswered or off (also the default for older settings files), there are no
 automatic requests. On, Dispatch checks once a day
-while running and downloads newer versions, then offers **Restart and install**. Restart goes through the normal
+while running and downloads newer versions, then offers **Restart and install** in a sheet on the main window.
+**Check for updates** downloads a newer release it finds straight away, without opting in; Settings shows the
+download's size and progress, then verification, with **Cancel**, and then **Restart and install** (no sheet: the
+click came from Settings). The feed request goes out while the installed app's signature is checked, so a build that
+cannot update itself still makes that one request when you click. Restart goes through the normal
 running-process confirmation and session cleanup. An ordinary quit never installs a pending update.
 
 The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks/dispatch.rb`: the cask's literal
@@ -263,7 +267,20 @@ The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks
 version and checksum; the updater sees a release only after the cask changes. Keep those three fields literal and
 unique. Versions are numeric dot-separated components; equal or older versions are not installed.
 
-Downloads use ephemeral HTTPS sessions to GitHub and its asset hosts, without cookies or stored credentials.
+Downloads use ephemeral HTTPS sessions to `github.com` and `*.githubusercontent.com`, without cookies or stored
+credentials. Release downloads redirect to an asset host GitHub has renamed before (`objects.`, then
+`release-assets.githubusercontent.com`), so any of its content subdomains is accepted: a rename must not strand every
+installed copy, and the feed's checksum and the signature checks vouch for the file, not the host. A refused redirect
+names its host in the error. Each download is a plain download task: the async `URLSession.download(for:)` never
+reports progress to the delegate, so the size limit (64 KB for the feed, 512 MB for the DMG) would apply only once the
+whole file had arrived. A connection that drops or stalls for a minute is tried again after 2, 10 and 30 s, resuming
+the partial file when the server allows; a slow one that keeps going may take up to six hours.
+
+The daily check saves when it last ran only once a check completed: a network failure (offline, the Mac just woke, a
+dropped connection, a server error) is tried again after 5 min, 30 min and 2 h, then daily, and a relaunch checks at
+once. Failures show in Settings with what failed and when ("Could not download Dispatch 0.1.7 (14:05): …"). A check,
+download or verification can be cancelled. Turning automatic updates off stops the daily check's work and discards an
+update it staged; one started with **Check for updates** stays.
 Dispatch checks the DMG's SHA-256, mounts it read-only, copies the app to a private staging folder beside the installed
 app, and checks its version, minimum macOS, architecture, Developer ID signature (including nested code and all
 architectures) and Gatekeeper assessment. It leaves quarantine intact. A development/ad hoc build, a read-only or
@@ -271,7 +288,9 @@ translocated app, or an app whose directory is not writable cannot update itself
 The installed and staged apps exchange paths atomically after quit cleanup. A small system-shell launcher waits for
 Dispatch to exit, opens the updated app and removes the previous bundle only if `open` succeeds. No elevated helper
 or password prompt is used. If exchange fails, the installed app stays intact; if starting the launcher fails, the
-exchange is reversed. An interrupted relaunch can leave a `.Dispatch-update-*` backup beside the app.
+exchange is reversed. An interrupted relaunch can leave a `.Dispatch-update-*` backup beside the app, as can a crash,
+forced quit or power loss mid-download. Launch removes such folders once they are a day old (younger ones may be
+another running copy's download), ejecting a disk image still mounted in one first.
 
 ### Changing the Apple signing account
 

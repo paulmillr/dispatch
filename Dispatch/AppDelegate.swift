@@ -201,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.async { runtime.focusActive() }
         let window = window!
         updater.onReady = { [weak self] in self?.offerUpdate() }
+        updater.sweep()
         updater.onRestart = { [weak self] in
             self?.updateOnQuit = true
             NSApp.terminate(nil)

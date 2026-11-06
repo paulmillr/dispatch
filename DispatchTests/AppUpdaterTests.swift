@@ -1,4 +1,5 @@
 import AppKit
+import os
 import Security
 import SwiftUI
 import XCTest
@@ -18,7 +19,7 @@ final class AppUpdaterTests: XCTestCase {
 
     private func operations(_ release: UpdateRelease) -> AppUpdater.Operations {
         .init(context: { self.context }, latest: { release },
-              prepare: { release, context in .init(context: context, release: release, directory: URL(fileURLWithPath: "/fictional/update")) },
+              prepare: { release, context, _ in .init(context: context, release: release, directory: URL(fileURLWithPath: "/fictional/update")) },
               discard: { _ in }, install: { _ in })
     }
 
@@ -162,7 +163,95 @@ final class AppUpdaterTests: XCTestCase {
         for address in ["http://github.com/release", "https://github.com.example.invalid/release", "https://user@github.com/release", "https://github.com:444/release", "file:///tmp/app"] {
             XCTAssertFalse(UpdateDownloadDelegate.allowed(try XCTUnwrap(URL(string: address))))
         }
-        XCTAssertTrue(UpdateDownloadDelegate.allowed(URL(string: "https://release-assets.githubusercontent.com/release")!))
+        for address in ["https://githubusercontent.com/release", "https://evilgithubusercontent.com/release",
+                        "https://release-assets.githubusercontent.com.example.invalid/release", "https://gist.github.com.example.invalid/x"] {
+            XCTAssertFalse(UpdateDownloadDelegate.allowed(try XCTUnwrap(URL(string: address))), address)
+        }
+        // GitHub has renamed its asset host before; any of its content subdomains keeps installed copies updating.
+        for address in ["https://release-assets.githubusercontent.com/release", "https://objects.githubusercontent.com/release",
+                        "https://raw.githubusercontent.com/cask", "https://assets-next.githubusercontent.com/release", "https://github.com/release"] {
+            XCTAssertTrue(UpdateDownloadDelegate.allowed(try XCTUnwrap(URL(string: address))), address)
+        }
+    }
+
+    /// A network failure is retried sooner than daily and is not saved as a check, so a relaunch tries again; a
+    /// failure the network did not cause (no newer version, a bad signature) counts as the day's check.
+    func testNetworkFailuresAreRetriedNotSavedAsChecks() async throws {
+        XCTAssertTrue(AppUpdater.isTransient(URLError(.notConnectedToInternet)))
+        XCTAssertTrue(AppUpdater.isTransient(UpdateFailure("HTTP 503", transient: true)))
+        XCTAssertFalse(AppUpdater.isTransient(URLError(.cancelled)))
+        XCTAssertFalse(AppUpdater.isTransient(UpdateFailure("Invalid signature")))
+        XCTAssertTrue(UpdateDownloadDelegate.interrupted(URLError(.networkConnectionLost)))
+        XCTAssertFalse(UpdateDownloadDelegate.interrupted(URLError(.badServerResponse)))
+        XCTAssertEqual(AppUpdater.retries, [300, 1800, 7200] as [TimeInterval])
+
+        let suite = "AppUpdaterTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let release = try UpdateRelease(cask: cask)
+        var ops = operations(release)
+        ops.latest = { throw URLError(.notConnectedToInternet) }
+        let offline = AppUpdater(operations: ops, defaults: defaults)
+        offline.check()
+        try await TestSupport.eventually { offline.state != .checking }
+        XCTAssertEqual(offline.state, .failed(URLError(.notConnectedToInternet).localizedDescription))
+        XCTAssertTrue(offline.status.hasPrefix("Could not check for updates ("), offline.status)
+        XCTAssertNil(defaults.object(forKey: "dispatchUpdateLastCheck"), "Offline is no check")
+        await offline.stop()
+
+        ops.prepare = { _, _, _ in throw UpdateFailure("Invalid signature") }
+        ops.latest = { release }
+        let invalid = AppUpdater(operations: ops, defaults: defaults)
+        invalid.check()
+        try await TestSupport.eventually { invalid.state == .failed("Invalid signature") }
+        XCTAssertNotNil(defaults.object(forKey: "dispatchUpdateLastCheck"))
+        await invalid.stop()
+    }
+
+    /// Turning automatic updates off stops only the daily check's work: an update started with Check for updates
+    /// stays, downloading or ready.
+    func testOptOutKeepsManualUpdate() async throws {
+        var discarded = 0
+        var ops = operations(try UpdateRelease(cask: cask))
+        ops.discard = { _ in discarded += 1 }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.check()
+        try await TestSupport.eventually { updater.state == .ready }
+        updater.setAutomaticUpdates(true)
+        updater.setAutomaticUpdates(false)
+        XCTAssertEqual(updater.state, .ready)
+        XCTAssertEqual(discarded, 0)
+        await updater.stop()
+    }
+
+    /// A check waiting on a slow network can be cancelled too.
+    func testCheckCanBeCancelled() async throws {
+        var signature: CheckedContinuation<Void, Never>?
+        var ops = operations(try UpdateRelease(cask: cask))
+        ops.context = { await withCheckedContinuation { signature = $0 }; return self.context }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.check()
+        try await TestSupport.eventually { signature != nil }
+        XCTAssertTrue(updater.cancellable)
+        updater.cancel()
+        XCTAssertEqual(updater.state, .idle)
+        signature?.resume()
+        await updater.stop()
+        XCTAssertEqual(updater.state, .idle, "The cancelled check changes nothing when it returns")
+    }
+
+    /// Launch removes interrupted updates' folders beside the app once they are a day old; younger ones may be a
+    /// download in progress, and other files stay.
+    func testSweepRemovesOldLeftoverUpdateFolders() async throws {
+        let parent = System.temporary.appendingPathComponent("update-sweep-" + System.uuid().uuidString)
+        defer { try? System.remove(parent) }
+        let old = parent.appendingPathComponent(".Dispatch-update-old"), young = parent.appendingPathComponent(".Dispatch-update-young")
+        let file = parent.appendingPathComponent(".Dispatch-update-file"), other = parent.appendingPathComponent("Other.app")
+        for directory in [old, young, other] { try System.directory(directory.appendingPathComponent("Dispatch.app")) }
+        try System.write(Data("x".utf8), to: file)
+        let past = System.date().addingTimeInterval(-UpdateInstaller.leftoverAge - 60)
+        for url in [old, file, other] { try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: url.path) }
+        await UpdateInstaller().sweep(in: parent)
+        XCTAssertEqual(try System.list(parent).sorted(), [".Dispatch-update-file", ".Dispatch-update-young", "Other.app"])
     }
 
     func testSigningAccountTransitionRequiresExplicitTrustedPair() throws {
@@ -178,22 +267,106 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertThrowsError(try UpdateIdentity.requirement([.init(team: "ABC123DE45", bundle: "x\" or true")]))
     }
 
-    func testManualCheckDoesNotOptInDownloadOrInstall() async throws {
+    /// Check for updates asks for the one release it finds: it downloads it at once, without the main window's prompt
+    /// (Settings, where it was clicked, offers Restart and install), and opts into nothing.
+    func testManualCheckDownloadsWithoutOptingInOrPrompting() async throws {
         let release = try UpdateRelease(cask: cask)
         var calls: [String] = []
+        var prompts = 0
         var ops = operations(release)
         ops.latest = { calls.append("check"); return release }
-        ops.prepare = { _, _ in calls.append("download"); throw UpdateFailure("Unexpected download") }
+        ops.prepare = { release, context, _ in calls.append("download"); return .init(context: context, release: release, directory: URL(fileURLWithPath: "/fictional/update")) }
         ops.install = { _ in calls.append("install") }
         let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.onReady = { prompts += 1 }
         updater.setAutomaticUpdates(false)
         XCTAssertTrue(calls.isEmpty)
         updater.check()
         updater.check() // Coalesces concurrent checks.
-        try await TestSupport.eventually { updater.state == .available }
-        XCTAssertEqual(calls, ["check"])
+        try await TestSupport.eventually { updater.state == .ready }
+        XCTAssertEqual(calls, ["check", "download"])
+        XCTAssertEqual(prompts, 0)
+        XCTAssertEqual(updater.status, "Dispatch 0.2.0 is ready to install.")
         XCTAssertFalse(updater.automatic)
         await updater.stop()
+    }
+
+    /// The feed request does not wait for the installed app's signature check.
+    func testFeedRequestOverlapsSignatureCheck() async throws {
+        let release = try UpdateRelease(cask: cask)
+        var signature: CheckedContinuation<Void, Never>?
+        var requested = false
+        var ops = operations(release)
+        ops.context = { await withCheckedContinuation { signature = $0 }; return self.context }
+        ops.latest = { requested = true; return release }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.check()
+        try await TestSupport.eventually { signature != nil && requested }
+        XCTAssertEqual(updater.state, .checking)
+        signature?.resume()
+        try await TestSupport.eventually { updater.state == .ready }
+        await updater.stop()
+    }
+
+    /// Settings shows the download's size and progress, then verification, and can cancel either: the partial
+    /// update is discarded, and a cancelled download's late progress changes nothing.
+    func testDownloadProgressAndCancel() async throws {
+        let release = try UpdateRelease(cask: cask)
+        var step: (@Sendable (UpdateInstaller.Step) -> Void)?
+        var pending: CheckedContinuation<UpdateInstaller.Prepared, Never>?
+        var discarded = 0
+        var ops = operations(release)
+        ops.prepare = { _, _, report in step = report; return await withCheckedContinuation { pending = $0 } }
+        ops.discard = { _ in discarded += 1 }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.check()
+        try await TestSupport.eventually { pending != nil }
+        XCTAssertEqual(updater.status, "Downloading Dispatch 0.2.0…")
+        XCTAssertTrue(updater.cancellable)
+        step?(.downloading(.init(received: 21_000_000, expected: 62_000_000)))
+        try await TestSupport.eventually { updater.progress?.received == 21_000_000 }
+        XCTAssertEqual(updater.status, "Downloading Dispatch 0.2.0… 21 MB of 62 MB")
+
+        let directory = System.temporary.appendingPathComponent("update-progress-" + System.uuid().uuidString)
+        defer { try? System.remove(directory) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        let content = NSHostingView(rootView: SettingsView(store: SettingsStore(file: directory.appendingPathComponent("settings.json")), workspace: Workspace(), updater: updater))
+        window.contentView = content
+        content.layoutSubtreeIfNeeded()
+        _ = try PresentationTestSupport.render(content, named: "update-settings-downloading", in: "update-audit")
+
+        step?(.verifying)
+        try await TestSupport.eventually { updater.state == .verifying }
+        XCTAssertEqual(updater.status, "Verifying Dispatch 0.2.0…")
+        XCTAssertNil(updater.progress)
+        step?(.downloading(.init(received: 62_000_000, expected: 62_000_000)))
+        updater.cancel()
+        XCTAssertEqual(updater.state, .idle)
+        XCTAssertFalse(updater.busy)
+        pending?.resume(returning: .init(context: context, release: release, directory: URL(fileURLWithPath: "/fictional/update")))
+        try await TestSupport.eventually { discarded == 1 }
+        XCTAssertEqual(updater.state, .idle)
+        XCTAssertNil(updater.progress, "Late progress from the cancelled download")
+        await updater.stop()
+    }
+
+    /// The download reports each whole percent once, and stops past its size limit while the file arrives.
+    func testDownloadDelegateReportsPercentsAndEnforcesLimit() throws {
+        let reports = OSAllocatedUnfairLock(initialState: [Int64]())
+        let delegate = UpdateDownloadDelegate(limit: 1000) { progress in reports.withLock { $0.append(progress.received) } }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.downloadTask(with: try XCTUnwrap(URL(string: "https://github.com/fictional/update.dmg")))
+        for received: Int64 in [1, 5, 9, 10, 15, 500, 501, 1000] {
+            delegate.urlSession(session, downloadTask: task, didWriteData: 0, totalBytesWritten: received, totalBytesExpectedToWrite: 1000)
+        }
+        XCTAssertEqual(reports.withLock { $0 }, [1, 10, 500, 1000])
+        XCTAssertEqual(task.state, .suspended)
+        delegate.urlSession(session, downloadTask: task, didWriteData: 0, totalBytesWritten: 1001, totalBytesExpectedToWrite: -1)
+        XCTAssertNotEqual(task.state, .suspended, "Past the limit, the download is cancelled")
+        XCTAssertEqual(reports.withLock { $0 }.count, 4)
     }
 
     func testAutomaticDownloadWaitsForExplicitRestartAndQuit() async throws {
@@ -220,7 +393,7 @@ final class AppUpdaterTests: XCTestCase {
         var pending: CheckedContinuation<UpdateInstaller.Prepared, Never>?
         var discarded = 0, prompts = 0
         var ops = operations(release)
-        ops.prepare = { _, _ in await withCheckedContinuation { pending = $0 } }
+        ops.prepare = { _, _, _ in await withCheckedContinuation { pending = $0 } }
         ops.discard = { _ in discarded += 1 }
         let updater = AppUpdater(operations: ops, defaults: nil)
         updater.onReady = { prompts += 1 }
@@ -237,16 +410,18 @@ final class AppUpdaterTests: XCTestCase {
     func testFailuresAndOlderVersionsNeverInstall() async throws {
         let release = try UpdateRelease(cask: cask)
         var ops = operations(release)
-        ops.prepare = { _, _ in throw UpdateFailure("Invalid signature") }
+        ops.prepare = { _, _, _ in throw UpdateFailure("Invalid signature") }
         let updater = AppUpdater(operations: ops, defaults: nil)
-        updater.check(download: true)
+        updater.check()
         try await TestSupport.eventually { updater.state == .failed("Invalid signature") }
+        XCTAssertTrue(updater.status.hasPrefix("Could not download Dispatch 0.2.0 ("), updater.status)
+        XCTAssertTrue(updater.status.hasSuffix("): Invalid signature"), updater.status)
         do { try await updater.installOnQuit(); XCTFail("No verified update to install") } catch {}
         await updater.stop()
 
         ops.context = { .init(target: self.context.target, version: "0.3.0", build: "1", identities: self.context.identities) }
         let newer = AppUpdater(operations: ops, defaults: nil)
-        newer.check(download: true)
+        newer.check()
         try await TestSupport.eventually { newer.state == .upToDate }
         XCTAssertNil(newer.release)
         await newer.stop()

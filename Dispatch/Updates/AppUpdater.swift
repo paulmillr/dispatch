@@ -4,54 +4,94 @@ import Observation
 @MainActor @Observable
 final class AppUpdater {
     enum State: Equatable {
-        case idle, checking, available, downloading, ready, installing, upToDate, failed(String)
+        case idle, checking, downloading, verifying, ready, installing, upToDate, failed(String)
     }
 
     struct Operations {
         var context: () async throws -> UpdateInstaller.Context
         var latest: () async throws -> UpdateRelease
-        var prepare: (UpdateRelease, UpdateInstaller.Context) async throws -> UpdateInstaller.Prepared
+        /// Reports the download's progress, then that it is verifying, from any thread.
+        var prepare: (UpdateRelease, UpdateInstaller.Context, @escaping @Sendable (UpdateInstaller.Step) -> Void) async throws -> UpdateInstaller.Prepared
         var discard: (UpdateInstaller.Prepared) async -> Void
         var install: (UpdateInstaller.Prepared) async throws -> Void
+        /// Removes what interrupted updates left beside the app.
+        var sweep: () async -> Void = {}
 
         static func live(_ installer: UpdateInstaller = UpdateInstaller()) -> Self {
             Self(context: { try await installer.context() }, latest: { try await installer.latest() },
-                 prepare: { try await installer.prepare($0, context: $1) }, discard: { await installer.discard($0) },
-                 install: { try await installer.install($0) })
+                 prepare: { try await installer.prepare($0, context: $1, step: $2) }, discard: { await installer.discard($0) },
+                 install: { try await installer.install($0) }, sweep: { await installer.sweep() })
         }
     }
 
     private(set) var state = State.idle
     private(set) var release: UpdateRelease?
     private(set) var automatic = false
+    /// Bytes of the update downloaded so far, while downloading.
+    private(set) var progress: UpdateInstaller.Progress?
+    /// What the last failure was doing ("check for updates", "download Dispatch 0.2.0"), and when.
+    private(set) var failure: (step: String, at: Date)?
+    /// An update the daily check downloaded is ready. One started in Settings shows there instead.
     @ObservationIgnored var onReady: (() -> Void)?
     @ObservationIgnored var onRestart: (() -> Void)?
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private var schedule: Task<Void, Never>?
     @ObservationIgnored private var prepared: UpdateInstaller.Prepared?
+    /// Tells a cancelled download's late progress from the current one's.
+    @ObservationIgnored private var attempt = 0
+    /// The current or last check is the daily one: turning automatic updates off stops it and discards what it staged,
+    /// but leaves one started with Check for updates.
+    @ObservationIgnored private var daily = false
+    /// The last failure was the network's or the server's, so the daily check tries again sooner.
+    @ObservationIgnored private var transient = false
     @ObservationIgnored private let operations: Operations
     @ObservationIgnored private let defaults: UserDefaults?
     private static let lastCheckKey = "dispatchUpdateLastCheck"
     static let interval: TimeInterval = 24 * 60 * 60
+    /// After a network failure (offline, just woken, a dropped connection) the daily check tries again after these
+    /// waits before going back to daily.
+    static let retries: [TimeInterval] = [5 * 60, 30 * 60, 2 * 60 * 60]
 
     init(operations: Operations = .live(), defaults: UserDefaults? = .app) {
         self.operations = operations
         self.defaults = defaults
     }
 
-    var busy: Bool { state == .checking || state == .downloading || state == .installing }
+    var busy: Bool { cancellable || state == .installing }
+    /// Checking, downloading or verifying, which Settings offers to cancel.
+    var cancellable: Bool { state == .checking || state == .downloading || state == .verifying }
     var status: String {
         switch state {
         case .idle: automatic ? "Checks daily; asks before restarting." : "Automatic updates are off."
         case .checking: "Checking for updates…"
-        case .available: "Dispatch \(release?.version ?? "") is available."
-        case .downloading: "Downloading and verifying the update…"
+        case .downloading:
+            if let progress, progress.received > 0 {
+                progress.expected > 0
+                    ? "Downloading Dispatch \(release?.version ?? "")… \(Self.size(progress.received)) of \(Self.size(progress.expected))"
+                    : "Downloading Dispatch \(release?.version ?? "")… \(Self.size(progress.received))"
+            } else { "Downloading Dispatch \(release?.version ?? "")…" }
+        case .verifying: "Verifying Dispatch \(release?.version ?? "")…"
         case .ready: "Dispatch \(release?.version ?? "") is ready to install."
         case .installing: "Installing the update…"
         case .upToDate: "Dispatch is up to date."
-        case .failed(let message): message
+        case .failed(let message):
+            if let failure { "Could not \(failure.step) (\(Self.time(failure.at))): \(message)" } else { message }
         }
     }
+
+    /// Today's time alone, else the date too: a failure can stay in Settings for days.
+    private static func time(_ date: Date) -> String {
+        Calendar.current.isDate(date, inSameDayAs: System.date())
+            ? date.formatted(date: .omitted, time: .shortened) : date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// The network's or the server's failures, worth trying again soon; a cancelled task is not one.
+    static func isTransient(_ error: Error) -> Bool {
+        if let error = error as? URLError { return error.code != .cancelled }
+        return (error as? UpdateFailure)?.transient == true
+    }
+
+    private static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
     func setAutomaticUpdates(_ enabled: Bool) {
         guard automatic != enabled else { return }
@@ -59,6 +99,7 @@ final class AppUpdater {
         schedule?.cancel(); schedule = nil
         if enabled {
             schedule = Task { [weak self] in
+                var retried = 0
                 while !Task.isCancelled {
                     guard let self else { return }
                     let last = defaults?.object(forKey: Self.lastCheckKey) as? Date
@@ -70,71 +111,119 @@ final class AppUpdater {
                         catch { return }
                     }
                     guard !Task.isCancelled, automatic else { return }
-                    check(download: true)
+                    check(announce: true)
                     await work?.value
-                    do { try await System.sleep(for: .seconds(Self.interval), "automatic update interval") }
-                    catch { return }
+                    // The last check is saved only once one completed, so the loop's start waits out the rest.
+                    if case .failed = state, transient, retried < Self.retries.count {
+                        do { try await System.sleep(for: .seconds(Self.retries[retried]), "automatic update retry") }
+                        catch { return }
+                        retried += 1
+                    } else {
+                        retried = 0
+                        do { try await System.sleep(for: .seconds(Self.interval), "automatic update interval") }
+                        catch { return }
+                    }
                 }
             }
-        } else {
+        } else if daily {
             work?.cancel(); work = nil
             if let prepared {
                 self.prepared = nil
                 Task { await operations.discard(prepared) }
             }
-            release = nil
-            state = .idle
+            reset()
         }
     }
 
-    /// A manual check does not opt the user into future requests or downloads.
-    func check(download: Bool = false) {
+    private func reset() {
+        release = nil
+        progress = nil
+        failure = nil
+        state = .idle
+    }
+
+    /// Removes folders interrupted updates left beside the app (a crash, a forced quit, power lost mid-download).
+    func sweep() { Task { await operations.sweep() } }
+
+    /// Checks, then downloads and verifies a newer release. Clicking Check for updates asks for this one release, so a
+    /// manual check downloads it at once; it does not opt the user into future requests or downloads. Only the daily
+    /// check (`announce`) calls `onReady`: a manual one shows its result in Settings, where it was started.
+    func check(announce: Bool = false) {
         guard !busy, state != .ready else { return }
+        daily = announce
+        failure = nil
+        transient = false
         state = .checking
+        // A cancelled download may still be cleaning up its files; it finishes before the next one starts.
+        let previous = work
         work = Task { [weak self] in
+            await previous?.value
             guard let self else { return }
+            // The feed request goes out while the installed app's signature is checked (up to a second, cold).
+            let feed = Task { try await operations.latest() }
+            defer { feed.cancel() } // once answered, a no-op
             do {
                 let context = try await operations.context()
                 try Task.checkCancellation()
-                defaults?.set(System.date(), forKey: Self.lastCheckKey)
-                let latest = try await operations.latest()
+                let latest = try await withTaskCancellationHandler { try await feed.value } onCancel: { feed.cancel() }
                 try Task.checkCancellation()
                 guard try UpdateRelease.compare(latest.version, context.version) == .orderedDescending else {
                     release = nil; state = .upToDate
+                    checked()
                     return
                 }
                 release = latest
-                state = .available
-                if download { try await prepare(latest, context: context) }
+                try await prepare(latest, context: context, announce: announce)
+                checked()
             } catch {
                 guard !Task.isCancelled else { return }
+                let step = switch state {
+                case .downloading: "download Dispatch \(release?.version ?? "")"
+                case .verifying: "verify Dispatch \(release?.version ?? "")"
+                default: "check for updates"
+                }
+                transient = Self.isTransient(error)
+                // A network failure is no check: a relaunch tries again rather than waiting a day.
+                if !transient { checked() }
+                progress = nil
+                failure = (step, System.date())
                 state = .failed(error.localizedDescription)
             }
         }
     }
 
-    func download() {
-        guard !busy, state != .ready, let release else { return }
-        state = .downloading
-        work = Task {
-            do {
-                let context = try await operations.context()
-                try Task.checkCancellation()
-                try await prepare(release, context: context)
-            } catch {
-                guard !Task.isCancelled else { return }
-                state = .failed(error.localizedDescription)
-            }
-        }
+    private func checked() { defaults?.set(System.date(), forKey: Self.lastCheckKey) }
+
+    /// Stops a check, a download or its verification; the partial files are removed in the background.
+    func cancel() {
+        guard cancellable else { return }
+        work?.cancel()
+        attempt += 1
+        reset()
     }
 
-    private func prepare(_ release: UpdateRelease, context: UpdateInstaller.Context) async throws {
+    private func prepare(_ release: UpdateRelease, context: UpdateInstaller.Context, announce: Bool) async throws {
+        attempt += 1
+        let current = attempt
+        progress = nil
         state = .downloading
-        let result = try await operations.prepare(release, context)
+        let result = try await operations.prepare(release, context) { step in
+            Task { @MainActor [weak self] in self?.advance(step, attempt: current) }
+        }
         guard !Task.isCancelled else { await operations.discard(result); return }
         prepared = result
+        progress = nil
         state = .ready
-        onReady?()
+        if announce { onReady?() }
+    }
+
+    /// Steps arrive asynchronously: one from an earlier attempt, or after a later step, changes nothing.
+    private func advance(_ step: UpdateInstaller.Step, attempt current: Int) {
+        guard current == attempt, state == .downloading else { return }
+        switch step {
+        case .downloading(let received): progress = received
+        case .verifying: progress = nil; state = .verifying
+        }
     }
 
     func restart() { if state == .ready { onRestart?() } }
@@ -146,6 +235,7 @@ final class AppUpdater {
             try await operations.install(prepared)
             self.prepared = nil
         } catch {
+            failure = ("install Dispatch \(prepared.release.version)", System.date())
             state = .failed(error.localizedDescription)
             throw error
         }

@@ -286,9 +286,17 @@ struct SettingsView: View {
                     if updater.state == .ready {
                         Button("Restart and install") { updater.restart() }
                             .accessibilityIdentifier("settings-install-update")
-                    } else if updater.state == .available {
-                        Button("Download update") { updater.download() }
-                            .accessibilityIdentifier("settings-download-update")
+                    } else if updater.cancellable {
+                        HStack(spacing: 8) {
+                            if let progress = updater.progress, progress.expected > 0 {
+                                ProgressView(value: Double(progress.received), total: Double(progress.expected))
+                                    .frame(width: 72)
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                            Button("Cancel") { updater.cancel() }
+                                .accessibilityIdentifier("settings-cancel-update")
+                        }
                     } else {
                         Button("Check for updates") { updater.check() }
                             .disabled(updater.busy)

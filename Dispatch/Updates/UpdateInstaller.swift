@@ -10,6 +10,16 @@ actor UpdateInstaller {
         let build: String
         let identities: [UpdateIdentity]
     }
+    struct Progress: Equatable, Sendable {
+        let received: Int64
+        /// Zero when the server does not say.
+        let expected: Int64
+    }
+    /// What `prepare` is doing: downloading, then checking the checksum, copying the app out and verifying it.
+    enum Step: Equatable, Sendable {
+        case downloading(Progress)
+        case verifying
+    }
     struct Prepared: Sendable {
         let context: Context
         let release: UpdateRelease
@@ -58,14 +68,15 @@ actor UpdateInstaller {
         }
     }
 
-    func latest() async throws -> UpdateRelease {
+    /// Off the actor: the request must not wait behind `context()`'s signature check, which runs meanwhile.
+    nonisolated func latest() async throws -> UpdateRelease {
         let file = System.temporary.appendingPathComponent("dispatch-update-" + System.uuid().uuidString)
         defer { try? System.remove(file) }
         try await System.updateDownload(UpdateRelease.feed, to: file, limit: 64 * 1024)
         return try UpdateRelease(cask: String(decoding: System.read(file), as: UTF8.self))
     }
 
-    func prepare(_ release: UpdateRelease, context: Context) async throws -> Prepared {
+    func prepare(_ release: UpdateRelease, context: Context, step: @escaping @Sendable (Step) -> Void = { _ in }) async throws -> Prepared {
         guard try UpdateRelease.compare(release.version, context.version) == .orderedDescending else {
             throw UpdateFailure("This update is not newer than the installed app.")
         }
@@ -75,7 +86,8 @@ actor UpdateInstaller {
         try System.updateDirectory(directory)
         var mounting = false
         do {
-            try await System.updateDownload(release.url, to: disk, limit: 512 * 1024 * 1024)
+            try await System.updateDownload(release.url, to: disk, limit: 512 * 1024 * 1024) { step(.downloading($0)) }
+            step(.verifying)
             guard try System.updateDigest(disk) == release.sha256 else { throw UpdateFailure("The update’s checksum does not match Homebrew’s release.") }
             try Task.checkCancellation()
             try System.directory(mount)
@@ -97,6 +109,25 @@ actor UpdateInstaller {
     }
 
     func discard(_ prepared: Prepared) { try? System.remove(prepared.directory) }
+
+    /// Folders older than this beside the app are an interrupted update's: a download, its staged app, or the backup an
+    /// interrupted relaunch kept. Younger ones may be another running copy's download (at most `updateDownload`'s six
+    /// hours) or a relaunch still finishing.
+    static let leftoverAge: TimeInterval = 24 * 60 * 60
+
+    /// Removes interrupted updates' folders beside the app, ejecting a disk image still mounted in one first; a folder
+    /// whose image will not eject stays.
+    func sweep(in parent: URL = System.bundle.deletingLastPathComponent()) async {
+        guard let names = try? System.list(parent) else { return }
+        for name in names where name.hasPrefix(".Dispatch-update-") {
+            let directory = parent.appendingPathComponent(name)
+            guard let modified = System.updateModified(directory),
+                  System.date().timeIntervalSince(modified) > Self.leftoverAge else { continue }
+            let mount = directory.appendingPathComponent("mount")
+            if System.updateMounted(mount), await !detach(mount) { continue }
+            try? System.remove(directory)
+        }
+    }
 
     private func detach(_ mount: URL) async -> Bool {
         // Cancellation must not leave a disk image mounted. This task belongs to cleanup, not the cancelled download.
@@ -145,6 +176,26 @@ actor UpdateInstaller {
 }
 
 extension System {
+    /// A folder's last change, nil when it is not a folder.
+    static func updateModified(_ url: URL) -> Date? {
+        try? observe("update.modified", url.path) {
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true, let date = values.contentModificationDate else {
+                throw UpdateFailure("Not a folder.")
+            }
+            return date
+        }
+    }
+
+    /// Whether a volume is mounted at `url`: a different device than its parent folder.
+    static func updateMounted(_ url: URL) -> Bool {
+        (try? observe("update.mounted", url.path) {
+            var mount = stat(), parent = stat()
+            guard lstat(url.path, &mount) == 0, lstat(url.deletingLastPathComponent().path, &parent) == 0 else { return false }
+            return mount.st_dev != parent.st_dev
+        }) ?? false
+    }
+
     static func updateDirectory(_ url: URL) throws {
         _ = try act("update.directory", url.path) {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])

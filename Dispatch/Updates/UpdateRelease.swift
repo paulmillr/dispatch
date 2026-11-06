@@ -2,7 +2,9 @@ import Foundation
 
 struct UpdateFailure: LocalizedError, Equatable {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// The server's, worth trying again soon (`AppUpdater.retries`).
+    let transient: Bool
+    init(_ message: String, transient: Bool = false) { self.message = message; self.transient = transient }
     var errorDescription: String? { message }
 }
 
