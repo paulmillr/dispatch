@@ -57,6 +57,65 @@ final class SettingsSynchronizationTests: XCTestCase {
     }
 
     /// Settings › Keys saves modifier names; a file whose groups clash keeps the defaults, not the other settings.
+    /// A settings file Dispatch cannot use whole never becomes defaults on disk: a missing starting folder keeps the
+    /// file (new tabs start in the home folder meanwhile), an invalid field falls back alone, and an unreadable file is
+    /// moved aside by the first save instead of being written over.
+    func testSettingsThatFailToLoadAreNeverWrittenOver() throws {
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try System.directory(directory)
+        let file = directory.appendingPathComponent("settings.json")
+        let unmounted = directory.appendingPathComponent("unmounted-drive").path
+        var saved = Preferences()
+        saved.autoApproveUnsafePastes = false
+        saved.startingDirectory = unmounted
+        try JSONEncoder().encode(saved).write(to: file)
+        let store = SettingsStore(file: file)
+        XCTAssertNil(store.error)
+        XCTAssertEqual(store.values, saved, "A missing starting folder keeps every setting")
+        XCTAssertEqual(store.values.startingFolder, System.home.path, "New tabs start in the home folder meanwhile")
+        var changed = store.values
+        changed.fontSize = 15
+        try store.save(changed)
+        XCTAssertEqual(SettingsStore(file: file).values.startingDirectory, unmounted, "Saving something else keeps the folder")
+        changed.startingDirectory = directory.appendingPathComponent("never-made").path
+        XCTAssertThrowsError(try store.save(changed), "A newly chosen folder must exist")
+        changed.startingDirectory = directory.path
+        try store.save(changed)
+        XCTAssertEqual(store.values.startingFolder, directory.path)
+
+        // One invalid field (a hand edit) falls back alone.
+        try Data(#"{"fontSize": 99, "theme": "", "autoApproveUnsafePastes": false}"#.utf8).write(to: file)
+        let repaired = SettingsStore(file: file)
+        XCTAssertEqual(repaired.values.fontSize, 32)
+        XCTAssertEqual(repaired.values.theme, Preferences().theme)
+        XCTAssertFalse(repaired.values.autoApproveUnsafePastes, "The rest of the file stays")
+        XCTAssertFalse(repaired.unreadable)
+        XCTAssertEqual(repaired.error, "Some settings were invalid and use their defaults: font size, theme.")
+
+        // An unreadable file: defaults until a save, which moves it aside first.
+        let broken = Data(#"{"fontSize": "large", "autoApproveUnsafePastes": false}"#.utf8)
+        try broken.write(to: file)
+        let unreadable = SettingsStore(file: file)
+        XCTAssertTrue(unreadable.unreadable)
+        XCTAssertEqual(unreadable.values, Preferences())
+        XCTAssertNotNil(unreadable.error)
+        XCTAssertFalse(LocalAgentsConsent.shouldAsk(unreadable), "The setup sheet does not ask over unreadable settings")
+        XCTAssertEqual(try System.read(file), broken, "Loading changes nothing")
+        var fresh = unreadable.values
+        fresh.fontSize = 16
+        try unreadable.save(fresh)
+        XCTAssertFalse(unreadable.unreadable)
+        let kept = try System.list(directory).filter { $0.hasPrefix("settings.unreadable-") && $0.hasSuffix(".json") }
+        XCTAssertEqual(kept.count, 1)
+        XCTAssertEqual(try System.read(directory.appendingPathComponent(kept[0])), broken, "The unreadable file is kept as it was")
+        XCTAssertEqual(unreadable.error, "Settings that could not be read are kept in \(directory.appendingPathComponent(kept[0]).path).")
+        XCTAssertEqual(SettingsStore(file: file).values.fontSize, 16)
+        try unreadable.save(fresh)
+        XCTAssertNil(unreadable.error)
+        XCTAssertEqual(try System.list(directory).filter { $0.hasPrefix("settings.unreadable-") }.count, 1, "Only that file is moved aside")
+    }
+
     func testKeyGroupsDefaultsPersistenceAndValidation() throws {
         let defaults = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).keyGroups
         XCTAssertEqual([defaults.spaces, defaults.tabs, defaults.splits], [[.shift, .command], .command, .control])

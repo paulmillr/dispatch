@@ -50,7 +50,9 @@ enum Landing {
         // The app's own ThemeMakerView (linked, App/), as Settings › Theme's New color scheme sheet shows it.
         Screen("L6-theme-creator", group: "landing", "The theme creator: a scheme grown from one color") {
             MacWindow(width: 620, height: 586, lights: false) {
-                ThemeMakerView(save: { _, _ in }, cancel: {})
+                // The default recipe with the triadic harmony: three hues a third of the wheel apart.
+                ThemeMakerView(initial: { var recipe = ThemeRecipe.standard; recipe.harmony = .triadic; return recipe }(),
+                               save: { _, _ in }, cancel: {})
             }
         },
     ]

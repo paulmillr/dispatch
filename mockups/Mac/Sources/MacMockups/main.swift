@@ -7,7 +7,7 @@ import AppKit
 //   MacMockups sheets [options] [group…]         sheets/mac-<group>-<theme>.png from the shots
 //
 // A selector is an id (M1-main), an id's leading part before its dash (M1), or a group (main).
-// Options: --themes dark,light (also graphite, lavender, nautical) · --font system|code (Source Code Pro interface)
+// Options: --themes dark,light (also nautical) · --font system|code (Source Code Pro interface)
 //          --size 14 (Settings › Font size) · --flat (no Liquid Glass) · --scale 2 · --out <dir>
 //          --scheme "Catppuccin Latte" (a bundled terminal scheme instead of dispatch-black; adds it to the file name)
 

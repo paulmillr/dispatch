@@ -92,8 +92,8 @@ final class MobileSettings {
         didSet { if whisperModel != oldValue { defaults.set(whisperModel.rawValue, forKey: Self.whisperModelKey) } }
     }
 
-    /// The app's theme (G4): Automatic follows Appearance; Graphite, Lavender and Nautical are the Mac's, each with
-    /// its own scheme (`MobileTheme`). The root reads the same key (`mobileAppearance()`).
+    /// The app's theme (G4): Automatic follows Appearance; Graphite, Lavender and Nautical each have
+    /// their own scheme (`MobileTheme`). The root reads the same key (`mobileAppearance()`).
     var theme: MobileTheme {
         didSet { if theme != oldValue { defaults.set(theme.rawValue, forKey: Self.themeKey) } }
     }

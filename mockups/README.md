@@ -24,11 +24,11 @@ look, in the app's accent, without taking focus or activating anything.
 
     python3 mockups/shoot.py mac list                          # ids, groups, titles
     python3 mockups/shoot.py K2-main-chat                      # one screen, dark and light → shots/mac/<id>-<theme>.png
-    python3 mockups/shoot.py mac render --themes dark,lavender K2 --flat   # options: README below, or `mac` alone
+    python3 mockups/shoot.py mac render --themes dark,nautical K2 --flat   # options: README below, or `mac` alone
     python3 mockups/shoot.py all mac                           # every screen, then sheets/mac-<group>-<theme>.png
 
 `mac` builds the package first (incremental: about a second, then under a second a screen). Options: `--themes`
-(dark, light, graphite, lavender, nautical), `--flat` (flat chrome; Liquid Glass is the app's default), `--font code`
+(dark, light, nautical), `--flat` (flat chrome; Liquid Glass is the app's default), `--font code`
 (Source Code Pro interface), `--size` (Settings › Font size, 14), `--scale`, `--out`, `--scheme "Catppuccin Latte"`
 (the terminal and chat in a bundled scheme from `Vendor/Term/Resources/ghostty/themes` instead of dispatch-black,
 without the theme's overrides, as the app does; the file name gains `-catppuccin-latte`; the glowing schemes, Root
@@ -81,6 +81,9 @@ terminal and L3 the same session in Dispatch (branches shown, Settings › Show 
 terminal and L5 the same session in Chat, its steps opened; L6 the theme creator, the app's own `ThemeMakerView` linked
 into `App/` with the Themes sources it needs (`Shims.swift` stands in for Settings and the custom-scheme store). Shots
 are cropped 80 pixels on each side to the window.
+
+The `onboarding` group draws the first-launch setup sheet as it ships (LocalAgentsConsent, OnboardingPages.swift): O1
+Chat, O2 Tabs, O3 Prefs, over a fresh install's window.
 
 ## Screens
 

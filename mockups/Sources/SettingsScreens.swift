@@ -134,7 +134,7 @@ struct ChatFontScreen: View {
     }
 }
 
-/// App theme: Automatic, Dark, Light, plus the Mac's Graphite, Lavender and Nautical as swatch tiles.
+/// App theme: Automatic, Dark, Light, plus Graphite, Lavender and Nautical as swatch tiles.
 struct AppThemeScreen: View {
     let themes: [(String, Color, Color, String)] = [
         ("Automatic", Color.canvas, Color.dispatchPink, "Follows Appearance"),

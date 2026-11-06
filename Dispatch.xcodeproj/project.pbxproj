@@ -1105,6 +1105,7 @@
 		DA4D7A63C6878FDB6733A347 /* FilesCoordinator+Git.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E914BE64AAEBF9272D5A879 /* FilesCoordinator+Git.swift */; };
 		DA637D27FCADAC9BE2AC0D01 /* ChatIPadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14351912F6251C487E142A6F /* ChatIPadTests.swift */; };
 		DAD0085135E20CD8D19510B8 /* FileTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F422335394690195D4A4209 /* FileTransfer.swift */; };
+		DAE0FC6FD9A11BC2CCD90CA3 /* OnboardingPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0448FA19984DF855269E5817 /* OnboardingPages.swift */; };
 		DAE3F748DB8F1B47B0E4796B /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F7A235D2D2051A3C2908B0B /* MainWindow.swift */; };
 		DB0BDAD03492F8BD29CB0535 /* TerminalFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5EF21465BD3361E7494899C /* TerminalFeed.swift */; };
 		DB13764D62F345376779357F /* ResilienceNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5849D27CD265DC64DCE5B8 /* ResilienceNetworkTests.swift */; };
@@ -1513,6 +1514,7 @@
 		03808921BC24BFE648FBF4FE /* ReviewChangesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesTests.swift; sourceTree = "<group>"; };
 		03CE861DBA40BCA60D66B28F /* zstd_ldm.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = zstd_ldm.h; sourceTree = "<group>"; };
 		03F3AB8A35C56268C5CD4C7A /* MobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileUITests.swift; sourceTree = "<group>"; };
+		0448FA19984DF855269E5817 /* OnboardingPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingPages.swift; sourceTree = "<group>"; };
 		048DCF3EBBFC347EECE36E7F /* HostSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSessionStoreTests.swift; sourceTree = "<group>"; };
 		05158BA83F6AA8FDB22677E8 /* HelperDescriptors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperDescriptors.swift; sourceTree = "<group>"; };
 		0543AFD46B26B16A0B4ED16F /* ChatPatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPatch.swift; sourceTree = "<group>"; };
@@ -3300,6 +3302,7 @@
 				762B5823F405819CEFE7898B /* NativeSplit.swift */,
 				EB5B26EEF9E35DB64D7D972F /* NewSpaceButton.swift */,
 				AF9774BDD63683B33FCB3A8F /* OKLCHDisc.swift */,
+				0448FA19984DF855269E5817 /* OnboardingPages.swift */,
 				872DFD1A4E8F2B116979264F /* PaneView.swift */,
 				C3F4217C56173B6C4B887ACC /* ReviewViews.swift */,
 				DA2A4486AA62D429C9D64C86 /* SettingsColorSchemes.swift */,
@@ -5266,6 +5269,7 @@
 				F06AFEB7BCD6CB07A1A37EED /* NativeSplit.swift in Sources */,
 				B25AF74C30ED40E29D5EC54F /* NewSpaceButton.swift in Sources */,
 				10CCC1D1C182F676BDE22D24 /* OKLCHDisc.swift in Sources */,
+				DAE0FC6FD9A11BC2CCD90CA3 /* OnboardingPages.swift in Sources */,
 				7AB2CB11476E0659A411AD59 /* PaneSpace.swift in Sources */,
 				EC3BAD24419F7ADDA4B63095 /* PaneView.swift in Sources */,
 				D300F67864A879FFE5D065C0 /* PrefixKeys.swift in Sources */,

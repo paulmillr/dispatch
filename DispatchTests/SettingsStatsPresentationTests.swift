@@ -608,6 +608,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await bottom()
         let disabled = try await capture(window, "settings-diagnostics-disabled").text()
         XCTAssertTrue(disabled.contains("Diagnostics"), disabled)
+        XCTAssertTrue(disabled.contains("Reset Dispatch"), "Troubleshooting offers Reset: \(disabled)")
         XCTAssertFalse(disabled.contains("Copy path"), disabled)
         XCTAssertFalse(store.values.enableDiagnostics)
         XCTAssertFalse(FileManager.default.fileExists(atPath: diagnostics.directory.path))

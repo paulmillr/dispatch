@@ -26,12 +26,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var termination: Task<Void, Never>?
     /// Settings' "Remove Dispatch from this Mac": run once the runtime stopped (true also deletes the app's data).
     var removalOnQuit: Bool?
+    /// Settings' Reset: once the runtime stopped, Dispatch's data on this Mac is deleted and the app opens again.
+    /// Nothing is saved on the way out, so nothing comes back.
+    var resetOnQuit = false
     let hostSessionStore: HostSessionStore?
     private var closingNativeTabs: Set<UUID> = []
     private var savedHostSession = false
 
     private func saveHostSession() {
-        guard !savedHostSession, hostSessionStore != nil else { return }
+        guard !savedHostSession, !resetOnQuit, hostSessionStore != nil else { return }
         savedHostSession = true
         persistHostSession(quitting: true)
     }
@@ -162,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 if let self { self.applySidebarTheme(self.settings.values.resolvedSidebarTheme) }
             }
         }
-        workspace.defaultDirectory = settings.values.startingDirectory
+        workspace.defaultDirectory = settings.values.startingFolder
         workspace.spaceOrder = settings.values.spaceOrder
         workspace.tabsOnly = settings.values.tabsOnly
         workspace.onCloseTabs = { TerminalRuntime.shared.close($0) }
@@ -275,8 +278,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
         guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else {
-            removalOnQuit = nil; updateOnQuit = false
+            removalOnQuit = nil; updateOnQuit = false; resetOnQuit = false
             return .terminateCancel
+        }
+        if resetOnQuit {
+            // Nothing may install this Mac's hooks again while Dispatch quits; Reset removes them after.
+            let chat = TerminalRuntime.shared.chat
+            for launch in chat.listedLaunches { chat.setLocalHooks(launch.key, allowed: false) }
         }
         saveHostSession()
         // Unmount terminal views before stopping the runtime, then keep AppKit
@@ -298,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task { await cleanup.value; cleanupCompleted = true; deadline.cancel(); finish.finish() }
         termination = Task {
             for await _ in finished {}
-            if updateOnQuit, removalOnQuit == nil {
+            if updateOnQuit, removalOnQuit == nil, !resetOnQuit {
                 do {
                     guard cleanupCompleted else { throw UpdateFailure("Terminal cleanup did not finish in time to install the update.") }
                     try await updater.installOnQuit()
@@ -312,7 +320,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             await updater.stop()
             // Dispatch's helpers here have stopped, so the removal is not refused or undone.
-            if let data = removalOnQuit { await DispatchRemoval.finishLocal(data: data) }
+            if resetOnQuit { await DispatchRemoval.resetLocal() }
+            else if let data = removalOnQuit { await DispatchRemoval.finishLocal(data: data) }
             reply(true)
         }
         return .terminateLater
@@ -322,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         attention.stop()
         HostStats.shared.stop()
         TerminalRuntime.shared.stop()
-        ReviewRepository.flushShared()
+        if !resetOnQuit { ReviewRepository.flushShared() }
         ChatAttachmentPreview.shared.removeAll()
     }
     // Quick Look: the responder chain ends here, so the attachment preview takes the panel through the app delegate.

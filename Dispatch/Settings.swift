@@ -299,6 +299,9 @@ struct Preferences: Codable, Equatable {
     var secureKeyboardEntry = true
     /// nil until onboarding is answered; both nil and false make no automatic update requests.
     var automaticUpdates: Bool? = nil
+    /// The first-launch setup sheet (LocalAgentsConsent) has been shown on this Mac, by this build or another sharing
+    /// these settings: it is not shown again, whether or not it was answered.
+    var setupShown = false
     var newHostPolicy: NewHostPolicy {
         get { !enableHostDetection ? .plain : autoGrantNewHosts ? .full : .ask }
         set { enableHostDetection = newValue != .plain; autoGrantNewHosts = newValue == .full }
@@ -376,7 +379,7 @@ struct Preferences: Codable, Equatable {
     // Settings saved by earlier local builds gain defaults for new fields.
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
-        case automaticUpdates
+        case automaticUpdates, setupShown
         case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, autoApproveUnsafePastes, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
         case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
         case keyGroups
@@ -401,6 +404,7 @@ struct Preferences: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         automaticUpdates = try fields.decodeIfPresent(Bool.self, forKey: .automaticUpdates)
+        setupShown = try fields.decodeIfPresent(Bool.self, forKey: .setupShown) ?? setupShown
         enableHostDetection = try fields.decodeIfPresent(Bool.self, forKey: .enableHostDetection) ?? enableHostDetection
         autoGrantNewHosts = try fields.decodeIfPresent(Bool.self, forKey: .autoGrantNewHosts) ?? autoGrantNewHosts
         allowClipboardWrites = try fields.decodeIfPresent(Bool.self, forKey: .allowClipboardWrites) ?? allowClipboardWrites
@@ -534,47 +538,99 @@ extension UserDefaults {
 final class SettingsStore {
     var values = Preferences()
     var error: String?
+    /// The file is there but could not be read (not JSON, a value of the wrong type, no permission): `values` are
+    /// the defaults, and the first save moves the file aside (`settings.unreadable-<time>-<id>.json`) before writing, so
+    /// what it held is never lost to defaults.
+    private(set) var unreadable = false
     @ObservationIgnored var onSave: ((Preferences) -> Void)?
     private let file: URL
 
     init(file: URL? = nil) {
         self.file = file ?? Home.support.appendingPathComponent("Local/settings.json")
         guard FileManager.default.fileExists(atPath: self.file.path) else { return }
+        let data: Data
         do {
-            let data = try Data(contentsOf: self.file)
-            let loaded = try JSONDecoder().decode(Preferences.self, from: data)
-            try Self.validate(loaded)
+            data = try Data(contentsOf: self.file)
+            var loaded = try JSONDecoder().decode(Preferences.self, from: data)
+            // One invalid field (a hand edit) falls back alone; the rest of the file, opt-outs included, stays.
+            let reset = Self.repair(&loaded)
             values = loaded
-            // Settings name the starting folder and shell: a file an older build wrote readable by others is narrowed.
-            let permissions = try FileManager.default.attributesOfItem(atPath: self.file.path)[.posixPermissions] as? NSNumber
-            if permissions?.intValue != 0o600 { try PrivateFile.write(data, to: self.file) }
+            if !reset.isEmpty { error = "Some settings were invalid and use their defaults: \(reset.joined(separator: ", "))." }
+        } catch {
+            unreadable = true
+            self.error = "Could not read settings, so Dispatch uses the defaults: \(error.localizedDescription) "
+                + "The file is kept: changing a setting moves it aside, next to the new settings.json."
+            return
         }
-        catch { self.error = "Could not load settings: \(error.localizedDescription)" }
+        // Settings name the starting folder and shell: a file an older build wrote readable by others is narrowed.
+        let permissions = (try? FileManager.default.attributesOfItem(atPath: self.file.path))?[.posixPermissions] as? NSNumber
+        if permissions?.intValue != 0o600 { try? PrivateFile.write(data, to: self.file) }
     }
 
     func save(_ preferences: Preferences) throws {
-        try Self.validate(preferences)
+        try Self.validate(preferences, since: values)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try PrivateFile.write(encoder.encode(preferences), to: file)
+        let data = try encoder.encode(preferences)
+        let kept = unreadable ? try keepUnreadable() : nil
+        try PrivateFile.write(data, to: file)
         values = preferences
-        error = nil
+        unreadable = false
+        error = kept.map { "Settings that could not be read are kept in \($0.path)." }
         onSave?(preferences)
     }
 
-    static func validate(_ preferences: Preferences) throws {
-        guard (8...32).contains(preferences.fontSize), !preferences.fontFamily.contains(where: \.isNewline),
-              !preferences.theme.contains(where: \.isNewline),
-              !preferences.theme.isEmpty,
-              !preferences.lightTheme.contains(where: \.isNewline), !preferences.lightTheme.isEmpty,
-              !preferences.fontFamily.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw SettingsError.invalidFont
-        }
+    /// Moves the unreadable file aside under a name of its own; nil when it is gone already.
+    private func keepUnreadable() throws -> URL? {
+        guard System.exists(file) else { return nil }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyyMMdd-HHmmss"
+        let name = "settings.unreadable-\(format.string(from: System.date()))-\(System.uuid().uuidString.prefix(8)).json"
+        let target = file.deletingLastPathComponent().appendingPathComponent(name)
+        try System.move(file, to: target)
+        return target
+    }
+
+    /// With `previous`, a starting folder changed since must exist. An unchanged one may be missing (an unmounted
+    /// drive, a deleted project): it stays saved, and new tabs start in the home folder meanwhile (`startingFolder`).
+    static func validate(_ preferences: Preferences, since previous: Preferences? = nil) throws {
         if let problem = preferences.keyGroups.problem { throw SettingsError.invalidKeyGroups(problem) }
+        var checked = preferences
+        guard repair(&checked).isEmpty else { throw SettingsError.invalidFont }
+        guard let previous, preferences.startingDirectory != previous.startingDirectory else { return }
         var directory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: preferences.startingDirectory, isDirectory: &directory), directory.boolValue else {
             throw SettingsError.invalidDirectory
         }
+    }
+
+    /// Sets the fields `validate` refuses back to their defaults (a font size outside 8–32 to the nearest bound) and
+    /// names them.
+    static func repair(_ preferences: inout Preferences) -> [String] {
+        let defaults = Preferences()
+        var reset: [String] = []
+        if !(8...32).contains(preferences.fontSize) {
+            preferences.fontSize = preferences.fontSize < 8 ? 8 : 32
+            reset.append("font size")
+        }
+        if preferences.fontFamily.contains(where: \.isNewline) || preferences.fontFamily.trimmingCharacters(in: .whitespaces).isEmpty {
+            preferences.fontFamily = defaults.fontFamily
+            reset.append("font")
+        }
+        if preferences.theme.isEmpty || preferences.theme.contains(where: \.isNewline) {
+            preferences.theme = defaults.theme
+            reset.append("theme")
+        }
+        if preferences.lightTheme.isEmpty || preferences.lightTheme.contains(where: \.isNewline) {
+            preferences.lightTheme = defaults.lightTheme
+            reset.append("light theme")
+        }
+        if preferences.keyGroups.problem != nil {
+            preferences.keyGroups = defaults.keyGroups
+            reset.append("shortcut modifiers")
+        }
+        return reset
     }
 
     enum SettingsError: LocalizedError {
@@ -594,5 +650,15 @@ extension Dictionary where Key == String, Value == Bool {
     subscript(on name: String) -> Bool {
         get { self[name] ?? true }
         set { self[name] = newValue ? nil : false }
+    }
+}
+
+extension Preferences {
+    /// Where new local tabs start: the starting folder, or the home folder while it is missing. The setting itself
+    /// is kept, so the folder is used again once it is back (at the next launch or settings save).
+    var startingFolder: String {
+        var directory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: startingDirectory, isDirectory: &directory) && directory.boolValue
+            ? startingDirectory : System.home.path
     }
 }

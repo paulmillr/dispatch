@@ -9,7 +9,7 @@
     python3 mockups/shoot.py list                          # the screen ids by group
 
     python3 mockups/shoot.py mac [render|list|sheets] [--themes dark,light] [selector…]   # Mac screens (README, Mac)
-    python3 mockups/shoot.py M1-main [dark|light|graphite|lavender|nautical]          # one Mac screen
+    python3 mockups/shoot.py M1-main [dark|light|nautical]                            # one Mac screen
     python3 mockups/shoot.py all mac                       # every Mac screen, then its sheets
 
 The Mac screens need no simulator: `mac` builds the Swift package in Mac/ (incremental, about a second) and draws them
@@ -88,7 +88,7 @@ def platform_of(screen):
     sys.exit(f'unknown screen {screen}; see `shoot.py list`')
 
 
-MAC_THEMES = {'dark', 'light', 'graphite', 'lavender', 'nautical'}
+MAC_THEMES = {'dark', 'light', 'nautical'}
 
 
 def mac(*args, capture=False):

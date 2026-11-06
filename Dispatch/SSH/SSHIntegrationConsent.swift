@@ -459,10 +459,13 @@ enum SSHIntegrationConsent {
                 (parent ? accent.withAlphaComponent(state == .on ? 0.08 : 0.02) : foreground.withAlphaComponent(0.03)).setFill()
                 bounds.fill()
             }
-            if parent && !(radio && last) {
-                accent.withAlphaComponent(0.25).setStroke()
-                let line = NSBezierPath()
-                line.move(to: NSPoint(x: 0, y: bounds.maxY - 0.5)); line.line(to: NSPoint(x: bounds.width, y: bounds.maxY - 0.5)); line.stroke()
+            if parent {
+                // A parent row's separator; the last of a set of answers (radio) has none. Neither hangs on a tree.
+                if !(radio && last) {
+                    accent.withAlphaComponent(0.25).setStroke()
+                    let line = NSBezierPath()
+                    line.move(to: NSPoint(x: 0, y: bounds.maxY - 0.5)); line.line(to: NSPoint(x: bounds.width, y: bounds.maxY - 0.5)); line.stroke()
+                }
             } else {
                 accent.withAlphaComponent(0.35 * enabled).setStroke()
                 let tree = NSBezierPath()

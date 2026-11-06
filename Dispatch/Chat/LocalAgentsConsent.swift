@@ -1,11 +1,16 @@
 import AppKit
+import SwiftUI
 
-/// The first-launch setup sheet, in the SSH consent sheet's style. A fresh install answers two questions in it: will
-/// agents run on this Mac, and should Dispatch keep itself up to date. Yes to agents installs the integrations of the
-/// agent CLIs found here, or, with none found, shows how to install Claude Code and Codex and sets up the first one a
-/// later launch finds; no turns this Mac's agent hooks off. Automatic updates come checked, but nothing is requested
-/// until Continue saves the choice. Ask later saves neither and asks next launch. An existing installation that has
-/// not answered the updates question gets the same sheet with only that section.
+/// The first-launch setup sheet, in the SSH consent sheet's style. A fresh install pages through what to type for Chat
+/// (an agent in any tab), for tabs (`tmux -CC`, `herdr`, `ssh`), then answers two questions: will agents run on this Mac,
+/// and should Dispatch keep itself up to date. Back, the steps (Chat · Tabs · Prefs) and Next move between the pages;
+/// Skip (Escape) on the first two goes to the questions. Yes to agents installs the integrations of the agent CLIs found
+/// here, or, with none found, shows how to install Claude Code and Codex and sets up the first one a later launch
+/// finds; no turns this Mac's agent hooks off. Automatic updates come checked, but nothing is requested until Let's
+/// roll! saves the choice. Skip on the questions saves neither; Settings answers them later (Updates; Hosts › This
+/// Mac). An existing installation that has not answered the updates question gets that question alone, with Continue.
+/// Either sheet shows once per Mac (`shouldAsk`). The pages are Onboarding's (OnboardingPages.swift), drawn after
+/// mockups/Mac's Onboarding screens.
 @MainActor
 enum LocalAgentsConsent {
     /// "pending" from a fresh install's first launch until answered; "waiting" after a yes that found no CLI;
@@ -19,10 +24,11 @@ enum LocalAgentsConsent {
         defaults.set("pending", forKey: key)
     }
 
-    /// Asks over `window` while either question is unanswered; after a yes that found nothing, looks again quietly.
+    /// Asks over `window` once (`shouldAsk`); after a yes that found nothing, looks again quietly.
     static func start(over window: NSWindow, chat: ChatCoordinator, settings: SettingsStore, defaults: UserDefaults? = .app) async {
         let choice = defaults?.string(forKey: key)
-        if choice == "pending" || settings.values.automaticUpdates == nil {
+        if shouldAsk(settings) {
+            markShown(settings)
             let sheet = Sheet(chat: chat, settings: settings, agents: choice == "pending")
             await withCheckedContinuation { continuation in
                 window.beginSheet(sheet) { _ in continuation.resume() }
@@ -34,6 +40,21 @@ enum LocalAgentsConsent {
         guard let defaults, choice == "waiting", let found = await installedAgents(), !found.isEmpty else { return }
         chat.adoptLocalAgents(found)
         defaults.set("yes", forKey: key)
+    }
+
+    /// The sheet shows once per Mac: while updates are unanswered and it was never shown, here or by another build
+    /// sharing these settings (Release and Debug keep separate defaults, so their fresh-install checks differ). Settings
+    /// that could not be read ask nothing: they most likely answered it already (SettingsStore keeps them aside).
+    static func shouldAsk(_ settings: SettingsStore) -> Bool {
+        !settings.unreadable && settings.values.automaticUpdates == nil && !settings.values.setupShown
+    }
+
+    /// Recorded as the sheet opens, so neither Skip nor quitting with it open brings it back.
+    static func markShown(_ settings: SettingsStore) {
+        var values = settings.values
+        values.setupShown = true
+        do { try settings.save(values) }
+        catch { settings.error = error.localizedDescription }
     }
 
     /// Launch keys whose CLI runs in the login shell (`--version` succeeds); nil when the shell cannot be asked.
@@ -75,23 +96,30 @@ enum LocalAgentsConsent {
     final class Sheet: NSPanel {
         private let chat: ChatCoordinator
         private let settings: SettingsStore
-        /// The agents question is asked (a fresh install); without it, the sheet only asks about updates.
+        /// The agents question is asked (a fresh install, three pages); without it, the sheet only asks about updates.
         private let agents: Bool
         /// The stored agents answer once the user gave one.
         private(set) var answer: String?
         private(set) var yes: Style.ChoiceButton!
         private var no: Style.ChoiceButton!
         private(set) var updates: Style.ChoiceButton!
-        private var stack: NSStackView!
+        /// The page shown: 0 Chat, 1 Tabs, 2 the choices (Prefs). The updates-only sheet is its choices alone.
+        private(set) var page = 0
+        private var header: NSHostingView<Onboarding.Header>!
+        /// The pages, laid over each other in `pagesView`, which is as tall as the tallest so the footer never moves.
+        private var pages: [NSView] = []
+        private var pagesView: NSView!
+        private var pagesHeight: NSLayoutConstraint!
+        private var choices: NSStackView!
         private var warning: NSStackView!
-        private var later: Style.FooterButton!
-        private var proceed: Style.FooterButton!
-        private var again: Style.FooterButton!
-        private var done: Style.FooterButton!
-        private var checking = false
+        private var column: NSStackView!
+        private let footer = Onboarding.FooterModel()
+        private var checking = false { didSet { footer.busy = checking } }
 
-        /// The row that has focus when the sheet opens.
-        var initial: NSButton { agents ? yes : updates }
+        static let width: CGFloat = 500
+
+        /// The row that has focus when the sheet opens: the updates-only sheet's checkbox; the pages start on Chat.
+        var initial: NSView? { agents ? nil : updates }
         override var canBecomeKey: Bool { true }
 
         init(chat: ChatCoordinator, settings: SettingsStore, agents: Bool) {
@@ -105,43 +133,21 @@ enum LocalAgentsConsent {
             hasShadow = true
             appearance = NSAppearance(named: Chrome.palette.isDark ? .darkAqua : .aqua)
             title = agents ? "Welcome to Dispatch" : "Keep Dispatch up to date"
-            let width: CGFloat = 460, inset: CGFloat = 20, contentWidth = width - inset * 2
+            let inset: CGFloat = 20, contentWidth = Self.width - inset * 2
             let content = NSView()
             content.wantsLayer = true
             content.layer?.backgroundColor = Style.background.cgColor
-            content.layer?.cornerRadius = 10
+            content.layer?.cornerRadius = 12
+            content.layer?.masksToBounds = true
             content.layer?.borderWidth = 1
             content.layer?.borderColor = NSColor(Chrome.border).cgColor
             content.identifier = NSUserInterfaceItemIdentifier("local-agents-options")
-            stack = NSStackView()
-            stack.orientation = .vertical
-            stack.alignment = .leading
-            stack.spacing = 14
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            stack.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
 
-            let icon = NSImageView()
-            icon.image = NSImage(systemSymbolName: agents ? "laptopcomputer" : "arrow.down.circle", accessibilityDescription: title)
-            icon.contentTintColor = NSColor(srgbRed: 126/255, green: 166/255, blue: 201/255, alpha: 1)
-            icon.symbolConfiguration = .init(pointSize: 15, weight: .medium)
-            icon.wantsLayer = true
-            icon.layer?.backgroundColor = NSColor(calibratedRed: 0.12, green: 0.17, blue: 0.21, alpha: 1).cgColor
-            icon.layer?.cornerRadius = 7
-            icon.widthAnchor.constraint(equalToConstant: 28).isActive = true
-            icon.heightAnchor.constraint(equalToConstant: 28).isActive = true
-            let heading = Style.label(title, size: 13, bold: true)
-            heading.textColor = Style.foreground
-            let subtitle = Style.label(agents ? "Two quick choices for this Mac" : "New releases, downloaded for you", size: 11)
-            for text in [heading, subtitle] { text.widthAnchor.constraint(equalToConstant: contentWidth - 38).isActive = true }
-            let titles = NSStackView(views: [heading, subtitle])
-            titles.orientation = .vertical
-            titles.alignment = .leading
-            titles.spacing = 2
-            let header = NSStackView(views: [icon, titles])
-            header.spacing = 10
-            header.alignment = .centerY
-            stack.addArrangedSubview(header)
-
+            header = NSHostingView(rootView: Self.header(page: 0, agents: agents))
+            choices = NSStackView()
+            choices.orientation = .vertical
+            choices.alignment = .leading
+            choices.spacing = 14
             if agents {
                 yes = Style.ChoiceButton(title: "Yes, I’ll use agents on this Mac", detail: "sets up Chat hooks for the agents installed here",
                                          parent: true, note: nil, radio: true)
@@ -153,9 +159,9 @@ enum LocalAgentsConsent {
                     button.setAccessibilityIdentifier(identifier)
                 }
                 yes.state = .on
-                stack.addArrangedSubview(Self.section("Agents", width: contentWidth))
-                stack.addArrangedSubview(Self.group([yes, no], width: contentWidth))
-                stack.setCustomSpacing(6, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 2])
+                choices.addArrangedSubview(Self.section("Agents", width: contentWidth))
+                choices.addArrangedSubview(Self.group([yes, no], width: contentWidth))
+                choices.setCustomSpacing(6, after: choices.arrangedSubviews[choices.arrangedSubviews.count - 2])
             }
             updates = Style.ChoiceButton(title: agents ? "Keep Dispatch up to date" : "Enable automatic updates",
                                          detail: "checks daily and downloads; asks before restarting", parent: true, last: true, note: nil)
@@ -164,59 +170,97 @@ enum LocalAgentsConsent {
             updates.setAccessibilityIdentifier("onboarding-automatic-updates")
             updates.state = .on
             if agents {
-                stack.addArrangedSubview(Self.section("Updates", width: contentWidth))
-                stack.setCustomSpacing(6, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
+                choices.addArrangedSubview(Self.section("Updates", width: contentWidth))
+                choices.setCustomSpacing(6, after: choices.arrangedSubviews[choices.arrangedSubviews.count - 1])
             }
-            stack.addArrangedSubview(Self.group([updates], width: contentWidth))
-            let explanation = Style.label(agents ? "SSH hosts ask for themselves. Change either later in Settings."
-                                                 : "Change this later in Settings › General › Updates.", size: 11)
+            choices.addArrangedSubview(Self.group([updates], width: contentWidth))
+            let explanation = Style.label(agents ? "Change either later in Settings." : "Change this later in Settings › General › Updates.", size: 11)
             explanation.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
-            stack.addArrangedSubview(explanation)
-
+            choices.addArrangedSubview(explanation)
             warning = Self.warning(width: contentWidth)
             warning.isHidden = true
-            stack.addArrangedSubview(warning)
+            choices.addArrangedSubview(warning)
 
-            let separator = NSBox()
-            separator.boxType = .separator
-            separator.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
-            stack.addArrangedSubview(separator)
-            let footer = NSStackView()
-            footer.spacing = 8
-            footer.alignment = .centerY
-            footer.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
-            later = Style.FooterButton(title: "Ask later", shortcut: "esc", identifier: "local-agents-later")
-            later.target = self
-            later.action = #selector(cancelOperation(_:))
-            // Updates alone has no later: unanswered, it already makes no requests.
-            later.isHidden = !agents
-            footer.addArrangedSubview(later)
-            footer.addArrangedSubview(NSView())
-            again = Style.FooterButton(title: "Check again", identifier: "local-agents-check")
-            again.target = self
-            again.action = #selector(checkAgain(_:))
-            again.isHidden = true
-            footer.addArrangedSubview(again)
-            proceed = Style.FooterButton(title: "Continue", shortcut: "⏎", identifier: "local-agents-continue", primary: true)
-            proceed.target = self
-            proceed.action = #selector(save(_:))
-            footer.addArrangedSubview(proceed)
-            done = Style.FooterButton(title: "Done", shortcut: "⏎", identifier: "local-agents-done", primary: true)
-            done.target = self
-            done.action = #selector(finish(_:))
-            done.isHidden = true
-            footer.addArrangedSubview(done)
-            stack.addArrangedSubview(footer)
-            content.addSubview(stack)
+            // Laid out at the sheet's width, so text that wraps is measured wrapped.
+            pages = (agents ? [NSHostingView(rootView: Onboarding.ChatPage().frame(width: contentWidth, alignment: .leading)),
+                               NSHostingView(rootView: Onboarding.TabsPage().frame(width: contentWidth, alignment: .leading))] : []) + [choices]
+            pagesView = NSView()
+            for (index, view) in pages.enumerated() {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                view.isHidden = index != 0
+                pagesView.addSubview(view)
+                NSLayoutConstraint.activate([
+                    view.topAnchor.constraint(equalTo: pagesView.topAnchor),
+                    view.leadingAnchor.constraint(equalTo: pagesView.leadingAnchor),
+                    view.widthAnchor.constraint(equalToConstant: contentWidth),
+                ])
+            }
+            pagesView.translatesAutoresizingMaskIntoConstraints = false
+            pagesView.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+            pagesHeight = pagesView.heightAnchor.constraint(equalToConstant: 0)
+            pagesHeight.isActive = true
+
+            let body = NSStackView(views: [header, pagesView])
+            body.orientation = .vertical
+            body.alignment = .leading
+            body.spacing = 14
+            body.edgeInsets = NSEdgeInsets(top: 18, left: inset, bottom: 18, right: inset)
+            header.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+            footer.mode = agents ? .pages : .updates
+            footer.back = { [weak self] in self?.show((self?.page ?? 1) - 1) }
+            footer.show = { [weak self] in self?.show($0) }
+            footer.skip = { [weak self] in self?.cancelOperation(nil) }
+            footer.next = { [weak self] in self?.advance() }
+            footer.check = { [weak self] in self?.checkAgain(nil) }
+            footer.done = { [weak self] in self?.finish(nil) }
+            let bar = NSHostingView(rootView: Onboarding.Footer(model: footer))
+            bar.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
+            bar.heightAnchor.constraint(equalToConstant: 54).isActive = true
+            column = NSStackView(views: [body, bar])
+            column.orientation = .vertical
+            column.spacing = 0
+            column.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(column)
             NSLayoutConstraint.activate([
-                stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: inset),
-                stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -inset),
-                stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
-                stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14)
+                column.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+                column.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                column.topAnchor.constraint(equalTo: content.topAnchor),
+                column.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             ])
-            content.frame = NSRect(x: 0, y: 0, width: width, height: ceil(stack.fittingSize.height) + 32)
+            pagesHeight.constant = tallestPage()
+            content.frame = NSRect(x: 0, y: 0, width: Self.width, height: ceil(column.fittingSize.height))
             contentView = content
             setContentSize(content.frame.size)
+            show(agents ? 0 : pages.count - 1)
+        }
+
+        private static func header(page: Int, agents: Bool) -> Onboarding.Header {
+            guard agents else {
+                return Onboarding.Header(symbol: "arrow.down.circle", title: "Keep Dispatch up to date", subtitle: "New releases, downloaded for you")
+            }
+            return [Onboarding.Header(symbol: "text.bubble", title: "Chat with your agents", subtitle: "Welcome to Dispatch"),
+                    Onboarding.Header(symbol: "square.split.2x1", title: "tmux, herdr and SSH", subtitle: "Type the commands you already know"),
+                    Onboarding.Header(symbol: "laptopcomputer", title: "Set up this Mac", subtitle: "Two quick choices")][page]
+        }
+
+        /// The tallest page's height (hidden ones measured too), the warning included once it shows.
+        private func tallestPage() -> CGFloat {
+            ceil(pages.map { $0.fittingSize.height }.max() ?? 0)
+        }
+
+        /// Shows a page; the choices take the keyboard focus on their own page.
+        private func show(_ index: Int) {
+            guard !checking, footer.mode != .warning, pages.indices.contains(index) else { return }
+            page = agents ? index : 2
+            for (other, view) in pages.enumerated() { view.isHidden = other != index }
+            header.rootView = Self.header(page: page, agents: agents)
+            footer.page = page
+            makeFirstResponder(index == pages.count - 1 ? (agents ? (yes.state == .on ? yes : no) : updates) : nil)
+        }
+
+        /// Next on the first two pages; on the choices, Let's roll! (Continue on the updates-only sheet) saves them.
+        private func advance() {
+            if page < 2 { show(page + 1) } else { save(nil) }
         }
 
         /// A small caps heading over a group of rows.
@@ -275,14 +319,14 @@ enum LocalAgentsConsent {
         }
 
         @objc private func choose(_ sender: NSButton) {
-            guard !checking, done.isHidden else { return }
+            guard !checking, footer.mode != .warning else { return }
             yes.state = sender === yes ? .on : .off
             no.state = sender === no ? .on : .off
             yes.needsDisplay = true; no.needsDisplay = true
         }
 
         @objc private func toggleUpdates(_ sender: Any?) {
-            guard !checking, done.isHidden else { return }
+            guard !checking, footer.mode != .warning else { return }
             updates.needsDisplay = true
         }
 
@@ -296,7 +340,7 @@ enum LocalAgentsConsent {
         }
 
         @objc private func save(_ sender: Any?) {
-            guard !checking, !proceed.isHidden else { return }
+            guard !checking, footer.mode != .warning, page == 2 else { return }
             saveUpdates()
             guard agents else { return end(nil) }
             guard yes.state == .on else {
@@ -311,11 +355,9 @@ enum LocalAgentsConsent {
         /// Yes: the agents found are set up and the sheet closes; with none, it warns and stays.
         private func check() {
             checking = true
-            for button in [proceed, again, done, later] { button?.isEnabled = false }
             Task { @MainActor in
                 let found = await LocalAgentsConsent.installedAgents()
                 checking = false
-                for button in [proceed, again, done, later] { button?.isEnabled = true }
                 if let found, !found.isEmpty {
                     chat.adoptLocalAgents(found)
                     return end("yes")
@@ -329,16 +371,16 @@ enum LocalAgentsConsent {
         private func showWarning() {
             guard warning.isHidden else { return }
             warning.isHidden = false
-            proceed.isHidden = true; later.isHidden = true
-            again.isHidden = false; done.isHidden = false
+            footer.mode = .warning
             yes.isEnabled = false; no.isEnabled = false; updates.isEnabled = false
-            stack.layoutSubtreeIfNeeded()
-            let height = ceil(stack.fittingSize.height) + 32
+            pagesHeight.constant = tallestPage()
+            column.layoutSubtreeIfNeeded()
+            let height = ceil(column.fittingSize.height)
             var frame = self.frame
             frame.origin.y -= height - frame.height
             frame.size.height = height
             setFrame(frame, display: true, animate: false)
-            makeFirstResponder(done)
+            makeFirstResponder(nil)
         }
 
         @objc private func finish(_ sender: Any?) { end("waiting") }
@@ -348,18 +390,21 @@ enum LocalAgentsConsent {
             sheetParent?.endSheet(self)
         }
 
+        /// Escape and Skip: on the first two pages, on to the choices; on them, close with nothing saved (the sheet is
+        /// not shown again: `markShown`).
         override func cancelOperation(_ sender: Any?) {
             guard !checking, agents else { return }
-            if !done.isHidden { return end("waiting") }
+            if footer.mode == .warning { return end("waiting") }
+            if page < 2 { return show(2) }
             answer = nil
             sheetParent?.endSheet(self, returnCode: .cancel)
         }
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             if event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
-                if event.keyCode == 36 || event.keyCode == 76 { done.isHidden ? save(nil) : finish(nil); return true }
+                if event.keyCode == 36 || event.keyCode == 76 { footer.mode == .warning ? finish(nil) : advance(); return true }
                 if event.keyCode == 53 { cancelOperation(nil); return true }
-                if event.keyCode == 125 || event.keyCode == 126, agents, done.isHidden {
+                if event.keyCode == 125 || event.keyCode == 126, agents, page == 2, footer.mode != .warning {
                     choose(event.keyCode == 125 ? no : yes); makeFirstResponder(event.keyCode == 125 ? no : yes); return true
                 }
             }

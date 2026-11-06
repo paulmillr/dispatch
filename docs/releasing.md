@@ -248,9 +248,11 @@ would get none.
 ## Mac automatic updates
 
 The Mac app has its own updater, using Foundation, CryptoKit, Security and macOS tools; there is no updater dependency.
-The first-launch setup sheet (`LocalAgentsConsent`, with the agents question) offers **Keep Dispatch up to date**
-checked; existing installations that have not answered get the sheet with that section alone. Nothing is requested
-until Continue saves the choice; Ask later saves nothing. Settings › General › Updates can change the choice and
+The first-launch setup sheet (`LocalAgentsConsent`: Chat, Tabs, then the agents question on Prefs) offers **Keep
+Dispatch up to date** checked; existing installations that have not answered get the sheet with that section alone.
+Nothing is requested until Let's roll! (Continue on the updates-only sheet) saves the choice; Skip saves nothing.
+The sheet shows once per Mac, answered or not: `settings.json` records it (`setupShown`), shared by Release and Debug
+builds, which keep separate defaults. Settings › General › Updates can change the choice and
 check manually without enabling it. Unanswered or off (also the default for older settings files), there are no
 automatic requests. On, Dispatch checks once a day
 while running and downloads newer versions, then offers **Restart and install**. Restart goes through the normal

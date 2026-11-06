@@ -3,7 +3,7 @@ import Observation
 
 /// Resolved app palettes. Automatic appearance selects dark or light.
 enum SidebarTheme: String, Codable, CaseIterable, Sendable {
-    case dark, light, graphite, lavender, nautical
+    case dark, light, nautical
     var label: String { rawValue.capitalized }
     /// Dark palettes: dark system appearance, the dark terminal scheme and light-on-dark host tones.
     var isDark: Bool { self == .dark || self == .nautical }
@@ -46,42 +46,41 @@ struct SidebarPalette: Sendable {
     var isDark: Bool { theme.isDark }
     /// Nautical, the hidden theme Settings unlocks, is a harbour's vessel traffic radar: green-black chrome, phosphor
     /// green accent and gray-green ink.
-    private func color(_ dark: UInt32, _ light: UInt32, _ graphite: UInt32, _ lavender: UInt32, _ nautical: UInt32) -> Color {
+    private func color(_ dark: UInt32, _ light: UInt32, _ nautical: UInt32) -> Color {
         let hex: UInt32
         switch theme {
-        case .dark: hex = dark; case .light: hex = light; case .graphite: hex = graphite; case .lavender: hex = lavender
-        case .nautical: hex = nautical
+        case .dark: hex = dark; case .light: hex = light; case .nautical: hex = nautical
         }
         return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
     }
-    var window: Color { color(0x131315, 0xf6f6f8, 0xf2f2f2, 0xf3f1f9, 0x0c100d) }
+    var window: Color { color(0x131315, 0xf6f6f8, 0x0c100d) }
     /// What the terminal and chat sit on: Dark keeps dispatch-black's near-black; other palettes use the window.
     var terminal: Color { theme == .dark ? Chrome.terminal : window }
-    var sidebar: Color { color(0x16161a, 0xececef, 0xe6e6e6, 0xe9e6f2, 0x0e130f) }
-    var border: Color { theme == .dark ? .white.opacity(0.08) : color(0, 0xdcdce0, 0xcfcfcf, 0xd5d0e3, 0x1f2a21) }
-    var sidebarDivider: Color { color(0x212121, 0xcdcdd1, 0xc5c5c5, 0xcbc8d2, 0x1f2a21) }
-    var ink: Color { color(0xececf0, 0x131318, 0x000000, 0x120f1a, 0xdfe8df) }
-    var secondary: Color { color(0xc9c9ce, 0x2e2e36, 0x1f1f1f, 0x2a2538, 0x9aa89b) }
-    var muted: Color { color(0x8f8f98, 0x767680, 0x5a5a5a, 0x69617e, 0x7c8c7e) }
-    var detail: Color { color(0x5c5c64, 0x8a8a94, 0x6b6b6b, 0x7a7290, 0x55635a) }
-    var faint: Color { color(0x3f3f47, 0xb0b0b8, 0x969696, 0xa199b5, 0x2c3b2e) }
-    var accent: Color { color(0xe07be0, 0xb8449e, 0x2a5bd7, 0x5648c4, 0x8be28f) }
-    var green: Color { color(0x7fd3a1, 0x2f9a5c, 0x2f9a5c, 0x2f9a5c, 0x7fd3a1) }
-    var warning: Color { color(0xd9b36a, 0xb07a1a, 0xb07a1a, 0xb07a1a, 0xd9b36a) }
+    var sidebar: Color { color(0x16161a, 0xececef, 0x0e130f) }
+    var border: Color { theme == .dark ? .white.opacity(0.08) : color(0, 0xdcdce0, 0x1f2a21) }
+    var sidebarDivider: Color { color(0x212121, 0xcdcdd1, 0x1f2a21) }
+    var ink: Color { color(0xececf0, 0x131318, 0xdfe8df) }
+    var secondary: Color { color(0xc9c9ce, 0x2e2e36, 0x9aa89b) }
+    var muted: Color { color(0x8f8f98, 0x767680, 0x7c8c7e) }
+    var detail: Color { color(0x5c5c64, 0x8a8a94, 0x55635a) }
+    var faint: Color { color(0x3f3f47, 0xb0b0b8, 0x2c3b2e) }
+    var accent: Color { color(0xe07be0, 0xb8449e, 0x8be28f) }
+    var green: Color { color(0x7fd3a1, 0x2f9a5c, 0x7fd3a1) }
+    var warning: Color { color(0xd9b36a, 0xb07a1a, 0xd9b36a) }
     /// The commit graph's lanes: the current branch a vivid green, merged branches slate (Nautical's grey-green).
-    var graphCurrent: Color { color(0x3fd98a, 0x12804a, 0x12804a, 0x12804a, 0x3fd98a) }
-    var graphMerged: Color { color(0x8fa6c7, 0x56698a, 0x56698a, 0x56698a, 0x9aa89b) }
+    var graphCurrent: Color { color(0x3fd98a, 0x12804a, 0x3fd98a) }
+    var graphMerged: Color { color(0x8fa6c7, 0x56698a, 0x9aa89b) }
     var selection: Color { (isDark ? Color.white : Color.black).opacity(0.07) }
     var hover: Color { (isDark ? Color.white : Color.black).opacity(0.04) }
-    var hostGroup: Color { theme == .dark ? Chrome.terminal.opacity(0.55) : color(0, 0xe4e4e8, 0xdddddd, 0xe0dcec, 0x111612) }
-    var field: Color { color(0x111114, 0xf6f6f8, 0xf2f2f2, 0xf3f1f9, 0x111612) }
-    var control: Color { color(0x1d1d21, 0xe9e9ed, 0xdddddd, 0xe0dcec, 0x1f2a21) }
-    var controlBorder: Color { color(0x2a2a30, 0xd0d0d6, 0xbfbfbf, 0xc9c2dc, 0x2c3b2e) }
-    var sidebarDetail: Color { color(0x6f6f78, 0x767680, 0x5a5a5a, 0x69617e, 0x7c8c7e) }
-    var sidebarHostLabel: Color { color(0x9a9aa2, 0x767680, 0x5a5a5a, 0x69617e, 0x9aa89b) }
-    var sidebarAction: Color { color(0x232328, 0xe9e9ed, 0xdddddd, 0xe0dcec, 0x1f2a21) }
-    var selectedControl: Color { color(0x2e2e34, 0xffffff, 0xffffff, 0xfcfbfe, 0x2c3b2e) }
-    var separator: Color { color(0x1c1c20, 0xe3e3e7, 0xcfcfcf, 0xd5d0e3, 0x141b16) }
+    var hostGroup: Color { theme == .dark ? Chrome.terminal.opacity(0.55) : color(0, 0xe4e4e8, 0x111612) }
+    var field: Color { color(0x111114, 0xf6f6f8, 0x111612) }
+    var control: Color { color(0x1d1d21, 0xe9e9ed, 0x1f2a21) }
+    var controlBorder: Color { color(0x2a2a30, 0xd0d0d6, 0x2c3b2e) }
+    var sidebarDetail: Color { color(0x6f6f78, 0x767680, 0x7c8c7e) }
+    var sidebarHostLabel: Color { color(0x9a9aa2, 0x767680, 0x9aa89b) }
+    var sidebarAction: Color { color(0x232328, 0xe9e9ed, 0x1f2a21) }
+    var selectedControl: Color { color(0x2e2e34, 0xffffff, 0x2c3b2e) }
+    var separator: Color { color(0x1c1c20, 0xe3e3e7, 0x141b16) }
 }
 
 @MainActor @Observable

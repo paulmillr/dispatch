@@ -32,7 +32,9 @@ final class AppUpdaterTests: XCTestCase {
     }
 
     /// The setup sheet (LocalAgentsConsent) offers updates checked, yet saves nothing, so makes no request, until
-    /// Continue; Ask later leaves the question unanswered. Existing installations get the updates section alone.
+    /// Let's roll! (Continue alone); Skip leaves the question unanswered. A fresh install pages Chat, Tabs, then the
+    /// choices: Return goes on, Escape skips to the choices and there asks later. Existing installations get the
+    /// updates section alone.
     func testSetupSheetOffersUpdatesCheckedAndSavesOnlyOnContinue() async throws {
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: nil)
         for agents in [true, false] {
@@ -43,8 +45,25 @@ final class AppUpdaterTests: XCTestCase {
             defer { sheet.close() }
             XCTAssertEqual(sheet.updates.state, .on)
             XCTAssertNil(settings.values.automaticUpdates, "Showing the sheet answers nothing")
-            _ = try PresentationTestSupport.render(XCTUnwrap(sheet.contentView), named: agents ? "setup" : "setup-updates", in: "update-audit")
             let escape = TerminalTestSupport.keyEvent(53, "\u{1b}", in: sheet)
+            let enter = TerminalTestSupport.keyEvent(36, "\r", in: sheet)
+            if agents {
+                let height = sheet.frame.height
+                for (page, name) in ["setup-chat", "setup-tabs", "setup-prefs"].enumerated() {
+                    XCTAssertEqual(sheet.page, page)
+                    XCTAssertEqual(sheet.frame.height, height, "Every page is the same height")
+                    _ = try PresentationTestSupport.render(XCTUnwrap(sheet.contentView), named: name, in: "update-audit")
+                    if page < 2 { XCTAssertTrue(sheet.performKeyEquivalent(with: enter)) }
+                }
+                XCTAssertNil(settings.values.automaticUpdates, "Next saves nothing")
+                let fresh = LocalAgentsConsent.Sheet(chat: chat, settings: settings, agents: true)
+                defer { fresh.close() }
+                XCTAssertTrue(fresh.performKeyEquivalent(with: TerminalTestSupport.keyEvent(53, "\u{1b}", in: fresh)))
+                XCTAssertEqual(fresh.page, 2, "Skip goes to the choices")
+                XCTAssertNil(settings.values.automaticUpdates, "Skip saves nothing")
+            } else {
+                _ = try PresentationTestSupport.render(XCTUnwrap(sheet.contentView), named: "setup-updates", in: "update-audit")
+            }
             XCTAssertTrue(sheet.performKeyEquivalent(with: escape))
             XCTAssertNil(settings.values.automaticUpdates, "Ask later saves nothing")
             if agents { continue }
@@ -54,6 +73,58 @@ final class AppUpdaterTests: XCTestCase {
             XCTAssertTrue(sheet.performKeyEquivalent(with: TerminalTestSupport.keyEvent(36, "\r", in: sheet)))
             XCTAssertEqual(settings.values.automaticUpdates, true)
         }
+    }
+
+    /// The setup sheet shows once per Mac: not after it was shown (answered or skipped, by this build or another reading
+    /// the same settings), not once updates are answered, and never over settings that could not be read.
+    func testSetupSheetShowsOncePerMac() throws {
+        let directory = System.temporary.appendingPathComponent("update-once-" + System.uuid().uuidString)
+        defer { try? System.remove(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let settings = SettingsStore(file: file)
+        XCTAssertTrue(LocalAgentsConsent.shouldAsk(settings), "A fresh install asks")
+        LocalAgentsConsent.markShown(settings)
+        XCTAssertFalse(LocalAgentsConsent.shouldAsk(settings))
+        let other = SettingsStore(file: file)
+        XCTAssertFalse(LocalAgentsConsent.shouldAsk(other), "Another build reading the same settings")
+        XCTAssertNil(other.values.automaticUpdates, "Shown is not answered: no automatic requests")
+        let answered = SettingsStore(file: directory.appendingPathComponent("answered.json"))
+        var values = answered.values
+        values.automaticUpdates = false
+        try answered.save(values)
+        XCTAssertFalse(LocalAgentsConsent.shouldAsk(answered), "An answer from before the flag counts as shown")
+        let broken = directory.appendingPathComponent("broken.json")
+        try PrivateFile.write(Data("{".utf8), to: broken)
+        XCTAssertFalse(LocalAgentsConsent.shouldAsk(SettingsStore(file: broken)), "Unreadable settings are never saved over")
+        XCTAssertEqual(try System.read(broken), Data("{".utf8))
+    }
+
+    /// Settings › Troubleshooting › Reset deletes Dispatch's data (settings with the setup sheet's record, spaces,
+    /// drafts…), your color schemes and diagnostics, and this build's defaults; the dictation models and another
+    /// build's defaults stay.
+    func testResetDeletesDataButDictationModels() throws {
+        let root = System.temporary.appendingPathComponent("reset-" + System.uuid().uuidString)
+        defer { try? System.remove(root) }
+        let support = root.appendingPathComponent("Dispatch"), home = root.appendingPathComponent("home")
+        for name in ["Local", "Whisper", "Parakeet"] { try System.directory(support.appendingPathComponent(name)) }
+        for name in ["Local/settings.json", "host-session.json", "drafts.json", "Whisper/ggml-base.bin", "Parakeet/model.bin"] {
+            try System.write(Data("x".utf8), to: support.appendingPathComponent(name))
+        }
+        let targets = DispatchRemoval.resetTargets(support: support, home: home)
+        XCTAssertEqual(targets.map(\.path), ["Local", "drafts.json", "host-session.json"].map { support.appendingPathComponent($0).path }
+            + [CustomThemes.directory.path, home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics").path])
+        let suite = "ResetTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let otherSuite = suite + "-other", other = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+        defer { other.removePersistentDomain(forName: otherSuite) }
+        defaults.set("yes", forKey: LocalAgentsConsent.key)
+        other.set("yes", forKey: LocalAgentsConsent.key)
+        // The scratch folder's entries only: the real color schemes and logs are never touched here.
+        XCTAssertEqual(DispatchRemoval.resetData(targets: Array(targets.prefix(3)), defaults: defaults, domain: suite), [])
+        XCTAssertEqual(try System.list(support).sorted(), ["Parakeet", "Whisper"])
+        XCTAssertNil(defaults.string(forKey: LocalAgentsConsent.key), "This build's defaults are gone")
+        XCTAssertEqual(other.string(forKey: LocalAgentsConsent.key), "yes", "Another build's stay")
+        XCTAssertTrue(LocalAgentsConsent.shouldAsk(SettingsStore(file: support.appendingPathComponent("Local/settings.json"))),
+                      "The setup sheet shows again")
     }
 
     func testSettingsShowUpdateControls() async throws {

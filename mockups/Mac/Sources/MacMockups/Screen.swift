@@ -22,6 +22,6 @@ struct Screen {
 /// here.
 enum Screens {
     static var all: [Screen] {
-        Reference.screens + FilesModes.screens + Landing.screens
+        Reference.screens + FilesModes.screens + Landing.screens + Onboarding.screens
     }
 }

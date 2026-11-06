@@ -18,6 +18,7 @@ struct SettingsView: View {
     var resetSSHState: () async throws -> Void = { try await TerminalRuntime.shared.resetSSHState() }
     var fitInitialHeight: ((CGFloat) -> Void)?
     @State private var confirmingSSHReset = false
+    @State private var confirmingReset = false
     @State private var resettingSSH = false
     /// Multiplexers whose terminal-started sessions can open as spaces, by the helper's name
     /// (the legacy route's fixed pair until its removal).
@@ -169,6 +170,12 @@ struct SettingsView: View {
         .tint(accent)
         .preferredColorScheme(Chrome.colorScheme)
         .accessibilityIdentifier("settings-sheet")
+        .alert("Reset Dispatch on this Mac?", isPresented: $confirmingReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) { resetDispatch() }
+        } message: {
+            Text("Dispatch quits and closes every tab, then deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices, your color schemes and diagnostics, and removes its agent hooks and ~/.dispatch from this Mac. Dictation models are kept; SSH hosts are not changed. Dispatch then opens again with the setup sheet.")
+        }
         .alert("Forget all SSH hosts?", isPresented: $confirmingSSHReset) {
             Button("Cancel", role: .cancel) {}
             Button("Forget all", role: .destructive) { resetHosts() }
@@ -304,7 +311,7 @@ struct SettingsView: View {
         }
     }
 
-    /// Why SSH integration fell back to a plain shell, and the app's anonymous diagnostics; on the Extra page.
+    /// Why SSH integration fell back to a plain shell, the app's anonymous diagnostics, and Reset; on the Extra page.
     private var troubleshootingSettings: some View {
         settingsGroup("Troubleshooting") {
             let setup = SSHSetupLog.shared
@@ -337,6 +344,12 @@ struct SettingsView: View {
                         Text(error).font(typography, .body).foregroundStyle(.red)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
+            }
+            // Last: the one destructive action here.
+            row("Reset Dispatch", detail: "deletes Dispatch’s data on this Mac and starts again from the setup sheet",
+                info: "Dispatch quits, removes its agent hooks, Pi extension and ~/.dispatch from this Mac, deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices, your color schemes and its diagnostics, then opens again as on a fresh install. Dictation models are kept. Nothing changes on your SSH hosts.") {
+                Button("Reset…") { confirmingReset = true }
+                    .accessibilityIdentifier("settings-reset-dispatch")
             }
         }
     }
@@ -1102,6 +1115,12 @@ struct SettingsView: View {
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }
 
+    /// Reset: Dispatch quits (the usual confirmation for running programs), then DispatchRemoval.resetLocal runs.
+    private func resetDispatch() {
+        (NSApp.delegate as? AppDelegate)?.resetOnQuit = true
+        NSApp.terminate(nil)
+    }
+
     private func resetHosts() {
         guard !resettingSSH else { return }
         resettingSSH = true
@@ -1333,7 +1352,7 @@ struct SettingsView: View {
             catch { try? TerminalRuntime.shared.apply(old); throw error }
             diagnostics.setEnabled(store.values.enableDiagnostics)
             (NSApp.delegate as? AppDelegate)?.applySidebarTheme(draft.resolvedSidebarTheme)
-            workspace.defaultDirectory = draft.startingDirectory
+            workspace.defaultDirectory = draft.startingFolder
             error = store.error
         } catch { self.error = error.localizedDescription }
     }

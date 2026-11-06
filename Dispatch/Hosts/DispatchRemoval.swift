@@ -97,6 +97,77 @@ enum DispatchRemoval {
         alert.runModal()
     }
 
+    /// Settings › Extra › Troubleshooting › Reset, as Dispatch quits (its helpers stopped): this Mac's `uninstall`
+    /// (every Dispatch hook, Pi's extension, `~/.dispatch`), then `resetData`, then Dispatch opens again as a fresh
+    /// install, setup sheet included. SSH hosts are left alone. A failure is reported before the app opens again.
+    static func resetLocal() async {
+        let outcome = await run(on: .local, dry: false, attempts: 10)
+        let problems = resetData()
+        if !outcome.removed || !problems.isEmpty {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Dispatch couldn’t reset everything"
+            alert.informativeText = ([outcome.output] + problems).filter { !$0.isEmpty }.joined(separator: "\n")
+                + (outcome.removed ? "" : "\n\nTo remove the hooks, run \(command) in a terminal.")
+            alert.addButton(withTitle: "Open Dispatch")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+        relaunch()
+    }
+
+    /// The support folder's entries Reset keeps: the dictation models, large downloads that hold nothing personal.
+    static let resetKeeps: Set<String> = ["Whisper", "Parakeet"]
+
+    /// What Reset deletes: the support folder (settings, the setup sheet's record, spaces, terminal output, drafts,
+    /// reviews) but `resetKeeps`, your color schemes and the diagnostics logs.
+    static func resetTargets(support: URL = Home.support, home: URL = System.home) -> [URL] {
+        let entries = ((try? System.list(support)) ?? []).filter { !resetKeeps.contains($0) }.sorted()
+        return entries.map { support.appendingPathComponent($0) }
+            + [CustomThemes.directory, home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics")]
+    }
+
+    /// Deletes `resetTargets` and this build's defaults (SSH grants, host records, chat and hook switches, the window
+    /// frame); another build's defaults stay. Returns what could not be deleted.
+    static func resetData(targets: [URL] = resetTargets(), defaults: UserDefaults? = .app,
+                          domain: String? = Bundle.main.bundleIdentifier) -> [String] {
+        var problems: [String] = []
+        for url in targets where System.exists(url) {
+            do { try System.remove(url) } catch { problems.append("\(url.path): \(error.localizedDescription)") }
+        }
+        if let defaults, let domain {
+            defaults.removePersistentDomain(forName: domain)
+            defaults.synchronize()
+        }
+        return problems
+    }
+
+    /// Opens this app again once this process has exited (at most a minute's wait). Paths are positional arguments.
+    static let relaunchScript = #"""
+    count=0
+    while /bin/kill -0 "$1" 2>/dev/null; do
+        count=$((count + 1))
+        [ "$count" -lt 300 ] || exit 1
+        /bin/sleep 0.2
+    done
+    /usr/bin/open -n "$2"
+    """#
+
+    static func relaunch() {
+        let parent = String(System.pid), app = System.bundle.path
+        _ = try? System.act("reset.relaunch", [parent, app]) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", relaunchScript, "dispatch-reset", parent, app]
+            process.currentDirectoryURL = URL(fileURLWithPath: "/")
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            return true
+        }
+    }
+
     /// A removal's result for an SSH host, after it was forgotten.
     static func report(_ outcome: Outcome, host: String) {
         let alert = NSAlert()
