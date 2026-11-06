@@ -323,6 +323,7 @@ impl Tmux {
                     command.args(["-C", "attach-session", "-t", &format!("${}", expected.0)]);
                     match Client::new(io, command) {
                         Ok(mut client) => {
+                            client.session = Some(expected.0);
                             client.expected = Some(expected);
                             client.dismissed = dismissed;
                             mux.backends.get_mut(&id).unwrap().clients.push(client);
@@ -333,6 +334,69 @@ impl Tmux {
                 }),
             );
         }
+    }
+    /// `%sessions-changed` on a backend opened by its server (`backends.open`, every reconnect): attach the
+    /// sessions made since, as the open attached those it listed, so a session started outside Dispatch shows as
+    /// a space. A session this backend ever started a client for is never attached again (tmux does not reuse
+    /// session ids): one the app detached stays detached, and an ended one stays gone. A claimed or relayed stream
+    /// shows its own session only.
+    pub(crate) fn sessions_changed(&mut self, io: &mut dyn Io, id: Id) {
+        let Some(backend) = self.backends.get(&id) else {
+            return;
+        };
+        if backend.remote
+            || backend.endpoint.is_none()
+            || backend.opening != 0
+            || backend.clients.iter().any(|client| client.adopted())
+            || !backend.clients.iter().any(|client| client.live())
+        {
+            return;
+        }
+        if let Some(again) = self.scans.get_mut(&id) {
+            *again = true;
+            return;
+        }
+        self.scans.insert(id, false);
+        let key = backend.key.clone();
+        let mut command = self.native(&key);
+        command.args(["list-sessions", "-F", "#{session_id}"]);
+        self.run(
+            io,
+            command,
+            Box::new(move |mux, io, result| {
+                let again = mux.scans.remove(&id).unwrap_or(false);
+                let Some(backend) = mux.backends.get(&id) else {
+                    return;
+                };
+                let known: BTreeSet<u64> = backend
+                    .clients
+                    .iter()
+                    .filter_map(|client| client.session.or(client.snapshot.as_ref().map(|s| s.session)))
+                    .collect();
+                // A failed listing (the server just exited) adds nothing; the next notification lists again.
+                let listed = match result {
+                    Ok(Output::Exit { status: Some(0), stdout }) => String::from_utf8_lossy(&stdout)
+                        .lines()
+                        .filter_map(|line| crate::snapshot::id(line, '$').ok())
+                        .filter(|session| !known.contains(session))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                for session in listed {
+                    let mut command = mux.native(&key);
+                    command.args(["-C", "attach-session", "-t", &format!("${session}")]);
+                    // A session that ended before its client attached ends that client: nothing shows.
+                    if let Ok(mut client) = Client::new(io, command) {
+                        client.session = Some(session);
+                        mux.backends.get_mut(&id).unwrap().clients.push(client);
+                        mux.changed = true;
+                    }
+                }
+                if again {
+                    mux.sessions_changed(io, id);
+                }
+            }),
+        );
     }
     fn verified(
         &mut self,
@@ -389,15 +453,13 @@ impl Tmux {
                         .map_err(io::Error::other)?
                         .lines()
                     {
-                        crate::snapshot::id(session, '$')
+                        let number = crate::snapshot::id(session, '$')
                             .map_err(|e| io::Error::other(e.message))?;
                         let mut command = mux.native(&key);
                         command.args(["-C", "attach-session", "-t", session]);
-                        mux.backends
-                            .get_mut(&id)
-                            .unwrap()
-                            .clients
-                            .push(Client::new(io, command)?);
+                        let mut client = Client::new(io, command)?;
+                        client.session = Some(number);
+                        mux.backends.get_mut(&id).unwrap().clients.push(client);
                     }
                     if mux.backends[&id].clients.is_empty() {
                         return Err(io::Error::other("No tmux session exists"));
@@ -411,3 +473,7 @@ impl Tmux {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "open.test.rs"]
+mod tests;

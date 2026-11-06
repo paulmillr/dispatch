@@ -108,6 +108,16 @@ class TmuxConfigAudit(unittest.TestCase):
                     self.assertEqual(len(panes), 2)
                     self.assertTrue(panes[1].split('|')[1], panes)
 
+    def test_a_session_started_later_shows_on_a_server_opened_by_its_socket(self):
+        # docs/integrations.md (Sessions and space names): on %sessions-changed the helper attaches sessions made
+        # since the open; a relayed stream shows its own session only.
+        for relay in [False, True]:
+            with self.subTest(relay=relay), self.server() as (native, driver):
+                result = driver('later', relay=relay)
+                self.assertIn('LATER=true', result)
+                later = native('display-message', '-p', '-t', 'later:', '#{session_id}').strip()
+                self.assertEqual(f'LATER_NODE=Workspace|{later}' in result.splitlines(), not relay, result)
+
     def test_global_prefix_helper_control(self):
         with self.server('set -g prefix C-a\nset -g repeat-time 1234\nbind c split-window -h\n') as (_, driver):
             result = driver('prefix')

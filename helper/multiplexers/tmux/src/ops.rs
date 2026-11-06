@@ -131,7 +131,8 @@ impl Tmux {
     }
     pub(crate) fn location(&self, node: Id) -> Result<Location, Error> {
         let (loc, target) = self.target(node)?;
-        let pane = crate::snapshot::id(&target, '%')? as u32;
+        // A space or tab where a terminal is needed (a split beside it, input, a screen).
+        let pane = crate::snapshot::id(&target, '%').map_err(|_| error("Tmux node is not a terminal"))? as u32;
         let client = &self.backends[&loc.backend].clients[loc.client];
         if client.dismissed.contains(&pane)
             || !client.snapshot.as_ref().unwrap().panes.contains_key(&pane)
@@ -657,6 +658,9 @@ impl Tmux {
         }
     }
     pub(crate) fn notification(&mut self, io: &mut dyn Io, loc: Location, line: &str) {
+        if line == "%sessions-changed" {
+            self.sessions_changed(io, loc.backend);
+        }
         if let Some(pane) = line
             .strip_prefix("%pause ")
             .and_then(|value| crate::snapshot::id(value, '%').ok())

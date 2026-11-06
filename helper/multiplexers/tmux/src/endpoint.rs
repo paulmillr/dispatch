@@ -26,6 +26,20 @@ pub(crate) struct Endpoint {
 }
 
 impl Endpoint {
+    /// A verified server at `path`, for tests of what a backend does with its endpoint.
+    #[cfg(test)]
+    pub(crate) fn fixture(path: &str) -> Self {
+        Self {
+            path: PathBuf::from(path),
+            private: true,
+            uid: 501,
+            directory: [1, 2],
+            socket: [1, 3],
+            pid: 4242,
+            start: [1, 0],
+            executable: PathBuf::from("/fixture/tmux"),
+        }
+    }
     pub(crate) fn identity(&self) -> String {
         // Socket spellings and admission policy do not change the verified server they reach.
         format!("server:{}:{}:{:?}:{:?}", self.uid, self.pid, self.start, self.socket)

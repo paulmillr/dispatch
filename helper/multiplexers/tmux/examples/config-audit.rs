@@ -55,22 +55,39 @@ impl Audit {
                     message: "audit operation exceeded five seconds".into(),
                 });
             }
-            if let (Some((id, output)), Event::Ready { fd, read: true, .. }) = (self.relay, &event)
-            {
-                if *fd == output {
-                    let mut bytes = [0; 65536];
-                    let count = self.io.read(output, &mut bytes).unwrap();
-                    if count == 0 {
-                        return Err(Error {
-                            code: "closed",
-                            message: "relay ended".into(),
-                        });
-                    }
-                    self.mux
-                        .stream(&mut self.io, id, Control::Data(bytes[..count].to_vec()))?;
+            self.feed(event)?;
+        }
+    }
+    /// The relayed stream's bytes go to the mux before the event loop sees the event.
+    fn feed(&mut self, event: Event) -> Result<(), Error> {
+        if let (Some((id, output)), Event::Ready { fd, read: true, .. }) = (self.relay, &event) {
+            if *fd == output {
+                let mut bytes = [0; 65536];
+                let count = self.io.read(output, &mut bytes).unwrap();
+                if count == 0 {
+                    return Err(Error {
+                        code: "closed",
+                        message: "relay ended".into(),
+                    });
                 }
+                self.mux
+                    .stream(&mut self.io, id, Control::Data(bytes[..count].to_vec()))?;
             }
-            self.mux.event(&mut self.io, &mut self.ui, event);
+        }
+        self.mux.event(&mut self.io, &mut self.ui, event);
+        Ok(())
+    }
+    /// Run the event loop until `done` holds for the published topology, or `within` passed.
+    fn settle(&mut self, within: Duration, done: impl Fn(&[Node]) -> bool) {
+        let deadline = self.io.now() + within;
+        self.io.timer(deadline);
+        while !done(&self.ui.nodes) {
+            self.io.callbacks();
+            let (_, event) = self.io.next().unwrap();
+            if matches!(event, Event::Timer { at } if at >= deadline) {
+                return;
+            }
+            self.feed(event).unwrap();
         }
     }
 }
@@ -265,6 +282,22 @@ fn main() {
                 bindings.join(","),
                 optional(&prefix.prefix2)
             );
+        }
+        // A session started outside Dispatch after the open (open.rs `sessions_changed`): a space of a server
+        // opened by its socket; never one of a relayed stream, which shows its own session only.
+        "later" => {
+            let started = Command::new(&args[1])
+                .args(["-S", &args[2], "new-session", "-d", "-s", "later"])
+                .env_remove("TMUX")
+                .status()
+                .unwrap();
+            println!("LATER={}", started.success());
+            let spaces = |nodes: &[Node]| nodes.iter().filter(|n| n.kind == Kind::Workspace).count();
+            let before = spaces(&audit.ui.nodes);
+            audit.settle(Duration::from_secs(3), |nodes| spaces(nodes) > before);
+            for node in audit.ui.nodes.iter().filter(|n| n.kind != Kind::Terminal) {
+                println!("LATER_NODE={:?}|{}", node.kind, node.key.rsplit(':').next().unwrap_or(""));
+            }
         }
         "command" => println!(
             "COMMAND={:?}",

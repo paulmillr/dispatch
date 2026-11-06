@@ -181,3 +181,12 @@ fn a_steady_client_takes_the_current_window_size_before_it_sizes_one_window() {
     let mut tmux = two_windows(false);
     assert_eq!(tmux.grid(8, at, grid(50, 30)).unwrap(), ["refresh-client -C @2:50x30"]);
 }
+
+#[test]
+fn a_space_or_tab_where_a_terminal_is_needed_is_named_as_such() {
+    let (mut tmux, _) = streaming();
+    tmux.backends.get_mut(&1).unwrap().ids.insert("$1:@2".into(), 8);
+    assert_eq!(tmux.location(7).map(|loc| loc.pane), Ok(3));
+    let Err(error) = tmux.location(8) else { panic!("a tab is not a terminal") };
+    assert_eq!((error.code, error.message.as_str()), ("tmux", "Tmux node is not a terminal"));
+}

@@ -25,6 +25,7 @@ python3 test/model-fixtures.py        # Local endpoint/shell barrier regressions
 python3 test/terminal-shell.py        # Shell integration directory-name injection regressions
 python3 test/shell-config-audit.py -v # Custom shell startup configurations (real Bash, Zsh, Fish)
 python3 test/tmux-config-audit.py -v # Custom tmux configuration and prefix audit
+python3 test/tmux-fuzz.py            # Randomized tmux configurations, sessions and operations
 python3 test/vm.py test ChatTests     # XCTest in the dedicated macOS VM
 bash test/run.sh ChatTests           # XCTest on the current desktop
 ```
@@ -43,13 +44,26 @@ interactive mode with piped input; it does not exercise the app UI or live SSH.
 logic, and uses private tmux sockets for local and relayed control streams. Set
 `AUDIT_TMUX` to choose a tmux version. It covers the session's own prefix table reaching
 the app's key handler, refused bindings, server window indices, and new panes running
-`default-command`/`default-shell`.
+`default-command`/`default-shell`, and sessions started after a server was opened.
 The default temporary build cache is `/private/tmp/dispatch-tmux-audit-build`
 (`AUDIT_TMUX_BUILD` overrides it). macOS must permit Unix sockets and Swift compiler
 macros. No desktop focus or existing tmux server is needed. The Swift fixture
 uses model stubs and copies the actual app table-selection and index-selection
 methods and the `backends.prefix` reply type verbatim, fed with the real helper's reply;
 it does not launch the app UI (`TmuxPrefixTableTests` does).
+
+`tmux-fuzz.py` drives the same Rust tmux multiplexer
+(`helper/multiplexers/tmux/examples/fuzz.rs`) against private tmux servers with random
+options, hooks and session names, interleaving Dispatch's operations with commands a user
+types into tmux (new, killed, renamed, swapped, linked and joined sessions, windows and
+panes, live `set-option`, raw `@dispatch-window` values). After each step the published
+topology must follow the server within 3 s. The seed picks the connection: the server's
+socket, a tab's own `tmux -CC` on a PTY, or an unverified relayed stream. With no arguments
+it runs the regression set (seeds 1-24, 60 steps, about half a minute); `--runs`, `--steps`
+and `--seed` explore further, and a failing seed repeats with `--seed N --runs 1` (failing
+runs' logs are kept, `--keep` keeps all). It shares the audit's build cache and `AUDIT_TMUX`.
+Not checked, as documented behavior: a relayed stream's view after it ended (kept for a
+reconnect) and a session whose every pane the app detached (quiet until restored).
 
 ## XCTest on the current Mac
 

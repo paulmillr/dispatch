@@ -121,6 +121,9 @@ pub(crate) struct Client {
     pub exited: bool,
     /// The transport refused a write; see `refuse`.
     refused: bool,
+    /// The session this client was started for (`attach-session -t $N`), known before its first snapshot: a rescan
+    /// on `%sessions-changed` attaches only sessions no client was ever started for (open.rs `sessions_changed`).
+    pub session: Option<u64>,
 }
 impl Client {
     pub fn new(io: &mut dyn Io, mut command: Command) -> io::Result<Self> {

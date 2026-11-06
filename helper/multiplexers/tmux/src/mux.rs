@@ -49,6 +49,9 @@ pub struct Tmux {
     pub(crate) appeared: std::collections::BTreeSet<Id>,
     /// First topologies `holds` keeps back, until when.
     pub(crate) held: BTreeMap<Id, std::time::Instant>,
+    /// Backends listing their server's sessions after `%sessions-changed` (open.rs `sessions_changed`): whether
+    /// another notification arrived meanwhile, so the list is read once more.
+    pub(crate) scans: BTreeMap<Id, bool>,
     /// Each backend's last published layouts and focus: a backend that cannot read its
     /// server (suspended, opening) republishes them with its current retained views.
     shown: BTreeMap<Id, (Vec<Layout>, Option<Id>)>,

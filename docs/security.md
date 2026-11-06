@@ -268,6 +268,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 - In native mode it reads each pane's full scrollback (`capture-pane -S -`), its working directory, titles, and paste buffers. Paste buffers are copied to the macOS clipboard under the clipboard rule above.
 - It sets a `@dispatch-window` option on windows and adds `DISPATCH_*` variables, `PATH`, and `ZDOTDIR` to windows it creates. These stay after Dispatch quits, while the `/tmp` folders they point to are deleted. A new window or pane without a program of its own runs the server's `default-command` (or its `default-shell`), as `tmux new-window` would ([integrations](integrations.md#tmux-and-herdr)).
 - It reads the server's prefix table for each attached session (`prefix`, `prefix2`, `repeat-time`, `list-keys -T prefix`) and runs only the bindings Dispatch can run as tmux would; the server commands it forwards are the single-reply pane, window and layout commands listed in `helper/multiplexers/tmux/src/prefix.rs`, plus `send-prefix`.
+- A server opened by its socket (a reconnect, the iPhone) gets a control client (`tmux -C attach-session`) for each of its sessions, those started later outside Dispatch too (on tmux's `%sessions-changed`), and the reads above apply to them. It only attaches: it never starts a session, and never attaches again to one the app detached. A typed `tmux -CC` shows only its own session.
 - Closing **the launching tab** keeps its control connection open privately until the tmux session ends.
 
 **herdr.**
