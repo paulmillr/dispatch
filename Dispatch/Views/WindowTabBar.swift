@@ -14,9 +14,9 @@ struct WindowTabBar: View {
     }
     private var selected: UUID? { group?.selected ?? space.activeWindow?.id }
     private var paneID: UUID { group?.id ?? space.numberedPaneIDs.first ?? space.id }
-    /// Tabs only lists the windows in the sidebar instead.
-    static func showsTabs(space: Space, tabsOnly: Bool) -> Bool {
-        !tabsOnly && space.structured && ((space.windowPresentation?.groups.count ?? 1) > 1 || space.windows.count > 1)
+    /// Vertical tabs lists the windows in the sidebar instead.
+    static func showsTabs(space: Space, verticalTabs: Bool) -> Bool {
+        !verticalTabs && space.structured && ((space.windowPresentation?.groups.count ?? 1) > 1 || space.windows.count > 1)
     }
 
     /// Spacing and the full-screen slot match the native pane strip, so tabs keep their place across spaces.
@@ -87,7 +87,7 @@ struct WindowTabBar: View {
                              spaceHover: tab.arrangement.panes.first(where: { $0.id == tab.arrangement.focusedPane })?.activeTab.map { terminal in
                                  SpaceHoverDetails.make(tab: workspace.liveTab(terminal.id) ?? terminal, host: workspace.hosts.record(workspace.hosts.terminals[terminal.id]?.host ?? space.hostID),
                                      runtime: TerminalRuntime.shared, title: title)
-                             }, dragLabel: title, select: { workspace.selectWindow(tab.id) }, accepts: { item in
+                             }, hoverFontSize: typography.tabSize, dragLabel: title, select: { workspace.selectWindow(tab.id) }, accepts: { item in
                     guard case .window(let id) = item else { return false }
                     return workspace.canMoveWindow(id, beside: tab.id)
                 }) { item, after in
@@ -96,18 +96,54 @@ struct WindowTabBar: View {
             }
             .contextMenu {
                 Button("Rename…") { controller.rename(title: "Rename tab", value: title) { workspace.renameWindow(tab.id, to: $0) } }
-                Button("Move to New Space") { workspace.moveWindowToNewSpace(tab.id) }
-                ForEach(workspace.spaces.filter { target in
+                MoveTargetsSection(newSpace: { workspace.moveWindowToNewSpace(tab.id) },
+                                   spaces: workspace.spaces.filter { target in
                     target.id != space.id && target.windows.first.map { workspace.canMoveWindow(tab.id, beside: $0.id) } == true
-                }) { target in
+                }.map { target in
                     // The window goes beside the target space's last one.
-                    Button("Move to \(workspace.liveName(target))") {
+                    MoveTarget(id: target.id, title: workspace.liveName(target)) {
                         if let last = target.windows.last { workspace.moveWindow(tab.id, beside: last.id) }
                     }
-                }
-                Button("Detach") { controller.detachWindow(tab.id) }
+                })
+                Divider()
+                Button("Detach") { controller.detachWindow(tab.id) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminateWindow(tab.id) }
             }
             .contentShape(Rectangle())
+    }
+}
+
+/// A place a tab's context menu can move it to, named as the menu lists it.
+struct MoveTarget: Identifiable {
+    let id: UUID
+    let title: String
+    let action: () -> Void
+}
+
+/// A tab's (or window's) move targets under one "Move to" header, each by its bare name so a space's name never reads
+/// as a verb ("Move to release"): the other panes of its space, a new space, then the other spaces, which fold into a
+/// submenu past `inlineSpaces` so the menu stays short however many there are.
+struct MoveTargetsSection: View {
+    var panes: [MoveTarget] = []
+    let newSpace: () -> Void
+    let spaces: [MoveTarget]
+
+    static let inlineSpaces = 4
+    static let detachHelp = "Remove from Dispatch; keep server work running"
+
+    var body: some View {
+        Section("Move to") {
+            ForEach(panes) { Button($0.title, action: $0.action) }
+            Button("New Space", action: newSpace)
+            if spaces.count > Self.inlineSpaces {
+                Menu("Other Spaces") { targets }
+            } else {
+                targets
+            }
+        }
+    }
+
+    private var targets: some View {
+        ForEach(spaces) { Button($0.title, action: $0.action) }
     }
 }

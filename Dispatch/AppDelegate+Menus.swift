@@ -273,8 +273,8 @@ extension AppDelegate {
         }
         guard !groups.tabs.isEmpty, modifiers == groups.tabs else { return nil }
         guard NSApp.keyWindow === window else { return false }
-        // Tabs only numbers the sidebar's list; otherwise, with splits, the digits past the panes are typing.
-        guard workspace.tabsOnly || workspace.current?.usesPaneShortcuts != true || index < 4 else { return nil }
+        // With splits, the digits past the panes are typing.
+        guard workspace.current?.usesPaneShortcuts != true || index < 4 else { return nil }
         workspace.selectNumberedItem(at: index)
         return true
     }

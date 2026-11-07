@@ -197,12 +197,28 @@ private struct StripGlassButton: ViewModifier {
             if merged {
                 content.frame(minWidth: size, minHeight: size).modifier(StripActionHover())
             } else {
-                content.frame(minWidth: size, minHeight: size).liquidGlass(in: Capsule(), interactive: true)
+                content.frame(minWidth: size, minHeight: size).liquidGlass(in: Capsule(), interactive: true).glassHover(Capsule())
             }
         } else {
             content
         }
     }
+}
+
+/// A glass button's hover: a faint fill of its shape while the pointer is over it, as GlassPanelControl's and a strip's
+/// merged buttons' (StripActionHover). Interactive glass alone shows nothing until pressed.
+struct GlassHover<S: Shape>: ViewModifier {
+    let shape: S
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .overlay { shape.fill(Chrome.ink.opacity(Chrome.palette.isDark ? 0.08 : 0.06)).opacity(hovering ? 1 : 0).allowsHitTesting(false) }
+            .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    func glassHover(_ shape: some Shape) -> some View { modifier(GlassHover(shape: shape)) }
 }
 
 /// A button on a strip's shared glass: no glass of its own, a faint circle while the pointer is over it.

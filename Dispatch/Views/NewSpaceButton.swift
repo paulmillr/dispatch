@@ -132,6 +132,26 @@ final class HostBackendCache {
     }
 }
 
+/// The sidebar's New Space (⌘N) in tree order: a round glass button at the end of the spaces' header row, as New Tab
+/// ends the bar inside a space (flat order has `NewSpaceListButton` under its list instead). A click makes a space where ⌘N would; a secondary click or a held press lists the hosts and
+/// backends to start one on (NewSpaceMenu).
+struct NewSpaceButton: View {
+    let workspace: Workspace
+
+    var body: some View {
+        SidebarGlassCircle { Image(systemName: "plus").font(SidebarGlassCircle<EmptyView>.glyph) }
+            .allowsHitTesting(false)
+            .overlay {
+                NewSpaceControl(workspace: workspace, host: nil, identifier: "sidebar-new-space")
+                    .accessibilityLabel("New space")
+                    .accessibilityIdentifier("sidebar-new-space")
+            }
+            // The control's own view takes the pointer: the circle's hover is tracked over it.
+            .glassHover(LiquidGlassStore.shared.active ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 4)))
+            .help("New space (⌘N) · Right-click for options")
+    }
+}
+
 /// The new-space buttons' plus: the SF Symbol at the label's size, a little smaller and heavier than its text so it
 /// sits on the text's cap height with a matching stroke.
 private struct NewSpacePlus: View {
@@ -141,76 +161,35 @@ private struct NewSpacePlus: View {
     }
 }
 
-/// Both locations use the same primary action, with the backend menu on a secondary click.
-struct NewSpaceButton: View {
+/// Flat order's "+ space" (⌘N) and, while a remote host is connected, "+ local" (⇧⌘N, `host` the Mac), side by side
+/// under the last space: a capsule each on Liquid Glass, their glass blending with their neighbour's; otherwise tiles
+/// in Large or rows in compact. A click makes the space; a secondary click lists the backends (NewSpaceMenu).
+struct NewSpaceListButton: View {
     let workspace: Workspace
     var host: HostRecord?
     var metrics = SidebarMetrics.large(contentSize: 14)
-    /// A tree group's header button: the plus alone, shortcut in its tooltip.
-    var grouped = false
-    /// A header button shows only while its group is hovered, empty or read by VoiceOver.
-    var revealed = true
-    /// Tabs only: "+ tab" makes a tab in the current space (⌘T); the host buttons make a space there, which lists as a
-    /// tab, so every title says tab.
-    var tabs = false
     @Environment(\.appTypography) private var typography
     @State private var hovered = false
 
-    private var isLocalSidebar: Bool { host?.id == .local }
-    /// Only advertise Command-N where it currently targets.
-    private var shortcut: String? {
-        if isLocalSidebar { return "⇧⌘N" }
-        if tabs && host == nil { return "⌘T" }
-        return host == nil || host?.id == (workspace.current?.hostID ?? .local) ? "⌘N" : nil
-    }
-    /// What it makes: in a tree group, a space on that group's host.
-    private var title: String {
-        let title: String
-        if grouped, let host { title = host.id == .local ? "New local space" : "New space on \(host.name)" }
-        else { title = isLocalSidebar ? "New local space" : "New space" }
-        return NewSpaceMenu.noun(title, tabs: tabs)
-    }
+    private var local: Bool { host?.id == .local }
+    private var shortcut: String { local ? "⇧⌘N" : "⌘N" }
+    private var title: String { local ? "New local space" : "New space" }
+    private var identifier: String { host.map { "host-new-space-\($0.id.rawValue)" } ?? "sidebar-new-space" }
+    private var glass: Bool { LiquidGlassStore.shared.active }
 
     var body: some View {
         Group {
-            if grouped { headerLabel } else { actionRow }
+            if glass { glassLabel } else if metrics.large { tileLabel } else { rowLabel }
         }
         .allowsHitTesting(false)
         .overlay {
-            NewSpaceControl(workspace: workspace, host: host?.id, identifier: identifier, tabs: tabs)
+            NewSpaceControl(workspace: workspace, host: host?.id, identifier: identifier)
                 .accessibilityLabel(title)
                 .accessibilityIdentifier(identifier)
         }
         .onHover { hovered = $0 }
-        .help(title + (shortcut.map { " (\($0))" } ?? "") + " · Right-click for options")
+        .help(title + " (\(shortcut)) · Right-click for options")
     }
-
-    private var identifier: String {
-        host.map { "host-new-space-\($0.id.rawValue)" } ?? (tabs ? "sidebar-new-tab" : "sidebar-new-space")
-    }
-
-    /// A tree group's header button: a plus in the header's own control style, a soft capsule under the pointer and no
-    /// glass of its own; in Large's host chip, a small circle at the chip's trailing end.
-    private var headerLabel: some View {
-        // The icons style's heading: the plus takes the host disc's place, at its size.
-        let side = metrics.cards ? metrics.headerHeight - 6 : metrics.hostInHeader ? metrics.discSize : metrics.headerHeight
-        return Image(systemName: "plus")
-            .font(.system(size: (metrics.headerSize * (metrics.cards ? 0.9 : 1)).rounded(), weight: .semibold))
-            .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.secondary)
-            .frame(width: side, height: side)
-            .background(hovered ? Chrome.palette.hover : .clear, in: Circle())
-            .contentShape(Circle())
-            .opacity(revealed || hovered ? 1 : 0)
-            .animation(.easeOut(duration: 0.12), value: revealed || hovered)
-    }
-
-    /// The flat order's "+ local" and "+ space", side by side under the last space: a capsule each on Liquid Glass,
-    /// their glass blending with their neighbour's; otherwise tiles in Large or rows in compact.
-    @ViewBuilder private var actionRow: some View {
-        if glass { glassLabel } else if metrics.large { tileLabel } else { rowLabel }
-    }
-
-    private var glass: Bool { LiquidGlassStore.shared.active }
 
     /// Compact flat list: a row like a space's, the icon in the status column.
     private var rowLabel: some View {
@@ -233,8 +212,8 @@ struct NewSpaceButton: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    /// Liquid Glass: one of the two new-space capsules, its glass blending with its neighbour's; a faint capsule nested
-    /// 2 points inside it marks the pointer.
+    /// Liquid Glass: one of the two capsules, its glass blending with its neighbour's; a faint capsule nested 2 points
+    /// inside it marks the pointer.
     private var glassLabel: some View {
         fitted(iconSize: typography.hostIconSize, shortcutSize: typography.size(offset: -1.5))
             .interfaceFont(size: typography.tabSize)
@@ -246,8 +225,8 @@ struct NewSpaceButton: View {
             .contentShape(Capsule())
     }
 
-    /// "local" led by the Mac's icon or "space" by a plus, with its shortcut on the right, as on space tiles. A narrow
-    /// sidebar drops the shortcut before the label; the tooltip still names it.
+    /// "local" led by the Mac's icon or "space" by a plus, its shortcut on the right; a narrow sidebar drops the
+    /// shortcut before the label (the tooltip still names it).
     private func fitted(iconSize: CGFloat, iconWidth: CGFloat? = nil, shortcutSize: CGFloat) -> some View {
         ViewThatFits(in: .horizontal) {
             contents(iconSize: iconSize, iconWidth: iconWidth, shortcutSize: shortcutSize, showsShortcut: true)
@@ -259,14 +238,13 @@ struct NewSpaceButton: View {
     private func contents(iconSize: CGFloat, iconWidth: CGFloat?, shortcutSize: CGFloat, showsShortcut: Bool) -> some View {
         HStack(spacing: 6) {
             Group {
-                if let host, isLocalSidebar { HostGlyph(host: host, size: iconSize) }
-                else { NewSpacePlus(size: iconSize) }
+                if let host, local { HostGlyph(host: host, size: iconSize) } else { NewSpacePlus(size: iconSize) }
             }
             .foregroundStyle(Chrome.palette.secondary)
             .frame(width: iconWidth)
-            Text(isLocalSidebar ? "local" : tabs ? "tab" : "space")
+            Text(local ? "local" : "space")
             Spacer(minLength: 0)
-            if showsShortcut, let shortcut {
+            if showsShortcut {
                 Text(shortcut).font(.system(size: shortcutSize).monospacedDigit()).tracking(shortcutSize * 0.06)
                     .foregroundStyle(Chrome.palette.secondary.opacity(0.7))
             }
@@ -276,11 +254,6 @@ struct NewSpaceButton: View {
 
 @MainActor
 enum NewSpaceMenu {
-    /// Tabs only names what the sidebar lists: every "space" in a title reads "tab".
-    nonisolated static func noun(_ title: String, tabs: Bool) -> String {
-        tabs ? title.replacingOccurrences(of: " space", with: " tab") : title
-    }
-
     struct Choice {
         /// The item's name ("New tmux space"); `title` adds the host when the menu lists several.
         let label: String
@@ -410,21 +383,19 @@ enum NewSpaceMenu {
     }
 }
 
-private struct NewSpaceControl: NSViewRepresentable {
+struct NewSpaceControl: NSViewRepresentable {
     let workspace: Workspace
     let host: HostID?
     let identifier: String
-    var tabs = false
+    /// VoiceOver's name for it; "New space" (or "New local space") without.
+    var label: String? = nil
 
     func makeNSView(context: Context) -> NewSpaceNativeButton { NewSpaceNativeButton() }
 
     func updateNSView(_ button: NewSpaceNativeButton, context: Context) {
         button.setAccessibilityIdentifier(identifier)
-        button.setAccessibilityLabel(NewSpaceMenu.noun(host == .local ? "New local space" : "New space", tabs: tabs))
-        // Tabs only's "+ tab" is ⌘T: a tab beside the current one; its host buttons still make a space on that host.
-        if tabs && host == nil { button.create = { workspace.newTab() } }
-        else { button.create = { workspace.newSpace(on: host ?? workspace.current?.hostID ?? .local) } }
-        button.tabs = tabs
+        button.setAccessibilityLabel(label ?? (host == .local ? "New local space" : "New space"))
+        button.create = { workspace.newSpace(on: host ?? workspace.current?.hostID ?? .local) }
         button.host = host
         button.immediateOptions = { NewSpaceMenu.immediateGroups(workspace: workspace, host: host) }
         button.options = { await NewSpaceMenu.groups(workspace: workspace, host: host) }
@@ -436,8 +407,6 @@ final class NewSpaceNativeButton: NSButton {
     var host: HostID? {
         didSet { if host != oldValue { prefetched = false } }
     }
-    /// Tabs only: the menu's titles say tab.
-    var tabs = false
     var create: () -> Void = {}
     var immediateOptions: (() -> [NewSpaceMenu.HostGroup])?
     var options: () async -> [NewSpaceMenu.HostGroup] = { [] }
@@ -485,7 +454,7 @@ final class NewSpaceNativeButton: NSButton {
             return menu
         }
         choices = [create]
-        let here = NSMenuItem(title: tabs ? "New tab here" : "New space here", action: #selector(choose(_:)), keyEquivalent: tabs ? "t" : "n")
+        let here = NSMenuItem(title: "New space here", action: #selector(choose(_:)), keyEquivalent: "n")
         here.keyEquivalentModifierMask = .command
         here.target = self; here.tag = 0
         menu.addItem(here)
@@ -510,7 +479,7 @@ final class NewSpaceNativeButton: NSButton {
 
     private func addOptions(_ options: [NewSpaceMenu.Option], to menu: NSMenu) {
         for option in options {
-            let item = NSMenuItem(title: NewSpaceMenu.noun(option.choice.menuTitle, tabs: tabs), action: #selector(choose(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: option.choice.menuTitle, action: #selector(choose(_:)), keyEquivalent: "")
             item.target = self
             item.tag = choices.count
             choices.append(option.action)

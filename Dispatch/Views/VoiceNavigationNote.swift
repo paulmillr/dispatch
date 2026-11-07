@@ -2,7 +2,8 @@ import Dictation
 import SwiftUI
 
 /// Over the top of the window: what "Dispatch, …" heard while it listens for commands alone, then where a command went
-/// (or why it went nowhere) for a moment. Click to dismiss.
+/// (or why it went nowhere) for a moment. Click to dismiss; a failure goes by itself after 10 s
+/// (`dictationErrorTimeout`).
 struct VoiceNavigationNote: View {
     @Environment(\.appTypography) private var typography
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -33,6 +34,7 @@ struct VoiceNavigationNote: View {
             // every partial transcript.
             .transition(.opacity.animation(InterfaceMotion.animation(reduce: reduceMotion)))
             .accessibilityIdentifier("voice-navigation-note")
+            .dictationErrorTimeout(dictation.error(for: VoiceNavigation.owner), owner: VoiceNavigation.owner)
         }
     }
 
@@ -46,5 +48,22 @@ struct VoiceNavigationNote: View {
         }
         if let error = dictation.error(for: VoiceNavigation.owner) { return (error, "exclamationmark.triangle.fill", true) }
         return navigation.note.map { ($0.text, $0.failed ? "questionmark.circle" : "arrow.right", $0.failed) }
+    }
+}
+
+/// A dictation failure shown in passing (the composer's, the voice note's: "Dispatch can't use the microphone…") goes
+/// after 10 s, as long as it is still the same failure for the same owner; Settings keeps its own until the next try.
+enum DictationErrorTimeout {
+    static let duration: Duration = .seconds(10)
+}
+
+extension View {
+    func dictationErrorTimeout(_ error: String?, owner: AnyHashable) -> some View {
+        task(id: error) {
+            guard let error else { return }
+            try? await System.sleep(for: DictationErrorTimeout.duration, "dictation.error")
+            guard !Task.isCancelled, Dictation.shared.error(for: owner) == error else { return }
+            Dictation.shared.dismissError()
+        }
     }
 }

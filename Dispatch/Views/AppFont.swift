@@ -44,14 +44,37 @@ enum AppFont {
     /// Settings › Font's interface font; reading it in a body redraws the view when it changes.
     @MainActor static func ui(size: CGFloat, weight: Font.Weight = .regular) -> Font {
         switch InterfaceFontStore.shared.current {
-        case .sourceCodePro: code(size: size, weight: weight)
+        case .sameAsCode: code(size: size, weight: weight)
         case .system: .system(size: size * systemScale, weight: weight, design: .rounded).monospacedDigit()
         }
     }
-    /// Source Code Pro whatever the interface font: text that is code (paths, commands, color values).
-    static func code(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+    /// The terminal font (Settings › Font) whatever the interface font, at the size the terminal draws it: text that is
+    /// code (paths, commands, color values), and all the interface's text in Same as code.
+    @MainActor static func code(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        let face = codeFace(InterfaceFontStore.shared.codeFamily)
+        if [.semibold, .bold, .heavy, .black].contains(weight), let bold = face.bold { return .custom(bold, size: size * face.scale) }
+        return .custom(face.regular, size: size * face.scale).weight(weight)
+    }
+    /// Source Code Pro whatever the fonts chosen: pictures drawn to a fixed size, as onboarding's terminals.
+    static func sourceCodePro(size: CGFloat, weight: Font.Weight = .regular) -> Font {
         .custom("SourceCodePro-Regular", size: size).weight(weight)
     }
+    /// The code font's faces of `family`, the terminal font: its regular face by name, a bold kept in another family
+    /// (Latin Modern Mono's, `ChatFont.boldPostScriptName`), and the scale to Source Code Pro's lowercase height the
+    /// terminal draws it at. A family this Mac no longer has draws Source Code Pro.
+    @MainActor private static func codeFace(_ family: String) -> CodeFace {
+        if let face = codeFaces[family] { return face }
+        register()
+        guard let regular = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 14) else {
+            return CodeFace(family: TerminalFontScale.reference, regular: "SourceCodePro-Regular", bold: nil, scale: 1)
+        }
+        let face = CodeFace(family: family, regular: regular.fontName, bold: ChatFont.boldPostScriptName(regular.fontName),
+                            scale: CGFloat(TerminalFontScale.factor(family)))
+        codeFaces[family] = face
+        return face
+    }
+    private struct CodeFace { let family, regular: String; let bold: String?; let scale: CGFloat }
+    @MainActor private static var codeFaces: [String: CodeFace] = [:]
     /// Source Code Pro's line at `size` (TextKit's, ascent and descent each rounded up): the line every font of the
     /// interface and of chat's prose is set on at that size, so switching fonts changes the letters, not where lines
     /// and the rows they make fall. San Francisco's own is about two points shorter, Latin Modern's five taller.
@@ -69,7 +92,7 @@ enum AppFont {
     static func nativeShortcut(size: CGFloat) -> NSFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
     /// The letter spacing that draws `text` semibold at its regular width, so a title that turns semibold when selected
     /// neither moves its letters nor truncates sooner: San Francisco's semibold is about 6% wider. Next to nothing in
-    /// Source Code Pro, whose weights share one advance width.
+    /// a code font, whose weights share one advance width.
     @MainActor static func semiboldTracking(_ text: String, size: CGFloat) -> CGFloat {
         guard !text.isEmpty else { return 0 }
         let width = { (font: NSFont) in (text as NSString).size(withAttributes: [.font: font]).width }
@@ -80,8 +103,13 @@ enum AppFont {
         if InterfaceFontStore.shared.current == .system {
             return rounded(size: size * systemScale, weight: semibold ? .semibold : .regular)
         }
-        return NSFont(name: semibold ? "SourceCodePro-SemiBold" : "SourceCodePro-Regular", size: size)
-            ?? .monospacedSystemFont(ofSize: size, weight: semibold ? .semibold : .regular)
+        let face = codeFace(InterfaceFontStore.shared.codeFamily), scaled = size * face.scale
+        // Semibold is the family's nearest face to it: Bold in a family without a SemiBold, as SwiftUI picks.
+        let font = semibold
+            ? face.bold.flatMap { NSFont(name: $0, size: scaled) }
+                ?? NSFontManager.shared.font(withFamily: face.family, traits: [], weight: 8, size: scaled)
+            : NSFont(name: face.regular, size: scaled)
+        return font ?? .monospacedSystemFont(ofSize: scaled, weight: semibold ? .semibold : .regular)
     }
 }
 
@@ -89,6 +117,8 @@ enum AppFont {
 final class InterfaceFontStore {
     static let shared = InterfaceFontStore()
     var current = InterfaceFont.system
+    /// The terminal font's family (Settings › Font), which code text (`AppFont.code`) and Same as code draw.
+    var codeFamily = TerminalFontCatalog.defaultFamily
 }
 
 /// UI sizes are offsets from the content size (Settings › Font size); compact labels retain an 8 pt floor. Text takes
@@ -120,7 +150,7 @@ struct AppTypography: Equatable {
     /// An SF Symbol beside a role's text, at the role's size whichever interface font draws the text.
     func symbol(_ role: Role, weight: Font.Weight = .regular) -> Font { .system(size: size(role), weight: weight) }
     /// `AppFont.code` at a role's size.
-    func code(_ role: Role, weight: Font.Weight = .regular) -> Font { AppFont.code(size: size(role), weight: weight) }
+    @MainActor func code(_ role: Role, weight: Font.Weight = .regular) -> Font { AppFont.code(size: size(role), weight: weight) }
     func shortcut(offset: CGFloat = -1.5) -> Font { AppFont.shortcut(size: size(offset: offset)) }
     var sidebarShortcut: Font { AppFont.shortcut(size: size(.label)) }
     /// Grow text containers with larger fonts without shrinking their default hit areas.

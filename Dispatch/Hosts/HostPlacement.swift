@@ -33,10 +33,8 @@ extension Workspace {
         return liveHosts.flatMap { groups[$0.id] ?? [] }
     }
 
-    /// The Spaces digits (⌘⇧1…9 by default). Tabs only lists no spaces: they choose the listed rows, as the Tabs
-    /// digits do, rather than spaces the window doesn't show.
+    /// The Spaces digits (⌘⇧1…9 by default).
     func selectSpace(at index: Int) {
-        if tabsOnly { selectSidebarTab(at: index); return }
         let order = presentationSpaces
         let index = index == 8 ? order.count - 1 : index
         if order.indices.contains(index) { selectSpace(order[index].id) }

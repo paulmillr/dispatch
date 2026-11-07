@@ -12,12 +12,55 @@ struct SpaceHoverDetails: Equatable {
     var agents: String? = nil
     var title: String? = nil
     var activity: String? = nil
+    /// The place line, as the phone's headers say where a tab is: the host by its name, in its colour, and the folder's
+    /// name ("build-box · app"); the full path stays in the details line, where it is known.
+    var host: HostRecord? = nil
+    var folder: String? = nil
+    /// The name the card stands beside when it has no title (a space's row): a folder of the same name goes unsaid.
+    var name: String? = nil
 
     var tabCount: String? { tabs.map { $0 == 1 ? "1 tab" : "\($0) tabs" } }
 
+    /// "build-box · app", or the host alone; the host alone too where the title (or the row's name) is the folder's.
+    var place: String? { host.map { host in ([host.name] + (shownFolder.map { [$0] } ?? [])).joined(separator: " · ") } }
+
+    /// The folder's name unless the name beside it already says it: never "api" under "api".
+    var shownFolder: String? { Self.distinct(folder, from: title ?? name) }
+
+    static func distinct(_ folder: String?, from name: String?) -> String? {
+        guard let folder, let name, folder.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame
+        else { return folder }
+        return nil
+    }
+
     var summary: String {
-        ([remote ? "ssh" : "local", route, backend] + [title, activity, directory, tabCount, agents].compactMap { $0 })
-            .filter { !$0.isEmpty }.joined(separator: " · ")
+        ([place, remote ? "ssh" : "local", route, backend] + [title, activity, directory, tabCount, agents].compactMap { $0 })
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// A folder's name as the phone says it: the last component, "~" for the home folder, "/" for the root.
+    static func folderName(_ path: String?, home: String?) -> String? {
+        guard var path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return nil }
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        if let home = home.map({ $0.count > 1 && $0.hasSuffix("/") ? String($0.dropLast()) : $0 }), !home.isEmpty, path == home { return "~" }
+        return path == "/" ? "/" : (path as NSString).lastPathComponent
+    }
+
+    /// The tab's live folder's name: where its shell or pane is now (`Workspace.liveTab`, as Files reads it), never a
+    /// space's launch folder. Nil for a plain SSH tab, whose folder this Mac does not know.
+    @MainActor static func liveFolder(_ id: UUID, runtime: TerminalRuntime) -> String? {
+        liveDirectory(id, runtime: runtime).flatMap { folderName($0.path, home: $0.home) }
+    }
+
+    /// The tab's live folder and its host's home (for "~"); nil for a plain SSH tab or an unknown one.
+    @MainActor static func liveDirectory(_ id: UUID, runtime: TerminalRuntime) -> (path: String, home: String?)? {
+        guard let workspace = runtime.workspace, let tab = workspace.liveTab(id), !tab.directory.isEmpty else { return nil }
+        if case .ssh = runtime.machine(for: tab) { return nil }
+        let space = workspace.spaces.first { $0.tabs.contains { $0.id == id } }
+        let remote = space.map { $0.hostID != .local } ?? false
+        let home = remote ? (space?.remote ?? runtime.ssh.connectionForOrigin(id)).flatMap { runtime.ssh.links[$0]?.greeting.home }
+            : System.home.path
+        return (FilesPath.normalized(tab.directory), home)
     }
 
     /// The multiplexer behind a structured space, by the name its helper gives it.
@@ -55,7 +98,7 @@ struct SpaceHoverDetails: Equatable {
         else if let session = sessions.first { activity = session.agentTitle + " · Idle" }
         else { activity = nil }
         return Self(remote: context.remote, route: context.route, backend: backend, directory: owner?.structured == true ? nil : context.directory,
-                    title: title ?? tab.label, activity: activity)
+                    title: title ?? tab.label, activity: activity, host: host, folder: liveFolder(tab.id, runtime: runtime))
     }
 
     /// Working agents, then those needing attention (an approval or unread reply), e.g. "2 agents (1 unread)".
@@ -97,7 +140,8 @@ struct SpaceHoverDetails: Equatable {
         // A tmux space's tabs are its windows; its terminals are their panes.
         return Self(remote: remote, route: route, backend: backend, directory: directory,
                     tabs: space.structured ? space.windows.count : space.tabs.count,
-                    agents: agentSummary(space.tabs.flatMap(\.surfaceIDs).compactMap { runtime.chat.sessions[$0] }))
+                    agents: agentSummary(space.tabs.flatMap(\.surfaceIDs).compactMap { runtime.chat.sessions[$0] }),
+                    host: host, folder: tab.flatMap { liveFolder($0.id, runtime: runtime) }, name: space.name)
     }
 }
 
@@ -143,9 +187,12 @@ struct SpaceHoverCard: View {
         VStack(alignment: .leading, spacing: 5) {
             if let title = details.title {
                 Text(title).foregroundStyle(Chrome.ink).lineLimit(1).truncationMode(.middle)
+                placeLine
                 if let activity = details.activity {
                     Text(activity).foregroundStyle(secondary).lineLimit(1)
                 }
+            } else {
+                placeLine
             }
             HStack(spacing: 8) {
                 ConnectionRouteView(remote: details.remote, route: details.route, fontSize: fontSize)
@@ -173,6 +220,16 @@ struct SpaceHoverCard: View {
     }
 
     private var dot: some View { Text("·").foregroundStyle(muted).fixedSize() }
+
+    /// "build-box · app": the host's name in its colour, then the folder's name (`SpaceHoverDetails.place`).
+    @ViewBuilder private var placeLine: some View {
+        if let host = details.host {
+            (Text(host.name).foregroundColor(host.tint?.foreground ?? Chrome.ink)
+                + Text(details.shownFolder.map { " · " + $0 } ?? "").foregroundColor(secondary))
+                .lineLimit(1).truncationMode(.middle)
+                .accessibilityIdentifier("hover-place")
+        }
+    }
 }
 
 /// The card's ground. Flat, an opaque card with an arrow toward its row. On Liquid Glass a glass card without the

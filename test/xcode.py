@@ -352,8 +352,11 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
                          **{prefix + key: value for prefix in ('', 'TEST_RUNNER_')
                             for key, value in {'LANG': 'en_US.UTF-8', '__CF_USER_TEXT_ENCODING': '0x%X:0x0:0x0' % os.getuid()}.items()},
                          'TEST_RUNNER_DISPATCH_UNPRIVILEGED_SSHD': os.environ.get('DISPATCH_UNPRIVILEGED_SSHD', ''),
-                         # The test VM's account password (vm.py), for the password login test; unset elsewhere, which skips it.
-                         'TEST_RUNNER_DISPATCH_TEST_SSH_PASSWORD': os.environ.get('DISPATCH_TEST_SSH_PASSWORD', '')}).returncode
+                         # The test VM's account password (vm.py), for the password login test; unset elsewhere, which
+                         # skips it. Never present when empty: recorded environments would hold a credential-like name,
+                         # which stops the capture scrub.
+                         **({'TEST_RUNNER_DISPATCH_TEST_SSH_PASSWORD': os.environ['DISPATCH_TEST_SSH_PASSWORD']}
+                            if os.environ.get('DISPATCH_TEST_SSH_PASSWORD') else {})}).returncode
             except KeyboardInterrupt:
                 status = 130
             stage["exit_code"] = status

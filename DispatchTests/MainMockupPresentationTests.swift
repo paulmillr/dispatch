@@ -88,13 +88,13 @@ final class MainMockupPresentationTests: XCTestCase {
         for _ in 0..<3 { workspace.newTab() }
         for (index, tab) in workspace.currentTabs.enumerated() { workspace.updateTab(tab.id, customTitle: ["billing", "tests", "docs", "shell"][index]) }
         let flat = try await capture(window, "main-flat").text()
+        // Flat order's New Space is "+ space" under the list (tree's is the header's plus: NewSpacePresentationTests).
         for label in ["api-refactor", "ci-fix", "scratch", "+ space"] { XCTAssertTrue(flat.contains(label), flat) }
         XCTAssertFalse(flat.contains("single"), "The default layout control is icon-only")
         controller.settings.values.spaceOrder = .tree
         let treeSnapshot = try await capture(window, "main-tree")
         let tree = try sidebarText(treeSnapshot, window: window)
-        // The host heading's plus stays hidden until the pointer is over it (NewSpacePresentationTests).
-        XCTAssertFalse(tree.contains("this Mac")); XCTAssertTrue(tree.contains("Local"), tree)
+        XCTAssertFalse(tree.contains("this Mac")); XCTAssertTrue(tree.contains("LOCAL"), tree)
         XCTAssertFalse(tree.contains("+ local"), tree)
         let original = workspace.allTabIDs
         workspace.applyLayout(.grid)

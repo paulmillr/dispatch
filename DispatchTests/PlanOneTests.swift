@@ -281,8 +281,8 @@ final class PlanOneTests: XCTestCase {
         // Chat's faces and the interface's San Francisco draw at Source Code Pro's lowercase height too, at every size
         // (the system font changes optical size with it), measured the same way.
         let heightOf = { (font: NSFont) in try XCTUnwrap(TerminalFontScale.lowercaseHeight(font as CTFont)) }
-        let interface = InterfaceFontStore.shared.current
-        defer { InterfaceFontStore.shared.current = interface }
+        let interface = InterfaceFontStore.shared.current, codeFamily = InterfaceFontStore.shared.codeFamily
+        defer { InterfaceFontStore.shared.current = interface; InterfaceFontStore.shared.codeFamily = codeFamily }
         for size in [10.0, 14, 18, 24] {
             let target = try heightOf(try XCTUnwrap(NSFont(name: "SourceCodePro-Regular", size: size)))
             for choice in ChatFont.allCases where choice != .sameAsCode {
@@ -292,6 +292,14 @@ final class PlanOneTests: XCTestCase {
             }
             InterfaceFontStore.shared.current = .system
             XCTAssertEqual(try heightOf(AppFont.native(size: size)), target, accuracy: target * 0.005, "San Francisco at \(size)")
+            // Same as code: the terminal font, at the size the terminal draws it.
+            InterfaceFontStore.shared.current = .sameAsCode
+            for family in ["Source Code Pro", "Inconsolata", "Victor Mono", "Latin Modern Mono"] {
+                InterfaceFontStore.shared.codeFamily = family
+                let font = AppFont.native(size: size)
+                XCTAssertEqual(font.familyName, family)
+                XCTAssertEqual(try heightOf(font), target, accuracy: target * 0.005, "Same as code in \(family) at \(size)")
+            }
         }
         XCTAssertEqual(ChatFont.sameAsCode.sizeScale, 1)
         XCTAssertLessThan(ChatFont.system.sizeScale, 0.96, "SF Rounded's lowercase is taller than Source Code Pro's")
@@ -381,20 +389,24 @@ extension PlanOneTests {
                 XCTAssertEqual(pitches, [line + theme.typography.lineSpacing], "\(choice) at \(size)")
             }
         }
-        // The interface's roles: San Francisco's lines are Source Code Pro's, one line or several.
-        let interface = InterfaceFontStore.shared.current
-        defer { InterfaceFontStore.shared.current = interface }
+        // The interface's roles: San Francisco's lines and every Same as code font's are Source Code Pro's, one line or
+        // several, Latin Modern Mono's taller ones included.
+        let interface = InterfaceFontStore.shared.current, codeFamily = InterfaceFontStore.shared.codeFamily
+        defer { InterfaceFontStore.shared.current = interface; InterfaceFontStore.shared.codeFamily = codeFamily }
         let typography = AppTypography(contentSize: 14)
+        let choices: [(InterfaceFont, String)] = [(.sameAsCode, "Source Code Pro"), (.system, "Source Code Pro"),
+                                                  (.sameAsCode, "Victor Mono"), (.sameAsCode, "Latin Modern Mono")]
         for role in [AppTypography.Role.title, .content, .label, .body, .caption, .micro] {
-            var heights: [InterfaceFont: [CGFloat]] = [:]
-            for font in [InterfaceFont.sourceCodePro, .system] {
+            var heights: [String: [CGFloat]] = [:]
+            for (font, family) in choices {
                 InterfaceFontStore.shared.current = font
-                heights[font] = ["Queue", "Queue\ndrains"].map {
+                InterfaceFontStore.shared.codeFamily = family
+                heights["\(font) \(family)"] = ["Queue", "Queue\ndrains"].map {
                     NSHostingView(rootView: Text($0).font(typography, role).fixedSize()).fittingSize.height
                 }
             }
-            XCTAssertEqual(heights[.system], heights[.sourceCodePro], "\(role)")
-            XCTAssertEqual(heights[.system]?.first, AppFont.lineHeight(size: typography.size(role)), "\(role)")
+            XCTAssertEqual(Set(heights.values).count, 1, "\(role): \(heights)")
+            XCTAssertEqual(heights["system Source Code Pro"]?.first, AppFont.lineHeight(size: typography.size(role)), "\(role)")
         }
         let widths = ["Play", "Copying…"].map {
             NSHostingView(rootView: ReservedText(text: $0, variants: ["Play", "Copying…"]).fixedSize()).fittingSize.width

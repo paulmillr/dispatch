@@ -18,7 +18,7 @@ enum Onboarding {
             Text("❯ ").foregroundStyle(theme.green).bold()
             Text(text).foregroundStyle(theme.ink)
         }
-        .font(AppFont.code(size: 12))
+        .font(AppFont.sourceCodePro(size: 12))
         .padding(.horizontal, 10).frame(height: 26)
         .background(theme.terminal, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Chrome.border))
@@ -91,7 +91,7 @@ enum Onboarding {
                                 .padding(.horizontal, 6).padding(.vertical, 4)
                                 .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(theme.ink.opacity(0.35)))
                         }
-                        .font(AppFont.code(size: 10.5)).padding(9)
+                        .font(AppFont.sourceCodePro(size: 10.5)).padding(9)
                     }
                     .overlay(alignment: .topTrailing) { mode("apple.terminal") }
                 } after: {
@@ -120,7 +120,7 @@ enum Onboarding {
                 VStack(alignment: .leading, spacing: 5) {
                     note("laptopcomputer", Text("Agents on this Mac need hooks: say Yes in Prefs."))
                     note("network", Text("SSH agents need the helper: confirm it when you ")
-                         + Text("ssh").font(AppFont.code(size: 11)).foregroundColor(Chrome.ink) + Text(" to a host."))
+                         + Text("ssh").font(AppFont.sourceCodePro(size: 11)).foregroundColor(Chrome.ink) + Text(" to a host."))
                 }
             }
         }
@@ -150,7 +150,7 @@ enum Onboarding {
                 Text("Start tmux or herdr in any tab:").font(sheetFont(12)).foregroundStyle(Chrome.ink)
                 HStack(spacing: 8) { command("tmux -CC"); command("tmux -CC attach"); command("herdr") }
                 beforeAfter {
-                    picture { prompt("tmux -CC attach").font(AppFont.code(size: 10.5)).padding(9) }
+                    picture { prompt("tmux -CC attach").font(AppFont.sourceCodePro(size: 10.5)).padding(9) }
                 } after: {
                     picture(lit: true) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -164,7 +164,7 @@ enum Onboarding {
                                 Text("GET /health 200").foregroundStyle(theme.comment)
                                 Text("GET /api/items 200").foregroundStyle(theme.comment)
                             }
-                            .font(AppFont.code(size: 9.5)).padding(8)
+                            .font(AppFont.sourceCodePro(size: 9.5)).padding(8)
                         }
                     }
                 }

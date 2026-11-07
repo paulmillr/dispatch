@@ -116,9 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrame(frame, display: true)
     }
 
-    /// With one space (tabs only: one tab) the sidebar hides, unless Settings keeps it.
+    /// With one space the sidebar hides, unless Settings keeps it. Vertical tabs lists that space's tabs there, so it
+    /// hides only while the space has one tab too.
     private var automaticSidebarVisible: Bool {
-        !settings.values.hideSingleSpace || (workspace.tabsOnly ? workspace.lastingTabCount : workspace.lastingSpaceCount) > 1
+        guard settings.values.hideSingleSpace, workspace.lastingSpaceCount <= 1 else { return true }
+        return workspace.verticalTabs && (workspace.current.map { $0.structured ? $0.containers.count : $0.tabs.count } ?? 0) > 1
     }
     var sidebarVisible: Bool {
         windowState.sidebarVisibilityOverride ?? automaticSidebarVisible
@@ -167,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         workspace.defaultDirectory = settings.values.startingFolder
         workspace.spaceOrder = settings.values.spaceOrder
-        workspace.tabsOnly = settings.values.tabsOnly
+        workspace.verticalTabs = settings.values.verticalTabs
         workspace.onCloseTabs = { TerminalRuntime.shared.close($0) }
         if restoreHostSession() {
             // Keep restored offline hosts visible; local-only sessions follow the usual sidebar rules.
@@ -688,25 +690,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return NSApp.keyWindow === settingsWindow || workspace.activeTab != nil
         case #selector(renameTab):
             return workspace.activeTab != nil && workspace.current.map { workspace.helper($0)?.offline($0) == true } != true
-        // Tabs only steps and numbers the sidebar's rows, across spaces (a space of one window, or a split, included).
         case #selector(nextTab), #selector(previousTab):
-            return NSApp.keyWindow === window && (workspace.tabsOnly ? workspace.sidebarTabs.count : workspace.currentTabs.count) > 1
+            return NSApp.keyWindow === window && workspace.currentTabs.count > 1
         case #selector(nextSpace), #selector(previousSpace):
-            return NSApp.keyWindow === window && (workspace.tabsOnly ? workspace.sidebarTabs.count : workspace.spaces.count) > 1
+            return NSApp.keyWindow === window && workspace.spaces.count > 1
         case #selector(selectNumberedItem(_:)):
-            if workspace.tabsOnly {
-                item.title = item.tag == 8 ? "Last Tab" : "Tab \(item.tag + 1)"
-                return NSApp.keyWindow === window && Self.numbers(item.tag, rows: workspace.sidebarTabs.count)
-            }
             item.title = "\(workspace.current?.usesPaneShortcuts == true ? "Pane" : "Tab") \(item.tag + 1)"
             return NSApp.keyWindow === window && item.tag >= 0 && item.tag < (workspace.current?.numberedShortcutCount ?? 0)
         case #selector(selectSpace(_:)):
-            if workspace.tabsOnly { return NSApp.keyWindow === window && Self.numbers(item.tag, rows: workspace.sidebarTabs.count) }
             return NSApp.keyWindow === window && (item.tag == 8 ? !workspace.spaces.isEmpty : workspace.spaces.indices.contains(item.tag))
         default: return true
         }
     }
-
-    /// Whether digit `tag` (0…8, 8 the last) names one of `rows`.
-    static func numbers(_ tag: Int, rows: Int) -> Bool { tag == 8 ? rows > 0 : tag >= 0 && tag < rows }
 }

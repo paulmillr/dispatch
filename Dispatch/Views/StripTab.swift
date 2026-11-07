@@ -292,7 +292,9 @@ struct HostMarkEffects: View {
     var body: some View {
         ZStack {
             if !reduceMotion { HostSwitchRipple(trigger: trigger, color: color) }
-            if connecting { HostConnectingPulse(color: color, reduceMotion: reduceMotion).transition(.opacity) }
+            if connecting {
+                HostConnectingPulse(color: color, reduceMotion: reduceMotion || !MotionRate.decorates).transition(.opacity)
+            }
         }
         // Here, not only on the tab: a capsule on glass draws these effects in the strip's overlay, outside the tab's
         // animation.
@@ -301,7 +303,7 @@ struct HostMarkEffects: View {
     }
 }
 
-/// Rings breathing out of the mark while its tab connects; with Reduce Motion a steady faint ring.
+/// Rings breathing out of the mark while its tab connects; with Reduce Motion or in Low Power Mode a steady faint ring.
 private struct HostConnectingPulse: View {
     let color: Color
     let reduceMotion: Bool
@@ -392,7 +394,7 @@ enum StripSpaceMenu {
         shortcuts(order.map(\.id), keys: keys, group: \.spaces)
     }
 
-    /// The jump shortcuts of a list (spaces, or tabs only's tabs) by a Settings › Keyboard group: the first eight get
+    /// The jump shortcuts of a list by a Settings › Keyboard group: the first eight get
     /// 1…8, the last 9; with the group unbound, none.
     static func shortcuts(_ order: [UUID], keys: KeyGroups, group: KeyPath<KeyGroups, NSEvent.ModifierFlags>) -> [UUID: String] {
         Dictionary(uniqueKeysWithValues: order.enumerated().map { index, id in
@@ -401,9 +403,10 @@ enum StripSpaceMenu {
     }
 }
 
-/// The host mark's popover: the spaces as rows on the popover's glass, each led by its host's glyph on a small tinted
-/// glass disc, with its agent activity and jump shortcut; the current space sits on a glass capsule of its own, in its
-/// host's color. While the sidebar groups spaces by host, each host's name heads its spaces.
+/// The host mark's popover: the spaces as rows on the popover's glass, with their agent activity and jump shortcut; the
+/// current space sits on a glass capsule of its own, in its host's color. As the sidebar draws them: listed flat, each
+/// row is led by its host's glyph on a small tinted glass disc and ends with its activity; grouped by host, each host's
+/// name heads its spaces, ending in its disc, and the rows lead with their activity instead.
 struct StripSpacePicker: View {
     @Environment(\.appTypography) private var typography
     let workspace: Workspace
@@ -423,10 +426,24 @@ struct StripSpacePicker: View {
                         if let host = section.host { heading(host) }
                         ForEach(section.spaces) { space in
                             StripSpaceRow(space: workspace.liveSpace(space), host: workspace.hosts.record(space.hostID),
-                                          selected: space.id == workspace.selectedSpace,
+                                          grouped: section.host != nil, selected: space.id == workspace.selectedSpace,
                                           shortcut: shortcuts[space.id] ?? "") {
                                 workspace.selectSpace(space.id)
                                 chosen()
+                            }
+                            // Vertical tabs has no strips: the shown space's tabs list under it, as the sidebar would.
+                            if workspace.verticalTabs, space.id == workspace.selectedSpace {
+                                let live = workspace.liveSpace(space)
+                                ForEach(workspace.sidebarTabs(in: live)) { tab in
+                                    StripPickerTabRow(tab: tab, workspace: workspace, settings: controller.settings,
+                                                      selected: SpaceTabsList.selection(tab, in: live) == .focused,
+                                                      shortcut: SpaceTabsList.shortcut(tab, in: live,
+                                                                                       keys: controller.settings.values.keyGroups),
+                                                      indent: section.host != nil ? 34 : 14 + typography.expanded(22)) {
+                                        workspace.selectSidebarTab(tab.id)
+                                        chosen()
+                                    }
+                                }
                             }
                         }
                     }
@@ -436,6 +453,15 @@ struct StripSpacePicker: View {
         }
             Divider().padding(.horizontal, 12)
             VStack(spacing: 2) {
+                if workspace.verticalTabs, workspace.current != nil {
+                    StripPickerAction(title: "New tab", shortcut: "⌘T") {
+                        Image(systemName: "plus.square").font(typography.symbol(.body))
+                    } action: {
+                        chosen()
+                        controller.newTab()
+                    }
+                    .accessibilityIdentifier("strip-space-picker-new-tab")
+                }
                 // The sidebar's "+ space" and "+ local": "New local space" only while another host is live, where it
                 // differs from "New space".
                 StripPickerAction(title: "New space", shortcut: "⌘N") {
@@ -466,21 +492,29 @@ struct StripSpacePicker: View {
             .padding(8)
         }
         .font(typography.font(.label)).foregroundStyle(Chrome.ink)
-        .frame(width: typography.expanded(280))
+        // As wide as its longest row needs, from a narrow minimum up to the width it always had; longer names truncate.
+        .frame(minWidth: typography.expanded(180), maxWidth: typography.expanded(280))
+        .fixedSize(horizontal: true, vertical: false)
         // On glass the popover's own system glass shows through instead of the sidebar fill.
         .background(glass ? Color.clear : Chrome.sidebar).preferredColorScheme(Chrome.colorScheme)
         .fittedPopoverPresentation()
+        // A container, so its rows keep their own identifiers rather than taking the picker's.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("strip-space-picker")
     }
 
+    /// A host's heading: its name in capitals (the sidebar's tree headings too, `HostHeadingText`), ending in its disc
+    /// where the rows' checks end.
     private func heading(_ host: HostRecord) -> some View {
-        let size = typography.size(offset: -3)
-        return Text(host.id == .local ? "LOCAL" : host.name.uppercased())
-            .interfaceFont(size: size).tracking(size * 0.08)
-            .foregroundStyle(host.tint?.foreground ?? Chrome.palette.sidebarHostLabel)
-            .lineLimit(1).truncationMode(.middle)
-            .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 2)
-            .accessibilityAddTraits(.isHeader)
+        HStack(spacing: 8) {
+            HostHeadingText(host: host, size: typography.size(offset: -3))
+            Spacer(minLength: 0)
+            StripPickerDisc(host: host, selected: false)
+                .accessibilityHidden(true)
+        }
+        .padding(.leading, 10).padding(.trailing, 6).padding(.top, 2).padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -514,6 +548,53 @@ private struct StripPickerAction<Icon: View>: View {
     }
 }
 
+/// Vertical tabs: a tab of the shown space under its row, indented to the space's name: its activity, its kind, its
+/// title and ⌘ digit, checked while it has the window's focus. A click shows it.
+private struct StripPickerTabRow: View {
+    @Environment(\.appTypography) private var typography
+    let tab: SidebarTab
+    let workspace: Workspace
+    let settings: SettingsStore
+    let selected: Bool
+    let shortcut: String
+    /// Where the space row's name starts.
+    let indent: CGFloat
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: typography.expanded(12), style: .continuous)
+        let name = SpaceTabLabel.name(tab, in: workspace, settings: settings)
+        Button(action: action) {
+            HStack(spacing: 7) {
+                AgentActivityGlyph(tabIDs: tab.surfaceIDs, size: typography.size(offset: -3), showsQuiet: false)
+                    .fixedSize().frame(width: 14)
+                SpaceTabLabel.kind(tab, in: workspace).font(typography.symbol(.caption))
+                    .foregroundStyle(Chrome.muted).frame(width: 16)
+                Text(name).lineLimit(1).truncationMode(.middle)
+                    .font(Font(AppFont.native(size: typography.size(.label), semibold: selected)))
+                    .tracking(selected ? AppFont.semiboldTracking(name, size: typography.size(.label)) : 0)
+                    .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !shortcut.isEmpty {
+                    Text(shortcut).font(typography.shortcut()).foregroundStyle(Chrome.muted)
+                }
+                StripPickerCheck(shown: selected, color: Chrome.ink)
+            }
+            // The kind's glyph starts where the space's name does, the activity hanging before it.
+            .padding(.leading, max(5, indent - 21)).padding(.trailing, 10).padding(.vertical, 3)
+            .frame(minHeight: typography.expanded(22) + 4)
+            .background { if hovered { shape.fill(Chrome.palette.hover) } }
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("strip-picker-tab-\(tab.id)")
+    }
+}
+
 /// The picker rows' trailing check: every row keeps its slot, so the shortcuts before it line up.
 private struct StripPickerCheck: View {
     @Environment(\.appTypography) private var typography
@@ -528,10 +609,44 @@ private struct StripPickerCheck: View {
     }
 }
 
+/// A host's glyph on the picker's small tinted glass disc; plain on the current row's glass (no glass on glass).
+private struct StripPickerDisc: View {
+    @Environment(\.appTypography) private var typography
+    let host: HostRecord
+    let selected: Bool
+
+    var body: some View {
+        let disc = typography.expanded(22)
+        HostGlyph(host: host, size: typography.hostIconSize)
+            .foregroundStyle(host.tint?.foreground ?? Chrome.palette.secondary)
+            .frame(width: disc, height: disc)
+            .background { if selected { Circle().fill(host.tint?.glassWash ?? Chrome.palette.hover) } }
+            .liquidGlass(in: Circle(), fallback: selected ? nil : Chrome.palette.hover,
+                         tint: host.tint?.glassWash, enabled: !selected)
+    }
+}
+
+/// A host's name as a heading: in capitals, spaced, in its color (local in the sidebar's host label tone). The space
+/// picker's sections and the sidebar's tree groups both head with it.
+struct HostHeadingText: View {
+    let host: HostRecord
+    let size: CGFloat
+    var weight: Font.Weight = .regular
+
+    var body: some View {
+        Text(host.id == .local ? "LOCAL" : host.name.uppercased())
+            .interfaceFont(size: size, weight: weight).tracking(size * 0.08)
+            .foregroundStyle(host.tint?.foreground ?? Chrome.palette.sidebarHostLabel)
+            .lineLimit(1).truncationMode(.middle)
+    }
+}
+
 private struct StripSpaceRow: View {
     @Environment(\.appTypography) private var typography
     let space: Space
     let host: HostRecord
+    /// Under its host's heading: the row leads with its activity, the disc being the heading's.
+    let grouped: Bool
     let selected: Bool
     let shortcut: String
     let action: () -> Void
@@ -540,27 +655,26 @@ private struct StripSpaceRow: View {
     private var glass: Bool { LiquidGlassStore.shared.active }
 
     var body: some View {
-        let disc = typography.expanded(22)
         let shape = RoundedRectangle(cornerRadius: typography.expanded(12), style: .continuous)
+        let activity = AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs), size: typography.size(offset: -3),
+                                          showsQuiet: false).fixedSize()
         Button(action: action) {
-            HStack(spacing: 9) {
-                HostGlyph(host: host, size: typography.hostIconSize)
-                    .foregroundStyle(host.tint?.foreground ?? Chrome.palette.secondary)
-                    .frame(width: disc, height: disc)
-                    // On the current row's glass a plain disc: no glass on glass.
-                    .background { if selected { Circle().fill(host.tint?.glassWash ?? Chrome.palette.hover) } }
-                    .liquidGlass(in: Circle(), fallback: selected ? nil : Chrome.palette.hover,
-                                 tint: host.tint?.glassWash, enabled: !selected)
+            HStack(spacing: grouped ? 8 : 9) {
+                // Grouped, the activity leads in a column where the heading's name starts (as the sidebar's tree rows);
+                // listed flat, the host's disc leads and the activity follows the name.
+                if grouped { activity.frame(width: 16) } else { StripPickerDisc(host: host, selected: selected) }
                 Text(space.name).lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs), size: typography.size(offset: -3)).fixedSize()
+                if !grouped { activity }
                 if !shortcut.isEmpty {
                     Text(shortcut).font(typography.shortcut()).foregroundStyle(Chrome.muted)
                 }
                 StripPickerCheck(shown: selected, color: host.tint?.foreground ?? Chrome.ink)
             }
-            .padding(.leading, 5).padding(.trailing, 10).padding(.vertical, 4)
+            .padding(.leading, grouped ? 10 : 5).padding(.trailing, 10).padding(.vertical, 4)
+            // As tall as a row with a disc, so grouped and flat rows keep one height.
+            .frame(minHeight: typography.expanded(22) + 8)
             .background { if hovered && !selected { shape.fill(Chrome.palette.hover) } }
             // The current row's content sits in its glass, not over a glass background, which the glass layer would
             // draw above its name and shortcut.
@@ -592,7 +706,7 @@ struct NewTabLabel: View {
             } else {
                 // Its own glass circle, as tall as the track and 4 points after it.
                 Image(systemName: "plus").frame(width: size, height: size)
-                    .liquidGlass(in: Circle(), interactive: true).contentShape(Circle())
+                    .liquidGlass(in: Circle(), interactive: true).glassHover(Circle()).contentShape(Circle())
                     .padding(.leading, 4)
             }
         } else {

@@ -27,15 +27,18 @@ struct PaneView: View {
     }
     private var activeLabel: String? { pane.activeTab.map(label) }
     private var tabStyle: StripTab.Style { .current(controller.windowState) }
-    /// Off the title row (full screen), the strip shows only when there are tabs or panes to choose between; tabs
-    /// only (the sidebar lists them) never shows one.
-    static func showsTabs(pane: Pane, space: Space, tabsOnly: Bool) -> Bool {
-        !tabsOnly && !space.structured && (pane.tabs.count > 1 || space.panes.count > 1)
+    /// Off the title row (full screen), the strip shows only when there are tabs or panes to choose between. Vertical
+    /// tabs (the sidebar lists them) never shows one: the pane's content takes its whole height, its mode switch (and
+    /// the top-right pane's layout picker) floating at its corner.
+    static func showsTabs(pane: Pane, space: Space, verticalTabs: Bool) -> Bool {
+        !verticalTabs && !space.structured && (pane.tabs.count > 1 || space.panes.count > 1)
     }
     private var showTabs: Bool {
-        (!space.structured && inTitlebar && !workspace.tabsOnly) || Self.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
+        (!space.structured && inTitlebar && !workspace.verticalTabs)
+            || Self.showsTabs(pane: pane, space: space, verticalTabs: workspace.verticalTabs)
     }
-    private var hasTmuxHeader: Bool { space.structured && (window?.arrangement.panes.count ?? 0) > 1 }
+    /// A server window's pane header; vertical tabs lists the window's panes in the sidebar instead.
+    private var hasTmuxHeader: Bool { !workspace.verticalTabs && space.structured && (window?.arrangement.panes.count ?? 0) > 1 }
     /// With Liquid Glass the strip lies over the content, so the glass has the terminal or chat behind it.
     private var glassStrip: Bool { LiquidGlassStore.shared.active }
     private var overlaidStrip: Bool { glassStrip && showTabs && !hasTmuxHeader }
@@ -46,8 +49,22 @@ struct PaneView: View {
     }
 
     private var floatingChatSwitch: Bool {
+        if workspace.verticalTabs { return true }
         guard let window else { return !showTabs }
-        return !inTitlebar && window.arrangement.panes.count == 1 && !WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly)
+        return !inTitlebar && window.arrangement.panes.count == 1 && !WindowTabBar.showsTabs(space: space, verticalTabs: false)
+    }
+    /// Vertical tabs with the sidebar hidden (its bar holds the picker otherwise): the top-right pane's floating switch
+    /// has the layout picker beside it, as its strip would. In a server window, the window's top-right pane, in the
+    /// top-right window group when the windows are split.
+    private var floatingLayout: Space? {
+        guard workspace.verticalTabs, !controller.sidebarVisible, space.layoutTabCount > 1 else { return nil }
+        guard let window else { return pane.id == space.layout.topRightPaneID ? space : nil }
+        guard window.arrangement.layout.topRightPaneID == pane.id else { return nil }
+        if let presentation = space.windowPresentation, presentation.groups.count > 1,
+           presentation.groups.first(where: { $0.selected == window.id })?.id != presentation.layout.topRightPaneID {
+            return nil
+        }
+        return space
     }
     private var placement: TabBarPlacement {
         TabBarPlacement(titlebar: titlebar,
@@ -85,8 +102,8 @@ struct PaneView: View {
                 }.padding(.top, overlaidStrip ? 0 : stripInset)
             }
         }
-        // Tabs only with the sidebar shown: the sidebar's row marks the host, so no edge across the pane's top.
-        .hostTintBorder(!space.structured && !(workspace.tabsOnly && controller.sidebarVisible) ? hostTint : nil,
+        // Vertical tabs with the sidebar shown: the sidebar marks the host, so no edge across the pane's top.
+        .hostTintBorder(!space.structured && !(workspace.verticalTabs && controller.sidebarVisible) ? hostTint : nil,
                         surfaceID: pane.activeTab?.focusedSurfaceID,
                         stripHeight: showTabs ? tabBarHeight : 0)
         .frame(minWidth: 180, maxWidth: .infinity, minHeight: 120, maxHeight: .infinity)
@@ -148,7 +165,8 @@ struct PaneView: View {
             .contextMenu {
                 Button("Rename Pane…") { controller.rename(title: "Rename pane", value: activeLabel ?? "") { workspace.updateTab(pane.selected, customTitle: $0) } }
                 Button("Move Pane to New Space") { workspace.moveTabToNewSpace(pane.selected) }
-                Button("Detach") { controller.detachTab(pane.selected) }
+                Divider()
+                Button("Detach") { controller.detachTab(pane.selected) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminatePane(pane.selected) }
             }
     }
@@ -166,7 +184,7 @@ struct PaneView: View {
             .onTapGesture { workspace.selectTab(pane.selected) }
             .overlay {
                 LocalReorder(item: .tab(pane.selected), edge: .horizontal,
-                             spaceHover: pane.activeTab.map { tabHoverDetails($0) },
+                             spaceHover: pane.activeTab.map { tabHoverDetails($0) }, hoverFontSize: typography.tabSize,
                              dragLabel: activeLabel, select: { workspace.selectTab(pane.selected) },
                              accepts: { if case .tab(let id) = $0 { return workspace.canMoveTab(id, to: pane.id) }; return false }) { item, _ in
                     if case .tab(let id) = item { workspace.moveTab(id, to: pane.id) }
@@ -205,7 +223,8 @@ struct PaneView: View {
         .accessibilityIdentifier("tab-\(tab.id)")
         .overlay { HostMoveMarker(motion: workspace.hostMoveMotion, item: .tab(tab.id)).allowsHitTesting(false) }
         .overlay {
-            LocalReorder(item: .tab(tab.id), edge: .horizontal, leadingButtonWidth: StripTab.closeSlotWidth, spaceHover: tabHoverDetails(tab), dragLabel: label(tab),
+            LocalReorder(item: .tab(tab.id), edge: .horizontal, leadingButtonWidth: StripTab.closeSlotWidth, spaceHover: tabHoverDetails(tab),
+                         hoverFontSize: typography.tabSize, dragLabel: label(tab),
                          select: { workspace.selectTab(tab.id) },
                          accepts: { if case .tab(let id) = $0 { return workspace.canMoveTab(id, to: pane.id) }; return false }) { item, after in
                 guard case .tab(let id) = item else { return }
@@ -214,22 +233,23 @@ struct PaneView: View {
         }
         .contextMenu {
             Button("Rename…") { controller.rename(title: "Rename tab", value: label(tab)) { workspace.updateTab(tab.id, customTitle: $0) } }
-            if space.panes.count > 1 {
-                ForEach(space.panes.filter { $0.id != pane.id }) { target in
-                    Button("Move to Pane \(space.paneShortcutNumber(for: target.id) ?? 1)") { workspace.moveTab(tab.id, to: target.id) }
-                }
-            }
-            Button("Move to New Space") { workspace.moveTabToNewSpace(tab.id) }
-            ForEach(workspace.spaces.filter { $0.id != space.id && workspace.canMoveTab(tab.id, to: $0.focusedPane) }) { target in
-                Button("Move to \(workspace.liveName(target))") { workspace.moveTab(tab.id, to: target.focusedPane) }
-            }
+            MoveTargetsSection(
+                panes: space.panes.filter { $0.id != pane.id }.map { target in
+                    MoveTarget(id: target.id, title: "Pane \(space.paneShortcutNumber(for: target.id) ?? 1)") { workspace.moveTab(tab.id, to: target.id) }
+                },
+                newSpace: { workspace.moveTabToNewSpace(tab.id) },
+                spaces: workspace.spaces.filter { $0.id != space.id && workspace.canMoveTab(tab.id, to: $0.focusedPane) }.map { target in
+                    MoveTarget(id: target.id, title: workspace.liveName(target)) { workspace.moveTab(tab.id, to: target.focusedPane) }
+                })
+            Divider()
             Button("Close Tab") { controller.closeTab(tab.id) }
         }
     }
 
     private func tabContent(_ tab: TerminalTab) -> some View {
         TerminalContentView(tab: tab, workspace: workspace, spaceID: space.id, windowTabID: window?.id, paneID: pane.id, focused: isPresented && space.focusedPane == pane.id,
-                            isPresented: isPresented, floatingSwitch: floatingChatSwitch,
+                            isPresented: isPresented, floatingSwitch: floatingChatSwitch, floatingLayout: floatingLayout,
+                            revealOverTerminal: workspace.verticalTabs,
                             switchRow: floatingChatSwitch && placement.sidebarSlot ? Chrome.bareLeadingRowHeight(typography) : nil)
             .overlay { SplitDropZones(pane: pane, workspace: workspace) }
     }

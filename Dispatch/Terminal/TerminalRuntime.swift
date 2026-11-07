@@ -33,7 +33,7 @@ final class TerminalRuntime {
         didSet {
             for helper in helpers.values { helper.bind(workspace) }
             workspace?.helpers = helpers
-            workspace?.tabsOnly = preferences.tabsOnly
+            workspace?.verticalTabs = preferences.verticalTabs
             workspace?.machineForTab = { [weak self] in self?.machine(for: $0) ?? $0.machine }
             workspace?.owningMachineForTab = { [weak self] in self?.owningMachine(for: $0) ?? $0.machine }
         }
@@ -109,7 +109,7 @@ final class TerminalRuntime {
         defer { if !started { stop() } }
         AppFont.register()
         self.preferences = preferences
-        workspace?.tabsOnly = preferences.tabsOnly
+        workspace?.verticalTabs = preferences.verticalTabs
         chat.sendWhileWorking = preferences.chatSendWhileWorking
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
@@ -121,6 +121,7 @@ final class TerminalRuntime {
         }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         InterfaceFontStore.shared.current = preferences.interfaceFont
+        InterfaceFontStore.shared.codeFamily = preferences.fontFamily
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
@@ -190,7 +191,7 @@ final class TerminalRuntime {
         // Files views drop or resolve their repositories now rather than on the next tick.
         if gitChanged { for id in files.sessions.keys { files.refresh(id) } }
         if !preferences.filesEnabled { files.leaveFiles() }
-        workspace?.tabsOnly = preferences.tabsOnly
+        workspace?.verticalTabs = preferences.verticalTabs
         chat.sendWhileWorking = preferences.chatSendWhileWorking
         ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
@@ -200,6 +201,7 @@ final class TerminalRuntime {
         for helper in helpers.values { helper.claim(preferences.spaces) }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         InterfaceFontStore.shared.current = preferences.interfaceFont
+        InterfaceFontStore.shared.codeFamily = preferences.fontFamily
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors

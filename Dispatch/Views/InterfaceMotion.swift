@@ -10,6 +10,8 @@ enum InterfaceMotion {
     static let hostSwitchDuration = 0.1
     /// Title and sidebar selection follow a space switch; shorter than `viewDuration` so switching feels immediate.
     static let spaceSwitchDuration = 0.12
+    /// Vertical tabs' sidebar going into a space and back (SpaceSidebar.push).
+    static let pushDuration = 0.16
     static let modeSwitchDuration = 0.15
     static let accent = Color(red: 224/255, green: 123/255, blue: 224/255)
     static func animation(reduce: Bool, duration: Double = viewDuration) -> Animation? {

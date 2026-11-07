@@ -197,7 +197,13 @@ extension ChatFontChoice {
 /// The app's own text: tabs, the sidebar, Files, Git and Settings. Terminals and chat keep their own fonts.
 enum InterfaceFont: String, Codable, CaseIterable {
     case system = "San Francisco"
-    case sourceCodePro = "Source Code Pro"
+    /// The terminal font (Settings › Font), at Source Code Pro's lowercase height as the terminal draws it.
+    case sameAsCode = "Same as code"
+
+    /// A saved choice; Source Code Pro, the choice before Same as code, now follows the terminal font.
+    init?(saved: String) {
+        self.init(rawValue: saved == "Source Code Pro" ? Self.sameAsCode.rawValue : saved)
+    }
 }
 
 struct Preferences: Codable, Equatable {
@@ -274,9 +280,9 @@ struct Preferences: Codable, Equatable {
     /// parked in SSH and TCP buffers on a slow link. Off: output streams as before.
     var outputWindow = false
     var hideSingleSpace = true
-    /// Tabs only: no tab strips, and the sidebar lists every tab (a tmux or herdr space's windows) instead of spaces,
-    /// with "+ tab" in place of "+ space". Spaces still exist underneath (⌘N, splits, layouts); they are just not shown.
-    var tabsOnly = false
+    /// Vertical tabs: no tab strips. The sidebar goes into the shown space and lists its tabs (a tmux or herdr space's
+    /// windows, their panes a line each), with Back to the spaces; each pane keeps a title row for its tab.
+    var verticalTabs = false
     /// Per multiplexer (the helper's name): open its sessions started in terminals as spaces.
     var spaces: [String: Bool] = [:]
     /// Kitty's terminal image protocol. Disabled unless the user explicitly opts in.
@@ -383,7 +389,9 @@ struct Preferences: Codable, Equatable {
         case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, autoApproveUnsafePastes, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
         case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
         case keyGroups
-        case hideSingleSpace, tabsOnly, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
+        // Stored under the key of the mode it replaced (tabs only, "Vertical tabs, no spaces"): a choice made there carries over.
+        case verticalTabs = "tabsOnly"
+        case hideSingleSpace, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
         case enableDiagnostics, outputWindow
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case textContrast, colorVision, terminalOpacity
@@ -423,7 +431,7 @@ struct Preferences: Codable, Equatable {
         fontLigatures = try fields.decodeIfPresent(Bool.self, forKey: .fontLigatures) ?? fontLigatures
         // Removed font choices fall back without discarding the other settings.
         chatFont = try fields.decodeIfPresent(String.self, forKey: .chatFont).flatMap(ChatFont.init(rawValue:)) ?? chatFont
-        interfaceFont = try fields.decodeIfPresent(String.self, forKey: .interfaceFont).flatMap(InterfaceFont.init(rawValue:)) ?? interfaceFont
+        interfaceFont = try fields.decodeIfPresent(String.self, forKey: .interfaceFont).flatMap(InterfaceFont.init(saved:)) ?? interfaceFont
         fontSize = try fields.decodeIfPresent(Double.self, forKey: .fontSize) ?? fontSize
         sidebarStyle = try fields.decodeIfPresent(String.self, forKey: .sidebarStyle).flatMap(SidebarStyle.init(rawValue:))
             ?? sidebarStyle
@@ -457,7 +465,7 @@ struct Preferences: Codable, Equatable {
         enableDiagnostics = try fields.decodeIfPresent(Bool.self, forKey: .enableDiagnostics) ?? false
         outputWindow = try fields.decodeIfPresent(Bool.self, forKey: .outputWindow) ?? false
         hideSingleSpace = try fields.decodeIfPresent(Bool.self, forKey: .hideSingleSpace) ?? hideSingleSpace
-        tabsOnly = try fields.decodeIfPresent(Bool.self, forKey: .tabsOnly) ?? tabsOnly
+        verticalTabs = try fields.decodeIfPresent(Bool.self, forKey: .verticalTabs) ?? verticalTabs
         spaces = try fields.decodeIfPresent([String: Bool].self, forKey: .spaces) ?? [:]
         enableKittyGraphics = try fields.decodeIfPresent(Bool.self, forKey: .enableKittyGraphics) ?? enableKittyGraphics
         startingDirectory = try fields.decodeIfPresent(String.self, forKey: .startingDirectory) ?? startingDirectory

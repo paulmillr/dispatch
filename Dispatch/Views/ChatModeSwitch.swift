@@ -313,16 +313,17 @@ struct ChatModeSwitchSlot: View {
     }
 }
 
-/// Room a floating mode switch takes at the trailing end of the files header, which sits under it.
-private struct FilesHeaderTrailingInsetKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 0
+/// The pane's controls a files header ends with in place of a floating mode switch (TerminalContentView), so a narrow
+/// header's own controls never slide under it.
+private struct FilesHeaderAccessoryKey: EnvironmentKey {
+    static var defaultValue: AnyView? { nil }
 }
 
 extension EnvironmentValues {
-    /// Room at the files header's trailing end for the floating mode switch over it (TerminalContentView); 0 in a strip.
-    var filesHeaderTrailingInset: CGFloat {
-        get { self[FilesHeaderTrailingInsetKey.self] }
-        set { self[FilesHeaderTrailingInsetKey.self] = newValue }
+    /// The pane's mode switch (and layout picker) as the files header's last controls; nil in a strip.
+    var filesHeaderAccessory: AnyView? {
+        get { self[FilesHeaderAccessoryKey.self] }
+        set { self[FilesHeaderAccessoryKey.self] = newValue }
     }
 }
 

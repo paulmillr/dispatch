@@ -9,10 +9,8 @@ struct SpaceItem: Identifiable {
     var host = Hosts.local
     var branch: String?
     var activity = Activity.none
-    /// 1…9; nil draws "·" as a space without a shortcut.
+    /// ⇧⌘1…9; nil draws "·" as a space without a shortcut.
     var shortcut: Int?
-    /// The shortcut's modifiers: spaces ⇧⌘, tabs only's tabs ⌘.
-    var keys = "⇧⌘"
     var selected = false
     var hovered = false
 }
@@ -50,7 +48,7 @@ struct Sidebar: View {
         VStack(spacing: 11) {
             ForEach(model.groups, id: \.0) { host, spaces in
                 VStack(spacing: 2) {
-                    TreeGroupHeader(host: host, empty: spaces.isEmpty)
+                    TreeGroupHeader(host: host)
                     ForEach(spaces) { SpaceRow(space: $0, lead: .activity) }
                 }
                 .opacity(host.offline ? 0.65 : 1)
@@ -116,13 +114,13 @@ extension SidebarColumn {
     }
 }
 
-/// The traffic lights' row, as the app draws it (SpaceSidebar.windowRow, headerControls): the sidebar toggle, the
-/// mode's menu (Spaces ⌄ or Tabs ⌄), then the tree toggle and the shortcuts button. Tight, the shortcuts button goes,
-/// then the name becomes an icon among the buttons. On glass each control is a GlassPanelControl (a track-sized
+/// The traffic lights' row (SpaceSidebar.windowRow, headerControls), icons only: the sidebar toggle and the tree toggle,
+/// then at the end the shortcuts button and, in tree order, New Space (a glass circle, as New Tab inside a space, ending
+/// where the rows' shortcuts do; flat order has "+ space" under its list); tight, the shortcuts button goes. No mode menu: the sidebar is the spaces, or inside one its tabs
+/// (Screens/VerticalTabs.swift), never a list of every tab. On glass each control is a GlassPanelControl (a track-sized
 /// square, a capsule when lit); flat, a 24-point square with a 4-point corner.
 struct SidebarTopRow: View {
     var tree = false
-    var tabs = false
     private var p: SidebarPalette { Chrome.palette }
     private var t: AppTypography { Mock.typography }
     var body: some View {
@@ -137,44 +135,28 @@ struct SidebarTopRow: View {
                 Image(systemName: "sidebar.left").font(.system(size: 14)).foregroundStyle(p.ink).frame(width: 22, height: 20)
             }
             ViewThatFits(in: .horizontal) {
-                row(named: true, shortcuts: true)
-                row(named: true, shortcuts: false)
-                row(named: false, shortcuts: true)
+                row(shortcuts: true)
+                row(shortcuts: false)
             }
         }
-        .padding(.leading, Mock.controlsInset).padding(.trailing, glass ? 8 + 4 : 8)
+        // New Space ends at the rows' shortcuts: the list's 10 and a row's 10.
+        .padding(.leading, Mock.controlsInset).padding(.trailing, 20)
         .frame(height: height)
         // headerGap: max(rowSpacing, glassRowInset) − (row − controls) / 2.
         .padding(.bottom, max(2, 4) - (height - controls) / 2)
     }
 
-    private func row(named: Bool, shortcuts: Bool) -> some View {
-        HStack(spacing: 0) {
-            if named { menu.padding(.leading, 8) }
-            Spacer(minLength: named ? 8 : 0)
-            HStack(spacing: 4) {
-                if !named { control(Image(systemName: "rectangle.stack.badge.minus"), lit: tabs) }
-                control(HostTreeGlyph().frame(width: t.size(offset: -0.5), height: t.size(offset: -0.5)), lit: tree)
-                if shortcuts {
-                    // ShortcutSheetButton: flat, its glyph in the shortcut font.
-                    if Mock.glass { control(Image(systemName: "keyboard"), lit: false) }
-                    else { control(Image(systemName: "keyboard").font(t.shortcut()), lit: false) }
-                }
-            }
-        }
-    }
-
-    /// The mode's name and ⌄ on a faint capsule, as wide as "Spaces" in either mode (ReservedText).
-    private var menu: some View {
+    private func row(shortcuts: Bool) -> some View {
         HStack(spacing: 4) {
-            ReservedText(text: tabs ? "Tabs" : "Spaces", variants: ["Spaces", "Tabs"])
-                .interfaceFont(size: t.size(.body), weight: .semibold)
-                .foregroundStyle(Chrome.ink)
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(p.detail)
+            control(HostTreeGlyph().frame(width: t.size(offset: -0.5), height: t.size(offset: -0.5)), lit: tree)
+            Spacer(minLength: 8)
+            if shortcuts {
+                // ShortcutSheetButton: flat, its glyph in the shortcut font.
+                if Mock.glass { control(Image(systemName: "keyboard"), lit: false) }
+                else { control(Image(systemName: "keyboard").font(t.shortcut()), lit: false) }
+            }
+            if tree { NewSpaceCircle() }
         }
-        .padding(.horizontal, 7).frame(height: t.expanded(20))
-        .background(Chrome.ink.opacity(0.05), in: Capsule())
-        .fixedSize()
     }
 
     /// GlassPanelControl on glass; flat, SpaceSidebar.headerButton (the shortcuts button draws the same).
@@ -192,27 +174,44 @@ struct SidebarTopRow: View {
     }
 }
 
-/// A host's heading in tree order, as the app draws it (SpaceSidebar.hostGroup with `hostInHeader`): the name
-/// (semibold 12, in the host's colour) 10 in, "offline" after it when it is, and at the end the host's disc, which
-/// the + replaces on hover (or with no spaces). 32 tall: the disc and about 3 points above and below.
+/// NewSpaceButton: a plus in a glass circle as tall as the strip's track (SidebarGlassCircle); flat, the sidebar's
+/// action fill. Right-click lists the hosts.
+struct NewSpaceCircle: View {
+    var body: some View {
+        let p = Chrome.palette, side = StripTab.glassTrackHeight(Mock.typography)
+        Image(systemName: "plus").font(.system(size: 13, weight: .medium)).foregroundStyle(p.secondary)
+            .frame(width: side, height: side)
+            .background {
+                if Mock.glass {
+                    Circle().fill(GlassTone.track).overlay(Circle().stroke(GlassTone.trackEdge, lineWidth: 0.5))
+                        .shadow(color: GlassTone.shadow, radius: 2, y: 1)
+                } else {
+                    Circle().fill(p.sidebarAction)
+                }
+            }
+    }
+}
+
+/// A host's heading in tree order, as the app draws it (SpaceSidebar.hostGroup with `hostInHeader`): the name in
+/// capitals (HostHeadingText: semibold 11, spaced 8%, in the host's colour or the host label tone) 10 in, "offline"
+/// after it when it is, and at the end the host's icon dimmed (HostHeadingMark, at rest), centred under the header's
+/// New Space. 32 tall: the mark's 25 and about 3 points above and below.
 struct TreeGroupHeader: View {
     let host: MockHost
-    var hovered = false
-    /// No spaces under it: the + shows in the disc's place (NewSpaceButton's header label, `revealed`).
-    var empty = false
     var body: some View {
         let p = Chrome.palette
+        let side = StripTab.glassTrackHeight(Mock.typography)
         HStack(spacing: 6) {
-            Text(host.local ? "Local" : host.name).font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(host.tint?.foreground ?? p.secondary)
+            Text(host.local ? "LOCAL" : host.name.uppercased()).font(.system(size: 11, weight: .semibold))
+                .tracking(11 * 0.08)
+                .foregroundStyle(host.tint?.foreground ?? p.sidebarHostLabel)
             if host.offline { Text("offline").font(.system(size: 11)).foregroundStyle(p.muted) }
             Spacer()
-            ZStack {
-                HostDiscMark(host: host).opacity(hovered || empty ? 0 : 1)
-                TreeGroupPlus(hovered: hovered, revealed: empty).frame(width: 25, height: 25)
-            }
+            MockHostGlyph(system: host.system, size: Mock.typography.hostIconSize)
+                .foregroundStyle(host.tint?.foreground.opacity(0.75) ?? p.detail)
+                .frame(width: 25, height: 25)
         }
-        .padding(.leading, 10).padding(.trailing, 10)
+        .padding(.leading, 10).padding(.trailing, 10 + (side - 25) / 2)
         .frame(height: 32)
     }
 }
@@ -239,16 +238,51 @@ struct HostDiscMark: View {
     }
 }
 
-/// The header's +: on hover in a hover circle, or `revealed` (an empty group) without one.
-struct TreeGroupPlus: View {
-    var hovered = false
-    var revealed = false
+/// Flat order's "+ space ⌘N" (NewSpaceListButton) in the left half of its row under the spaces (the right half is "+ local"
+/// when a remote host is connected). Tree order has the header's plus instead.
+struct NewSpaceRow: View {
+    var local = false
+    var title = "space"
+    var shortcut = "⌘N"
+    private var p: SidebarPalette { Chrome.palette }
     var body: some View {
-        let p = Chrome.palette
-        Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).foregroundStyle(hovered ? p.ink : p.secondary)
-            .frame(width: 25, height: 25)
-            .background(Circle().fill(hovered ? p.hover : .clear))
-            .opacity(hovered || revealed ? 1 : 0)
+        HStack(spacing: Mock.glass ? 4 : 6) {
+            tile(title, shortcut: shortcut)
+            if local { tile("local", shortcut: "⇧⌘N", glyph: true) } else { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
+        }
+    }
+    /// NewSpaceButton's glassLabel (a capsule, text in `detail`) or tileLabel (a filled tile, ink at 0.75): "local" led
+    /// by the Mac's glyph, "space" by a plus at 0.82 of the host glyph's size; a narrow row drops the shortcut first.
+    private func tile(_ title: String, shortcut: String, glyph: Bool = false) -> some View {
+        let t = Mock.typography
+        let shape = RoundedRectangle(cornerRadius: Mock.glass ? 100 : 8, style: .continuous)
+        return ViewThatFits(in: .horizontal) {
+            contents(title, shortcut: shortcut, glyph: glyph)
+            contents(title, shortcut: nil, glyph: glyph)
+        }
+        .lineLimit(1)
+        .interfaceFont(size: t.tabSize)
+        .foregroundStyle(Mock.glass ? p.detail : p.ink.opacity(0.75))
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(t))
+        .background(Mock.glass ? GlassTone.track : p.sidebarAction, in: shape)
+        .overlay { if Mock.glass { shape.strokeBorder(GlassTone.trackEdge, lineWidth: 1) } }
+    }
+    private func contents(_ title: String, shortcut: String?, glyph: Bool) -> some View {
+        let t = Mock.typography
+        return HStack(spacing: 6) {
+            Group {
+                if glyph { MockHostGlyph(system: .mac, size: t.hostIconSize) }
+                else { Image(systemName: "plus").font(.system(size: (t.hostIconSize * 0.82).rounded(), weight: .semibold)) }
+            }
+            .foregroundStyle(p.secondary)
+            Text(title)
+            Spacer(minLength: 0)
+            if let shortcut {
+                let size = t.size(offset: -1.5)
+                Text(shortcut).font(.system(size: size).monospacedDigit()).tracking(size * 0.06).foregroundStyle(p.secondary.opacity(0.7))
+            }
+        }
     }
 }
 
@@ -306,8 +340,8 @@ struct SpaceRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if lead == .host { activity.glyph() }
-            Text(space.shortcut.map { "\(space.keys)\($0)" } ?? "·")
-                .font(.system(size: 12.5).monospacedDigit()).tracking(0.75).foregroundStyle(p.secondary.opacity(0.7))
+            Text(space.shortcut.map { "⇧⌘\($0)" } ?? "·")
+                .font(.system(size: 11.5).monospacedDigit()).tracking(0.75).foregroundStyle(p.secondary.opacity(0.5))
         }
         .interfaceFont(size: 13.5)
         .foregroundStyle(space.selected ? p.ink : p.secondary)
@@ -316,54 +350,6 @@ struct SpaceRow: View {
         // SidebarMetrics.icons' 13, nested on glass: glassRadius (16 − 6) − glassRowInset (4).
         .background(RoundedRectangle(cornerRadius: Mock.glass ? 6 : 13).fill(
             space.selected ? (tint.map { $0.foreground.opacity(0.16) } ?? p.selection) : space.hovered ? p.hover : .clear))
-    }
-}
-
-/// "+ space ⌘N" in the left half of its row (the right half is "+ local" when a remote host is connected).
-struct NewSpaceRow: View {
-    var local = false
-    /// "space" and ⌘N; tabs only's "tab" and ⌘T.
-    var title = "space"
-    var shortcut = "⌘N"
-    private var p: SidebarPalette { Chrome.palette }
-    var body: some View {
-        HStack(spacing: Mock.glass ? 4 : 6) {
-            tile(title, shortcut: shortcut)
-            if local { tile("local", shortcut: "⇧⌘N", glyph: true) } else { Color.clear.frame(maxWidth: .infinity, maxHeight: 1) }
-        }
-    }
-    /// NewSpaceButton's glassLabel (a capsule, text in `detail`) or tileLabel (a filled tile, ink at 0.75): "local" led
-    /// by the Mac's glyph, "space" by a plus at 0.82 of the host glyph's size; a narrow row drops the shortcut first.
-    private func tile(_ title: String, shortcut: String, glyph: Bool = false) -> some View {
-        let t = Mock.typography
-        let shape = RoundedRectangle(cornerRadius: Mock.glass ? 100 : 8, style: .continuous)
-        return ViewThatFits(in: .horizontal) {
-            contents(title, shortcut: shortcut, glyph: glyph)
-            contents(title, shortcut: nil, glyph: glyph)
-        }
-        .lineLimit(1)
-        .interfaceFont(size: t.tabSize)
-        .foregroundStyle(Mock.glass ? p.detail : p.ink.opacity(0.75))
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(t))
-        .background(Mock.glass ? GlassTone.track : p.sidebarAction, in: shape)
-        .overlay { if Mock.glass { shape.strokeBorder(GlassTone.trackEdge, lineWidth: 1) } }
-    }
-    private func contents(_ title: String, shortcut: String?, glyph: Bool) -> some View {
-        let t = Mock.typography
-        return HStack(spacing: 6) {
-            Group {
-                if glyph { MockHostGlyph(system: .mac, size: t.hostIconSize) }
-                else { Image(systemName: "plus").font(.system(size: (t.hostIconSize * 0.82).rounded(), weight: .semibold)) }
-            }
-            .foregroundStyle(p.secondary)
-            Text(title)
-            Spacer(minLength: 0)
-            if let shortcut {
-                let size = t.size(offset: -1.5)
-                Text(shortcut).font(.system(size: size).monospacedDigit()).tracking(size * 0.06).foregroundStyle(p.secondary.opacity(0.7))
-            }
-        }
     }
 }
 

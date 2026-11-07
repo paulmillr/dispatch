@@ -81,7 +81,7 @@ final class GitChangesPresentationTests: XCTestCase {
         return session
     }
 
-    /// `inset`: room the floating mode switch takes at the header's trailing end, as `TerminalContentView` leaves it.
+    /// `inset`: the width of the pane's controls the header ends with, as `TerminalContentView` puts its mode switch there.
     private func window(_ session: FilesSession, width: CGFloat = 1180, height: CGFloat = 700,
                         inset: CGFloat = 0) throws -> NSWindow {
         try DesktopTestSupport.requireUnlocked()
@@ -90,7 +90,7 @@ final class GitChangesPresentationTests: XCTestCase {
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: FilesView(session: session)
-            .environment(\.filesHeaderTrailingInset, inset)
+            .environment(\.filesHeaderAccessory, inset > 0 ? AnyView(Color.clear.frame(width: inset, height: 1)) : nil)
             .environment(\.appTypography, AppTypography())
             .preferredColorScheme(.dark))
         window.makeKeyAndOrderFront(nil)

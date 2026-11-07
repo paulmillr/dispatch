@@ -23,6 +23,36 @@ final class VerticalTabsTests: XCTestCase {
     }
 
     /// Back lists the spaces; showing a space, by its row, its digits or a tab anywhere, goes into it again.
+    /// Where a tab is (mockups/Mac U11 B): the space's folder is where most of its tabs are, and only a tab elsewhere
+    /// gets a line, its folder's name; a plain SSH tab on another host names that host alone.
+    func testOnlyATabElsewhereSaysWhereItIs() async throws {
+        let restore = TestSupport.preserveRuntime(); defer { restore() }
+        let workspace = Workspace()
+        TerminalRuntime.shared.workspace = workspace
+        workspace.verticalTabs = true
+        workspace.newLocalSpace(); workspace.newTab(); workspace.newTab()
+        let space = try XCTUnwrap(workspace.current)
+        let home = System.home.path
+        for (tab, folder) in zip(space.tabs, ["/src/api/", "/src/billing", "/src/billing"]) {
+            workspace.updateTab(tab.id, directory: home + folder)
+        }
+        try await TestSupport.eventually { workspace.liveTab(space.tabs[0].id)?.directory == home + "/src/api/" }
+        let live = workspace.liveSpace(space)
+        XCTAssertEqual(SpaceTabPlace.spaceDirectory(live, in: workspace)?.path, home + "/src/billing", "Where most tabs are")
+        let lines = workspace.sidebarTabs(in: live).map { SpaceTabPlace.elsewhere($0, in: live, workspace: workspace) }
+        XCTAssertEqual(lines, [SpaceTabPlace.Line(host: nil, folder: "api", path: home + "/src/api"), nil, nil])
+
+        let host = HostRecord(id: .authenticated("fixture"), name: "build-box", destinations: ["ops@10.0.0.12"], order: 0)
+        XCTAssertEqual(SpaceTabPlace.line(own: nil, space: (home + "/src/billing", home), otherHost: host),
+                       SpaceTabPlace.Line(host: host, folder: nil, path: nil), "A plain SSH tab: its host, no folder known")
+        XCTAssertNil(SpaceTabPlace.line(own: (home, home), space: (home, home), otherHost: nil))
+        XCTAssertEqual(SpaceTabPlace.line(own: (home, home), space: (home + "/src", home), otherHost: nil)?.folder, "~")
+        XCTAssertNil(SpaceTabPlace.line(own: (home + "/src/api", home), space: (home + "/src/billing", home), otherHost: nil, title: "api"),
+                     "A title that names the folder says it already")
+        XCTAssertEqual(SpaceHoverDetails.distinct("billing", from: "billing"), nil)
+        XCTAssertEqual(SpaceHoverDetails.distinct("billing", from: "Invoices"), "billing")
+    }
+
     func testShowingASpaceGoesIntoIt() throws {
         let workspace = Workspace()
         workspace.verticalTabs = true

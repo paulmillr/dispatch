@@ -176,21 +176,16 @@ final class VoiceNavigation {
         -> Result<() -> Void, Problem> {
         switch reference {
         case .number, .last:
-            let count = workspace.tabsOnly ? workspace.sidebarTabs.count { $0.space == space.id } : space.numberedShortcutCount
-            let what = workspace.tabsOnly || !space.usesPaneShortcuts ? "tab" : "pane"
+            let count = space.numberedShortcutCount
+            let what = space.usesPaneShortcuts ? "pane" : "tab"
             let index: Int
             if case .number(let number) = reference { index = number - 1 } else { index = count - 1 }
             guard index >= 0, index < count else {
                 return .failure(Problem(text: "There is no \(what) \(index + 1) in \(space.name)"))
             }
             return .success { [space] in
-                if workspace.tabsOnly {
-                    let tabs = workspace.sidebarTabs.filter { $0.space == space.id }
-                    workspace.selectSidebarTab(tabs[index].id)
-                } else {
-                    workspace.selectSpace(space.id)
-                    workspace.selectNumberedItem(at: index)
-                }
+                workspace.selectSpace(space.id)
+                workspace.selectNumberedItem(at: index)
             }
         case .name(let name):
             let names = tabNames(space)

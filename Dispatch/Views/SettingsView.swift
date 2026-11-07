@@ -391,9 +391,10 @@ struct SettingsView: View {
                        previewFont: { title, size in ChatFont(rawValue: title)?.systemFont(ofSize: size) })
                 }
                 cardOption("Interface font", detail: "tabs, the sidebar, Files, Git and Settings", detailBelow: true) {
+                    // Same as code in the terminal's font, as chat's; San Francisco from previewFont.
                     dropdown("Interface font", selection: Binding(get: { draft.interfaceFont.rawValue }, set: {
                         if let choice = InterfaceFont(rawValue: $0) { draft.interfaceFont = choice }
-                    }), choices: InterfaceFont.allCases.map(\.rawValue), fontName: { _ in "Source Code Pro" },
+                    }), choices: InterfaceFont.allCases.map(\.rawValue), fontName: { _ in draft.fontFamily },
                        previewFont: { title, size in
                         InterfaceFont(rawValue: title) == .system ? ChatFont.system.systemFont(ofSize: size * AppFont.systemScale) : nil
                     })
@@ -416,8 +417,8 @@ struct SettingsView: View {
         }
     }
 
-    /// The interface font as Font's detail names it.
-    private var interfaceFontName: String { draft.interfaceFont == .system ? "SF" : draft.interfaceFont.rawValue }
+    /// The interface font as Font's detail names it: SF for the system's, the terminal's for Same as code.
+    private var interfaceFontName: String { draft.interfaceFont == .system ? "SF" : draft.fontFamily }
 
     /// Text's second row: the size of terminal and chat text, with their line spacing folded under its options button,
     /// which alone opens it (a row tap would reach the slider).
@@ -818,19 +819,19 @@ struct SettingsView: View {
 
     /// Terminal's row above Security, folded; its title opens it too: what a new tab starts (folder, shell, startup
     /// command, scrollback), then how tabs and spaces are listed (git branches, the sidebar with one space, tab names,
-    /// vertical tabs). The detail summarizes the launch settings and says "spaces enabled" unless vertical tabs replace them; the badge counts the choices that differ from
-    /// defaults. How the window looks is under Theme › Appearance.
+    /// vertical tabs). The detail summarizes the launch settings and says "vertical tabs" while they are on; the badge
+    /// counts the choices that differ from defaults. How the window looks is under Theme › Appearance.
     @ViewBuilder private var tabsAndSpacesOptions: some View {
         // A switch that can't be changed here (git off) isn't counted.
         let fold = Fold(title: "Tabs & spaces", changed: changed {
             [$0.startingDirectory, $0.shell, $0.startupCommand, $0.scrollback.rawValue,
-             $0.hideSingleSpace, $0.automaticTabNames, $0.tabsOnly] + (draft.gitEnabled ? [$0.showGitBranches] : [])
+             $0.hideSingleSpace, $0.automaticTabNames, $0.verticalTabs] + (draft.gitEnabled ? [$0.showGitBranches] : [])
         }, isExpanded: $tabsAndSpacesExpanded)
         let folder = draft.startingDirectory == "/" ? "/" : draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~")
         let shell = draft.shellProgram.map { ($0 as NSString).lastPathComponent } ?? "login shell"
         let command = draft.startupCommand.trimmingCharacters(in: .whitespaces)
         // The startup command last: the longest, it is the one cut short.
-        row("Tabs & spaces", detail: ([folder, shell, scrollbackDetail] + (draft.tabsOnly ? [] : ["spaces enabled"]) + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
+        row("Tabs & spaces", detail: ([folder, shell, scrollbackDetail] + (draft.verticalTabs ? ["vertical tabs"] : []) + (command.isEmpty ? [] : ["runs \(command)"])).joined(separator: " · ")) {
             foldButton(fold, card: "Tabs & spaces")
         }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
@@ -855,17 +856,17 @@ struct SettingsView: View {
                         .accessibilityIdentifier("show-git-branch")
                 }
                 // Off by default: one space needs no sidebar until asked for (the setting is stored as hiding).
-                cardOption(draft.tabsOnly ? "Show sidebar with one tab" : "Show sidebar with one space") {
+                cardOption(draft.verticalTabs ? "Show sidebar with one tab" : "Show sidebar with one space") {
                     settingToggle("Show sidebar with one space", isOn: Binding(get: { !draft.hideSingleSpace }, set: { draft.hideSingleSpace = !$0 }))
                 }
                 cardOption("Automatic tab names", detail: "an agent's title, a program's own, or the folder", detailBelow: true) {
                     settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
                         .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
                 }
-                cardOption("Vertical tabs, no spaces", detail: "the sidebar lists tabs, no tab strips", detailBelow: true) {
-                    settingToggle("Vertical tabs, no spaces", isOn: $draft.tabsOnly)
-                        .accessibilityIdentifier("settings-tabs-only")
-                        .help("Lists every tab in the sidebar instead of tab strips. ⌘T adds a tab and ⌘1…9 jump through the list.")
+                cardOption("Vertical tabs", detail: "the sidebar lists the space's tabs, no tab strips", detailBelow: true) {
+                    settingToggle("Vertical tabs", isOn: $draft.verticalTabs)
+                        .accessibilityIdentifier("settings-vertical-tabs")
+                        .help("Shows a space's tabs in the sidebar instead of tab strips. Choosing a space goes into it; Back returns to the spaces.")
                 }
             }
         }

@@ -351,13 +351,68 @@ final class NewSpacePresentationTests: XCTestCase {
         }
     }
 
-    /// Each tree group's header ends in a plus that makes a space on its host: hidden until its header is under the pointer,
-    /// it sits above the group's spaces.
-    func testEachHostOffersNewSpaceInItsHeader() async throws {
+    /// A tree heading under the pointer shows a + (mockups/Mac E1): a click makes a space on that host, whichever space
+    /// is shown; it goes when the pointer leaves, and no heading shows one before.
+    func testATreeHeadingUnderThePointerOffersASpaceOnItsHost() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let previousPointer = CGEvent(source: nil)?.location
-        defer { if let previousPointer { CGWarpMouseCursorPosition(previousPointer) } }
+        let controller = AppDelegate(), workspace = controller.workspace
+        controller.settings.values = Preferences()
+        controller.settings.values.spaceOrder = .tree
+        workspace.newLocalSpace()
+        let local = try XCTUnwrap(workspace.selectedSpace)
+        var remote = Space(name: "remote-work", directory: "/tmp")
+        let shell = SSHShell(destination: "admin@fixture", options: ["-p", "2222"])
+        remote.panes[0].tabs[0].machine = .ssh(shell)
+        let terminal = remote.tabs[0].id, generation = System.uuid()
+        workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
+        let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
+        workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
+        remote.hostID = .authenticated("fixture")
+        workspace.spaces.append(remote)
+        workspace.selectSpace(local)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 356, height: 550),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings,
+                                                                  controller: controller, windowControls: true))
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        defer { window.close(); window.contentView = nil }
+        let root = try XCTUnwrap(window.contentView)
+        func controls() -> [String] {
+            root.layoutSubtreeIfNeeded()
+            return PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root).map { $0.accessibilityIdentifier() }
+        }
+        func point(_ to: NSPoint) throws {
+            let screen = window.convertPoint(toScreen: to), desktop = try XCTUnwrap(NSScreen.screens.first)
+            let cursor = CGPoint(x: screen.x, y: desktop.frame.maxY - screen.y)
+            XCTAssertEqual(CGWarpMouseCursorPosition(cursor), .success)
+            try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: cursor, mouseButton: .left))
+                .postToPid(getpid())
+            window.sendEvent(try PresentationTestSupport.mouseEvent(.mouseMoved, in: window, at: to))
+        }
+        let identifier = "host-new-space-\(remote.hostID.rawValue)"
+        try await TestSupport.eventually { controls() == ["sidebar-new-space"] }
+        let heading = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("host-card-\(remote.hostID.rawValue)", in: window).first)
+        try point(NSPoint(x: heading.minX + 10, y: heading.midY))
+        try await TestSupport.eventually(diagnostic: "controls: \(controls())") { controls().contains(identifier) }
+        _ = try await PresentationTestSupport.capture(window, named: "tree-heading-plus", in: "new-space-validation")
+        let plus = try XCTUnwrap(PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
+            .first { $0.accessibilityIdentifier() == identifier })
+        XCTAssertEqual(plus.accessibilityLabel(), "New space on fixture")
+        plus.performClick(nil)
+        XCTAssertEqual(workspace.spaces.count, 3)
+        XCTAssertEqual(workspace.current?.hostID, remote.hostID, "On the heading's host, though a local space was shown")
+        try point(NSPoint(x: window.frame.width - 4, y: 4))
+        try await TestSupport.eventually(diagnostic: "controls: \(controls())") { !controls().contains(identifier) }
+    }
+
+    /// In tree order New Space is the header's round plus (no heading has one): it makes a space where ⌘N would, on the
+    /// shown space's host (other hosts from its menu), and the tree's headings keep their discs. Flat order has none in
+    /// its header: "+ space" and, while a remote host is connected, "+ local" follow the last space.
+    func testTreeHasTheHeadersPlusAndFlatItsListButtons() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
         let controller = AppDelegate(), workspace = controller.workspace
         controller.settings.values = Preferences()
         controller.settings.values.spaceOrder = .tree
@@ -377,128 +432,57 @@ final class NewSpacePresentationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
-        window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
+        window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings,
+                                                                  controller: controller, windowControls: true))
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         defer { window.close(); window.contentView = nil }
-        // The physical pointer, wherever an earlier test left it, can rest on a row and open its hover card: a child
-        // window the captures then take in, moving every sampled pixel. The header gets synthetic pointer events instead.
-        let desktop = try XCTUnwrap(NSScreen.screens.first).frame
-        XCTAssertEqual(CGWarpMouseCursorPosition(CGPoint(x: window.frame.maxX + 20, y: desktop.maxY - window.frame.midY)), .success)
         let root = try XCTUnwrap(window.contentView)
-        func control(_ host: HostID) -> NewSpaceNativeButton? {
-            PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-                .first { $0.accessibilityIdentifier() == "host-new-space-\(host.rawValue)" }
-        }
-        try await TestSupport.eventually(diagnostic: "controls: \(PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root).map { $0.accessibilityIdentifier() })") {
-            root.layoutSubtreeIfNeeded(); return control(.local) != nil && control(remote.hostID) != nil
-        }
-        let treeText = try await PresentationTestSupport.capture(window).text()
-        XCTAssertTrue(treeText.contains("Local"), "Title-case headings: \(treeText)")
-        // Each plus sits in its host's header, above the group's spaces.
-        let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
-        for (host, id) in [(HostID.local, local), (remote.hostID, remote.id)] {
-            let row = try XCTUnwrap(rows.first { $0.configuration.item == .space(id) })
-            let plus = try XCTUnwrap(control(host))
-            let (rowFrame, plusFrame) = (root.convert(row.bounds, from: row), root.convert(plus.bounds, from: plus))
-            XCTAssertTrue(root.isFlipped ? plusFrame.maxY <= rowFrame.minY + 1 : plusFrame.minY >= rowFrame.maxY - 1,
-                          "\(host.rawValue)'s plus heads its spaces: \(plusFrame) over \(rowFrame)")
-        }
-        /// The plus's brightness at its center, read from the window.
-        func brightness(at point: NSPoint) async throws -> CGFloat {
-            let bitmap = try await PresentationTestSupport.capture(window).bitmap
-            let scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
-            let inRoot = root.convert(point, from: nil)
-            let y = root.isFlipped ? inRoot.y : root.bounds.height - inRoot.y
-            let color = try XCTUnwrap(bitmap.colorAt(x: Int(inRoot.x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB))
-            return (color.redComponent + color.greenComponent + color.blueComponent) / 3
-        }
-        func clickButton(at index: Int) async throws {
-            let host = index == 0 ? HostID.local : remote.hostID
-            let plus = try XCTUnwrap(control(host))
-            plus.scrollToVisible(plus.bounds)
+        func controls() -> [NewSpaceNativeButton] {
             root.layoutSubtreeIfNeeded()
-            let point = plus.convert(NSPoint(x: plus.bounds.midX, y: plus.bounds.midY), to: nil)
-            let hidden = try await brightness(at: point)
-            // The header's tracking area reports the pointer, which the window delivers whatever lies over the header;
-            // send it what the window would, as an unattended run can't move the pointer into a background window.
-            let tracker = try XCTUnwrap(PresentationTestSupport.views(of: PointerTrackingView.self, in: root).first {
-                $0.convert($0.bounds, to: nil).contains(point)
-            }, "\(host.rawValue)'s header tracks the pointer")
-            func pointer(_ type: NSEvent.EventType) throws -> NSEvent {
-                try XCTUnwrap(NSEvent.enterExitEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
-                                                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
-                                                    trackingNumber: 0, userData: nil))
-            }
-            var shown = hidden
-            tracker.mouseEntered(with: try pointer(.mouseEntered))
-            try await TestSupport.eventually(diagnostic: "\(host.rawValue)'s plus at \(point): hidden \(hidden), now \(shown)") {
-                shown = try await brightness(at: point)
-                return abs(shown - hidden) > 0.05
-            }
-            tracker.mouseExited(with: try pointer(.mouseExited))
-            try await TestSupport.eventually(diagnostic: "\(host.rawValue)'s plus hides again: \(shown)") {
-                shown = try await brightness(at: point)
-                return abs(shown - hidden) < 0.02
-            }
-            tracker.mouseEntered(with: try pointer(.mouseEntered))
-            try await TestSupport.eventually { abs(try await brightness(at: point) - hidden) > 0.05 }
-            _ = try await PresentationTestSupport.capture(window, named: "new-space-hover-\(index)", in: "new-space-validation")
-            try PresentationTestSupport.click(window, at: point)
+            return PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
         }
-        _ = try await PresentationTestSupport.capture(window, named: "per-host-before-remote", in: "new-space-validation")
-        try await clickButton(at: 1)
+        try await TestSupport.eventually(diagnostic: "controls: \(controls().map { $0.accessibilityIdentifier() })") {
+            controls().map { $0.accessibilityIdentifier() } == ["sidebar-new-space"]
+        }
+        let treeText = try await PresentationTestSupport.capture(window, named: "tree-header-plus", in: "new-space-validation").text()
+        XCTAssertTrue(treeText.contains("LOCAL"), "Headings in capitals: \(treeText)")
+        // The plus heads the list, above every space.
+        let plus = try XCTUnwrap(controls().first)
+        let plusFrame = root.convert(plus.bounds, from: plus)
+        for row in PresentationTestSupport.views(of: ReorderTrackingView.self, in: root) where row.configuration.item == .space(local) {
+            let rowFrame = root.convert(row.bounds, from: row)
+            XCTAssertTrue(root.isFlipped ? plusFrame.maxY <= rowFrame.minY + 1 : plusFrame.minY >= rowFrame.maxY - 1,
+                          "The plus is the header's: \(plusFrame) over \(rowFrame)")
+        }
+        workspace.selectSpace(remote.id)
+        plus.performClick(nil)
         XCTAssertEqual(workspace.spaces.count, 3)
-        XCTAssertEqual(workspace.currentMachine, .ssh(shell))
-        XCTAssertEqual(workspace.current?.hostID, remote.hostID)
-        try await Task.sleep(for: .seconds(InterfaceMotion.viewDuration + 0.15))
-        _ = try await PresentationTestSupport.capture(window, named: "per-host-before-local", in: "new-space-validation")
-        try await clickButton(at: 0)
+        XCTAssertEqual(workspace.current?.hostID, remote.hostID, "On the shown space's host, as ⌘N")
+        workspace.selectSpace(local)
+        plus.performClick(nil)
         XCTAssertEqual(workspace.spaces.count, 4)
-        XCTAssertEqual(workspace.currentMachine, .local)
         XCTAssertEqual(workspace.current?.hostID, .local)
         controller.settings.values.spaceOrder = .flat
-        try await TestSupport.eventually {
-            let controls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-            return controls.count == 2 && Set(controls.compactMap { $0.accessibilityIdentifier() })
-                == ["host-new-space-local", "sidebar-new-space"]
-        }
-        _ = try await PresentationTestSupport.capture(window, named: "shared-flat-two-line", in: "new-space-validation")
-        let flat = try await PresentationTestSupport.capture(root)
-        // Read in the button's own box: across the whole sidebar Vision drops "local" beside "+ space".
-        let localButton = try XCTUnwrap(PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root).first { $0.host == .local })
-        var box = root.convert(localButton.bounds, from: localButton)
-        if root.isFlipped { box.origin.y = root.bounds.height - box.maxY }
-        let flatText = try flat.text(in: CGRect(x: box.minX / root.bounds.width, y: box.minY / root.bounds.height,
-                                                width: box.width / root.bounds.width, height: box.height / root.bounds.height))
-        XCTAssertTrue(flatText.contains("local"), flatText)
-        // Every style puts them on one row, "+ space" first, beside "+ local".
         for style in SidebarStyle.bySize {
             controller.settings.values.sidebarStyle = style
-            try await TestSupport.eventually {
-                root.layoutSubtreeIfNeeded()
-                let controls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-                guard let here = controls.first(where: { $0.host == nil }), let local = controls.first(where: { $0.host == .local })
-                else { return false }
-                let (a, b) = (here.convert(here.bounds, to: nil), local.convert(local.bounds, to: nil))
-                return abs(a.midY - b.midY) < 1 && abs(a.width - b.width) < 1 && a.maxX <= b.minX + 1
+            // Under the last space, not in the header, once the style's layout settled.
+            var placed = ""
+            try await TestSupport.eventually(diagnostic: "\(style): \(placed)") {
+                let buttons = controls()
+                let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root).filter {
+                    if case .space = $0.configuration.item { return true } else { return false }
+                }.map { root.convert($0.bounds, from: $0) }
+                let frames = buttons.map { root.convert($0.bounds, from: $0) }
+                placed = "buttons \(zip(buttons.map { $0.accessibilityIdentifier() }, frames).map { "\($0) \($1)" }), spaces \(rows)"
+                return Set(buttons.map { $0.accessibilityIdentifier() }) == ["sidebar-new-space", "host-new-space-local"]
+                    && rows.count == workspace.spaces.count
+                    && frames.allSatisfy { frame in
+                        rows.allSatisfy { root.isFlipped ? frame.minY >= $0.maxY - 1 : frame.maxY <= $0.minY + 1 }
+                    }
             }
         }
-        let flatControls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-        let newHere = try XCTUnwrap(flatControls.first { $0.host == nil })
-        let newLocal = try XCTUnwrap(flatControls.first { $0.host == .local })
-        workspace.selectSpace(remote.id)
-        newHere.performClick(nil)
-        XCTAssertEqual(workspace.spaces.count, 5)
-        XCTAssertEqual(workspace.current?.hostID, remote.hostID)
-        newLocal.performClick(nil)
-        XCTAssertEqual(workspace.spaces.count, 6)
-        XCTAssertEqual(workspace.currentMachine, .local)
-        XCTAssertEqual(workspace.current?.hostID, .local)
-        workspace.spaces.removeAll { $0.hostID != .local }
-        try await TestSupport.eventually {
-            let controls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-            return controls.count == 1 && controls.first?.accessibilityIdentifier() == "sidebar-new-space"
-        }
+        let flatText = try await PresentationTestSupport.capture(window, named: "flat-list-buttons", in: "new-space-validation").text()
+        XCTAssertTrue(flatText.contains("space") && flatText.contains("local"), flatText)
     }
 
     func testButtonCreatesImmediatelyAndOffersExplicitHostChoices() async throws {

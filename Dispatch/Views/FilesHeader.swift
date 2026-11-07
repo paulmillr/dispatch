@@ -2,8 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: the tab's name, where you are, then (on
-/// Review, once it holds comments) Create review with their count; at the trailing end the search and the views button
-/// (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
+/// Review, once it holds comments) Create review with their count; at the trailing end the search, on Commits the
+/// filter (`GitLogFilterButton`), and the views button (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
 /// Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the follow-the-shell link
 /// after it, the host first), and on Review and Commits the repository and its branch. The Files tab shows nothing of
 /// git. The files tabs are not here: the strip's mode button names the one shown and its menu switches (and ⌃⌘1–3).
@@ -63,6 +63,7 @@ struct FilesHeader: View {
             // The search and the pane's toggle: one glass pill with Liquid Glass.
             HStack(spacing: glass ? 2 : 12) {
                 searchSlot
+                if session.tab == .commits { GitLogFilterButton(session: session) }
                 // Nothing to switch on Files with its previews off in Settings, nor where two views do not fit.
                 if session.hasPane && !session.previewOff && session.canShowBoth { viewsToggle }
             }

@@ -36,17 +36,12 @@ final class Workspace {
     var defaultDirectory = System.home.path
     let hosts = HostRegistry()
     var spaceOrder: SpaceOrder = .tree
-    /// Settings' tabs-only mode (Preferences.tabsOnly): the sidebar lists tabs, and tab navigation walks that list.
-    /// Turning it on lifts tabs out from behind splits' panes (`liftHiddenTabs`).
-    var tabsOnly = false {
-        didSet { if tabsOnly, !oldValue { commitLayout(committedLayout) } }
-    }
-    /// Tabs only's rows ⌘- or ⇧-clicked to split or close together (`clickSidebarRow`); view state, never saved.
-    var sidebarMarks: Set<UUID> = []
-    /// The row a ⇧-click marks from: the last one clicked.
-    @ObservationIgnored var sidebarMarkAnchor: UUID?
-    /// Splits of tmux or herdr windows waiting for their windows to arrive (`splitWindows`).
-    @ObservationIgnored var pendingWindowSplits: [PendingWindowSplit] = []
+    /// Settings' vertical tabs (Preferences.verticalTabs): no tab strips; the sidebar lists the shown space's tabs.
+    /// Presentation only: spaces, panes and tabs are the same either way.
+    var verticalTabs = false
+    /// Vertical tabs' sidebar is back at the spaces (its Back button) instead of inside the shown space. Showing a
+    /// space goes into it again (`selectSpace`). View state, never saved.
+    var sidebarListsSpaces = false
     @ObservationIgnored var hostPlacements: [UUID: HostPlacement] = [:]
     @ObservationIgnored var owningMachineForTab: ((TerminalTab) -> TerminalMachine)?
     @ObservationIgnored var onForgetHost: () -> Void = {}
@@ -75,8 +70,7 @@ final class Workspace {
     }
 
     private func commitLayout(_ proposed: WorkspaceLayout) {
-        var next = proposed
-        if tabsOnly { liftHiddenTabs(&next) }
+        let next = proposed
         guard committedLayout != next else { return }
         let previous = committedLayout
         let changed = previous.spaces != next.spaces
@@ -339,6 +333,8 @@ final class Workspace {
 
     func selectSpace(_ id: UUID, node: UInt64? = nil) {
         guard spaces.contains(where: { $0.id == id }) else { return }
+        // Showing a space goes into it: vertical tabs' sidebar lists its tabs.
+        if sidebarListsSpaces { sidebarListsSpaces = false }
         selectedSpace = id
         focusRequest = System.uuid()
         let container = current?.containers.first { $0.id == current?.activeWindow?.id }
@@ -357,30 +353,7 @@ final class Workspace {
     }
 
     func newTab() {
-        if tabsOnly, let current, isSplit(current) { newTabBesideSplit(current); return }
-        // A split of windows takes no window of its own: the new one goes to the session's nearest other space, or
-        // a new space.
-        if tabsOnly, let current, Self.windowSplit(current), let helper = helper(current) {
-            if let home = windowHome(near: current), let node = home.node { helper.create(node, in: home) }
-            else if let backend = current.backend { helper.create(backend, in: current) }
-            return
-        }
         newTab(placement: current?.focusedPane)
-    }
-
-    /// Tabs only's new tab while a split shows: a row of its own, where Pop Out would put one of the split's, never a
-    /// pane's hidden tab.
-    private func newTabBesideSplit(_ split: Space) {
-        let machine = currentMachine
-        let directory = machine == .local ? activeTab?.directory ?? defaultDirectory : defaultDirectory
-        let tab = makeNativeTab(machine: machine, directory: directory)
-        let host = hosts.terminals[tab.id]?.host ?? split.hostID
-        let home = homePane(on: host, near: split.id)
-        let space: UUID? = updateLayout { next in
-            _ = Self.place(tab, in: &next, home: home, after: split.id, host: host)
-            return next.selectTab(tab.id)
-        }
-        if let space { selectSpace(space) }
     }
 
     private func newTab(placement: UUID?, splitting edge: PaneEdge? = nil) {
@@ -438,7 +411,6 @@ final class Workspace {
     }
 
     func canToggleSplit(_ axis: SplitAxis) -> Bool {
-        if tabsOnly, case let marks = liveSidebarMarks, marks.count > 1 { return sidebarSplitRefusal(marks) == nil }
         guard canApplyLayout(.single), let current else { return false }
         if splitToCollapse(axis) != nil { return true }
         if !current.containers.isEmpty { return (current.presentation?.groups.count ?? 1) < 4 }
@@ -447,7 +419,6 @@ final class Workspace {
 
     func toggleSplit(_ axis: SplitAxis) {
         guard canToggleSplit(axis) else { return }
-        if tabsOnlySplit(axis) { return }
         guard let ids = splitToCollapse(axis), let destination = ids.first,
               let s = spaces.firstIndex(where: { $0.id == selectedSpace }) else {
             createSplit(axis)
@@ -717,9 +688,8 @@ final class Workspace {
         }
     }
 
-    /// ⌘⇧[ / ⌘⇧] by default; in tabs only, the listed rows, as ⌘[ / ⌘] step them.
+    /// ⌘⇧[ / ⌘⇧] by default.
     func cycleSpace(_ delta: Int) {
-        if tabsOnly { cycleSidebarTab(delta); return }
         let order = presentationSpaces
         guard let index = order.firstIndex(where: { $0.id == selectedSpace }) else { return }
         selectSpace(order[(index + delta + order.count) % order.count].id)

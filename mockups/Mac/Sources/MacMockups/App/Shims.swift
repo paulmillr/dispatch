@@ -20,7 +20,13 @@ enum TerminalFontCatalog {
 /// Settings.swift's: the app's own text (tabs, the sidebar, Files, Git and Settings).
 enum InterfaceFont: String, Codable, CaseIterable {
     case system = "San Francisco"
-    case sourceCodePro = "Source Code Pro"
+    case sameAsCode = "Same as code"
+}
+
+/// Settings.swift's bold of a face kept in another family (Latin Modern Mono's): none in the mockups' terminal font,
+/// Source Code Pro, which bolds within its own.
+enum ChatFont {
+    static func boldPostScriptName(_ name: String) -> String? { nil }
 }
 
 @MainActor final class LiquidGlassStore {

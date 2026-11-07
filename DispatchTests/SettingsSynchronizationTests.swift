@@ -561,7 +561,8 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         let originalGlass = LiquidGlassStore.shared.enabled
         defer { LiquidGlassStore.shared.enabled = originalGlass }
-        // Flat's "+ local" and "+ space" are as tall as the glass track (28 points at the 12.5 design base).
+        // Tree's New Space is the header's glass circle, flat's "+ space" and "+ local" capsules; both as tall as the
+        // glass track (28 points at the 12.5 design base).
         let trackHeight = StripTab.glassTrackHeight(AppTypography(contentSize: controller.settings.values.fontSize))
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
@@ -583,19 +584,16 @@ final class SettingsSynchronizationTests: XCTestCase {
                         if large {
                             let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                 .filter { !$0.isHiddenOrHasHiddenAncestor }
-                            // Tree: the plus at the end of each host chip. Flat: "+ local" and "+ space" as tall
-                            // as the glass track.
-                            let buttonHeight = order == .tree ? metrics.headerHeight - 6 : trackHeight
-                            guard buttons.count == 2 && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
+                                // A chip's + shows only under the pointer (headingPlus), wherever the pointer rests.
+                                .filter { order == .flat || $0.accessibilityIdentifier() == "sidebar-new-space" }
+                            // Tree: one New Space, the header's circle. Flat: "+ space" and "+ local".
+                            let buttonHeight = order == .flat || glass ? trackHeight : 24
+                            guard buttons.count == (order == .tree ? 1 : 2)
+                                    && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
                             if order == .tree {
                                 let hosts = PresentationTestSupport.views(of: HostSecondaryClickView.self, in: root)
                                     .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - metrics.headerHeight) < 1 }
                                 guard hosts.count == 2 else { return false }
-                                let headers = hosts.map { $0.convert($0.bounds, to: root) }
-                                guard buttons.allSatisfy({ button in
-                                    let frame = button.convert(button.bounds, to: root)
-                                    return headers.contains { abs($0.midY - frame.midY) < 1 && $0.maxX <= frame.minX }
-                                }) else { return false }
                             }
                         }
                         return true
@@ -617,7 +615,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                             }
                         }
                         let snapshot = try await PresentationTestSupport.capture(window, named: "large-sidebar-\(glass ? "glass" : "flat")-" + order.rawValue, in: "sidebar-validation")
-                        if order == .tree { XCTAssertTrue(try snapshot.text().contains("Local"), "The local host's chip") }
+                        if order == .tree { XCTAssertTrue(try snapshot.text().contains("LOCAL"), "The local host's chip") }
                         if order == .flat {
                             XCTAssertTrue(try snapshot.text().lowercased().contains("fixture"), "The remote card names its host")
                             for width: CGFloat in [264, 220, 200] {
@@ -632,7 +630,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                                         .filter { if case .space = $0.configuration.item { return true }; return false }
                                         .map { $0.convert($0.bounds, to: root) }
                                     guard buttons.count == 2, let card = cards.first else { return false }
-                                    // "+ local" and "+ space" on one row, splitting the cards' width between them.
+                                    // "+ space" and "+ local" on one row, splitting the cards' width between them.
                                     return frames.allSatisfy { abs($0.height - trackHeight) < 1 } && abs(frames[0].midY - frames[1].midY) < 1
                                         && abs(frames[0].width - frames[1].width) < 1
                                         && abs(frames[0].minX - card.minX) < 1 && abs(frames[1].maxX - card.maxX) < 1
@@ -679,6 +677,9 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(headed.groupSpacing, icons.groupSpacing)
         XCTAssertEqual(headed.markColumn, 16)
         XCTAssertEqual(headed.headerHeight, icons.discSize + 7)
+        XCTAssertEqual(headed.shortcutSize, 11.5)
+        XCTAssertEqual(headed.shortcutOpacity, 0.5)
+        XCTAssertEqual(SidebarMetrics.compact(contentSize: 14).shortcutOpacity, 0.7)
         let nested = headed.nested(cornerRadius: 9)
         XCTAssertTrue(nested.hostInHeader)
         XCTAssertEqual(nested.markColumn, headed.markColumn)
@@ -747,6 +748,25 @@ final class SettingsSynchronizationTests: XCTestCase {
         try await TestSupport.eventually(diagnostic: "marks \(PresentationTestSupport.accessibilityFrames("strip-host", in: app.window))") {
             PresentationTestSupport.accessibilityFrames("strip-host", in: app.window).contains {
                 abs($0.width - expected.width) < 0.5 && abs($0.height - expected.height) < 0.5
+            }
+        }
+    }
+
+    func testStripTabHoverCardsFollowTheTextSize() async throws {
+        // A tab's hover card in the strip takes the tab titles' size, as the sidebar's cards take its rows'.
+        let app = try TmuxWalkthrough(server: false, liquidGlass: false); defer { app.close() }
+        app.workspace.newTab()
+        let root = try XCTUnwrap(app.window.contentView)
+        for size: CGFloat in [14, 18] {
+            app.controller.settings.values.fontSize = size
+            let expected = AppTypography(contentSize: size).tabSize
+            var sizes: [CGFloat] = []
+            try await TestSupport.eventually(diagnostic: "size \(size): strip tabs' hover sizes \(sizes)") {
+                root.layoutSubtreeIfNeeded()
+                sizes = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+                    .filter { $0.configuration.edge == .horizontal && $0.configuration.spaceHover != nil }
+                    .map(\.configuration.hoverFontSize)
+                return sizes.count >= 2 && sizes.allSatisfy { $0 == expected }
             }
         }
     }
@@ -1443,20 +1463,44 @@ private struct RemoteTabHighlightPreview: View {
 
 extension SettingsSynchronizationTests {
     /// Settings › Font's interface font: San Francisco (SF Rounded, as chat's) at Source Code Pro's lowercase height by
-    /// default, Source Code Pro on request. The key was renamed with the default, so an old saved choice is dropped.
-    func testInterfaceFontDefaultsToSystemAndSwitchesToSourceCodePro() throws {
+    /// default, the terminal font (Same as code) on request. The key was renamed with the default, so a choice saved
+    /// under the old key is dropped; Source Code Pro, the choice before Same as code, is kept as Same as code.
+    func testInterfaceFontDefaultsToSystemAndSwitchesToSameAsCode() throws {
         let decode = { (json: String) in try JSONDecoder().decode(Preferences.self, from: Data(json.utf8)).interfaceFont }
         XCTAssertEqual(try decode("{}"), .system)
         XCTAssertEqual(try decode(#"{"interfaceTypeface":"Unknown"}"#), .system)
         XCTAssertEqual(try decode(#"{"interfaceFont":"Source Code Pro"}"#), .system)
-        var preferences = Preferences(); preferences.interfaceFont = .sourceCodePro
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).interfaceFont, .sourceCodePro)
+        XCTAssertEqual(try decode(#"{"interfaceTypeface":"Source Code Pro"}"#), .sameAsCode)
+        var preferences = Preferences(); preferences.interfaceFont = .sameAsCode
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).interfaceFont, .sameAsCode)
 
-        let store = InterfaceFontStore.shared, previous = store.current
-        defer { store.current = previous }
-        store.current = .sourceCodePro
+        let store = InterfaceFontStore.shared, previous = store.current, family = store.codeFamily
+        defer { store.current = previous; store.codeFamily = family }
+        store.current = .sameAsCode
+        store.codeFamily = "Source Code Pro"
         XCTAssertEqual(AppFont.native(size: 14).fontName, "SourceCodePro-Regular")
         XCTAssertEqual(AppFont.native(size: 14, semibold: true).fontName, "SourceCodePro-SemiBold")
+        XCTAssertEqual(AppFont.native(size: 14).pointSize, 14)
+        // The terminal font's own faces: Bold where it has no SemiBold, Latin Modern Mono's bold from Light's family.
+        store.codeFamily = "Fira Code"
+        XCTAssertEqual(AppFont.native(size: 14).fontName, "FiraCode-Regular")
+        XCTAssertEqual(AppFont.native(size: 14, semibold: true).fontName, "FiraCode-Bold")
+        XCTAssertNotEqual(AppFont.ui(size: 14), Font.custom("SourceCodePro-Regular", size: 14))
+        store.codeFamily = "Latin Modern Mono"
+        XCTAssertEqual(AppFont.native(size: 14).fontName, "LMMono10-Regular")
+        XCTAssertEqual(AppFont.native(size: 14, semibold: true).fontName, "LMMonoLt10-Bold")
+        store.codeFamily = "Inconsolata"
+        XCTAssertEqual(Double(AppFont.native(size: 14).pointSize), 14 * TerminalFontScale.factor("Inconsolata"), accuracy: 0.001,
+                       "at the terminal's size")
+        // A terminal font since removed from this Mac draws Source Code Pro.
+        store.codeFamily = "Uninstalled Mono"
+        XCTAssertEqual(AppFont.native(size: 14).fontName, "SourceCodePro-Regular")
+        // Code text (paths, commands, color values) is the terminal font whichever the interface font.
+        store.current = .system
+        store.codeFamily = "Fira Code"
+        XCTAssertEqual(AppFont.code(size: 14), .custom("FiraCode-Regular", size: 14 * TerminalFontScale.factor("Fira Code")).weight(.regular))
+        store.codeFamily = "Source Code Pro"
+        XCTAssertEqual(AppFont.code(size: 14), .custom("SourceCodePro-Regular", size: 14).weight(.regular))
         store.current = .system
         let system = AppFont.native(size: 14), code = try XCTUnwrap(NSFont(name: "SourceCodePro-Regular", size: 14))
         XCTAssertEqual(system.familyName, ChatFont.system.systemFont(ofSize: 14)?.familyName, "SF Rounded")

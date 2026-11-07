@@ -61,6 +61,43 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertEqual(SpaceHoverDetails.make(space: sibling, host: .local, runtime: runtime).directory, System.home.path + "-other/src")
     }
 
+    /// The place line, as the phone's headers say where a tab is: the host by its name, then the folder's name, the
+    /// tab's live folder (never a space's launch folder, and not known for a plain SSH tab). VoiceOver hears it first.
+    func testThePlaceLineNamesTheHostAndTheLiveFolder() async throws {
+        XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops/src/nightly/", home: "/home/ops"), "nightly")
+        XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops", home: "/home/ops/"), "~")
+        XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops-other", home: "/home/ops"), "ops-other")
+        XCTAssertEqual(SpaceHoverDetails.folderName("/", home: nil), "/")
+        XCTAssertNil(SpaceHoverDetails.folderName(" ", home: nil))
+        let host = HostRecord(id: .authenticated("fixture"), name: "build-box", destinations: ["ops@10.0.0.12"], order: 0)
+        var details = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", directory: nil, title: "Fix the invoice",
+                                        host: host, folder: "app")
+        XCTAssertEqual(details.place, "build-box · app")
+        XCTAssertTrue(details.summary.hasPrefix("build-box · app · ssh · ops@10.0.0.12 · tmux · Fix the invoice"), details.summary)
+        details.folder = nil
+        XCTAssertEqual(details.place, "build-box")
+        // Never the folder under a name that already is it: a tab named for its folder, a space's row.
+        details.folder = "app"; details.title = "App"
+        XCTAssertEqual(details.place, "build-box")
+        details.title = nil; details.name = "app"
+        XCTAssertEqual(details.place, "build-box")
+        details.name = "billing"
+        XCTAssertEqual(details.place, "build-box · app")
+
+        let runtime = TerminalRuntime(), workspace = Workspace()
+        runtime.workspace = workspace
+        workspace.newLocalSpace()
+        let tab = try XCTUnwrap(workspace.spaces.first?.tabs.first)
+        workspace.updateTab(tab.id, directory: System.home.path + "/src/ledger")
+        try await TestSupport.eventually { workspace.liveTab(tab.id)?.directory == System.home.path + "/src/ledger" }
+        let live = SpaceHoverDetails.make(tab: try XCTUnwrap(workspace.liveTab(tab.id)), host: .local, runtime: runtime)
+        XCTAssertEqual(live.folder, "ledger")
+        XCTAssertEqual(live.host?.id, .local)
+        XCTAssertEqual(SpaceHoverDetails.make(space: workspace.spaces[0], host: .local, runtime: runtime).folder, "ledger")
+        workspace.updateTab(tab.id, directory: System.home.path)
+        try await TestSupport.eventually { SpaceHoverDetails.liveFolder(tab.id, runtime: runtime) == "~" }
+    }
+
     func testSpaceHoverCountsTabsTmuxWindowsAndAgentStates() {
         let runtime = TerminalRuntime(), workspace = Workspace()
         workspace.newLocalSpace(); workspace.newTab(); workspace.newTab()

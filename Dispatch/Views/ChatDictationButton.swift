@@ -19,7 +19,7 @@ final class DictationStore {
 
 /// The composer's dictation control, beside Send: a microphone that listens until clicked again (ChatDictation: what
 /// it hears shows in the draft as it comes). While it listens it shows the level and how to finish; a failure shows
-/// why until clicked.
+/// why until clicked, or for `DictationErrorTimeout` (10 s).
 struct ChatDictationButton: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
@@ -45,6 +45,7 @@ struct ChatDictationButton: View {
             }.buttonStyle(.plain).help("Dismiss")
                 .font(theme.typography.detail).lineLimit(1).truncationMode(.tail).frame(maxWidth: 360, alignment: .trailing)
                 .accessibilityIdentifier("chat-dictation-error")
+                .dictationErrorTimeout(error, owner: session.id)
         } else {
             Text(statusText).font(theme.typography.detail).foregroundStyle(theme.muted)
                 .lineLimit(1).truncationMode(.head).frame(maxWidth: 260, alignment: .trailing)

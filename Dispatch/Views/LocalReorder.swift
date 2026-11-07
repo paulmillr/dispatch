@@ -22,8 +22,6 @@ struct LocalReorder: NSViewRepresentable {
     var hoverFontSize: CGFloat = 12
     var dragLabel: String?
     var select: () -> Void = {}
-    /// A click with its modifiers (the sidebar's ⌘- and ⇧-clicks mark rows), in place of `select` when given.
-    var click: ((NSEvent.ModifierFlags) -> Void)?
     var accepts: (ReorderItem) -> Bool
     var drop: (ReorderItem, Bool) -> Void
 
@@ -155,7 +153,7 @@ final class ReorderTrackingView: NSView {
                 if dragging {
                     if let target, let after = target.insertionAfter { target.configuration.drop(item, after) }
                 } else if bounds.intersection(visibleRect).contains(convert(point, from: nil)) {
-                    if let click = configuration.click { click(event.modifierFlags) } else { configuration.select() }
+                    configuration.select()
                 }
                 return
             }

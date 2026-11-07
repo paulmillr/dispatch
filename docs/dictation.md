@@ -34,6 +34,8 @@ A command starts with a wake word, "Dispatch" or "Captain" by default (user-edit
 `VoiceCommand.defaultWakeWords`). Wake words need two syllables: both recognizers drop or mishear a short word that opens
 a sentence ("Dash", "Helm", "Deck", "Patch" all failed). Both also hear "tab two" as "tattoo"; the grammar maps it.
 Replies read aloud are half-duplex: the microphone is muted while speaking (no echo cancellation).
+A failure ("Dispatch can't use the microphone…") shows where dictation was started, in the composer's footer or the
+voice note over the window, until clicked or for 10 s on the Mac (`dictationErrorTimeout`); Settings keeps its own.
 
 ## Testing
 

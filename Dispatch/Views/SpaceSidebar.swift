@@ -14,18 +14,30 @@ struct SpaceSidebar: View {
     }
     private var sidebarFont: Font { AppFont.ui(size: metrics.nameSize) }
     private var sidebarDetailFont: Font { AppFont.ui(size: metrics.detailSize) }
-    /// Tabs only (Preferences.tabsOnly): the rows are tabs (SidebarTab), not spaces.
-    private var tabsOnly: Bool { workspace.tabsOnly }
-    /// The selected row: the current space, or tabs only's active tab.
-    private var selectedRow: UUID? { tabsOnly ? workspace.selectedSidebarTab : workspace.selectedSpace }
-    private func select(_ row: UUID) {
-        if tabsOnly { workspace.selectSidebarTab(row) } else { workspace.selectSpace(row) }
+    /// How far the header row's last control ends from the sidebar's trailing edge (windowRow, or full screen's header).
+    private var barTrailing: CGFloat { windowControls ? (glass ? 8 + Self.glassRowInset : 8) : 8 }
+    /// The rows' inset from the sidebar's edges (rowsScroll, SpaceTabsList).
+    private var listInset: CGFloat { glass ? Self.glassInset + Self.glassRowInset : metrics.large ? 10 : 8 }
+    /// The selected row: the current space.
+    private var selectedRow: UUID? { workspace.selectedSpace }
+    private func select(_ row: UUID) { workspace.selectSpace(row) }
+    /// Vertical tabs, inside the shown space: the sidebar lists its tabs (SpaceTabsList) under a bar with Back. A
+    /// search, or Back, lists the spaces.
+    private var inside: Bool {
+        workspace.verticalTabs && !workspace.sidebarListsSpaces && workspace.current != nil && !searchOpen && searchQuery.isEmpty
     }
     /// The footer's host icons are the app's host icon size, like the tab bar's host button in a cell as tall.
     private var footerIconSize: CGFloat { typography.hostIconSize }
     private var footerCellHeight: CGFloat {
         glass ? StripTab.glassTrackHeight(typography) : max(typography.expanded(28), footerIconSize + 12)
     }
+    /// Vertical tabs' way into a space and back: a level slides 60 points in from `edge` as it fades in, and
+    /// out the same way, quick enough to read as a cut with a direction.
+    private static func push(from edge: Edge) -> AnyTransition {
+        let offset: CGFloat = edge == .leading ? -60 : 60
+        return .offset(x: offset).combined(with: .opacity)
+    }
+
     /// The footer's cells sit this far inside the sidebar's edges.
     private static let footerInset: CGFloat = 4
     @Bindable var workspace: Workspace
@@ -38,8 +50,6 @@ struct SpaceSidebar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selection
     @State private var searchQuery = ""
-    /// The tree group whose header is under the pointer, which shows its new-space button.
-    @State private var hoveredHost: HostID?
     /// ⌘P opens the search field above the footer; a query keeps it open.
     private var searchOpen: Bool { controller.windowState.spaceSearchFocusRequest != nil }
     @FocusState private var searchFocused: Bool
@@ -58,6 +68,8 @@ struct SpaceSidebar: View {
     @State private var branches: [UUID: String] = [:]
     /// Nautical: the host whose radar sector was clicked, narrowing the traffic list to its traffic.
     @State private var harbourHost: HostID?
+    /// The tree's heading under the pointer, which shows its + (`headingPlus`).
+    @State private var hoveredHeading: HostID?
 
     private func setSearchQuery(_ value: String) {
         // Filtering can remove hundreds of rows at once. Keep typing immediate
@@ -77,7 +89,7 @@ struct SpaceSidebar: View {
         if next != rowPlacements { rowPlacements = next }
     }
 
-    /// The listed rows (spaces or tabs, by id) the viewport hides.
+    /// The listed spaces (by id) the viewport hides.
     private func hiddenRows(in order: [UUID]) -> [UUID] {
         _ = rowPlacements
         // The overflow bar changes the scroll safe area. It must not keep itself alive
@@ -98,10 +110,9 @@ struct SpaceSidebar: View {
         }
     }
 
-    /// Each row's terminals: a space's tabs', or tabs only's tab's.
+    /// Each row's terminals: a space's tabs'.
     private var rowSurfaces: [UUID: [UUID]] {
-        if tabsOnly { return Dictionary(workspace.sidebarTabs.map { ($0.id, $0.surfaceIDs) }, uniquingKeysWith: { first, _ in first }) }
-        return Dictionary(workspace.spaces.map { ($0.id, $0.tabs.flatMap(\.surfaceIDs)) }, uniquingKeysWith: { first, _ in first })
+        Dictionary(workspace.spaces.map { ($0.id, $0.tabs.flatMap(\.surfaceIDs)) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Rows with an agent waiting for approval or a blocked program.
@@ -111,7 +122,7 @@ struct SpaceSidebar: View {
     private var readyIDs: Set<UUID> { Set(rowSurfaces.filter { Self.ready($1) }.keys) }
 
     /// Whether any of these terminals has an agent waiting for approval or a blocked program.
-    private static func needsAttention(_ surfaces: [UUID]) -> Bool {
+    static func needsAttention(_ surfaces: [UUID]) -> Bool {
         surfaces.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
             || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
     }
@@ -127,7 +138,6 @@ struct SpaceSidebar: View {
     /// A listed tab's name: the window's, or the tab's live label (its agent's conversation, program or folder).
     fileprivate func label(_ tab: SidebarTab) -> String {
         let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
-        if tab.split { return tab.members.map { label(of: $0, in: tab) }.joined(separator: " · ") }
         if tab.window {
             guard let window = workspace.spaces.lazy.flatMap(\.containers).first(where: { $0.id == tab.id }) else { return "Terminal" }
             return runtime.label(for: window, automatic: automatic)
@@ -136,29 +146,28 @@ struct SpaceSidebar: View {
         return runtime.label(for: live, automatic: automatic)
     }
 
-    /// Tabs only's rows matching the search: by the tab's name, or its host's name or address.
-    private func listedTabs(_ query: String) -> [SidebarTab] {
-        let tabs = workspace.sidebarTabs
-        guard !query.isEmpty else { return tabs }
-        return tabs.filter { tab in
-            let host = workspace.hosts.record(tab.host)
-            return label(tab).localizedStandardContains(query) || host.name.localizedStandardContains(query)
-                || host.details.localizedStandardContains(query)
-        }
-    }
-
     var body: some View {
         let attention = attentionIDs
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let listed = tabsOnly ? [] : workspace.spaces(matching: query)
-        let tabs = tabsOnly ? listedTabs(query) : []
+        let listed = workspace.spaces(matching: query)
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 // Outside full screen the window row carries the header's buttons. Search opens above the footer.
                 if windowControls { windowRow } else { header }
-                if harbour { harbourList(listed: listed, tabs: tabs, attention: attention) }
-                else { spaceList(listed: listed, tabs: tabs, attention: attention) }
+                // Going into a space pushes its tabs in from the trailing edge over the spaces leaving by the leading
+                // one; Back the reverse (`push`). Overlaid and clipped to the column, so neither shows beside it.
+                ZStack(alignment: .top) {
+                    if inside, let space = workspace.current {
+                        SpaceTabsList(space: space, workspace: workspace, settings: settings, controller: controller,
+                                      metrics: metrics, waiting: attentionIDs.subtracting([space.id]).count)
+                            .transition(Self.push(from: .trailing))
+                    } else if harbour { harbourList(listed: listed, attention: attention) }
+                    else { spaceList(listed: listed, attention: attention).transition(Self.push(from: .leading)) }
+                }
+                .frame(maxHeight: .infinity, alignment: .top)
+                .clipped()
             }
+            .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.pushDuration), value: inside)
             .layoutPriority(1)
             VStack(spacing: 0) {
                 if searchOpen || !searchQuery.isEmpty {
@@ -203,15 +212,14 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's "+ space" (tabs only: "+ tab") and "+ local" on one row after the last row, on Liquid Glass two
-    /// capsules close enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so
-    /// "+ space" stands alone in the left half rather than filling the row.
+    /// Flat order's "+ space", and "+ local" beside it while a remote host is connected (tree order's New Space is the
+    /// header's).
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
         return HStack(spacing: glass ? 4 : 6) {
-            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
+            NewSpaceListButton(workspace: workspace, metrics: metrics)
             if remote {
-                NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics, tabs: tabsOnly)
+                NewSpaceListButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics)
             } else {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
             }
@@ -224,6 +232,7 @@ struct SpaceSidebar: View {
         // A little more room than between spaces, so the actions read apart from the list.
         .padding(.top, max(Self.glassRowInset, metrics.rowSpacing))
     }
+
     @ViewBuilder private var glassPanel: some View {
         if #available(macOS 26, *) {
             SystemSidebarGlass().ignoresSafeArea().accessibilityHidden(true)
@@ -249,15 +258,15 @@ struct SpaceSidebar: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(typography.symbol(.caption))
                 .foregroundStyle(Chrome.palette.detail).accessibilityHidden(true)
-            let prompt = tabsOnly ? "Search tabs…" : "Search spaces…"
+            let prompt = "Search spaces…"
             TextField(prompt,
                       text: Binding(get: { searchQuery }, set: { setSearchQuery($0) }),
                       prompt: Text(prompt).foregroundColor(Chrome.palette.detail))
                 .textFieldStyle(.plain)
                 .foregroundStyle(searchQuery.isEmpty ? Chrome.palette.detail : Chrome.ink)
                 .focused($searchFocused)
-                .help((tabsOnly ? "Search tabs" : "Search spaces") + " · ⌘P")
-                .accessibilityLabel(tabsOnly ? "Search tabs" : "Search spaces")
+                .help("Search spaces · ⌘P")
+                .accessibilityLabel("Search spaces")
                 .accessibilityIdentifier("sidebar-space-search")
                 // Escape clears the query first, then closes search.
                 .onExitCommand {
@@ -348,78 +357,42 @@ struct SpaceSidebar: View {
         return max(metrics.rowSpacing, Self.glassRowInset) - (rowHeight - controls) / 2
     }
 
-    /// The header row after the sidebar toggle (or the full-screen slot): the sidebar's mode, then the grouping and
-    /// shortcuts buttons at the end. Where the row is tight the shortcuts button goes first (Help › Keyboard Shortcuts,
-    /// ⌘/, still opens the sheet), then the mode's name gives way to an icon among the buttons (mockups/Mac, G3).
-    /// Nautical's radar keeps its title instead.
-    @ViewBuilder private var headerControls: some View {
-        if harbour {
-            Spacer(minLength: 0)
-            HStack(spacing: 4) { harbourTitle; shortcutsButton }
-        } else {
-            ViewThatFits(in: .horizontal) {
-                headerControls(named: true, shortcuts: true)
-                headerControls(named: true, shortcuts: false)
-                headerControls(named: false, shortcuts: true)
-            }
-        }
-    }
-
-    private func headerControls(named: Bool, shortcuts: Bool) -> some View {
-        HStack(spacing: 0) {
-            if named { modeMenu.padding(.leading, 8) }
-            Spacer(minLength: named ? 8 : 0)
-            HStack(spacing: 4) {
-                if !named { modeToggle }
-                groupingToggle
-                if shortcuts { shortcutsButton }
-            }
-        }
-    }
-
-    /// Spaces or tabs only (Preferences.tabsOnly, also Settings' "Vertical tabs, no spaces"): the current one's name
-    /// and ⌄, a menu of both. As wide as "Spaces" in either mode, so switching never moves the row's buttons.
-    private var modeMenu: some View {
-        Menu {
-            Picker("Sidebar", selection: Binding(get: { tabsOnly }, set: { saveTabsOnly($0) })) {
-                Text("Spaces").tag(false)
-                Text("Tabs").tag(true)
-            }
-            .pickerStyle(.inline).labelsHidden()
-        } label: {
-            HStack(spacing: 4) {
-                ReservedText(text: tabsOnly ? "Tabs" : "Spaces", variants: ["Spaces", "Tabs"])
-                    .interfaceFont(size: typography.size(.body), weight: .semibold)
-                    .foregroundStyle(Chrome.ink)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(Chrome.palette.detail)
-            }
-            .padding(.horizontal, 7).frame(height: typography.expanded(20))
-            .background(Chrome.ink.opacity(0.05), in: Capsule())
-            .contentShape(Capsule())
-        }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .fixedSize()
-        .help(tabsOnly ? "Listing every tab · choose Spaces to group tabs into spaces" : "Listing spaces · choose Tabs to list every tab")
-        .accessibilityLabel("Sidebar lists")
-        .accessibilityValue(tabsOnly ? "Tabs" : "Spaces")
-        .accessibilityIdentifier("sidebar-mode-menu")
-    }
-
-    /// The mode where its name doesn't fit: one button, lit while tabs only lists every tab, a click flips it.
-    private var modeToggle: some View {
-        Button { saveTabsOnly(!tabsOnly) } label: {
-            let glyph = Image(systemName: "rectangle.stack.badge.minus")
-            if glass {
-                glyph.modifier(GlassPanelControl(active: tabsOnly))
+    /// The header row after the sidebar toggle (or the full-screen slot), icons only: the grouping toggle, then at the
+    /// end the shortcuts button and, in tree order, New Space (flat order has "+ space" under its list); where the row is
+    /// tight the shortcuts button goes (Help › Keyboard Shortcuts, ⌘/, still opens the sheet). Inside a space (vertical
+    /// tabs), the layout picker and New Tab (SpaceTabsBar). Nautical's radar keeps its title instead.
+    private var headerControls: some View {
+        // Overlaid, so going into a space and back crossfades the two bars in place (`push`).
+        ZStack {
+            if inside, let space = workspace.current {
+                // New Tab ends where the rows' shortcuts do.
+                SpaceTabsBar(space: space, workspace: workspace, controller: controller,
+                             trailing: listInset + metrics.shortcutInset - barTrailing)
+                    .transition(.opacity)
+            } else if harbour {
+                HStack(spacing: 4) { Spacer(minLength: 0); harbourTitle; shortcutsButton }
             } else {
-                headerButton(active: tabsOnly) { glyph }
+                ViewThatFits(in: .horizontal) {
+                    headerControls(shortcuts: true)
+                    headerControls(shortcuts: false)
+                }
+                .transition(.opacity)
             }
         }
-        .help(tabsOnly ? "Tabs, no spaces · click to list spaces" : "Spaces · click to list every tab")
-        .accessibilityLabel("List tabs, no spaces")
-        .accessibilityValue(tabsOnly ? "On" : "Off")
-        .accessibilityIdentifier("sidebar-mode-toggle")
+    }
+
+    /// The keyboard shortcuts right after the sidebar toggle; at the end the grouping toggle and New Space, which ends
+    /// where the rows' shortcuts do, over the tree headings' host discs, as New Tab ends the bar inside a space.
+    private func headerControls(shortcuts: Bool) -> some View {
+        HStack(spacing: 4) {
+            groupingToggle
+            Spacer(minLength: 8)
+            if shortcuts { shortcutsButton }
+            // Flat order's New Space is the list's "+ space" (newSpaceButtons): the shortcuts end the row there.
+            if settings.values.spaceOrder == .tree { NewSpaceButton(workspace: workspace) }
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, max(0, listInset + metrics.shortcutInset - barTrailing))
     }
 
     /// Tree groups spaces under their hosts; flat is one list.
@@ -439,49 +412,29 @@ struct SpaceSidebar: View {
         .accessibilityIdentifier("sidebar-group-by-host")
     }
 
-    /// Below the last row: a dropped space goes last (in its host's group); tabs only puts a dropped tab after the
-    /// last tab, or a window after the last window.
+    /// Below the last row: a dropped space goes last (in its host's group).
     private var trailingDrop: some View {
         LocalReorder(edge: .pane, accepts: { item in
-            switch item {
-            case .space: return !tabsOnly
-            case .tab(let id):
-                guard tabsOnly, let last = workspace.sidebarTabs.last(where: { $0.pane != nil }), let pane = last.pane else { return false }
-                return workspace.canMoveTab(id, to: pane)
-            case .window(let id):
-                guard tabsOnly, let last = workspace.sidebarTabs.last(where: \.window) else { return false }
-                return workspace.canMoveWindow(id, beside: last.id)
-            case .host, .queued: return false
-            }
+            if case .space = item { return true }
+            return false
         }) { item, _ in
-            switch item {
-            case .space(let id):
-                guard let source = workspace.spaces.first(where: { $0.id == id }),
-                      let last = workspace.presentationSpaces.last(where: { workspace.spaceOrder != .tree || $0.hostID == source.hostID }) else { return }
-                workspace.reorderSpace(id, relativeTo: last.id, after: true)
-            case .tab(let id):
-                guard let last = workspace.sidebarTabs.last(where: { $0.pane != nil }), let pane = last.pane else { return }
-                workspace.moveTab(id, to: pane, relativeTo: last.id, after: true)
-            case .window(let id):
-                guard let last = workspace.sidebarTabs.last(where: \.window) else { return }
-                workspace.moveContainer(id, beside: last.id, edge: nil, after: true)
-            case .host, .queued: break
-            }
+            guard case .space(let id) = item, let source = workspace.spaces.first(where: { $0.id == id }),
+                  let last = workspace.presentationSpaces.last(where: { workspace.spaceOrder != .tree || $0.hostID == source.hostID }) else { return }
+            workspace.reorderSpace(id, relativeTo: last.id, after: true)
         }
     }
 
-    private func spaceList(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
-        let order = tabsOnly ? tabs.map(\.id) : listed.map(\.id)
+    private func spaceList(listed: [Space], attention: Set<UUID>) -> some View {
+        let order = listed.map(\.id)
         let hidden = hiddenRows(in: order)
         let below = rowsBelowViewport(in: order)
         // The rows' order, with each one's host: a move between hosts or a reorder scrolls the selection back into view.
-        let arrangement = tabsOnly ? workspace.sidebarTabs.map { "\($0.host.rawValue):\($0.id)" }
-            : workspace.presentationSpaces.map { "\($0.hostID.rawValue):\($0.id)" }
+        let arrangement = workspace.presentationSpaces.map { "\($0.hostID.rawValue):\($0.id)" }
         return ScrollViewReader { scroll in
             VStack(spacing: 0) {
                 // The rows stretch to the viewport for the trailing drop target.
                 GeometryReader { area in
-                    rowsScroll(listed: listed, tabs: tabs, attention: attention, hidden: hidden, below: below, scroll: scroll,
+                    rowsScroll(listed: listed, attention: attention, hidden: hidden, below: below, scroll: scroll,
                                minHeight: area.size.height)
                         .onAppear { viewportHeight = area.size.height }
                         .onChange(of: area.size.height) { _, height in viewportHeight = height }
@@ -500,11 +453,11 @@ struct SpaceSidebar: View {
         }
     }
 
-    private func rowsScroll(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>, hidden: [UUID], below: [UUID],
+    private func rowsScroll(listed: [Space], attention: Set<UUID>, hidden: [UUID], below: [UUID],
                             scroll: ScrollViewProxy, minHeight: CGFloat) -> some View {
         ScrollView {
             VStack(spacing: 0) {
-                spaceRows(listed: listed, tabs: tabs, attention: attention)
+                spaceRows(listed: listed, attention: attention)
                     .background(GeometryReader { rows in
                         Color.clear.onAppear { measureRows(rows.size.height) }
                             .onChange(of: rows.size.height) { _, height in measureRows(height) }
@@ -530,82 +483,62 @@ struct SpaceSidebar: View {
                                     .onDisappear { overflowBarHeight = 0 }))
     }
 
-    /// The rows: spaces, or tabs only's tabs, in one list or grouped under their hosts.
-    private func spaceRows(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
+    /// The rows: spaces, in one list or grouped under their hosts.
+    private func spaceRows(listed: [Space], attention: Set<UUID>) -> some View {
         let tree = settings.values.spaceOrder == .tree
         let groups = Dictionary(grouping: listed, by: \.hostID)
-        let tabGroups = Dictionary(grouping: tabs, by: \.host)
-        // Unbound spaces (tabs) show no shortcut: the Spaces digits jump to spaces, the Tabs digits through the list.
-        let shortcuts = tabsOnly ? StripSpaceMenu.shortcuts(workspace.sidebarTabs.map(\.id), keys: settings.values.keyGroups, group: \.tabs)
-            : StripSpaceMenu.shortcuts(workspace.presentationSpaces, keys: settings.values.keyGroups)
+        // Unbound spaces show no shortcut.
+        let shortcuts = StripSpaceMenu.shortcuts(workspace.presentationSpaces, keys: settings.values.keyGroups)
         return VStack(spacing: tree ? metrics.groupSpacing : metrics.rowSpacing) {
             if tree {
                 ForEach(workspace.hosts.ordered(Set(workspace.liveHosts.map(\.id)).union(workspace.detached.map(\.host)))) { host in
-                    let spaces = groups[host.id] ?? [], hostTabs = tabGroups[host.id] ?? []
-                    if !spaces.isEmpty || !hostTabs.isEmpty || !detachedEntries(host.id).isEmpty || (host.id == .local && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-                        hostGroup(host, empty: spaces.isEmpty && hostTabs.isEmpty) {
-                            if tabsOnly {
-                                ForEach(hostTabs) { tab in
-                                    tabRow(tab, pending: attention.contains(tab.id), shortcut: shortcuts[tab.id] ?? "")
-                                }
-                            } else {
-                                ForEach(spaces) { space in
-                                    spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
-                                }
+                    let spaces = groups[host.id] ?? []
+                    if !spaces.isEmpty || !detachedEntries(host.id).isEmpty || (host.id == .local && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                        hostGroup(host) {
+                            ForEach(spaces) { space in
+                                spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
                             }
                         }
-                        // The group's rows are lazy and kept by id, and a split's row has its space's id in both
-                        // lists: without a group per list, switching to spaces kept the split's tab row.
-                        .id(tabsOnly)
                     }
                 }
             } else {
-                if tabsOnly {
-                    ForEach(tabs) { tab in
-                        tabRow(tab, pending: attention.contains(tab.id), shortcut: shortcuts[tab.id] ?? "")
-                    }
-                } else {
-                    ForEach(listed) { space in
-                        spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
-                    }
+                ForEach(listed) { space in
+                    spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
                 }
                 newSpaceButtons
                 flatDetachedSection
             }
-            if listed.isEmpty && tabs.isEmpty && matchingDetachedEntries.isEmpty {
-                Text(tabsOnly ? "No matching tabs" : "No matching spaces").interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted).padding(10)
+            if listed.isEmpty && matchingDetachedEntries.isEmpty {
+                Text("No matching spaces").interfaceFont(size: metrics.detailSize).foregroundStyle(Chrome.muted).padding(10)
             }
         }
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: selectedRow)
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2),
-                   value: tabsOnly ? tabs.map { "\($0.id):\($0.host.rawValue)" } : listed.map { "\($0.id):\($0.hostID.rawValue)" })
+                   value: listed.map { "\($0.id):\($0.hostID.rawValue)" })
     }
 
-    /// A tree group's heading: the host's name in title case, its connection state while not connected after it in a
-    /// quieter tone. Compact leads with the host's icon; the icons style's heading ends with the host's disc
+    /// A tree group's heading: the host's name in capitals, as the space picker's headings (HostHeadingText), its
+    /// connection state while not connected after it in a quieter tone. Compact leads with the host's icon; the icons style's heading ends with the host's disc
     /// (hostGroup), its rows leading with their activity instead. Remote hosts keep their color.
     private func hostHeading(_ host: HostRecord) -> some View {
         let state = workspace.hosts.state(host.id)
         return HStack(spacing: 6) {
             // Sized to the heading's text, not the app's host icons, so it fits the compact header.
             if !metrics.large { HostGlyph(host: host, size: metrics.headerSize + 3) }
-            Text(host.id == .local ? "Local" : host.name)
-                .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
-                .lineLimit(1).truncationMode(.middle)
+            HostHeadingText(host: host, size: metrics.headerSize, weight: .semibold)
             if host.id != .local && state != .connected {
                 Text(state.shownShortLabel).interfaceFont(size: metrics.headerSize).foregroundStyle(Chrome.muted)
             }
             Spacer(minLength: 0)
         }
-        .foregroundStyle(host.tint?.foreground ?? Chrome.palette.secondary)
+        .foregroundStyle(host.tint?.foreground ?? Chrome.palette.sidebarHostLabel)
         // The icons style lines its heading up as the host picker does, past the rows' inset.
         .padding(.leading, metrics.icons ? 10 : 2).frame(height: metrics.headerHeight).contentShape(Rectangle())
     }
 
-    /// Large's group header: the host's icon, name and connection state on a chip of its color, glass on Liquid Glass,
-    /// ending in the group's new-space button. The chip brightens as a space arrives from another host, as the compact
-    /// rule does. The button is the chip's neighbour, not inside the host's own button, so each keeps its clicks.
-    private func hostChip(_ host: HostRecord, arriving: Bool, newSpace: some View) -> some View {
+    /// Large's group header: the host's icon, name and connection state on a chip of its color, glass on Liquid Glass.
+    /// The chip brightens as a space arrives from another host, as the compact rule does.
+    private func hostChip(_ host: HostRecord, arriving: Bool) -> some View {
         let hue = host.tint?.foreground
         let dark = Chrome.palette.isDark
         let state = workspace.hosts.state(host.id)
@@ -614,10 +547,7 @@ struct SpaceSidebar: View {
                 hostHeader(host) {
                     HStack(spacing: 6) {
                         HostGlyph(host: host, size: metrics.hostIconSize).foregroundStyle(hue ?? Chrome.palette.secondary)
-                        Text(host.id == .local ? "Local" : host.name)
-                            .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
-                            .foregroundStyle(hue ?? Chrome.palette.secondary)
-                            .lineLimit(1).truncationMode(.middle)
+                        HostHeadingText(host: host, size: metrics.headerSize, weight: .semibold)
                         if host.id != .local && state != .connected {
                             Text(state.shownShortLabel).interfaceFont(size: metrics.headerSize).foregroundStyle(Chrome.muted)
                         }
@@ -625,7 +555,7 @@ struct SpaceSidebar: View {
                     .padding(.leading, 8).frame(height: metrics.headerHeight).contentShape(Rectangle())
                 }.help(host.id == .local ? "Local" : host.details)
                     .accessibilityIdentifier("host-card-\(host.id.rawValue)")
-                newSpace.padding(.trailing, 3)
+                    .padding(.trailing, 10)
             }
             .frame(height: metrics.headerHeight)
             .background { Capsule().fill((hue ?? Chrome.ink).opacity(glass ? 0.06 : dark ? 0.12 : 0.08)) }
@@ -636,50 +566,62 @@ struct SpaceSidebar: View {
                     .allowsHitTesting(false)
             }
             Spacer(minLength: 0)
+            headingPlus(host).padding(.trailing, metrics.shortcutInset)
         }
     }
 
-    /// A host's group: its heading (or Large's chip) with the group's new-space button, then `rows` (its spaces, or
-    /// tabs only's tabs there) and its detached work. `empty`: no rows to click through to the heading's button.
-    private func hostGroup<Rows: View>(_ host: HostRecord, empty: Bool, @ViewBuilder rows: () -> Rows) -> some View {
+    /// The + a tree heading shows while the pointer is over it (mockups/Mac E1): a click makes a space on that host, as ⌘N
+    /// would there; a right-click lists its backends (`NewSpaceControl`, scoped to the host). The rows' shortcuts' size
+    /// and tone. None for a host that cannot take a space now (not connected); VoiceOver has the heading's action instead.
+    @ViewBuilder private func headingPlus(_ host: HostRecord) -> some View {
+        if hoveredHeading == host.id, workspace.newSpaceMachine(on: host.id) != nil {
+            let local = host.id == .local
+            let side = max(22, metrics.shortcutSize + 10)
+            Image(systemName: "plus").font(.system(size: metrics.shortcutSize, weight: .semibold))
+                .foregroundStyle(Chrome.palette.secondary.opacity(0.7))
+                .frame(width: side, height: side)
+                .allowsHitTesting(false)
+                .overlay {
+                    NewSpaceControl(workspace: workspace, host: host.id, identifier: "host-new-space-\(host.id.rawValue)",
+                                    label: local ? "New local space" : "New space on \(host.name)")
+                }
+                .glassHover(AnyShape(Circle()))
+                .help((local ? "New local space (⇧⌘N)" : "New space on \(host.name)") + " · Right-click for tmux or herdr")
+        }
+    }
+
+    /// A host's group: its heading (or Large's chip), then `rows` (its spaces) and its detached work.
+    private func hostGroup<Rows: View>(_ host: HostRecord, @ViewBuilder rows: () -> Rows) -> some View {
         let tint = host.tint?.foreground ?? Chrome.palette.secondary
         let arriving = workspace.hostMoveMotion.arrivals.values.contains(host.id)
-        // A heading's plus shows while its header is under the pointer, when the group has no spaces to click through
-        // to it, and always for VoiceOver; Large's chip always ends in it, the chip's own control.
-        let revealed = metrics.cards || hoveredHost == host.id || empty || NSWorkspace.shared.isVoiceOverEnabled
-        let newSpace = NewSpaceButton(workspace: workspace, host: host, metrics: metrics, grouped: true, revealed: revealed, tabs: tabsOnly)
-            .fixedSize()
         return LazyVStack(spacing: metrics.rowSpacing) {
             Group {
                 if metrics.cards {
-                    hostChip(host, arriving: arriving, newSpace: newSpace)
+                    hostChip(host, arriving: arriving)
                 } else {
                     HStack(spacing: 8) {
                         hostHeader(host) { hostHeading(host) }
                             .help(host.id == .local ? "Local" : host.details)
                             .accessibilityIdentifier("host-card-\(host.id.rawValue)")
-                        // The icons style's heading: the host's disc, as flat order's rows draw it, ends where the
-                        // rows' shortcuts do; the plus, at the disc's size, takes the same spot while it shows.
-                        ZStack {
-                            if metrics.hostInHeader {
-                                HostDisc(host: host, metrics: metrics)
-                                    .opacity(revealed ? 0 : 1)
-                                    .animation(.easeOut(duration: 0.12), value: revealed)
-                                    .allowsHitTesting(false).accessibilityHidden(true)
-                            }
-                            newSpace
+                        // Before the host's mark, which still opens its widget.
+                        headingPlus(host)
+                        // The icons style's heading ends in the host's mark, which opens its widget, centered under the
+                        // header's New Space as a space's heading centers it under New Tab.
+                        if metrics.hostInHeader {
+                            hostButton(host) { HostHeadingMark(host: host, metrics: metrics) }
+                                .help(host.id == .local ? "Local · Host stats" : host.details)
+                                .padding(.trailing, metrics.shortcutInset + (SidebarGlassCircle<EmptyView>.side(typography) - metrics.discSize) / 2)
                         }
-                        .padding(.trailing, metrics.hostInHeader ? metrics.shortcutInset : max(0, metrics.shortcutInset - 6))
                     }
                 }
             }
             .frame(height: metrics.headerHeight)
-            // The header's own button and drag tracker are AppKit views over it, which SwiftUI's hover doesn't see
-            // through; a tracking area does, in an inactive window too, as sidebars reveal their actions.
-            .background {
-                PointerTracker { inside in
-                    if inside { hoveredHost = host.id } else if hoveredHost == host.id { hoveredHost = nil }
-                }
+            // The heading's AppKit controls (its reorder tracker, the + itself) take the pointer from SwiftUI's onHover.
+            .background(PointerTracker { inside in
+                if inside { hoveredHeading = host.id } else if hoveredHeading == host.id { hoveredHeading = nil }
+            })
+            .accessibilityAction(named: host.id == .local ? "New local space" : "New space on \(host.name)") {
+                workspace.newSpace(on: host.id)
             }
             // Compact rows have no gaps; keep the header off the first row.
             .padding(.bottom, metrics.large ? 0 : 2)
@@ -842,12 +784,6 @@ struct SpaceSidebar: View {
                         shortcut: shortcut, branch: branches[space.id], selection: selection).equatable()
     }
 
-    private func tabRow(_ tab: SidebarTab, pending: Bool, shortcut: String) -> some View {
-        SidebarTabRow(sidebar: self, tab: tab, selected: workspace.selectedSidebarTab == tab.id, pending: pending,
-                      shortcut: shortcut, branch: branches[tab.id], marked: workspace.sidebarMarks.contains(tab.id),
-                      selection: selection).equatable()
-    }
-
     /// The body of `SpaceSidebarRow`. It reads selection and branch only through its arguments,
     /// so a space switch re-renders the two rows whose selection changed, not every row.
     fileprivate func rowContent(_ space: Space, selected: Bool, pending: Bool, shortcut: String, branch: String?, selection: Namespace.ID) -> some View {
@@ -901,222 +837,6 @@ struct SpaceSidebar: View {
         })
     }
 
-    /// The body of `SidebarTabRow`: a tab (or a tmux or herdr window) drawn as a space's row is, named by its live
-    /// label, with its host, agent activity, branch and ⌘ digit. Tabs reorder among tabs and windows among windows;
-    /// a tab dropped on another lands beside it, in that tab's pane, moving between spaces if it must. A split lists
-    /// its tabs a line each (a window its panes): a split's line is chosen, dragged and dropped on as its tab, and
-    /// focuses that pane; ⌘- and ⇧-clicks mark rows to split together.
-    fileprivate func tabRowContent(_ tab: SidebarTab, selected: Bool, pending: Bool, shortcut: String, branch: String?,
-                                   marked: Bool, selection: Namespace.ID) -> some View {
-        let flat = settings.values.spaceOrder != .tree
-        let host = workspace.hosts.record(tab.host)
-        let owner = workspace.spaces.first { $0.id == tab.space }
-        // The terminal that names a window's branch and hover card: its focused pane (a split's too).
-        let terminal: TerminalTab? = tab.window
-            ? owner?.containers.first { $0.id == tab.id }?.focusedTerminal.map { workspace.liveTab($0.id) ?? $0 }
-            : workspace.liveTab((tab.members.first(where: \.focused) ?? tab.members.first)?.id ?? tab.id)
-        let name = label(tab)
-        let hover = terminal.map { SpaceHoverDetails.make(tab: $0, host: host, runtime: .shared, title: tab.window ? name : nil) }
-        let members = tab.members.map { member in
-            SidebarEntry.Member(id: member.id, name: label(of: member, in: tab), cell: member.cell, focused: member.focused,
-                                surfaceIDs: tab.windows ? windowSurfaces(member.id) : [member.id])
-        }
-
-        let entry = SidebarEntry(id: tab.id, name: name, surfaceIDs: tab.surfaceIDs, members: members, cells: tab.cells)
-        let tile = SidebarSpaceTile(entry: entry, host: host, mixedHost: nil, grouped: !flat, selected: selected,
-                                    pending: pending, shortcut: shortcut,
-                                    connecting: tab.surfaceIDs.contains { workspace.hostMoveMotion.connecting.contains($0) },
-                                    branch: branch, showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection,
-                                    marked: marked, decorate: tab.split ? memberDecoration(tab) : nil)
-        return rowButton(split: tab.split, tile: tile) {
-            workspace.clickSidebarRow(tab.id, Self.click(NSApp.currentEvent?.modifierFlags ?? []))
-        }
-        .background {
-            // A split's branch is its space's, keyed by the row.
-            if let owner, tab.split { SpaceBranchObserver(space: owner, enabled: settings.values.showsGitBranches) }
-            else if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showsGitBranches) }
-        }
-        .accessibilityHint(hover?.summary ?? "")
-        .accessibilityIdentifier("sidebar-tab-\(tab.id)")
-        .overlay {
-            // A split's lines take the clicks and drops themselves.
-            if !tab.split {
-                LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical, spaceHover: hover,
-                             hoverFontSize: metrics.nameSize, dragLabel: name,
-                             click: { workspace.clickSidebarRow(tab.id, Self.click($0)) }, accepts: { item in
-                    switch item {
-                    case .tab(let id): return !tab.window && tab.pane.map { workspace.canMoveTab(id, to: $0) } == true
-                    case .window(let id): return tab.window && workspace.canMoveWindow(id, beside: tab.id)
-                    case .space, .host, .queued: return false
-                    }
-                }) { item, after in
-                    switch item {
-                    case .tab(let id): if let pane = tab.pane { workspace.moveTab(id, to: pane, relativeTo: tab.id, after: after) }
-                    case .window(let id): workspace.moveContainer(id, beside: tab.id, edge: nil, after: after)
-                    case .space, .host, .queued: break
-                    }
-                }
-            }
-        }
-        .contextMenu { tab.split ? AnyView(splitMenu(tab, member: nil)) : AnyView(tabMenu(tab, label: name)) }
-        .id(tab.id)
-        .modifier(HostMoveRow(motion: workspace.hostMoveMotion, id: tab.id))
-        .background(GeometryReader { proxy in
-            Color.clear.preference(key: SpaceRowFrames.self, value: [tab.id: proxy.frame(in: .named("space-list"))])
-        })
-    }
-
-    /// A row's button. A split's is its card itself, tapped around its lines: a Button would merge the lines, each
-    /// a control of its own, into one accessibility element.
-    @ViewBuilder private func rowButton(split: Bool, tile: some View, action: @escaping () -> Void) -> some View {
-        if split {
-            tile.contentShape(Rectangle()).onTapGesture(perform: action)
-                .accessibilityElement(children: .contain).accessibilityAddTraits(.isButton)
-        } else {
-            Button(action: action) { tile }
-        }
-    }
-
-    private static func click(_ flags: NSEvent.ModifierFlags) -> SidebarClick {
-        SidebarClick(command: flags.contains(.command), shift: flags.contains(.shift))
-    }
-
-    /// A split's line: a click focuses its pane (⌘ and ⇧ mark the split); it drags as its tab, out to other rows or
-    /// to another place in the split, and a tab dropped on it joins the split there; its menu acts on its tab.
-    private func memberDecoration(_ tab: SidebarTab) -> SidebarMemberDecoration {
-        { member, line in
-            let host = workspace.hosts.record(tab.host)
-            let hover = workspace.liveTab(member.id).map { SpaceHoverDetails.make(tab: $0, host: host, runtime: .shared) }
-            let split = tab.members.first { $0.id == member.id }
-            return AnyView(line
-                .overlay {
-                    // A window's line drags out as its window (a move on the server, as its row's would); none joins.
-                    LocalReorder(item: tab.windows ? .window(member.id) : .tab(member.id), edge: .vertical, spaceHover: hover,
-                                 hoverFontSize: metrics.nameSize, dragLabel: member.name, click: { flags in
-                        let click = Self.click(flags)
-                        if click == .plain {
-                            workspace.sidebarMarks = []
-                            workspace.sidebarMarkAnchor = tab.id
-                            if tab.windows { workspace.selectWindow(member.id) } else { workspace.selectTab(member.id) }
-                        } else {
-                            workspace.clickSidebarRow(tab.id, click)
-                        }
-                    }, accepts: { item in
-                        guard !tab.windows, case .tab(let id) = item else { return false }
-                        return workspace.canAddToSplit(id, space: tab.space)
-                    }) { item, after in
-                        if case .tab(let id) = item { workspace.addToSplit(id, space: tab.space, relativeTo: member.id, after: after) }
-                    }
-                }
-                .contextMenu { splitMenu(tab, member: split) }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("sidebar-split-member-\(member.id)"))
-        }
-    }
-
-    /// A split line's name: its tab's, or its window's.
-    private func label(of member: SidebarSplitMember, in tab: SidebarTab) -> String {
-        guard tab.windows else { return label(ofTab: member.id) }
-        guard let window = workspace.spaces.lazy.flatMap(\.containers).first(where: { $0.id == member.id }) else { return "Terminal" }
-        return TerminalRuntime.shared.label(for: window, automatic: settings.values.automaticTabNames)
-    }
-
-    /// A window's terminals, whose agents make its line's activity.
-    private func windowSurfaces(_ id: UUID) -> [UUID] {
-        workspace.spaces.lazy.flatMap(\.containers).first { $0.id == id }?.terminals.flatMap(\.surfaceIDs) ?? []
-    }
-
-    /// A tab's live label, as its row names it.
-    private func label(ofTab id: UUID) -> String {
-        guard let live = workspace.liveTab(id) else { return "Terminal" }
-        return TerminalRuntime.shared.label(for: live, automatic: settings.values.automaticTabNames)
-    }
-
-    /// A listed tab's actions, as its strip offered them: a window detaches or terminates, a tab closes. A marked row
-    /// offers the marked rows' instead.
-    @ViewBuilder private func tabMenu(_ tab: SidebarTab, label: String) -> some View {
-        let marks = workspace.sidebarMarks
-        if marks.count > 1, marks.contains(tab.id) {
-            marksMenu(workspace.liveSidebarMarks)
-        } else {
-            Button("Rename…") {
-                controller.rename(title: "Rename tab", value: label) { name in
-                    if tab.window { workspace.renameWindow(tab.id, to: name) } else { workspace.updateTab(tab.id, customTitle: name) }
-                }
-            }
-            if tab.window {
-                Button("Detach") { controller.detachWindow(tab.id) }
-                Button("Terminate…") { controller.terminateWindow(tab.id) }
-            } else {
-                Button("Close Tab") { controller.closeTab(tab.id) }
-            }
-        }
-    }
-
-    /// A split's actions: on a line, its tab's (rename, pop out, close); then the split's layout, separating its tabs
-    /// into rows of their own, and closing it.
-    @ViewBuilder private func splitMenu(_ tab: SidebarTab, member: SidebarSplitMember?) -> some View {
-        let marks = workspace.sidebarMarks
-        let presets = LayoutPreset.splits(tab.members.count)
-        if marks.count > 1, marks.contains(tab.id) {
-            marksMenu(workspace.liveSidebarMarks)
-        } else {
-            if let member {
-                let name = label(of: member, in: tab)
-                Button("Rename “\(name)”…") {
-                    controller.rename(title: "Rename tab", value: name) { value in
-                        if tab.windows { workspace.renameWindow(member.id, to: value) } else { workspace.updateTab(member.id, customTitle: value) }
-                    }
-                }
-                Button("Pop Out of Split") { workspace.popOutOfSplit(member.id) }
-                if !tab.windows { Button("Close Tab") { controller.closeTab(member.id) } }
-                Divider()
-            }
-            if presets.count > 1 {
-                Menu("Layout") {
-                    ForEach(presets, id: \.self) { preset in
-                        Button(preset.splitTitle) { workspace.arrangeSplit(tab.space, preset) }
-                    }
-                }
-            }
-            Button("Separate All") { workspace.separateSplit(tab.space) }
-            // A split of windows is a space of its session: detached, its work keeps running.
-            if tab.windows { Button("Detach Split") { controller.closeSpace(tab.space) } }
-            else { Button("Close Split (\(tab.members.count) Tabs)") { controller.closeSpace(tab.space) } }
-        }
-    }
-
-    /// The marked rows' actions: split them in a layout for their count (greyed, with the reason, when they can't
-    /// be), or close them.
-    @ViewBuilder private func marksMenu(_ marks: Set<UUID>) -> some View {
-        let rows = workspace.sidebarTabs.filter { marks.contains($0.id) }
-        let tabs = rows.flatMap(\.tabIDs)
-        let title = "Split \(tabs.count) Tabs"
-        let presets = LayoutPreset.splits(tabs.count)
-        if let refusal = workspace.sidebarSplitRefusal(marks) {
-            Button {} label: {
-                Text(title)
-                Text(refusal)
-            }
-            .disabled(true)
-        } else if presets.count > 1 {
-            Menu(title) {
-                ForEach(presets, id: \.self) { preset in
-                    Button(preset.splitTitle) { workspace.splitSidebarRows(marks, preset: preset) }
-                }
-            }
-        } else {
-            Button(title) { workspace.splitSidebarRows(marks) }
-        }
-        if !rows.isEmpty, !rows.contains(where: \.multiplexed) {
-            Divider()
-            Button("Close \(tabs.count) Tabs") {
-                workspace.sidebarMarks = []
-                for id in tabs { controller.closeTab(id) }
-            }
-        }
-    }
-
     /// Nautical names the actions at sea, each with its plain name beside it so none surprises.
     @ViewBuilder private func spaceMenu(_ space: Space) -> some View {
         Button(harbour ? "Rename Vessel…" : "Rename…") {
@@ -1124,7 +844,7 @@ struct SpaceSidebar: View {
         }
         if space.structured {
             Button(harbour ? "Weigh Anchor (Detach)" : "Detach") { controller.closeSpace(space.id) }
-                .help("Remove from Dispatch; keep server work running")
+                .help(MoveTargetsSection.detachHelp)
             Button(harbour ? "Scuttle (Terminate)…" : "Terminate…") { controller.terminateSpace(space.id) }
         } else {
             Button(harbour ? "Lay Up (Close)" : "Close") { controller.closeSpace(space.id) }
@@ -1146,26 +866,21 @@ struct SpaceSidebar: View {
     }
 
     /// The radar plot over the traffic list. The plot takes the sidebar's width, up to about half its height, so the
-    /// list keeps room for its rows. The list holds the rows (spaces, or tabs only's tabs); the radar plots every tab
-    /// of them, so the tab that needs you is the one nearest the harbour.
-    private func harbourList(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
-        // Each space's (tabs only: tab's) key is its number, the first digit of its tabs' channels.
-        let order = tabsOnly ? workspace.sidebarTabs.map(\.id) : workspace.presentationSpaces.map(\.id)
+    /// list keeps room for its rows. The list holds the spaces; the radar plots every tab of them, so the tab that
+    /// needs you is the one nearest the harbour.
+    private func harbourList(listed: [Space], attention: Set<UUID>) -> some View {
+        // Each space's key is its number, the first digit of its tabs' channels.
+        let order = workspace.presentationSpaces.map(\.id)
         let numbers = Dictionary(order.enumerated().map { ($1, "\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
         let heading = settings.values.showsGitBranches
         let ready = readyIDs
-        let vessels = tabsOnly ? tabs.map { tab in
-            HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host),
-                               state: workspace.hosts.state(tab.host), surfaceIDs: tab.surfaceIDs,
-                               selected: workspace.selectedSidebarTab == tab.id, pending: attention.contains(tab.id),
-                               ready: ready.contains(tab.id), shortcut: numbers[tab.id] ?? "", heading: heading ? branches[tab.id] : nil)
-        } : listed.map {
+        let vessels = listed.map {
             HarbourVessel.make($0, workspace: workspace, selected: workspace.selectedSpace == $0.id,
                                pending: attention.contains($0.id), ready: ready.contains($0.id), shortcut: numbers[$0.id] ?? "",
                                heading: heading ? branches[$0.id] : nil)
         }
         let listedSpaces = Set(listed.map(\.id))
-        let plotted = tabsOnly ? tabs : workspace.sidebarTabs.filter { listedSpaces.contains($0.space) }
+        let plotted = workspace.sidebarTabs.filter { listedSpaces.contains($0.space) }
         let channels = harbourChannels()
         let contacts = plotted.map { tab in
             var vessel = HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host),
@@ -1173,16 +888,15 @@ struct SpaceSidebar: View {
                                             selected: workspace.selectedSidebarTab == tab.id,
                                             pending: Self.needsAttention(tab.surfaceIDs), ready: Self.ready(tab.surfaceIDs),
                                             shortcut: numbers[tab.id] ?? "",
-                                            heading: heading ? tabsOnly ? branches[tab.id] : branches[tab.space] : nil)
-            // Tabs only shows no spaces, so its convoys go unnamed.
+                                            heading: heading ? branches[tab.space] : nil)
             vessel.convoy = tab.space
-            vessel.convoyName = tabsOnly ? nil : workspace.spaces.first { $0.id == tab.space }.map { workspace.liveName($0) }
+            vessel.convoyName = workspace.spaces.first { $0.id == tab.space }.map { workspace.liveName($0) }
             vessel.channel = channels[tab.id]
             return vessel
         }
         // A clicked sector narrows the list to the rows with a tab on its host, while that host has any.
         let sector = harbourHost.flatMap { host in contacts.first { $0.hostID == host } }
-        let rowHosts = Dictionary(grouping: plotted, by: { tabsOnly ? $0.id : $0.space }).mapValues { Set($0.map(\.host)) }
+        let rowHosts = Dictionary(grouping: plotted, by: \.space).mapValues { Set($0.map(\.host)) }
         let shown = sector.map { sector in vessels.filter { rowHosts[$0.id]?.contains(sector.hostID) == true } } ?? vessels
         return GeometryReader { area in
             VStack(spacing: 0) {
@@ -1198,9 +912,6 @@ struct SpaceSidebar: View {
                                    select: { select($0) },
                                    menu: { id in AnyView(Group {
                                        if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) }
-                                       if let tab = tabs.first(where: { $0.id == id }) {
-                                           if tab.split { splitMenu(tab, member: nil) } else { tabMenu(tab, label: label(tab)) }
-                                       }
                                    }) })
                     .padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : 10).padding(.top, 10)
             }
@@ -1209,12 +920,6 @@ struct SpaceSidebar: View {
         // Each row's branch, read as the regular rows read it, for its heading.
         .background {
             ForEach(listed) { SpaceBranchObserver(space: $0, enabled: heading) }
-            ForEach(tabs) { tab in
-                if let owner = workspace.spaces.first(where: { $0.id == tab.space }),
-                   let terminal = tab.window ? owner.containers.first(where: { $0.id == tab.id })?.focusedTerminal : owner.tabs.first(where: { $0.id == tab.id }) {
-                    SpaceBranchObserver(space: owner, tab: terminal, enabled: heading)
-                }
-            }
         }
     }
 
@@ -1262,8 +967,7 @@ struct SpaceSidebar: View {
                 .modifier(OverflowPanel(glass: glass))
         }
         .accessibilityIdentifier("space-overflow")
-        .help(tabsOnly ? "Reveal hidden tabs; jump to a hidden tab awaiting approval, then one with a ready reply."
-              : "Reveal hidden spaces; jump to a hidden space awaiting approval, then one with a ready reply.")
+        .help("Reveal hidden spaces; jump to a hidden space awaiting approval, then one with a ready reply.")
         .padding(.horizontal, 8).padding(.vertical, 6)
     }
 
@@ -1326,15 +1030,6 @@ struct SpaceSidebar: View {
         workspace.spaceOrder = order
         do { try settings.save(values) } catch { settings.error = error.localizedDescription }
     }
-
-    /// The header's mode: Settings' "Vertical tabs, no spaces", saved as that toggle saves it.
-    private func saveTabsOnly(_ on: Bool) {
-        guard on != settings.values.tabsOnly else { return }
-        var values = settings.values
-        values.tabsOnly = on
-        workspace.tabsOnly = on
-        do { try settings.save(values) } catch { settings.error = error.localizedDescription }
-    }
 }
 
 /// A footer host's grid cell. On glass it behaves like a button in a strip's glass pill: a faint capsule under the
@@ -1368,30 +1063,6 @@ private struct SpaceSidebarRow: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.space == rhs.space && lhs.selected == rhs.selected && lhs.pending == rhs.pending
             && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.selection == rhs.selection
-    }
-}
-
-/// Tabs only's row, equatable on its inputs like a space's; its label is live (`Workspace.liveTab`), so a title
-/// change re-renders this row alone.
-private struct SidebarTabRow: View, Equatable {
-    let sidebar: SpaceSidebar
-    let tab: SidebarTab
-    let selected: Bool
-    let pending: Bool
-    let shortcut: String
-    let branch: String?
-    let marked: Bool
-    let selection: Namespace.ID
-
-    var body: some View {
-        sidebar.tabRowContent(tab, selected: selected, pending: pending, shortcut: shortcut, branch: branch, marked: marked,
-                              selection: selection)
-    }
-
-    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.tab == rhs.tab && lhs.selected == rhs.selected && lhs.pending == rhs.pending
-            && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.marked == rhs.marked
-            && lhs.selection == rhs.selection
     }
 }
 
@@ -1468,32 +1139,6 @@ private struct OverflowPanel: ViewModifier {
     let glass: Bool
     func body(content: Content) -> some View {
         if glass { content } else { content.chromePanel(Chrome.palette.terminal, cornerRadius: 6) }
-    }
-}
-
-/// Reports the pointer entering and leaving its frame, whatever views lie over it and whether or not the window is
-/// active. It takes no clicks.
-private struct PointerTracker: NSViewRepresentable {
-    let changed: (Bool) -> Void
-    func makeNSView(context: Context) -> PointerTrackingView { PointerTrackingView() }
-    func updateNSView(_ view: PointerTrackingView, context: Context) { view.changed = changed }
-}
-
-final class PointerTrackingView: NSView {
-    var changed: (Bool) -> Void = { _ in }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                       owner: self))
-    }
-    override func mouseEntered(with event: NSEvent) { changed(true) }
-    override func mouseExited(with event: NSEvent) { changed(false) }
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        // Leaving the window (a group closing, the sidebar hiding) never sends an exit.
-        if window == nil { changed(false) }
     }
 }
 
@@ -2195,7 +1840,7 @@ private struct HarbourSweep: NSViewRepresentable {
         }
 
         override func start() {
-            guard drawnDiameter > 0 else { return }
+            guard drawnDiameter > 0, MotionRate.decorates else { return }
             beam.transform = CATransform3DIdentity
             let turn = CABasicAnimation(keyPath: "transform.rotation.z")
             turn.fromValue = 0; turn.toValue = 2 * Double.pi; turn.duration = HarbourRadar.period
@@ -2207,7 +1852,8 @@ private struct HarbourSweep: NSViewRepresentable {
             rest()
         }
 
-        /// Reduce Motion, or a hidden window: the sweep rests at the mockup's bearing.
+        /// Reduce Motion, Low Power Mode (MotionRate.decorates) or a hidden window: the sweep rests at the mockup's
+        /// bearing.
         private func rest() {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             beam.transform = CATransform3DMakeRotation(HarbourRadar.restingBearing * .pi / 180, 0, 0, 1)
@@ -2347,7 +1993,7 @@ private struct HarbourEchoes: NSViewRepresentable {
         }
 
         override func start() {
-            for (blip, echo) in zip(blips, echoes) { loop(Self.afterglow(at: echo.bearing / 360), on: blip) }
+            for (blip, echo) in zip(blips, echoes) { loop(Self.afterglow(at: echo.bearing / 360), on: blip, decorative: true) }
         }
 
         /// One turn of a glow whose bearing the beam crosses at `phase` of the turn: off until then, full as it
@@ -2364,5 +2010,33 @@ private struct HarbourEchoes: NSViewRepresentable {
             animation.duration = HarbourRadar.period
             return animation
         }
+    }
+}
+
+/// Whether the pointer is over a view, from an AppKit tracking area behind it. Tracking areas go by where the pointer is,
+/// not by which view takes it, so the AppKit controls inside a row (a reorder tracker, a button) do not hide it from the
+/// row as they hide it from SwiftUI's `onHover`. Takes no clicks.
+struct PointerTracker: NSViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeNSView(context: Context) -> TrackingView { TrackingView() }
+    func updateNSView(_ view: TrackingView, context: Context) { view.changed = changed }
+
+    final class TrackingView: NSView {
+        var changed: (Bool) -> Void = { _ in }
+        private var area: NSTrackingArea?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let area { removeTrackingArea(area) }
+            let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+            addTrackingArea(area)
+            self.area = area
+        }
+
+        override func mouseEntered(with event: NSEvent) { changed(true) }
+        override func mouseExited(with event: NSEvent) { changed(false) }
     }
 }

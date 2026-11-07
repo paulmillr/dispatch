@@ -510,9 +510,11 @@ final class CodexMainThreadTests: XCTestCase {
         XCTAssertTrue(session.manualViewChoice)
         XCTAssertEqual(session.draft, "")
         XCTAssertNil(session.command); XCTAssertNil(session.observedCommand); XCTAssertNil(session.commandResult)
-        XCTAssertFalse(session.awaitingPromptAck); XCTAssertNil(session.submissionFailure); XCTAssertNil(session.terminalAttention)
-        try await TestSupport.eventually(diagnostic: terminal.agentMenuScreen) {
+        XCTAssertFalse(session.awaitingPromptAck); XCTAssertNil(session.submissionFailure)
+        // The picker covers Codex's composer: it asks for attention while it is open (docs/integrations.md, Input).
+        try await TestSupport.eventually(diagnostic: "\(session.terminalAttention ?? "no attention")\n\(terminal.agentMenuScreen)") {
             terminal.agentMenuScreen.contains("Resume a previous session") && app.window.firstResponder === terminal
+                && session.terminalAttention?.hasPrefix("Codex has a menu open in Terminal") == true
         }
         // Pick the first conversation: the picker lists the most recently updated first.
         TerminalTestSupport.key(125, "\u{F701}", terminal)
@@ -528,6 +530,7 @@ final class CodexMainThreadTests: XCTestCase {
             let screen = terminal.agentMenuScreen
             return screen.contains("DISPATCH_SIDE_QUESTION main first turn") && screen.contains("› Ask Codex to do anything")
         }
+        try await TestSupport.eventually(diagnostic: session.terminalAttention ?? "") { session.terminalAttention == nil }
         // As the user's typing does, sending follows the composer's focus (and Codex's focus-out report).
         runtime.chat.chooseChat(true, session: session)
         try await TestSupport.eventually { app.window.firstResponder is ChatComposer.ComposerTextView }

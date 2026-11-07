@@ -170,7 +170,7 @@ private struct OverflowSurface: ViewModifier {
             if onCapsule {
                 content.padding(.horizontal, 2).background(Chrome.palette.selection, in: Capsule())
             } else {
-                content.padding(.horizontal, 2).liquidGlass(in: Capsule(), interactive: true)
+                content.padding(.horizontal, 2).liquidGlass(in: Capsule(), interactive: true).glassHover(Capsule())
             }
         } else {
             content.chromePanel(cornerRadius: 4)

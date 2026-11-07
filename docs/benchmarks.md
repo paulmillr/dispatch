@@ -7,22 +7,22 @@ Results are informational: no timing threshold fails a build. Every script takes
 Builds optimized production code, runs workloads serially in fresh processes (3 by default), keeps raw samples, and compares runs.
 
 ```sh
-python3 scripts/benchmark.py run --suite core --environment hardware --label before
-python3 scripts/benchmark.py run --suite core --environment hardware --label after
+python3 scripts/benchmark.py run --suite quick --environment hardware --desktop --label before
+python3 scripts/benchmark.py run --suite quick --environment hardware --desktop --label after
 python3 scripts/benchmark.py compare before after --output build/benchmarks/comparison.json
 python3 scripts/benchmark.py run --suite full --environment vm --desktop --label full-before   # inside the VM
 ```
 
 | Suite | Adds |
 |---|---|
-| core | Headless; needs only Xcode. herdr line buffering, tmux unescaping (64 KiB/2 MiB), colored-output filtering, fragmented tmux framing (1/64 KiB reads) |
 | quick | Chat history scrolling, code preview resizing |
 | transcript | Cold chat mount, tab switching, streamed updates, wheel scrolling and idle cost |
-| full | Space/tab switching, splits/resize, local/SSH/tmux/herdr input and scrollback, sidebar at 40/240 spaces, settings open/scroll (General, and Theme's color scheme gallery), terminal lifecycle, idle terminals, concurrent output while switching, dense chat paging |
+| full | Space/tab switching, splits/resize, local/SSH/tmux/herdr input and scrollback, sidebar at 40/240 spaces, settings open/scroll (Extra, and Theme's color scheme gallery), terminal lifecycle, idle terminals, concurrent output while switching, dense chat paging |
 | soak | Longer idle and mixed-output phases; `--duration` is seconds **per phase** |
 
-- Desktop suites (`quick` and up) need `--desktop`, prepared offline dependencies, a current generated project, and an unlocked, idle desktop. Use the [VM](vm_testing.md) or a dedicated Mac, never alongside another desktop test runner. `--environment` is only a label: the runner doesn't boot or control a VM.
+- Every suite needs `--desktop`, prepared offline dependencies, a current generated project, and an unlocked, idle desktop. Use the [VM](vm_testing.md) or a dedicated Mac, never alongside another desktop test runner. `--environment` is only a label: the runner doesn't boot or control a VM.
 - The `full` and `soak` SSH workload needs a root-owned sshd, because Release helpers always check for one. The runner uses the first running `dispatch-*` Lima VM that accepts a non-interactive SSH login (never `dispatch-manual-ssh`). Without one, it uses the loopback sshd if `sudo -n` works, as in the test VM. Otherwise it skips the two SSH workloads (`ssh-input-reply` and `ssh-terminal-scroll`) and says so. `report.json` records the choice as `ssh_backend`.
+- Each test run gets a fresh private root, `/tmp/dt-bench` (`DISPATCH_TEST_ROOT`, `TMPDIR`), as `test/xcode.py` makes one: under `/var/folders/…/T/` the helper's hook sockets overrun macOS's 104-byte `sun_path`, the local helper exits and no terminal runs a command.
 - Missing dependencies, skipped tests, failed assertions, incomplete reports, or source changes during a run fail it. Labels never overwrite existing runs. `--runs 1` checks the harness, not performance.
 - Artifacts: `build/benchmarks/<label>/report.json` (revision, content hash, hardware/OS, tool versions, power, display, raw samples) plus per-repetition logs and xcresults.
 
@@ -33,7 +33,7 @@ python3 scripts/benchmark.py run --suite full --environment vm --desktop --label
 - `compare` prints median changes. The JSON adds p95 only at ≥20 observations and p99 at ≥1,000, and omits percent change for zero or negative baselines.
 - `compare` rejects mismatched environment, configuration, SSH backend, suite version, duration, repetitions, metrics/units, or fixed sample counts. Never pool hardware and VM runs. Keep display, power, and tools fixed, and alternate before/after runs to probe noise.
 
-**Adding a workload:** exercise production code and assert correct output. Keep fixture setup and compilation outside timed sections. Register UI workloads in `QUICK`/`FULL` and their reports in `EXPECTED`, and bump `VERSION` whenever fixtures, measurement boundaries, or semantics change. Core workloads live in `scripts/benchmarks/CoreBenchmark.swift`. Harness self-tests: `python3 test/benchmark.py`.
+**Adding a workload:** exercise production code and assert correct output. Keep fixture setup and compilation outside timed sections. Register UI workloads in `QUICK`/`FULL` and their reports in `EXPECTED`, and bump `VERSION` whenever fixtures, measurement boundaries, or semantics change. The helper's terminal latency and throughput, headless, are `cargo bench -p dispatch-helper --bench terminals` (`helper/bin/benches`). Harness self-tests: `python3 test/benchmark.py`.
 
 ## Specialized scripts
 
@@ -407,6 +407,40 @@ again lay out about as expensively as new ones, so it saved 8% of switching CPU 
 Measuring text with the view's own layout manager instead of `boundingRect` would save a second typesetting per change,
 but its line heights differ by up to 2 points from `boundingRect`'s for lines mixing fonts with emoji or CJK, so it was
 left alone.
+
+### Energy on hardware (2026-11-09)
+
+Activity Monitor's Energy Impact and 12 hr Power, and `top`'s `POWER`, are CPU time on macOS 27: 100 is one core
+busy, whatever it costs (`top -stats pid,command,cpu,power` shows the two columns equal). `powermetrics`'
+`energy_impact` is another scale, about milliwatts. What a busy core costs depends on where it runs: Dispatch's steady
+work (idle loops, terminal output) ran on the efficiency cores at about 0.4 W a core, its bursts and a followed stream
+on the performance cores at 3.5–4.6 W. The VM has no energy counters; on a Mac, `proc_pid_rusage` v6 (`ri_energy_nj`)
+reads a process's CPU energy without sudo, and summing it over the app's coalition (`proc_pidinfo`
+`PROC_PIDCOALITIONINFO`: the app, its helper, tmux and shells) gives what Activity Monitor puts on the app's row.
+Measured on an M5 Pro on AC power with a 60 Hz headless display, Release (`scripts/benchmark.py`) unless noted:
+
+| Sustained | Coalition power | CPU |
+|---|---:|---:|
+| Four idle terminals, 120 s | 3 mW | 1.7% |
+| Idle chat (Debug) | 0.3 mW | 0.2% |
+| Three terminals printing 50 lines/s each, 120 s | 118 mW (app 52, shells 37, helper 25) + about 180 mW GPU | 32% |
+| A shown chat following a 20 Hz stream (Debug) | 2.3–3.0 W | 56–68% |
+| The same stream while reading 60 rows up (Debug), before / after the reading hold | 110 / 84–116 mW | 18.5 / 10–12% |
+
+Per action: a space or tab switch 85–145 mJ, a terminal created, ready and closed 0.36 J, an SSH round trip 38 mJ, a
+local one 12 mJ, a streamed chat update 33 mJ, a scroll step 10–30 mJ. Energy per phase varies run to run by up to
+2× at the same work (the counted pass's layouts and draws were identical): compare CPU and counts, not single runs.
+
+Changes from these measurements, for battery life (on the adapter with Dispatch in front, motion keeps the screen's
+rate): a typed reveal and the arrival glide follow the motion policy (`MotionRate.range`: 60 on battery or behind
+another app, where a ProMotion screen ran them at 120; 30 in Low Power Mode); a terminal's output alone draws at most
+30 frames a second on battery, behind another app or in Low Power Mode (`MotionRate.terminalOutput`, `FrameDemand`;
+input at the display's rate); and records far below a reader wait up to 0.25 s for the next presentation
+(`ChatSession.TranscriptHold.reading`), which took a third to nearly half of the CPU off streaming while reading. The
+first two show only on battery, with the app inactive or on a 120 Hz screen; these runs were on AC at 60 Hz.
+Halving the reveal's rate, measured by pinning Low Power Mode on the 60 Hz screen (`MotionRate.pin`, Debug, three
+passes each): a followed stream at 30 frames instead of 60 took 2.4–2.8 W down to 1.2–1.7 W (CPU 56% to 45%); the
+same stream while reading did not change (69 mW), since the reading hold already presents it in batches.
 
 ## SSH traffic of a remote host
 

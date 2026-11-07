@@ -1039,7 +1039,9 @@ private struct GitCommitSummary: View {
         return HStack(spacing: 10) {
             Button(action: copyHash) {
                 HStack(spacing: 5) {
+                    // In room for any seven hex digits, so the author after it starts at one place for every commit.
                     Text(verbatim: commit.short)
+                        .frame(width: Self.hashWidth(typography.size(.body)), alignment: .leading)
                     Image(systemName: copied == commit.hash ? "checkmark" : "doc.on.doc")
                         .font(typography.symbol(.caption))
                 }
@@ -1080,6 +1082,18 @@ private struct GitCommitSummary: View {
         .foregroundStyle(palette.muted)
         .lineLimit(1)
     }
+
+    /// Seven of the interface font's widest hex digit at `size`: its letters are not monospaced.
+    @MainActor static func hashWidth(_ size: CGFloat) -> CGFloat {
+        let key = "\(InterfaceFontStore.shared.current)-\(InterfaceFontStore.shared.codeFamily)-\(size)"
+        if let width = hashWidths[key] { return width }
+        let font = AppFont.native(size: size)
+        let widest = "0123456789abcdef".map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        let width = (widest * 7).rounded(.up)
+        hashWidths[key] = width
+        return width
+    }
+    @MainActor private static var hashWidths: [String: CGFloat] = [:]
 
     private func copyHash() {
         GitPasteboard.copy(commit.hash)

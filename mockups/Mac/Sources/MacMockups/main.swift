@@ -29,7 +29,7 @@ func parse(_ arguments: ArraySlice<String>) throws -> (RenderOptions, [String]) 
                 guard let theme = SidebarTheme(rawValue: String($0)) else { throw Failure("unknown theme \($0)") }
                 return theme
             }
-        case "--font": options.interfaceFont = try value() == "code" ? .sourceCodePro : .system
+        case "--font": options.interfaceFont = try value() == "code" ? .sameAsCode : .system
         case "--size": options.contentSize = CGFloat(Double(try value()) ?? 14)
         case "--scale": options.scale = CGFloat(Double(try value()) ?? 2)
         case "--out": options.output = URL(fileURLWithPath: try value())

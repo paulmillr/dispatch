@@ -172,11 +172,15 @@ final class GitCommitsPresentationTests: XCTestCase {
         let scope = try await frame("git-log-scope", in: window)
         let footer = try await frame("git-commits-footer", in: window)
         let search = try await frame("files-search", in: window)
+        let filter = try await frame("git-log-filter", in: window)
         let toggle = try await frame("files-views-toggle", in: window)
         let list = try await frame("git-commits-list", in: window)
         XCTAssertEqual(header.height, AppTypography().expanded(34), accuracy: 0.5)
         XCTAssertLessThan(crumbs.maxX, search.minX)
-        XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
+        XCTAssertLessThanOrEqual(search.maxX, filter.minX + 0.5, "the filter follows the search")
+        XCTAssertLessThanOrEqual(filter.maxX, toggle.minX + 0.5)
+        XCTAssertEqual(filter.midY, header.midY, accuracy: 1)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-log-filter", in: window).contains("All branches"))
         XCTAssertEqual(scope.midY, footer.midY, accuracy: 1)
         XCTAssertLessThanOrEqual(scope.maxX, footer.maxX)
         XCTAssertLessThan(title.maxX, crumbs.minX)
@@ -188,6 +192,32 @@ final class GitCommitsPresentationTests: XCTestCase {
         // The search opens from its glyph.
         session.logFilter = "sam"
         _ = try await frame("git-commits-filter", in: window)
+    }
+
+    /// Another branch's tagged commits: the footer names the filter, the header's filter is lit, and the uncommitted
+    /// row (HEAD's changes) gives way, as it does over the tagged commits of the checked-out branch.
+    func testAFilteredLogNamesItsFilterWithoutTheUncommittedRow() async throws {
+        let session = mockupSession()
+        session.gitRefs = [GitRefRecord(refname: "refs/heads/main", hash: String(repeating: "c", count: 40), head: true),
+                           GitRefRecord(refname: "refs/heads/feat/webhook-signatures", hash: String(repeating: "8", count: 40),
+                                        head: false)]
+        let window = try window(session)
+        try await read(["Uncommitted changes"], in: window, named: "git-commits-unfiltered")
+        session.showLog(scope: .branch, ref: "refs/heads/feat/webhook-signatures", tagged: true)
+        let tagged = mockupCommits.filter { $0.refs.contains { $0.kind == .tag } }
+        session.log = GitLog(commits: tagged, exhausted: true, scope: .branch, filter: "", loadedAt: now,
+                             ref: "refs/heads/feat/webhook-signatures", tagged: true)
+        // OCR reads the footer's "·" as "•": the filter's own label below says it.
+        try await read(["feat/webhook-signatures", "v2.4.0", "1 loaded"], in: window, named: "git-commits-filtered")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-commits-uncommitted", in: window).isEmpty,
+                      "no uncommitted row over another branch's tags")
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-log-filter", in: window)
+            .contains("Tags · feat/webhook-signatures"))
+
+        // Nothing tagged on it: the note says so.
+        session.log = GitLog(commits: [], exhausted: true, scope: .branch, filter: "", loadedAt: now,
+                             ref: "refs/heads/feat/webhook-signatures", tagged: true)
+        try await says("No tagged commits", "git-commits-empty", in: window)
     }
 
     func testNarrowHeaderKeepsTheControlsInside() async throws {

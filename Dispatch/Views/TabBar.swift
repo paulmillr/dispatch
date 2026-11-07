@@ -23,11 +23,11 @@ extension TabBarPlacement {
                                                      fullScreen: Bool) -> Bool {
         guard !sidebarVisible, let space else { return false }
         guard workspace.lastingSpaceCount > 1 || leadingStripHost(space) != nil else { return false }
-        // Tabs only has no strip: in a window the plain title row carries the toggle.
-        guard fullScreen else { return !workspace.tabsOnly }
-        if space.structured { return WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly) }
+        // Vertical tabs has no strip: the toggle floats beside the window's controls (MainView).
+        guard fullScreen else { return !workspace.verticalTabs }
+        if space.structured { return WindowTabBar.showsTabs(space: space, verticalTabs: workspace.verticalTabs) }
         guard let pane = space.panes.first(where: { $0.id == space.layout.paneIDs.first }) else { return false }
-        return PaneView.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
+        return PaneView.showsTabs(pane: pane, space: space, verticalTabs: workspace.verticalTabs)
     }
 
     /// The host the strip leading the window shows for its own tabs, as PaneView and WindowTabBar ask for it.

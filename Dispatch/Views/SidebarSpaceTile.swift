@@ -21,8 +21,8 @@ struct SidebarMetrics: Equatable, Sendable {
     var icons = false
     /// The icon's disc, in the icons style.
     var discSize: CGFloat = 0
-    /// The icons style grouped by host (SpaceSidebar): each host's disc once, at the end of its group's heading; rows,
-    /// and each line of a split, lead with their activity in a `markColumn` wide column.
+    /// The icons style grouped by host (SpaceSidebar): each host's mark once, at the end of its group's heading
+    /// (HostHeadingMark); rows, and each line of a split, lead with their activity in a `markColumn` wide column.
     var hostInHeader = false
     var markColumn: CGFloat = 0
 
@@ -46,6 +46,8 @@ struct SidebarMetrics: Equatable, Sendable {
     /// How far a row's jump shortcut text ends from the row's trailing edge: the row's padding, or on a card its
     /// padding and the keycap's. Tree headers end their new-space shortcut here too, so the keys share a column.
     var shortcutInset: CGFloat { cards ? 17 : icons ? 10 : 8 }
+    /// A row's jump shortcut against the secondary tone: the icons style's stays under its names.
+    var shortcutOpacity: Double { icons ? 0.5 : 0.7 }
 
     /// On Liquid Glass the rows nest in the panel with corners concentric to it.
     func nested(cornerRadius: CGFloat) -> SidebarMetrics {
@@ -57,8 +59,8 @@ struct SidebarMetrics: Equatable, Sendable {
     }
 
     /// The icons style with the host's icon in its group's heading (`hostInHeader`; mockups/Mac, D8 B″): the heading
-    /// ends in the host's disc, with about 3 points (at the default size) above and below it so it stays off the first
-    /// row's fill; rows keep their height and lead with their activity in a 16-point column under the heading's name.
+    /// ends in the host's mark, with about 3 points (at the default size) above and below its disc so it stays off the
+    /// first row's fill; rows keep their height and lead with their activity in a 16-point column under the heading's name.
     func hostInHeaders(contentSize: CGFloat) -> SidebarMetrics {
         let scale = max(1, contentSize / 12.5)
         return SidebarMetrics(large: large, nameSize: nameSize, detailSize: detailSize, shortcutSize: shortcutSize,
@@ -75,7 +77,7 @@ struct SidebarMetrics: Equatable, Sendable {
         let name = max(8, contentSize - 0.5), scale = max(1, contentSize / 12.5)
         func scaled(_ value: CGFloat) -> CGFloat { (value * scale).rounded() }
         let disc = scaled(22)
-        return SidebarMetrics(large: true, nameSize: name, detailSize: max(8, name - 2.5), shortcutSize: max(8, name - 1),
+        return SidebarMetrics(large: true, nameSize: name, detailSize: max(8, name - 2.5), shortcutSize: max(8, name - 2),
                               rowHeight: disc + 8, rowSpacing: 2, groupSpacing: scaled(10),
                               activitySize: max(8, contentSize - 3), hostIconSize: AppTypography(contentSize: contentSize).hostIconSize,
                               cornerRadius: scaled(12), headerSize: max(8, contentSize - 3), headerHeight: scaled(18),
@@ -93,36 +95,17 @@ struct SidebarMetrics: Equatable, Sendable {
     }
 }
 
-/// What a sidebar row draws: a space, or in tabs-only mode a tab (SidebarTab).
+/// What a sidebar row draws: a space.
 struct SidebarEntry: Equatable {
     let id: UUID
     let name: String
     /// Its terminals, whose agents and programs make its activity.
     let surfaceIDs: [UUID]
-    /// A space's tabs, counted on its card; a tab has none to count.
+    /// A space's tabs, counted on its card.
     var tabCount: Int? = nil
-    /// Tabs only's split (or window with panes): a line per pane, in reading order, in place of the name.
-    var members: [Member] = []
-    /// The panes' frames in the unit square, which each line's pane glyph draws.
-    var cells: [CGRect] = []
 
-    /// One pane's line: its tab's name, where it sits, and whether it has focus.
-    struct Member: Identifiable, Equatable {
-        let id: UUID
-        let name: String
-        let cell: Int
-        let focused: Bool
-        /// The terminals whose activity the line shows: the tab's, or a window's.
-        var surfaceIDs: [UUID]
-
-        init(id: UUID, name: String, cell: Int, focused: Bool, surfaceIDs: [UUID]? = nil) {
-            self.id = id; self.name = name; self.cell = cell; self.focused = focused; self.surfaceIDs = surfaceIDs ?? [id]
-        }
-    }
-
-    init(id: UUID, name: String, surfaceIDs: [UUID], tabCount: Int? = nil, members: [Member] = [], cells: [CGRect] = []) {
+    init(id: UUID, name: String, surfaceIDs: [UUID], tabCount: Int? = nil) {
         self.id = id; self.name = name; self.surfaceIDs = surfaceIDs; self.tabCount = tabCount
-        self.members = members; self.cells = cells
     }
 
     init(space: Space) {
@@ -131,7 +114,7 @@ struct SidebarEntry: Equatable {
 }
 
 /// The icons style's disc: the host's icon on a circle (glass on Liquid Glass), plain on the selected row's fill.
-/// A row leads with it in flat order and the host picker; grouped by host, its group's heading ends with it instead.
+/// A row leads with it in flat order and the host picker; grouped by host, its group's heading has HostHeadingMark.
 struct HostDisc: View {
     let host: HostRecord
     let metrics: SidebarMetrics
@@ -146,7 +129,29 @@ struct HostDisc: View {
     }
 }
 
-/// One space (or tabs only's tab) in the sidebar, in either density.
+/// The end of a host's tree heading, the button that opens its widget: its icon dimmed, so New Space is the sidebar's
+/// one raised circle; under the pointer the icon brightens on HostDisc's circle, which is the button's area either way.
+struct HostHeadingMark: View {
+    let host: HostRecord
+    let metrics: SidebarMetrics
+    @State private var hovering = false
+
+    private var tone: Color {
+        if let foreground = host.tint?.foreground { return hovering ? foreground : foreground.opacity(0.75) }
+        return hovering ? Chrome.palette.secondary : Chrome.palette.detail
+    }
+
+    var body: some View {
+        HostGlyph(host: host, size: metrics.hostIconSize)
+            .foregroundStyle(tone)
+            .frame(width: metrics.discSize, height: metrics.discSize)
+            .liquidGlass(in: Circle(), fallback: Chrome.palette.hover, tint: host.tint?.glassWash, enabled: hovering)
+            .contentShape(Circle())
+            .onHover { hovering = $0 }
+    }
+}
+
+/// One space in the sidebar, in either density.
 struct SidebarSpaceTile: View {
     let entry: SidebarEntry
     let host: HostRecord
@@ -160,10 +165,6 @@ struct SidebarSpaceTile: View {
     var showBranch = true
     var metrics = SidebarMetrics.large(contentSize: 14)
     var selection: Namespace.ID?
-    /// Marked with others to split or close together (tabs only's ⌘- and ⇧-clicks): an accent outline.
-    var marked = false
-    /// What the sidebar adds to a member's line: its click, drag and menu.
-    var decorate: SidebarMemberDecoration?
     @State private var hovered = false
 
     private var selectedFill: Color { host.tint.map { $0.foreground.opacity(0.16) } ?? Chrome.palette.selection }
@@ -203,7 +204,7 @@ struct SidebarSpaceTile: View {
     private var shortcutLabel: some View {
         Text(shortcut.isEmpty ? "·" : shortcut)
             .font(.system(size: metrics.shortcutSize).monospacedDigit()).tracking(metrics.shortcutSize * 0.06)
-            .foregroundStyle(Chrome.palette.secondary.opacity(0.7))
+            .foregroundStyle(Chrome.palette.secondary.opacity(metrics.shortcutOpacity))
             .accessibilityLabel(shortcut.isEmpty ? "No jump shortcut" : "Jump to space: \(shortcut)")
     }
 
@@ -235,7 +236,7 @@ struct SidebarSpaceTile: View {
         if metrics.cards {
             SidebarSpaceCard(entry: entry, host: host, mixedHost: mixedHost, selected: selected, pending: pending,
                              shortcut: shortcut, connecting: connecting, branch: branch, showBranch: showBranch,
-                             metrics: metrics, selection: selection, marked: marked, decorate: decorate)
+                             metrics: metrics, selection: selection)
         } else {
             rowBody
         }
@@ -248,54 +249,10 @@ struct SidebarSpaceTile: View {
             .accessibilityLabel(host.id == .local ? "Local" : "\(host.name) · \(host.system?.label ?? "Remote host, OS unavailable")")
     }
 
-    /// A split's lines in the compact and icons styles, one row's height each: the pane's glyph and its tab's name,
-    /// with its activity; the first line ends with the host icons and the shortcut, and in the icons style starts
-    /// with the disc. With the host's disc in its group's heading (`hostInHeader`) each line leads with its activity,
-    /// as a row does.
-    private var memberLines: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(entry.members.enumerated()), id: \.element.id) { index, member in
-                let line = HStack(spacing: 6) {
-                    if metrics.hostInHeader {
-                        AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
-                            .fixedSize().frame(width: metrics.markColumn)
-                    } else if metrics.icons {
-                        if index == 0 { disc } else { Color.clear.frame(width: metrics.discSize, height: 1) }
-                    } else {
-                        AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
-                            .fixedSize()
-                    }
-                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: selected && member.focused, size: metrics.nameSize)
-                    Text(member.name)
-                        .foregroundStyle(selected && member.focused ? Chrome.ink : Chrome.palette.secondary)
-                        .lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if metrics.icons && !metrics.hostInHeader {
-                        AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
-                            .fixedSize()
-                    }
-                    if index == 0 {
-                        if !metrics.icons { inlineHostIcons }
-                        shortcutLabel.fixedSize()
-                    }
-                }
-                .frame(height: metrics.rowHeight)
-                .contentShape(Rectangle())
-                decorated(member, line)
-            }
-        }
-    }
-
-    private func decorated(_ member: SidebarEntry.Member, _ line: some View) -> AnyView {
-        decorate.map { $0(member, AnyView(line)) } ?? AnyView(line)
-    }
-
     private var rowBody: some View {
         // The compact row (status, name, branch when shown, host icons and jump shortcut) or the icons style's.
         Group {
-            if !entry.members.isEmpty {
-                memberLines
-            } else if metrics.icons {
+            if metrics.icons {
                 iconsRow
             } else {
                 HStack(spacing: 6) {
@@ -313,17 +270,7 @@ struct SidebarSpaceTile: View {
         .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
         // The activity column starts where the heading's name does (SpaceSidebar.hostHeading, 10 in).
         .padding(.leading, metrics.hostInHeader ? 10 : metrics.icons ? 5 : 6).padding(.trailing, metrics.shortcutInset)
-        .frame(height: metrics.rowHeight * CGFloat(max(1, entry.members.count)))
-        // A split's lines hang from a bracket, one row's shape.
-        .overlay(alignment: .leading) {
-            if !entry.members.isEmpty, !metrics.icons {
-                Capsule().fill(Chrome.palette.secondary.opacity(0.35)).frame(width: 2)
-                    .padding(.vertical, metrics.rowHeight * 0.3).padding(.leading, 1.5)
-            }
-        }
-        .overlay {
-            if marked { RoundedRectangle(cornerRadius: metrics.cornerRadius).strokeBorder(Chrome.accent, lineWidth: 1.5) }
-        }
+        .frame(height: metrics.rowHeight)
         .background {
             let shape = RoundedRectangle(cornerRadius: metrics.cornerRadius)
             if selected {
@@ -359,124 +306,62 @@ struct SidebarSpaceCard: View {
     var showBranch = true
     let metrics: SidebarMetrics
     var selection: Namespace.ID?
-    var marked = false
-    var decorate: SidebarMemberDecoration?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
 
-    private var glass: Bool { LiquidGlassStore.shared.active }
     private var dark: Bool { Chrome.palette.isDark }
     /// The host's color; local cards stay neutral.
     private var hue: Color? { host.tint?.foreground }
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous) }
 
     var body: some View {
         let activity = AgentActivity(tabIDs: entry.surfaceIDs, connecting: connecting)
-        let split = !entry.members.isEmpty
-        HStack(alignment: split ? .top : .center, spacing: 11) {
+        HStack(alignment: .center, spacing: 11) {
             orb
             VStack(alignment: .leading, spacing: 3) {
-                if split {
-                    memberLines
-                    // A split's lines carry each tab's activity; its details keep the host and branch.
-                    details(tabs: false)
-                } else {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        // Semibold while selected, at its regular width (`AppFont.semiboldTracking`): it truncates the same.
-                        Text(entry.name)
-                            .font(Font(AppFont.native(size: metrics.nameSize, semibold: selected)))
-                            .tracking(selected ? AppFont.semiboldTracking(entry.name, size: metrics.nameSize) : 0)
-                            .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        keycap
-                    }
-                    // The fullest details line that fits: the tab count goes first, then the status's word for its glyph;
-                    // the last choice truncates the host and branch if it must.
-                    ViewThatFits(in: .horizontal) {
-                        detailsLine(tabs: true, status: activity.label, activity: activity)
-                        detailsLine(tabs: false, status: activity.label, activity: activity)
-                        detailsLine(tabs: false, status: nil, activity: activity)
-                    }
-                    // The status pill's entrance: agent activity changes outside any animation. This card's line only.
-                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: activity.label)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // Semibold while selected, at its regular width (`AppFont.semiboldTracking`): it truncates the same.
+                    Text(entry.name)
+                        .font(Font(AppFont.native(size: metrics.nameSize, semibold: selected)))
+                        .tracking(selected ? AppFont.semiboldTracking(entry.name, size: metrics.nameSize) : 0)
+                        .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    SidebarKeycap(shortcut: shortcut, selected: selected, size: metrics.shortcutSize)
+                        .accessibilityLabel("Jump to space: \(shortcut)")
                 }
+                // The fullest details line that fits: the tab count goes first, then the status's word for its glyph;
+                // the last choice truncates the host and branch if it must.
+                ViewThatFits(in: .horizontal) {
+                    detailsLine(tabs: true, status: activity.label, activity: activity)
+                    detailsLine(tabs: false, status: activity.label, activity: activity)
+                    detailsLine(tabs: false, status: nil, activity: activity)
+                }
+                // The status pill's entrance: agent activity changes outside any animation. This card's line only.
+                .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: activity.label)
             }
         }
         .padding(.leading, 9).padding(.trailing, 11)
-        .padding(.vertical, split ? (metrics.rowHeight - metrics.discSize) / 2 : 0)
-        .frame(height: split ? nil : metrics.rowHeight)
-        .background { surface }
-        .overlay { edge }
-        .contentShape(shape)
-        // Lifts a little under the pointer; Reduce Motion keeps it still.
-        .scaleEffect(hovered && !selected && !reduceMotion ? 1.012 : 1)
-        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: hovered)
-        .modifier(AttentionMotion(pending: pending, cornerRadius: metrics.cornerRadius, bar: false))
-        .onHover { hovered = $0 }
-        .accessibilityElement(children: split ? .contain : .combine)
+        .frame(height: metrics.rowHeight)
+        .modifier(SidebarCardChrome(selected: selected, pending: pending, host: host, metrics: metrics, selection: selection))
+        .accessibilityElement(children: .combine)
     }
 
-    /// A split's lines: the pane's glyph and its tab's name (the focused one's bright on the selected card), the tab's
-    /// activity, and on the last line the keycap.
-    private var memberLines: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(entry.members.enumerated()), id: \.element.id) { index, member in
-                let bright = selected && member.focused
-                let line = HStack(spacing: 7) {
-                    SidebarPaneGlyph(cells: entry.cells, cell: member.cell, lit: selected && member.focused, size: metrics.nameSize)
-                    Text(member.name)
-                        .font(Font(AppFont.native(size: metrics.nameSize, semibold: bright)))
-                        .tracking(bright ? AppFont.semiboldTracking(member.name, size: metrics.nameSize) : 0)
-                        .foregroundStyle(bright ? Chrome.ink : Chrome.palette.secondary.opacity(selected ? 0.8 : 1))
-                        .lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    AgentActivityGlyph(tabIDs: member.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
-                        .fixedSize()
-                    if index == entry.members.count - 1 { keycap }
-                }
-                .contentShape(Rectangle())
-                decorate.map { $0(member, AnyView(line)) } ?? AnyView(line)
-            }
-        }
-    }
-
-    /// The host's icon in a soft orb of its color: glass on Liquid Glass, a gradient without it.
+    /// The host's icon in a soft orb of its color.
     private var orb: some View {
-        let size = metrics.discSize
-        return HostGlyph(host: host, size: metrics.hostIconSize)
-            .foregroundStyle(hue ?? Chrome.palette.secondary)
-            .frame(width: size, height: size)
-            .background {
-                Circle().fill(RadialGradient(colors: [(hue ?? Chrome.ink).opacity(dark ? 0.26 : 0.18),
-                                                      (hue ?? Chrome.ink).opacity(dark ? 0.08 : 0.05)],
-                                             center: .topLeading, startRadius: 0, endRadius: size))
-            }
-            .overlay { Circle().strokeBorder((hue ?? Chrome.ink).opacity(selected ? 0.45 : 0.2), lineWidth: 1) }
-            .liquidGlass(in: Circle(), tint: host.tint?.glassWash)
-            .help(host.id == .local ? "Local" : host.details)
-            .accessibilityLabel(host.id == .local ? "Local" : "\(host.name) · \(host.system?.label ?? "Remote host, OS unavailable")")
-    }
-
-    /// The jump shortcut as a small keycap; none while the space has no key.
-    @ViewBuilder private var keycap: some View {
-        if !shortcut.isEmpty {
-            Text(shortcut)
-                .font(.system(size: metrics.shortcutSize).monospacedDigit()).tracking(metrics.shortcutSize * 0.04)
-                .foregroundStyle(Chrome.palette.secondary.opacity(selected ? 0.95 : 0.7))
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Chrome.ink.opacity(dark ? 0.07 : 0.05), in: Capsule())
-                .overlay { Capsule().strokeBorder(Chrome.ink.opacity(dark ? 0.1 : 0.08), lineWidth: 0.5) }
-                .fixedSize()
-                .accessibilityLabel("Jump to space: \(shortcut)")
+        SidebarCardOrb(hue: hue, glassTint: host.tint?.glassWash, selected: selected, size: metrics.discSize) {
+            HostGlyph(host: host, size: metrics.hostIconSize)
         }
+        .help(host.id == .local ? "Local" : host.details)
+        .accessibilityLabel(host.id == .local ? "Local" : "\(host.name) · \(host.system?.label ?? "Remote host, OS unavailable")")
     }
 
     private func detailsLine(tabs: Bool, status: String?, activity: AgentActivity) -> some View {
         HStack(spacing: 6) {
             details(tabs: tabs)
             Spacer(minLength: 0)
-            if activity.label != nil { statusPill(status, activity: activity) }
+            if activity.label != nil {
+                SidebarStatusPill(activity: activity, surfaceIDs: entry.surfaceIDs, connecting: connecting, metrics: metrics,
+                                  label: status)
+            }
         }
     }
 
@@ -511,15 +396,70 @@ struct SidebarSpaceCard: View {
     private var separator: some View { Text("·").foregroundStyle(detailColor.opacity(0.6)) }
     /// Details stay legible over a card's glass and its host's tint.
     private var detailColor: Color { Chrome.palette.secondary.opacity(selected ? 0.8 : 0.62) }
+}
 
-    /// The agents' status in a word on a pill of its color, with the glyph the other styles show; the glyph alone when
-    /// `label` is nil.
-    private func statusPill(_ label: String?, activity: AgentActivity) -> some View {
+/// A Large card's orb: its glyph (the host's, or a tab's) over a soft gradient of `hue` (neutral without), glass on
+/// Liquid Glass, ringed brighter while selected.
+struct SidebarCardOrb<Glyph: View>: View {
+    let hue: Color?
+    var glassTint: Color?
+    let selected: Bool
+    let size: CGFloat
+    @ViewBuilder let glyph: Glyph
+
+    var body: some View {
+        let dark = Chrome.palette.isDark
+        glyph
+            .foregroundStyle(hue ?? Chrome.palette.secondary)
+            .frame(width: size, height: size)
+            .background {
+                Circle().fill(RadialGradient(colors: [(hue ?? Chrome.ink).opacity(dark ? 0.26 : 0.18),
+                                                      (hue ?? Chrome.ink).opacity(dark ? 0.08 : 0.05)],
+                                             center: .topLeading, startRadius: 0, endRadius: size))
+            }
+            .overlay { Circle().strokeBorder((hue ?? Chrome.ink).opacity(selected ? 0.45 : 0.2), lineWidth: 1) }
+            .liquidGlass(in: Circle(), tint: glassTint)
+    }
+}
+
+/// A Large card's jump shortcut as a small keycap; none without a key.
+struct SidebarKeycap: View {
+    let shortcut: String
+    let selected: Bool
+    let size: CGFloat
+
+    var body: some View {
+        if !shortcut.isEmpty {
+            let dark = Chrome.palette.isDark
+            Text(shortcut)
+                .font(.system(size: size).monospacedDigit()).tracking(size * 0.04)
+                .foregroundStyle(Chrome.palette.secondary.opacity(selected ? 0.95 : 0.7))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Chrome.ink.opacity(dark ? 0.07 : 0.05), in: Capsule())
+                .overlay { Capsule().strokeBorder(Chrome.ink.opacity(dark ? 0.1 : 0.08), lineWidth: 0.5) }
+                .fixedSize()
+        }
+    }
+}
+
+/// A Large card's status: the agents' state in a word on a pill of its color, with the glyph the other styles show
+/// (`glyph` false: the word alone, its glyph shown elsewhere); the glyph alone when `label` is nil.
+struct SidebarStatusPill: View {
+    let activity: AgentActivity
+    let surfaceIDs: [UUID]
+    let connecting: Bool
+    let metrics: SidebarMetrics
+    let label: String?
+    var glyph = true
+
+    var body: some View {
+        let dark = Chrome.palette.isDark
         let color = activity.reconnecting ? Chrome.palette.warning : activity.offline ? Chrome.muted
             : activity.blocked || activity.failed ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
-        return HStack(spacing: 4) {
-            AgentActivityGlyph(tabIDs: entry.surfaceIDs, connecting: connecting, size: metrics.activitySize)
-                .fixedSize()
+        HStack(spacing: 4) {
+            if glyph {
+                AgentActivityGlyph(tabIDs: surfaceIDs, connecting: connecting, size: metrics.activitySize).fixedSize()
+            }
             if let label { Text(label).foregroundStyle(color).lineLimit(1) }
         }
         .interfaceFont(size: metrics.detailSize)
@@ -528,9 +468,38 @@ struct SidebarSpaceCard: View {
         .fixedSize()
         .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
+}
 
-    /// The card's body: its own glass on Liquid Glass, interactive and host-tinted while selected, with the selection
-    /// sliding from card to card; without glass, translucent fills.
+/// A Large card's chrome, for a space's card and vertical tabs' tab cards alike: its own glass on Liquid Glass,
+/// interactive and host-tinted while selected, with the selection sliding from card to card (without glass,
+/// translucent fills); a specular edge, brighter along the top as light catches glass, the host's color while
+/// selected and the attention accent while it needs you; a soft glow of another host's color under the selected card
+/// (local cards stay neutral); a slight lift under the pointer, which Reduce Motion keeps still.
+struct SidebarCardChrome: ViewModifier {
+    let selected: Bool
+    var pending = false
+    let host: HostRecord
+    let metrics: SidebarMetrics
+    var selection: Namespace.ID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+
+    private var glass: Bool { LiquidGlassStore.shared.active }
+    private var dark: Bool { Chrome.palette.isDark }
+    private var hue: Color? { host.tint?.foreground }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous) }
+
+    func body(content: Content) -> some View {
+        content
+            .background { surface }
+            .overlay { edge }
+            .contentShape(shape)
+            .scaleEffect(hovered && !selected && !reduceMotion ? 1.012 : 1)
+            .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: hovered)
+            .modifier(AttentionMotion(pending: pending, cornerRadius: metrics.cornerRadius, bar: false))
+            .onHover { hovered = $0 }
+    }
+
     @ViewBuilder private var surface: some View {
         let selectedWash = hue.map { $0.opacity(dark ? 0.16 : 0.1) } ?? Chrome.ink.opacity(dark ? 0.09 : 0.06)
         ZStack {
@@ -548,21 +517,10 @@ struct SidebarSpaceCard: View {
                 }
             }
         }
-        // A soft glow of another host's color under its selected card; local cards stay neutral.
         .shadow(color: selected ? (hue?.opacity(dark ? 0.3 : 0.18) ?? .clear) : .clear, radius: 12, y: 4)
     }
 
-    /// A specular edge: brighter along the top, as light catches glass; the host's color while selected, the attention
-    /// accent while the space needs you.
-    @ViewBuilder private var edge: some View {
-        if marked {
-            shape.strokeBorder(Chrome.accent, lineWidth: 1.5).allowsHitTesting(false)
-        } else {
-            plainEdge
-        }
-    }
-
-    private var plainEdge: some View {
+    private var edge: some View {
         let accent = pending ? InterfaceMotion.accent : selected ? hue : nil
         let top = accent.map { $0.opacity(pending ? 0.7 : 0.55) } ?? Color.white.opacity(dark ? (hovered || selected ? 0.18 : 0.1) : 0.5)
         let bottom = accent.map { $0.opacity(0.2) } ?? Color.white.opacity(dark ? 0.03 : 0.15)
@@ -571,11 +529,8 @@ struct SidebarSpaceCard: View {
     }
 }
 
-/// What the sidebar wraps around a split member's line: its click, drag and menu.
-typealias SidebarMemberDecoration = (SidebarEntry.Member, AnyView) -> AnyView
-
-/// A split's layout in miniature with one pane filled: where a split row's line sits on screen. The focused pane's,
-/// on the selected row only, is filled with the accent, another's dimly.
+/// A split's layout in miniature with one pane filled: where a pane sits on screen, for vertical tabs' pane headings
+/// and a window's pane lines. The focused pane's, lit, is filled with the accent, another's dimly.
 struct SidebarPaneGlyph: View {
     let cells: [CGRect]
     let cell: Int

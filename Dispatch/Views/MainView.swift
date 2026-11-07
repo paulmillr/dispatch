@@ -17,13 +17,14 @@ struct MainView: View {
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
         return (space.windowPresentation?.groups.count ?? 1) <= 1
-            && (titlebarTabs || WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly))
+            && (titlebarTabs || WindowTabBar.showsTabs(space: space, verticalTabs: workspace.verticalTabs))
     }
 
-    /// Outside full screen, the strips along the top edge are the title row, as pills. Tabs only has no strips: the
-    /// sidebar lists the tabs, and with it hidden the plain title row carries the toggle and the tab's name.
+    /// Outside full screen, the strips along the top edge are the title row, as pills. Vertical tabs has no strips:
+    /// the sidebar lists the tabs and the content takes the window's full height.
     private var titlebarTabs: Bool {
-        !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil && workspace.current != nil && !workspace.tabsOnly
+        !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil && workspace.current != nil
+            && !workspace.verticalTabs
     }
 
     /// The title-row placement for a pane or tmux group, if its strip touches the top edge. With the
@@ -34,31 +35,30 @@ struct MainView: View {
     }
 
     /// The window header row exists only when no tab strip carries the window controls:
-    /// a visible sidebar does, and so does the title row. Tabs only has its own, over the content.
+    /// a visible sidebar does, and so does the title row. Vertical tabs has none: the sidebar toggle floats
+    /// beside the window's controls (`floatingSidebarToggle`).
     private var showsHeader: Bool {
-        !controller.windowState.isFullScreen && !sidebarVisible && !titlebarTabs && !contentTitleRow
+        !controller.windowState.isFullScreen && !sidebarVisible && !titlebarTabs && !workspace.verticalTabs
     }
 
-    /// Tabs only (outside full screen) keeps a title row over the content column, the sidebar shown or not, as a
-    /// pane's strip does in spaces: toggling the sidebar slides it sideways and never moves the terminal's top edge.
-    /// The row leads with the window controls' gap and the sidebar toggle only while the sidebar is hidden.
-    private var contentTitleRow: Bool {
-        workspace.tabsOnly && !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil
+    /// Vertical tabs with the sidebar hidden, outside full screen: the toggle over the content after the traffic
+    /// lights, where the title row would carry it, the content keeping its full height.
+    private var floatingSidebarToggle: Bool {
+        workspace.verticalTabs && !sidebarVisible && !controller.windowState.isFullScreen
     }
 
     private var hasLeadingTabRow: Bool {
         guard let space = workspace.current,
               let pane = space.panes.first(where: { $0.id == space.layout.paneIDs.first }) else { return false }
-        if space.structured { return showTmuxTabs || space.panes.count > 1 }
-        return PaneView.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
+        if space.structured { return showTmuxTabs || (!workspace.verticalTabs && space.panes.count > 1) }
+        return PaneView.showsTabs(pane: pane, space: space, verticalTabs: workspace.verticalTabs)
     }
 
     /// In full screen without a tab row, the edge reveal shows the host mark in place of the sidebar button, whenever a
     /// strip would lead with one: the active tab's host, or the Mac with other spaces to switch to. Its picker carries
     /// the sidebar toggle.
     private var revealHost: StripHost? {
-        // The mark's picker lists spaces, which tabs only keeps out of sight: its reveal is the plain button.
-        guard controller.windowState.isFullScreen, !sidebarVisible, !hasLeadingTabRow, !workspace.tabsOnly,
+        guard controller.windowState.isFullScreen, !sidebarVisible, !hasLeadingTabRow,
               let space = workspace.current else { return nil }
         if let host = TerminalRuntime.shared.ssh.stripHost(active: space.activeTab, among: space.tabs) { return host }
         return workspace.lastingSpaceCount > 1 ? StripHost(record: .local, tint: nil) : nil
@@ -114,6 +114,17 @@ struct MainView: View {
         .ignoresSafeArea()
         .overlay { HostMoveCanvas(motion: workspace.hostMoveMotion).allowsHitTesting(false) }
         .overlay(alignment: .top) { VoiceNavigationNote() }
+        .overlay(alignment: .topLeading) {
+            if floatingSidebarToggle {
+                HStack(spacing: 12) {
+                    Color.clear.frame(width: sidebarToggleLeadingSpace)
+                    SidebarToggle(controller: controller)
+                }
+                .padding(.horizontal, 14).frame(height: StripTab.titleRowHeight(typography))
+                .environment(\.appTypography, typography)
+                .ignoresSafeArea()
+            }
+        }
         .overlay(alignment: .leading) {
             if controller.windowState.isFullScreen {
                 let host = revealHost
@@ -154,7 +165,7 @@ struct MainView: View {
         }
         .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.sidebarVisibilityOverride = nil }
         // The runtime mirrors a saved choice as it applies it; this covers a value set without saving (tests).
-        .onChange(of: settings.values.tabsOnly, initial: true) { _, tabsOnly in workspace.tabsOnly = tabsOnly }
+        .onChange(of: settings.values.verticalTabs, initial: true) { _, vertical in workspace.verticalTabs = vertical }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }
     }
 
@@ -166,7 +177,7 @@ struct MainView: View {
     private var minimumContentSize: CGSize {
         let panes = minimumTerminalSize
         return CGSize(width: max(620, (sidebarVisible ? max(420, panes.width) + typography.expanded(200) + 1 : panes.width)),
-                      height: max(400, panes.height + (showsHeader || contentTitleRow ? StripTab.titleRowHeight(typography) + 1 : 0)))
+                      height: max(400, panes.height + (showsHeader ? StripTab.titleRowHeight(typography) + 1 : 0)))
     }
 
     /// With Liquid Glass, tmux strips lie over the panes instead of taking their own row, in full screen too.
@@ -186,23 +197,13 @@ struct MainView: View {
         return CGSize(width: panes.width, height: panes.height + (showTmuxTabs ? tmuxStripHeight : 0))
     }
 
-    private var contentColumn: some View {
-        VStack(spacing: 0) {
-            if contentTitleRow {
-                titleBar(controls: !sidebarVisible)
-                Rectangle().fill(Chrome.border).frame(height: 1)
-            }
-            content
-        }
-    }
+    private var contentColumn: some View { content }
 
-    /// `controls`: the row leads the window, after the traffic lights, with the sidebar toggle.
-    private func titleBar(controls: Bool = true) -> some View {
+    /// The row leads the window, after the traffic lights, with the sidebar toggle.
+    private func titleBar() -> some View {
         HStack(spacing: 12) {
-            if controls {
-                Color.clear.frame(width: sidebarToggleLeadingSpace)
-                SidebarToggle(controller: controller)
-            }
+            Color.clear.frame(width: sidebarToggleLeadingSpace)
+            SidebarToggle(controller: controller)
             Spacer(minLength: 0)
             MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography, .title).lineLimit(1).truncationMode(.middle)
                 .id(workspace.selectedSpace)
@@ -236,10 +237,8 @@ struct MainView: View {
                                   identity: "\(space.id):\(space.layout)",
                                   spaceID: space.id, layout: space.layout, hostID: space.hostID, selectedTabID: space.activeWindow?.id)
                 }
-                // Split tmux windows give each group its own strip; with glass each washes below its own. Tabs only with
-                // the sidebar shown: its row marks the host, so no edge across the top.
-                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) || (workspace.tabsOnly && sidebarVisible)
-                                ? nil : tmuxTint(space),
+                // Split tmux windows give each group its own strip; with glass each washes below its own.
+                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) ? nil : tmuxTint(space),
                                 surfaceID: space.activeTab?.focusedSurfaceID,
                                 stripHeight: showTmuxTabs ? tmuxStripHeight : 0)
                 .modifier(PaneFocusHighlight(workspace: workspace,
@@ -251,12 +250,9 @@ struct MainView: View {
                         .accessibilityHidden(true)
                     Text("A space to work.").font(typography, offset: 4.5)
                     HStack(spacing: 10) {
-                        // Tabs only: a new tab is the only thing to make (⌘N still works, unadvertised).
-                        if !workspace.tabsOnly {
-                            Button { workspace.newNativeSpace() } label: {
-                                EmptyStateAction(symbol: "plus", title: "New Space", shortcut: "⌘N")
-                            }.keyboardShortcut("n")
-                        }
+                        Button { workspace.newNativeSpace() } label: {
+                            EmptyStateAction(symbol: "plus", title: "New Space", shortcut: "⌘N")
+                        }.keyboardShortcut("n")
                         Button { workspace.newTab() } label: {
                             EmptyStateAction(symbol: "macwindow.badge.plus", title: "New Tab", shortcut: "⌘T")
                         }.keyboardShortcut("t")
@@ -296,8 +292,8 @@ struct MainView: View {
            let group = presentation.groups.first(where: { group in
                space.windows.first(where: { $0.id == group.selected })?.arrangement.layout == node
            }) {
-            // Tabs only lists the windows in the sidebar: each group keeps its place and focus ring, without a strip.
-            let strip = !workspace.tabsOnly
+            // Vertical tabs lists the windows in the sidebar: each group keeps its place and focus ring, without a strip.
+            let strip = !workspace.verticalTabs
             return AnyView(GlassStripStack(overlaid: glassStrips) {
                 if strip {
                     WindowTabBar(space: space, workspace: workspace, controller: controller, group: group,
@@ -462,7 +458,8 @@ private struct SidebarToggleGlass: ViewModifier {
             if onCapsule {
                 content.frame(minWidth: size, minHeight: size).modifier(StripActionHover()).contentShape(Capsule())
             } else {
-                content.frame(minWidth: size, minHeight: size).liquidGlass(in: Capsule(), interactive: true).contentShape(Capsule())
+                content.frame(minWidth: size, minHeight: size).liquidGlass(in: Capsule(), interactive: true).glassHover(Capsule())
+                    .contentShape(Capsule())
             }
         } else {
             content.contentShape(Rectangle())
@@ -678,8 +675,6 @@ final class FullScreenSidebarRevealView: NSView {
     let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
     let tab = space.containers.first { $0.id == space.selectedContainer }.map { runtime.label(for: $0, automatic: automatic) }
         ?? space.activeTab.map { runtime.label(for: workspace.liveTab($0.id) ?? $0, automatic: automatic) }
-    // Tabs only names no space.
-    if workspace.tabsOnly { return tab ?? "Terminal" }
     return "\(tab ?? "Terminal") — \(workspace.liveName(space))"
 }
 
