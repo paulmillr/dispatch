@@ -156,6 +156,33 @@ final class SSHTransportTests: XCTestCase {
         try decoder.finish()
     }
 
+    func testAFollowedFrameReportsItsWritingAndStaysItsOwnBuffer() throws {
+        // An attachment's frame is followed as the descriptor takes it (ChatAttachmentUpload.sent): in order, up to its
+        // whole size, never past it, however many small frames are sent behind it.
+        final class Reports: @unchecked Sendable { var written: [Int] = [] }
+        let output = Pipe(), unused = Pipe(), reports = Reports()
+        let transport = HelperTransport(read: unused.fileHandleForReading, write: output.fileHandleForWriting)
+        defer { transport.close() }
+        let large = try HelperWire.encode(HelperWire.Message(kind: .request, id: 1, body: Data(repeating: 7, count: 600_000)))
+        transport.send(large, sent: { reports.written.append($0) })
+        var expected = large
+        for id in 2...4 {
+            let small = try HelperWire.encode(HelperWire.Message(kind: .request, id: UInt64(id), body: Data("{}".utf8)))
+            transport.send(small); expected += small
+        }
+        // The pipe holds far less than the frame: it goes out in many writes as this side reads.
+        var received = Data()
+        for _ in 0..<10_000 where received.count < expected.count {
+            received += try XCTUnwrap(output.fileHandleForReading.read(upToCount: 65_536))
+        }
+        transport.queue.sync {}
+        XCTAssertEqual(received, expected)
+        XCTAssertGreaterThan(reports.written.count, 2, "\(reports.written)")
+        XCTAssertEqual(reports.written, reports.written.sorted())
+        XCTAssertEqual(Set(reports.written).count, reports.written.count)
+        XCTAssertEqual(reports.written.last, large.count)
+    }
+
     func testFramesSurviveEverySplitAndRejectInvalidLengths() throws {
         let frames = [HelperWire.Message(kind: .request, id: 0, body: Data("{}".utf8)),
                       HelperWire.Message(kind: .chunk, id: 0x1234_5678_9abc, body: Data(0...255)),

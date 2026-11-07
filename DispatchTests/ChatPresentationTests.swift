@@ -31,6 +31,110 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertTrue(session.turns.isEmpty, "A replacement connection must discover its own capability")
     }
 
+    /// Files dragged over the chat: the composer grows to the pane's top over the transcript, keeping its draft, with the
+    /// files as chips over "Add to message", and falls back when the drag leaves. A remote chat's well names the host
+    /// the files are uploaded to; one that would take the message past its limit says so instead.
+    func testDraggedFilesGrowTheComposerOverThePane() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = "drop"; session.active = true; session.showChat = true
+        session.helper = HelperChat(terminal: 0); session.acceptsAttachments = true
+        coordinator.receiveHelper(.records([.init(id: "earlier", turn: "earlier", kind: "notice",
+            text: "Totals now sum the exact amounts and round once.", title: "", output: "", blocks: [],
+            completed: true, exit_code: nil, patch: nil, time_ms: nil, documents: [], tool: nil,
+            inline_reasoning: false)]), session: session)
+        session.draft = "Also cover the zero-amount case"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: true, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(250))
+        // Inside the chat its identifier gives way to the chat's own: found by what it says.
+        let label = "Add to message: receipt-1042.png, invoices-2026-10.csv"
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames(label: label, in: window).isEmpty)
+
+        let items = [ChatAttachmentDrag.Item(name: "receipt-1042.png", image: true, size: 421_888),
+                     ChatAttachmentDrag.Item(name: "invoices-2026-10.csv", image: false, size: 18_432)]
+        session.attachmentDrag = ChatAttachmentDrag(items: items, overPane: true)
+        let height = try XCTUnwrap(window.contentView).bounds.height
+        var frames: [NSRect] = []
+        try await TestSupport.eventually(diagnostic: "well \(frames) in \(height)") {
+            frames = PresentationTestSupport.accessibilityFrames(label: label, in: window)
+            // The chips and title sit centred in the room the composer gained, the pane's upper part (the transcript
+            // under it is hidden: checked on the capture below).
+            return frames.count == 1 && frames[0].midY > height * 0.5 && frames[0].maxY < height - 12
+        }
+        try await Task.sleep(for: .milliseconds(300)) // The composer grows over 0.2 s.
+        let grown = try await PresentationTestSupport.capture(window, named: "attachment-drop", in: "chat-validation").text().lowercased()
+        for text in ["add to message", "receipt", "invoices", "zero-amount"] { XCTAssertTrue(grown.contains(text), "\(text): \(grown)") }
+        XCTAssertFalse(grown.contains("round once"), "The transcript is under the grown composer: \(grown)")
+
+        // Over the composer alone it stays; gone, the transcript shows again.
+        session.attachmentDrag?.overPane = false; session.attachmentDrag?.overComposer = true
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(PresentationTestSupport.accessibilityFrames(label: label, in: window).count, 1)
+        session.attachmentDrag = nil
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames(label: label, in: window).isEmpty }
+        try await Task.sleep(for: .milliseconds(300))
+        let after = try await PresentationTestSupport.capture(window, named: "attachment-drop-ended", in: "chat-validation").text().lowercased()
+        XCTAssertTrue(after.contains("round once"), after)
+
+        // Dropped: the file uploads in a chip that counts what is written, then waits for the host to store it.
+        var upload = ChatAttachmentUpload(id: "receipt", draft: session.drafts.current.id, scope: session.drafts.scope,
+                                          name: "receipt-1042.png", source: .data(name: "receipt-1042.png", Data([1])))
+        upload.size = 421_888; upload.sent = 0.42
+        session.attachmentUploads = [upload]
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames(label: "Uploading", in: window).count == 1 }
+        let uploading = try await PresentationTestSupport.capture(window, named: "attachment-uploading", in: "chat-validation").text().lowercased()
+        XCTAssertTrue(uploading.contains("uploading 42%"), uploading)
+        session.attachmentUploads[0].sent = 1
+        try await Task.sleep(for: .milliseconds(150))
+        let finishing = try await PresentationTestSupport.capture(window, named: "attachment-finishing", in: "chat-validation").text().lowercased()
+        XCTAssertTrue(finishing.contains("finishing"), finishing)
+        session.attachmentUploads = []
+
+        // On Liquid Glass the input floats over the transcript: the grown glass composer hides it all the same.
+        let glass = LiquidGlassStore.shared.enabled
+        defer { LiquidGlassStore.shared.enabled = glass }
+        LiquidGlassStore.shared.enabled = true
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: true, floatingSwitch: false))
+        try await Task.sleep(for: .milliseconds(250))
+        session.attachmentDrag = ChatAttachmentDrag(items: items, overPane: true)
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames(label: label, in: window).count == 1 }
+        try await Task.sleep(for: .milliseconds(300))
+        let glassy = try await PresentationTestSupport.capture(window, named: "attachment-drop-glass", in: "chat-validation").text().lowercased()
+        for text in ["add to message", "zero-amount"] { XCTAssertTrue(glassy.contains(text), "\(text): \(glassy)") }
+        XCTAssertFalse(glassy.contains("round once"), glassy)
+        session.attachmentDrag = nil
+
+        // A remote chat's well, alone: the host by name; past the message's limit, the limit instead.
+        let host = HostRecord(id: .authenticated("build-box-fixture"), name: "build-box", destinations: ["dev@build-box"], order: 0)
+        let drag = ChatAttachmentDrag(items: items, overPane: true)
+        for (attached, expected) in [(0, "Add to message: receipt-1042.png, invoices-2026-10.csv, uploaded to build-box"),
+                                     (9, "Add to message: receipt-1042.png, invoices-2026-10.csv. " + ChatAttachmentError.tooMany.localizedDescription)] {
+            window.contentView = NSHostingView(rootView: VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Color.clear.frame(height: 80)
+                    .modifier(ChatComposerDropWell(drag: drag, top: 12, host: host, attached: attached) { Color.clear })
+            }
+            .coordinateSpace(.named(ChatFlightFrames.space))
+            .environment(\.chatTheme, ChatThemeStore.shared.current)
+            .background(ChatThemeStore.shared.current.terminal))
+            try await TestSupport.eventually {
+                PresentationTestSupport.accessibilityLabels("chat-attachment-drop", in: window) == [expected]
+            }
+            if attached == 0 {
+                let remote = try await PresentationTestSupport.capture(window, named: "attachment-drop-remote", in: "chat-validation").text().lowercased()
+                XCTAssertTrue(remote.contains("uploaded to") && remote.contains("build-box"), remote)
+            }
+        }
+        let remote = try await PresentationTestSupport.capture(window, named: "attachment-drop-limit", in: "chat-validation").text().lowercased()
+        XCTAssertTrue(remote.contains("at most 10"), remote)
+    }
+
     func testSplitComposerFocusPreservesEditorsDraftsAndReadingGeometry() async throws {
         let glass = LiquidGlassStore.shared.enabled
         defer { LiquidGlassStore.shared.enabled = glass }
@@ -96,7 +200,7 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertTrue(text.contains("thinking"), text)
         XCTAssertEqual(text.components(separatedBy: "reply").count - 1, 3,
                        "Both idle panes and the focused editor must show Reply: \(text)")
-        XCTAssertFalse(text.contains("preserve working draft"), text)
+        XCTAssertTrue(text.contains("preserve working draft"), "an unfocused pane keeps its draft in view: \(text)")
         XCTAssertEqual(sessions[3].draft, "Preserve working draft")
         XCTAssertEqual(editors[3].selectedRange(), NSRange(location: 3, length: 5))
         for (before, after) in zip(originalFrames, try frames()) {
@@ -114,6 +218,10 @@ final class ChatPresentationTests: XCTestCase {
         let point = editors[0].convert(NSPoint(x: 20, y: 10), to: nil)
         try PresentationTestSupport.click(window, at: point)
         try await TestSupport.eventually { workspace.activeSurfaceID == tabs[0] && window.firstResponder === editors[0] }
+        // A click on an unfocused pane's draft focuses its editor, the selection where it was.
+        try PresentationTestSupport.click(window, at: editors[3].convert(NSPoint(x: 20, y: 10), to: nil))
+        try await TestSupport.eventually { workspace.activeSurfaceID == tabs[3] && window.firstResponder === editors[3] }
+        XCTAssertEqual(editors[3].selectedRange(), NSRange(location: 3, length: 5))
         // Rapid keyboard reversals settle on the final target, including drafts.
         workspace.selectPane(at: 3); workspace.selectPane(at: 2); workspace.selectPane(at: 3)
         try await TestSupport.eventually { window.firstResponder === editors[3] }
@@ -241,15 +349,20 @@ final class ChatPresentationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(250))
             let snapshot = try await PresentationTestSupport.capture(window, named: "composer-width-\(width)", in: "chat-validation")
             let text = try snapshot.text().lowercased()
-            for label in ["astra", "drafts", "send"] { XCTAssertTrue(text.contains(label), text) }
+            for label in ["astra", "send"] { XCTAssertTrue(text.contains(label), text) }
             XCTAssertFalse(text.contains("keep"), text)
-            let lines = try snapshot.recognizedText()
-            let drafts = try XCTUnwrap(lines.first { $0.topCandidates(1).first?.string.lowercased().contains("drafts") == true })
-            let send = try XCTUnwrap(lines.first { $0.topCandidates(1).first?.string.lowercased().hasPrefix("send") == true })
-            XCTAssertEqual(drafts.boundingBox.midY, send.boundingBox.midY, accuracy: 0.025, "Drafts must share the Send button's footer row")
+            // Folded, drafts are an icon and count and the effort its meter: only the wide footer has their words.
+            let full = width == 1000
+            XCTAssertEqual(text.contains("drafts"), full, text)
+            XCTAssertEqual(text.contains("high"), full, text)
+            if !full {
+                func frame(_ label: String) throws -> NSRect {
+                    try XCTUnwrap(PresentationTestSupport.accessibilityFrames(matching: { _ in true }, label: label, in: window).first { !$0.isEmpty })
+                }
+                XCTAssertEqual(try frame("1 saved draft").midY, try frame("Send message").midY, accuracy: 2, "Drafts must share the Send button's footer row")
+            }
             XCTAssertFalse(text.contains("codex"), text)
             XCTAssertFalse(text.contains("gpt-6-astra"), text)
-            XCTAssertTrue(text.contains("high"), text)
             for label in ["editor", "steer"] { XCTAssertFalse(text.contains(label), text) }
         }
         editor.insertText("Multiline draft", replacementRange: editor.selectedRange())
@@ -893,7 +1006,7 @@ final class ChatPresentationTests: XCTestCase {
 
 extension ChatPresentationTests {
     /// A working agent's footer gives up its labels before its row: one line at a narrow pane, two only when even
-    /// the minimal row cannot fit.
+    /// the compact row cannot fit.
     func testWorkingComposerFooterKeepsOneRowInNarrowPanes() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -927,15 +1040,15 @@ extension ChatPresentationTests {
                 XCTAssertEqual(model.midY, send.midY, accuracy: 2, "Model and Send share one row at \(width) pt")
                 XCTAssertEqual(stop.midY, send.midY, accuracy: 2, "Stop shares the row at \(width) pt")
             } else {
-                XCTAssertGreaterThan(abs(model.midY - send.midY), 8, "Only a pane too narrow for the minimal row takes two")
+                XCTAssertGreaterThan(abs(model.midY - send.midY), 8, "Only a pane too narrow for the compact row takes two")
             }
         }
-        XCTAssertGreaterThan(sendWidths[560] ?? 0, (sendWidths[490] ?? 0) + 8, "The keycap goes first")
+        XCTAssertGreaterThan(sendWidths[560] ?? 0, (sendWidths[490] ?? 0) + 8, "The compact row has no keycap")
         window.setContentSize(NSSize(width: 490, height: 400))
         try await TestSupport.eventually { frame("Queue message")?.width == sendWidths[490] }
-        let labeled = try await PresentationTestSupport.capture(window, named: "working-490", in: "chat-footer-validation").text().lowercased()
-        XCTAssertTrue(labeled.contains("thinking"), "The activity keeps its label after the keycap goes: \(labeled)")
-        // Hidden in the tightest row, the ⌘/ chip still anchors its sheet.
+        let folded = try await PresentationTestSupport.capture(window, named: "working-490", in: "chat-footer-validation").text().lowercased()
+        XCTAssertFalse(folded.contains("thinking"), "The activity's label folds with the keycap: \(folded)")
+        // Hidden in the compact row, the ⌘/ chip still anchors its sheet.
         window.setContentSize(NSSize(width: 375, height: 400))
         // Only the hidden anchor is left, behind the reply button's leading edge.
         try await TestSupport.eventually {
@@ -945,5 +1058,40 @@ extension ChatPresentationTests {
         session.shortcutsPresented = true
         try await TestSupport.eventually { NSApp.windows.contains { $0 !== window && $0.isVisible && $0.contentView != nil } }
         session.shortcutsPresented = false
+    }
+
+    /// An idle footer with a shell and a draft left by another conversation folds them onto one row, in words only
+    /// where they fit.
+    func testRecoveredDraftFoldsOntoOneFooterRow() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = "footer-left-behind"; session.active = true; session.showChat = true
+        session.model = "gpt-6-astra"; session.effort = "high"
+        session.shells = [ChatShell(id: "shell", started: .now)]
+        session.draft = "Typed before the conversation changed"
+        session.sessionID = "footer-recovered"
+        XCTAssertFalse(session.drafts.recoverable.isEmpty)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 400),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: true, floatingSwitch: false))
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        func frame(_ label: String) -> NSRect? {
+            PresentationTestSupport.accessibilityFrames(matching: { _ in true }, label: label, in: window).first { !$0.isEmpty }
+        }
+        for (width, words) in [(1000.0, true), (375.0, false)] {
+            window.setContentSize(NSSize(width: width, height: 400))
+            try await TestSupport.eventually { frame("Send message").map { $0.maxX <= width } ?? false }
+            try await Task.sleep(for: .milliseconds(250))
+            let text = try await PresentationTestSupport.capture(window, named: "recovered-draft-\(Int(width))", in: "chat-footer-validation").text().lowercased()
+            XCTAssertEqual(text.contains("unsent draft"), words, text)
+            let send = try XCTUnwrap(frame("Send message"))
+            for label in ["1 unsent draft", "Choose model", ChatComposerShells.title(1)] {
+                XCTAssertEqual(try XCTUnwrap(frame(label), label).midY, send.midY, accuracy: 2, "\(label) shares Send's row at \(width) pt")
+            }
+        }
     }
 }

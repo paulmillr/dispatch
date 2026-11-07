@@ -5,12 +5,15 @@ import SwiftUI
 struct ChatComposerFocusChrome: View {
     let session: ChatSession
     let focused: Bool
+    /// Open though unfocused: the pane keeps a draft (ChatView.composerShown); the surface stays, its focus edge goes.
+    var shown: Bool? = nil
     let lineHeight: CGFloat
     /// Glass only: where the unfocused reply button sits, from the composer's bottom-trailing corner.
     var buttonInset = CGSize.zero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let open = shown ?? focused
         GeometryReader { geometry in
             if LiquidGlassStore.shared.active {
                 // The composer's frame is the glass. Unfocused it is the round reply button (ChatView draws its
@@ -18,25 +21,25 @@ struct ChatComposerFocusChrome: View {
                 // circle easing into the composer's corners, with the borders (working animation included) on its edge.
                 // Unfocused while the agent works, the row shows its activity on the pane's own background.
                 let working = AgentWorkingState.isWorking(session)
-                let radius: CGFloat = focused ? 12 : lineHeight / 2
+                let radius: CGFloat = open ? 12 : lineHeight / 2
                 Color.clear
                     .liquidGlass(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-                    .opacity(focused || !working ? 1 : 0)
+                    .opacity(open || !working ? 1 : 0)
                     .overlay {
                         Color.clear.modifier(ChatComposerBorder(session: session, active: focused, cornerRadius: radius))
-                            .opacity(focused ? 1 : 0)
+                            .opacity(open ? 1 : 0)
                     }
-                    .frame(width: focused ? geometry.size.width : lineHeight, height: focused ? geometry.size.height : lineHeight)
-                    .padding(.trailing, focused ? 0 : buttonInset.width).padding(.bottom, focused ? 0 : buttonInset.height)
+                    .frame(width: open ? geometry.size.width : lineHeight, height: open ? geometry.size.height : lineHeight)
+                    .padding(.trailing, open ? 0 : buttonInset.width).padding(.bottom, open ? 0 : buttonInset.height)
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomTrailing)
-                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.24), value: focused)
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.24), value: open)
             } else {
                 Color.clear
                     .chatPanel(Chrome.sidebar, bordered: false)
                     .modifier(ChatComposerBorder(session: session, active: focused))
-                    .frame(height: focused ? geometry.size.height : lineHeight)
-                    .opacity(focused ? 1 : 0)
-                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.18), value: focused)
+                    .frame(height: open ? geometry.size.height : lineHeight)
+                    .opacity(open ? 1 : 0)
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.18), value: open)
             }
         }.allowsHitTesting(false).accessibilityHidden(true)
     }

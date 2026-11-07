@@ -67,8 +67,25 @@ struct ChatAttachmentUpload: Identifiable {
     var thumbnail: Data?
     /// Why the read or upload failed; nil while it runs.
     var failure: String?
+    /// The share of the upload written to the helper's connection, 0 to 1; nil while the file is read and prepared.
+    /// All of it written, the host may still be receiving and storing it (ssh holds some on the way).
+    var sent: Double?
     let source: ChatAttachmentSource
     var task: Task<Void, Never>?
+
+    /// Hands an upload's progress from the connection's queue to the main actor, once per whole percent, in order.
+    final class Progress: @unchecked Sendable {
+        private let apply: @MainActor (Double) -> Void
+        private var last = -1
+        init(_ apply: @escaping @MainActor (Double) -> Void) { self.apply = apply }
+        /// Called serially (the transport's queue).
+        func callAsFunction(_ fraction: Double) {
+            let percent = Int(fraction * 100)
+            guard percent != last else { return }
+            last = percent
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.apply(fraction) } }
+        }
+    }
 
     var uploading: Bool { failure == nil }
     /// The chip shows what the draft's attachments show.

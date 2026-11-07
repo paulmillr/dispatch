@@ -794,6 +794,62 @@ extension ChatQueueTests {
         XCTAssertNil(ChatCoordinator.attachmentPaths([]))
     }
 
+    /// Files dragged over a chat: what they are, read from the drag's pasteboard, and the pane's two drop targets (its
+    /// SwiftUI drop and the composer's text view) handing the drag between them without it falling. Text and rows of a
+    /// files view raise nothing: they would not attach.
+    func testAttachmentDragReadsItsFilesAndSurvivesTheHandOffToTheComposer() throws {
+        let (_, session) = try attachmentSession()
+        session.acceptsAttachments = true
+        let pasteboard = NSPasteboard(name: .init("dispatch-test-\(System.uuid().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        // Files that are not there: names and kinds come from the URLs, sizes only from a file that says.
+        pasteboard.writeObjects([URL(fileURLWithPath: "/nonexistent/fixture/receipt-1042.png") as NSURL,
+                                 URL(fileURLWithPath: "/nonexistent/fixture/invoices-2026-10.csv") as NSURL])
+        let items = ChatAttachmentDrag.items(pasteboard)
+        XCTAssertEqual(items.map(\.name), ["receipt-1042.png", "invoices-2026-10.csv"])
+        XCTAssertEqual(items.map(\.image), [true, false])
+        XCTAssertEqual(items.map(\.detail), ["PNG", "CSV"])
+        XCTAssertEqual(ChatAttachmentDrag.Item(name: "receipt-1042.png", image: true, size: 412_000).detail, "PNG · 412 KB")
+
+        ChatAttachmentDrag.entered(session, composer: false, pasteboard: pasteboard)
+        XCTAssertEqual(session.attachmentDrag?.active, true)
+        // Onto the composer and back: whichever target AppKit tells first, the drag stays over the pane.
+        ChatAttachmentDrag.entered(session, composer: true, pasteboard: pasteboard)
+        ChatAttachmentDrag.exited(session, composer: false)
+        XCTAssertEqual(session.attachmentDrag?.items, items)
+        ChatAttachmentDrag.exited(session, composer: true)
+        ChatAttachmentDrag.entered(session, composer: false, pasteboard: pasteboard)
+        XCTAssertEqual(session.attachmentDrag?.items, items)
+        ChatAttachmentDrag.exited(session, composer: false)
+        XCTAssertNil(session.attachmentDrag, "Left the pane")
+
+        pasteboard.clearContents()
+        pasteboard.setString("plain words", forType: .string)
+        ChatAttachmentDrag.entered(session, composer: false, pasteboard: pasteboard)
+        XCTAssertNil(session.attachmentDrag, "Text is the editor's, not an attachment")
+    }
+
+    /// An upload's progress comes off the connection's queue in order, once per whole percent, and its chip says it:
+    /// "Uploading…" while the file is read, the share written, then "Finishing…" while the host stores it.
+    func testUploadProgressReachesItsChipOncePerPercent() async throws {
+        final class Applied { var values: [Double] = [] }
+        let applied = Applied()
+        let progress = ChatAttachmentUpload.Progress { applied.values.append($0) }
+        DispatchQueue.global().sync { for byte in 0...1000 { progress(Double(byte) / 1000) } }
+        try await TestSupport.eventually { applied.values.last == 1 }
+        XCTAssertEqual(applied.values.count, 101)
+        XCTAssertEqual(applied.values, applied.values.sorted())
+
+        func status(_ sent: Double?) -> String {
+            ChatAttachmentChip(attachment: attachment("chart.png"), endpoint: nil, uploading: true, sent: sent, open: {}).uploadStatus
+        }
+        XCTAssertEqual(status(nil), "Uploading…")
+        XCTAssertEqual(status(0), "Uploading 0%")
+        XCTAssertEqual(status(0.426), "Uploading 42%")
+        XCTAssertEqual(status(1), "Finishing…")
+    }
+
     private func upload(_ id: String, for session: ChatSession) -> ChatAttachmentUpload {
         ChatAttachmentUpload(id: id, draft: session.drafts.current.id, scope: session.drafts.scope, name: id + ".png",
                              source: .data(name: id + ".png", Data([1])))

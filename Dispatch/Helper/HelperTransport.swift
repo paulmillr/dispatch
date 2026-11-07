@@ -24,6 +24,8 @@ final class HelperTransport: @unchecked Sendable {
   private var scheduled = false
   /// Unsent bytes in order; `written` of the first are out.
   private var output: [Data] = []
+  /// Beside `output`: for a frame whose sender follows it (`send(_:sent:)`), told the bytes of it written so far.
+  private var progress: [((Int) -> Void)?] = []
   private var written = 0
   private var queued = 0
   private var stopped = false
@@ -180,8 +182,11 @@ final class HelperTransport: @unchecked Sendable {
     if let ended { stop(ended) }
   }
 
-  /// `asking`: a waiting test's check sent it (AppReplay.asking, carried past the queue hop to its record).
-  func send(_ bytes: Data, asking: Bool = false) {
+  /// `asking`: a waiting test's check sent it (AppReplay.asking, carried past the queue hop to its record). `sent`, on
+  /// this queue: how many of `bytes` the descriptor took so far, after each write that took some (a frame followed so
+  /// stays a buffer of its own). Written is not received: a pipe and ssh's channel hold some on the way. Never called
+  /// in replay, where nothing is written.
+  func send(_ bytes: Data, asking: Bool = false, sent: ((Int) -> Void)? = nil) {
     queue.async {
       guard !self.stopped, !self.finishing else { return }
       do { try AppReplay.$asking.withValue(asking) { try self.ticket?.action(kind: "wire", value: .bytes(bytes)) } }
@@ -193,10 +198,13 @@ final class HelperTransport: @unchecked Sendable {
       }
       guard !bytes.isEmpty else { return }
       self.queued += bytes.count
-      if let last = self.output.indices.last, self.output[last].count + bytes.count <= Self.join {
+      if sent == nil, let last = self.output.indices.last, self.progress[last] == nil,
+        self.output[last].count + bytes.count <= Self.join
+      {
         self.output[last].append(bytes)
       } else {
         self.output.append(bytes)
+        self.progress.append(sent)
       }
       self.schedule()
     }
@@ -256,8 +264,10 @@ final class HelperTransport: @unchecked Sendable {
       if count > 0 {
         written += count
         queued -= count
+        progress[0]?(written)
         if written == first.count {
           output.removeFirst()
+          progress.removeFirst()
           written = 0
         }
       } else if count < 0 && errno == EINTR {
@@ -318,6 +328,7 @@ final class HelperTransport: @unchecked Sendable {
     cancelSources()
     descriptors?.release()
     output.removeAll()
+    progress.removeAll()
     written = 0
     queued = 0
     let ended = closed

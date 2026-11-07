@@ -536,8 +536,21 @@ private struct ChatTranscriptRowView: View {
         row.placeholder || row.group != nil || row.item?.kind == .assistant || row.item?.kind == .tool || row.item?.isNarration == true
     }
     var body: some View {
-        if theme.radioLog { radioBody } else { standardBody }
+        Group {
+            if theme.radioLog { radioBody } else { standardBody }
+        }
+        .environment(\.chatMessageMenu, messageMenu)
     }
+
+    /// Right-clicking a message's text (`ChatMessageMenu`): Copy Message, Reply on an agent's, Info. Tools, notices
+    /// and reasoning summaries keep their own.
+    private var messageMenu: ChatMessageMenu? {
+        guard let item = row.item, item.kind == .assistant || item.kind == .user || item.isNarration else { return nil }
+        return ChatMessageMenu(id: row.id, text: item.text, reply: item.kind == .user ? nil : { reply(to: item) },
+                               info: messageInfo(row.time ?? row.replyTime))
+    }
+
+    private func reply(to item: ChatItem) { session.reply(quoting: item.text) }
 
     /// Nautical: one log line per transmission, its time and call sign in columns beside the message. A bubble's
     /// rows share the line, so only its first names the station and only its last draws the rule below.
@@ -652,7 +665,8 @@ private struct ChatTranscriptRowView: View {
     /// Clicking a closed group, or a live one showing just its current step, shows every step; clicking again closes it.
     private func groupHeader(_ group: ChatToolGroup, replyTime: Date? = nil) -> some View {
         let disclosure = session.groupDisclosure(group, turnID: row.turnID)
-        let live = disclosure == .current || (disclosure == .all && session.groupIsLive(group, turnID: row.turnID))
+        // Live whatever it shows (collapsed, the current step or all): its time waits for the turn to end.
+        let live = session.groupIsLive(group, turnID: row.turnID)
         return ChatToolGroupHeader(group: group, replyTime: replyTime, replyInfo: messageInfo(replyTime), disclosure: disclosure,
                                    live: live) {
             session.setGroupExpanded(group, disclosure != .all)
@@ -662,9 +676,13 @@ private struct ChatTranscriptRowView: View {
     /// What clicking the row's time at `date` shows; nil without a time or a message.
     private func messageInfo(_ date: Date?) -> ChatMessageInfo? {
         guard let date, let item = row.item else { return nil }
+        let session = session, coordinator = coordinator
         return ChatMessageInfo(date: date, item: item, rowID: row.id, turnID: row.turnID, agent: session.agentTitle,
                                conversation: session.sessionID, host: session.host,
-                               offset: row.turnID.flatMap { session.itemOffsets[.init(turn: $0, item: item.id)] })
+                               offset: row.turnID.flatMap { session.itemOffsets[.init(turn: $0, item: item.id)] },
+                               session: session, directory: directory,
+                               reply: item.kind == .user ? nil : { reply(to: item) },
+                               showTerminal: { coordinator.showTerminal(session) })
     }
 
     /// The step the current one replaced, as it was shown: its header line on its own dot, and as the live step, no

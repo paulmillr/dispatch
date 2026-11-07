@@ -1280,6 +1280,8 @@ final class ChatSession: Identifiable {
     }
     /// Why the last attach was refused (too many, too large); shown beside the attachment chips.
     var attachmentError: String?
+    /// Files or images dragged over this chat's pane, while they are (the composer grows to take them); nil otherwise.
+    var attachmentDrag: ChatAttachmentDrag?
     var editingQueuedID: UUID?
     /// Esc was pressed once to stop: the composer says to press it
     /// again; the time of that press, from the key event.

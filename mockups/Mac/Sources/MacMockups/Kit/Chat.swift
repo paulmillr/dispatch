@@ -485,32 +485,26 @@ struct ComposerCard: View {
         }
     }
 
-    /// ChatView.composerFooter: one row, giving up what doesn't fit in the app's order (FooterDensity): effort as its
-    /// meter (only beside the activity), then Send's key, then the activity's label, then the ⌘/ chip.
+    /// ChatView.composerFooter: one row with everything, or one with every optional item folded at once
+    /// (FooterDensity): Send's key, the ⌘/ chip, effort as its meter, the activity's label, a long model name.
     private var footer: some View {
         ViewThatFits(in: .horizontal) {
-            footerRow(.regular)
-            if model.working != nil { footerRow(.compactEffort) }
-            footerRow(.keyless)
-            footerRow(.unlabeled)
-            footerRow(.minimal)
+            footerRow(.full)
+            footerRow(.compact)
         }
         .font(ChatType.detail)
     }
 
-    private enum Density: Int, Comparable {
-        case regular, compactEffort, keyless, unlabeled, minimal
-        static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
-    }
+    private enum Density { case full, compact }
 
     private func footerRow(_ density: Density) -> some View {
         let colors = ChatColors.current
-        let compact = density >= .compactEffort && model.working != nil
+        let compact = density == .compact
         return HStack(spacing: 0) {
             HStack(spacing: 12) {
                 HStack(spacing: 7) {
                     Text(model.model).lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: density == .minimal ? ChatType.detailSize * 9 : nil, alignment: .leading)
+                        .frame(maxWidth: compact ? ChatType.detailSize * 9 : nil, alignment: .leading)
                         .overlay(alignment: .bottom) { Rectangle().fill(colors.muted.opacity(0.4)).frame(height: 1).offset(y: 2) }
                     if !compact { Text("·") }
                     Group {
@@ -525,8 +519,8 @@ struct ComposerCard: View {
                     HStack(spacing: 8) {
                         HStack(spacing: 8) {
                             Orbit()
-                            if density < .unlabeled { Text(working.label) }
-                            Text((density < .unlabeled ? "· " : "") + working.time).monospacedDigit().opacity(handedOff ? 0 : 1)
+                            if !compact { Text(working.label) }
+                            Text((compact ? "" : "· ") + working.time).monospacedDigit().opacity(handedOff ? 0 : 1)
                         }
                         .opacity(handedOff ? 0.45 : 1)
                         Image(systemName: "stop.fill").font(.system(size: 7)).frame(width: 18, height: 18)
@@ -542,12 +536,12 @@ struct ComposerCard: View {
                 HStack(spacing: 2) {
                     Image(systemName: "paperclip").font(.system(size: ChatType.detailSize + 1, weight: .medium)).frame(width: side, height: side)
                     if model.dictation { Image(systemName: "mic").font(.system(size: ChatType.detailSize + 1, weight: .medium)).frame(width: side, height: side) }
-                    if density < .minimal {
+                    if !compact {
                         Text("⌘/").font(.system(size: ChatType.detailSize + 2, weight: .medium, design: .monospaced)).frame(minWidth: side, minHeight: side)
                     }
                 }
                 .foregroundStyle(colors.muted)
-                SendButton(title: model.working != nil ? "Queue" : "Send", enabled: model.draft?.isEmpty == false, showsKey: density < .keyless)
+                SendButton(title: model.working != nil ? "Queue" : "Send", enabled: model.draft?.isEmpty == false, showsKey: !compact)
             }
             .fixedSize()
             .opacity(model.focused ? 1 : 0)

@@ -310,6 +310,7 @@ targets:
       - Dispatch/Chat/ChatSideConversation.swift
       - Dispatch/Chat/ChatSideQuestion.swift
       - Dispatch/Chat/ChatTranscript.swift
+      - Dispatch/Chat/ChatTurnSteps.swift
       - Dispatch/Chat/ChatTypingReveal.swift
       - Dispatch/Chat/ClaudeQuestions.swift
       - Dispatch/Chat/DictationModels.swift

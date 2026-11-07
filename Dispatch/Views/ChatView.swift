@@ -55,6 +55,9 @@ struct ChatView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        // Files and images dropped anywhere on the pane attach to the draft, as on the composer; while they are dragged
+        // over it the composer grows to the pane's top to take them (ChatComposerDropWell).
+        .onDrop(of: [.fileURL, .image], delegate: ChatAttachmentDrop(session: session, coordinator: coordinator))
         .background(GeometryReader { geometry in
             Color.clear.onAppear { availableChatHeight = geometry.size.height; chatWidth = geometry.size.width }
                 .onChange(of: geometry.size.height) { _, height in availableChatHeight = height }
@@ -110,8 +113,6 @@ struct ChatView: View {
                            bottomContentInset: bottomInset, fadeTopInset: session.search.visible ? 0 : topInset)
             .opacity(session.sideConversation == nil ? 1 : 0.38)
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: session.sideConversation?.id)
-            // Files and images dropped on the conversation attach to the draft, as on the composer.
-            .onDrop(of: [.fileURL, .image], delegate: ChatAttachmentDrop(session: session, coordinator: coordinator))
     }
 
     private var canSubmit: Bool {
@@ -205,7 +206,7 @@ struct ChatView: View {
                         .modifier(QueueTipSurface()).accessibilityIdentifier("chat-queue-tip")
                 }
                 VStack(spacing: 6) {
-                    // Unfocused, only the footer's activity can stay (agentWorking); the editor and details hide.
+                    // Unfocused, the editor and details stay only while they hold a draft (composerShown); the footer only its activity.
                     Group {
                         if let id = session.editingQueuedID, let index = session.queuedMessages.firstIndex(where: { $0.id == id }) {
                             HStack {
@@ -262,7 +263,14 @@ struct ChatView: View {
                             }
                         composerDetails
                     }
-                    .opacity(focused ? 1 : 0).allowsHitTesting(focused)
+                    .opacity(composerShown ? 1 : 0).allowsHitTesting(focused)
+                    .overlay {
+                        // A kept draft reads in place; a click on it focuses this pane's composer.
+                        if !focused && composerShown {
+                            Color.clear.contentShape(Rectangle()).onTapGesture { replyHere() }
+                                .accessibilityHidden(true)
+                        }
+                    }
                     composerFooter.font(theme.typography.detail)
                         .padding(.horizontal, 12).padding(.top, 8)
                         .padding(.bottom, 9)
@@ -273,17 +281,18 @@ struct ChatView: View {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.18).delay(focused ? 0.1 : 0), value: focused)
                 }.padding(.top, 4)
                     .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.14), value: focused)
-                    .allowsHitTesting(focused || agentWorking)
-                    .accessibilityHidden(!focused && !agentWorking)
-                    .background {
-                        ChatComposerFocusChrome(session: session, focused: focused,
+                    .allowsHitTesting(composerShown || agentWorking)
+                    .accessibilityHidden(!composerShown && !agentWorking)
+                    .modifier(ChatComposerDropWell(drag: session.attachmentDrag, top: topInset + 12, host: dropHost,
+                                                   attached: session.drafts.current.attachments.count + session.draftUploads.filter(\.uploading).count) {
+                        ChatComposerFocusChrome(session: session, focused: focused, shown: composerShown,
                                                 lineHeight: theme.typography.replyLineHeight + 14, buttonInset: replyButtonInset)
-                    }
+                    })
                     .overlay(alignment: .topLeading) {
-                        if !focused { inactiveComposer.transition(.identity) }
+                        if !composerShown { inactiveComposer.transition(.identity) }
                     }
                     .overlay(alignment: .bottomTrailing) {
-                        if !focused && !agentWorking && LiquidGlassStore.shared.active {
+                        if !composerShown && !agentWorking && LiquidGlassStore.shared.active {
                             glassReplyButton.padding(.trailing, replyButtonInset.width).padding(.bottom, replyButtonInset.height)
                                 .transition(.identity)
                         }
@@ -296,6 +305,22 @@ struct ChatView: View {
     // shifts the Reply baseline nor moves the transcript being read.
     /// Whether the agent's activity shows in the composer footer, which an unfocused pane keeps in place.
     private var agentWorking: Bool { AgentWorkingState.isWorking(session) }
+
+    /// The composer stays open unfocused while it holds a draft (text or attachments), so moving to another split
+    /// never hides what was typed; empty, it folds to the Reply line or button. Files dragged over the pane open it too.
+    private var composerShown: Bool { focused || session.drafts.shape.hasText || attachmentsShown || session.attachmentDrag?.active == true }
+
+    /// The remote host a drop is uploaded to, read only while files are dragged over the pane; nil on this Mac.
+    private var dropHost: HostRecord? {
+        guard session.attachmentDrag != nil, let hosts = (workspace ?? TerminalRuntime.shared.workspace)?.hosts,
+              let context = hosts.terminals[session.id], context.host != .local else { return nil }
+        return hosts.record(context.host)
+    }
+
+    private func replyHere() {
+        (workspace ?? TerminalRuntime.shared.workspace)?.selectSurface(session.id)
+        session.focusRequest = System.uuid()
+    }
 
     @ViewBuilder private var inactiveComposer: some View {
         if agentWorking {
@@ -348,50 +373,36 @@ struct ChatView: View {
         .accessibilityIdentifier("chat-inactive-composer")
     }
 
-    /// How much the one-row footer gives up to fit, least first; past `.minimal` it takes two rows.
-    private enum FooterDensity: Int, Comparable {
-        /// Everything, effort as text.
-        case regular
-        /// The effort meter in place of its text (only beside the agent's activity).
-        case compactEffort
-        /// Also the reply button without its keycap (its help names it).
-        case keyless
-        /// Also the activity without its label, orbit and time only (its help names it).
-        case unlabeled
-        /// Also the ⌘/ chip (the shortcut still opens its sheet) and a model name truncated in the middle.
-        case minimal
-
-        static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+    /// One row with everything, or one row with every optional item folded at once; past `.compact` the same items
+    /// take two rows. What folds keeps its help and shortcut.
+    private enum FooterDensity {
+        /// Everything, in words.
+        case full
+        /// Send without its keycap, no ⌘/ chip (the shortcut still opens its sheet), effort as its meter, the activity
+        /// as orbit and time, drafts as an icon and count, and a model name truncated in the middle.
+        case compact
     }
 
     private var composerFooter: some View {
-        let hasActivity = agentWorking
-        return ViewThatFits(in: .horizontal) {
-            composerFooterRow(.regular)
-            if hasActivity {
-                composerFooterRow(.compactEffort)
-            }
-            composerFooterRow(.keyless)
-            composerFooterRow(.unlabeled)
-            composerFooterRow(.minimal)
+        ViewThatFits(in: .horizontal) {
+            composerFooterRow(.full)
+            composerFooterRow(.compact)
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
                     ScrollView(.horizontal) {
                         HStack(spacing: 12) {
-                            modelControls(compactEffort: hasActivity, truncated: true).fixedSize().focusedOnly(focused)
-                            ChatComposerActivity(session: session, activity: activity, active: focused || agentWorking, showsLabel: false).fixedSize()
-                            ChatComposerAgents(session: session).fixedSize()
-                            ChatComposerShells(session: session).fixedSize()
+                            modelControls(.compact).fixedSize().focusedOnly(focused)
+                            HStack(spacing: 8) { agentStatus(.compact) }.fixedSize()
                         }
                     }
                     // Never, not hidden: with scroll bars shown always (no trackpad) hidden still draws one.
                     .scrollIndicators(.never).frame(height: max(24, theme.typography.detailLineHeight))
-                    composerStop
+                    stopControls
                 }
                 HStack(spacing: 12) {
-                    savedDraftControls.focusedOnly(focused)
+                    savedDraftControls(.compact).focusedOnly(focused)
                     Spacer(minLength: 0)
-                    trailingControls(.regular)
+                    trailingControls(.compact)
                 }
             }
         }
@@ -401,10 +412,15 @@ struct ChatView: View {
     private func composerFooterRow(_ density: FooterDensity) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: 12) {
-                modelControls(compactEffort: density >= .compactEffort && agentWorking, truncated: density == .minimal)
-                    .fixedSize().focusedOnly(focused)
-                composerActivity(showsLabel: density < .unlabeled).fixedSize()
-                savedDraftControls.focusedOnly(focused)
+                modelControls(density).fixedSize().focusedOnly(focused)
+                // Only with something in it: an empty stack would still take the row's spacing.
+                if showsAgentStatus {
+                    HStack(spacing: 8) {
+                        agentStatus(density)
+                        stopControls
+                    }.fixedSize()
+                }
+                savedDraftControls(density).focusedOnly(focused)
             }
             Spacer(minLength: 12)
             trailingControls(density)
@@ -417,12 +433,12 @@ struct ChatView: View {
             HStack(spacing: 2) {
                 attachControl
                 dictationControl
-                if density < .minimal { shortcutsControl.focusedOnly(focused) }
+                if density == .full { shortcutsControl.focusedOnly(focused) }
             }
-            replyButton(showsKey: density < .keyless)
+            replyButton(showsKey: density == .full)
                 .background(alignment: .leading) {
                     // Hidden, the chip still anchors the sheet ⌘/ opens.
-                    if density == .minimal {
+                    if density == .compact {
                         shortcutsControl.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                     }
                 }
@@ -452,16 +468,16 @@ struct ChatView: View {
         }
     }
 
-    @ViewBuilder private var savedDraftControls: some View {
+    @ViewBuilder private func savedDraftControls(_ density: FooterDensity) -> some View {
         if session.drafts.shape.hasSaved || !session.drafts.recoverable.isEmpty {
-            ChatDraftControls(session: session).frame(maxWidth: 220, alignment: .leading)
+            ChatDraftControls(session: session, compact: density == .compact)
         }
     }
 
-    private func modelControls(compactEffort: Bool, truncated: Bool = false) -> some View {
+    private func modelControls(_ density: FooterDensity) -> some View {
         HStack(spacing: 7) {
             ChatModelControls(session: session, coordinator: coordinator, focused: focused && session.showChat && !session.drafts.shape.multiline,
-                              compactEffort: compactEffort, modelWidth: truncated ? theme.typography.detailSize * 9 : nil)
+                              compactEffort: density == .compact, modelWidth: density == .compact ? theme.typography.detailSize * 9 : nil)
             if session.goal != nil {
                 Text("·").accessibilityHidden(true)
                 ChatGoalControls(session: session, coordinator: coordinator)
@@ -470,18 +486,24 @@ struct ChatView: View {
             .foregroundStyle(theme.muted.opacity(0.65))
     }
 
-    private func composerActivity(showsLabel: Bool) -> some View {
-        HStack(spacing: 8) {
-            ChatComposerActivity(session: session, activity: activity, active: focused || agentWorking, showsLabel: showsLabel)
-            ChatComposerAgents(session: session)
-            ChatComposerShells(session: session)
-            if agentWorking, session.stopArmedAt != nil {
-                // Settings' Esc twice: the first press only arms the stop.
-                Text("⎋ again to stop").font(theme.typography.detail).foregroundStyle(theme.muted)
-                    .accessibilityIdentifier("chat-stop-armed")
-            }
-            composerStop
+    private var showsAgentStatus: Bool {
+        agentWorking || (session.active && !(session.subagents.isEmpty && session.shells.isEmpty))
+    }
+
+    @ViewBuilder private func agentStatus(_ density: FooterDensity) -> some View {
+        ChatComposerActivity(session: session, activity: activity, active: focused || agentWorking, showsLabel: density == .full)
+        ChatComposerAgents(session: session)
+        ChatComposerShells(session: session)
+    }
+
+    /// Outside the two-row footer's scrolling strip, so neither can scroll out of reach.
+    @ViewBuilder private var stopControls: some View {
+        if agentWorking, session.stopArmedAt != nil {
+            // Settings' Esc twice: the first press only arms the stop.
+            Text("⎋ again to stop").font(theme.typography.detail).foregroundStyle(theme.muted)
+                .accessibilityIdentifier("chat-stop-armed")
         }
+        composerStop
     }
 
     @ViewBuilder private var composerStop: some View {

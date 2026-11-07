@@ -3,40 +3,41 @@ import SwiftUI
 struct ChatDraftControls: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
+    /// Where the footer is tight: an icon and count, the wording in the help and the menu.
+    var compact = false
+    /// Chips only while their labels stay this short: many or long drafts are a menu, so they never fold the footer.
+    private static let chipCharacters = 28
     @State private var renaming: ChatDraft?
     @State private var title = ""
     var body: some View {
         let drafts = session.drafts
         HStack(spacing: 2) {
             if !drafts.saved.isEmpty {
-                ViewThatFits(in: .horizontal) {
+                if compact {
+                    let name = drafts.saved.count == 1 ? "1 saved draft" : "\(drafts.saved.count) saved drafts"
+                    Menu { savedDraftsMenu } label: { countLabel(drafts.saved.count) }
+                        .footerMenu()
+                        .help(name)
+                        .accessibilityLabel(name)
+                } else if drafts.saved.reduce(0, { $0 + $1.label.count }) <= Self.chipCharacters {
                     HStack(spacing: 8) {
                         Text("drafts").foregroundStyle(theme.muted.opacity(0.65))
                         savedDrafts
                     }.fixedSize()
-                    Menu {
-                        ForEach(drafts.saved) { draft in
-                            Button(draft.label) { drafts.select(draft.id) }
-                        }
-                        Menu("Manage drafts") {
-                            ForEach(drafts.saved) { draft in
-                                Menu(draft.label) {
-                                    Button("Rename…") { title = draft.title ?? draft.label; renaming = draft }
-                                    Button("Delete") { drafts.delete(draft.id) }
-                                }
-                            }
-                        }
-                        Divider()
-                        draftActions
-                    } label: { menuLabel("drafts \(drafts.saved.count)") }
+                } else {
+                    Menu { savedDraftsMenu } label: { menuLabel("drafts \(drafts.saved.count)") }
                         .footerMenu()
                 }
             }
             if drafts.saved.isEmpty && !drafts.recoverable.isEmpty {
                 let count = drafts.recoverable.reduce(0) { $0 + drafts.recoverableDrafts($1).count }
-                Menu { recoveryActions } label: { menuLabel(count == 1 ? "1 unsent draft" : "\(count) unsent drafts") }
+                let name = count == 1 ? "1 unsent draft" : "\(count) unsent drafts"
+                Menu { recoveryActions } label: {
+                    if compact { countLabel(count) } else { menuLabel(name) }
+                }
                     .footerMenu()
-                    .help("Drafts typed in conversations that are no longer open")
+                    .help("\(name), typed in conversations that are no longer open")
+                    .accessibilityLabel(name)
                     .accessibilityIdentifier("chat-recover-drafts")
             }
         }.font(theme.typography.font(offset: -1.5))
@@ -59,6 +60,22 @@ struct ChatDraftControls: View {
                     }
             }
         }.fixedSize()
+    }
+    @ViewBuilder private var savedDraftsMenu: some View {
+        let drafts = session.drafts
+        ForEach(drafts.saved) { draft in
+            Button(draft.label) { drafts.select(draft.id) }
+        }
+        Menu("Manage drafts") {
+            ForEach(drafts.saved) { draft in
+                Menu(draft.label) {
+                    Button("Rename…") { title = draft.title ?? draft.label; renaming = draft }
+                    Button("Delete") { drafts.delete(draft.id) }
+                }
+            }
+        }
+        Divider()
+        draftActions
     }
     @ViewBuilder private var draftActions: some View {
         let drafts = session.drafts
@@ -92,6 +109,13 @@ struct ChatDraftControls: View {
     /// Muted text with the underline the model control uses.
     private func menuLabel(_ text: String) -> some View {
         Text(text).foregroundStyle(theme.muted).footerMenuUnderline(theme.muted)
+    }
+    /// The icon and count the agents and shells beside it show.
+    private func countLabel(_ count: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc.text").imageScale(.small)
+            Text("\(count)").monospacedDigit()
+        }.font(theme.typography.detail).foregroundStyle(theme.muted).contentShape(Rectangle())
     }
     private func chip(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {

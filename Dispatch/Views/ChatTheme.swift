@@ -264,9 +264,13 @@ struct ChatTypography: Equatable, Sendable {
         let selected = chatFont.flatMap { sizeScale == 1 ? $0 : NSFont(descriptor: $0.fontDescriptor, size: pointSize()) } ?? code
         fontName = selected.fontName
         characterWidth = ("0" as NSString).size(withAttributes: [.font: selected]).width
+        // The face a step's name draws in (`.fontWeight(.semibold)` on `detail`). A weight trait added to the regular
+        // face's descriptor names that face and is ignored: the column fit regular names and cut "Search" in SF.
         let detail = NSFont(descriptor: selected.fontDescriptor, size: detailSize) ?? .systemFont(ofSize: detailSize)
-        let semibold = NSFont(descriptor: detail.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold]]),
-                              size: detailSize) ?? detail
+        let semibold = systemChoice?.systemFont(ofSize: detailSize, weight: .semibold)
+            ?? ChatFont.boldPostScriptName(fontName).flatMap { NSFont(name: $0, size: detailSize) }
+            ?? detail.familyName.flatMap { NSFontManager.shared.font(withFamily: $0, traits: [], weight: 8, size: detailSize) }
+            ?? NSFontManager.shared.convert(detail, toHaveTrait: .boldFontMask)
         stepTitleWidth = ceil(Self.stepNames.map { ($0 as NSString).size(withAttributes: [.font: semibold]).width }.max() ?? 64) + 1
         let layout = NSLayoutManager()
         codeDetailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: code.fontDescriptor, size: codeDetailSize)

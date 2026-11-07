@@ -103,6 +103,9 @@ build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` stan
   decoding, interaction replies and model menu/readback (`HelperChatTransport`). A model selection is confirmed only
   by the agent's subsequent state; a failed read never substitutes the requested choice. An uncertain question reply
   stays blocked until the helper resolves it.
+- A turn's summary, steps and their folding (`ChatTurnSummary`, `ChatStep`, `ChatStepFold` in
+  `ChatTurnSteps.swift`), with the times and token counts message details word: the phone's message details and bubble
+  corners, and the Mac's message Info, read a turn the same way. Their colours and badges stay with each client.
 - Inline Markdown parsing and safe-link filtering (`ChatMarkdownPolicy`), with an explicit Mac file-link allowance;
   count and UTF-8 byte limits on cached parses. Question selection, custom-answer validation, navigation and action
   availability (`ChatQuestionPolicy`) are shared. Selection uses stored choices, so commas in labels do not change

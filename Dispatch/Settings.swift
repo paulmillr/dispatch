@@ -156,9 +156,9 @@ extension ChatFontChoice {
     }
 
     /// The system font in this choice's design; nil for fonts drawn by name.
-    func systemFont(ofSize size: CGFloat) -> NSFont? {
+    func systemFont(ofSize size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont? {
         guard let design = systemDesign else { return nil }
-        let font = NSFont.systemFont(ofSize: size)
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
         return font.fontDescriptor.withDesign(design).flatMap { NSFont(descriptor: $0, size: size) } ?? font
     }
 

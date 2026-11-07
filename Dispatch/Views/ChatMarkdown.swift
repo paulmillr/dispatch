@@ -73,18 +73,18 @@ struct ChatMarkdown: View {
                 case .rule: Divider().padding(.vertical, 4)
                 case .table(let all):
                     let rows = cut.map { Array(all.prefix($0.shown)) } ?? all
-                    ScrollView(.horizontal) {
-                        Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
-                            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                GridRow {
-                                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                                        inline(cell).fontWeight(index == 0 ? .semibold : .regular)
-                                    }
-                                }
-                                if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                    let columns = rows.map(\.count).max() ?? 0
+                    // Columns fit the message's width and their cells wrap (`ChatTableLayout`); a short row gets empty cells.
+                    ChatTableLayout(columns: columns) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                            ForEach(0..<columns, id: \.self) { column in
+                                inline(column < row.count ? row[column] : "", wordWidth: true)
+                                    .fontWeight(index == 0 ? .semibold : .regular)
                             }
-                        }.padding(12)
-                    }.background(theme.sidebar, in: RoundedRectangle(cornerRadius: 6))
+                            if index < rows.count - 1 { Divider().opacity(index == 0 ? 1 : 0.45) }
+                        }
+                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(theme.sidebar, in: RoundedRectangle(cornerRadius: 6))
                 case .paragraph: inline(block.text, cut: cut)
                 }
             }
@@ -99,15 +99,18 @@ struct ChatMarkdown: View {
             })
             .sheet(item: $fileLink) { ChatFileLinkPreview(link: $0) }
     }
-    @ViewBuilder private func inline(_ text: String, color: Color? = nil, cut: ChatTypingCut? = nil) -> some View {
+    /// `wordWidth`: a table cell, whose narrowest width is its longest word (`ChatSelectableText.wordWidth`).
+    @ViewBuilder private func inline(_ text: String, color: Color? = nil, cut: ChatTypingCut? = nil, wordWidth: Bool = false) -> some View {
         if #available(macOS 26, *) {
             let value = attributed(text, color: color)
             let typed = cut.map { $0.apply(to: value, color: theme.accent) }
-            ChatSelectableText(value: typed?.value ?? value, selection: selection, source: self.text, caret: typed?.caret)
+            ChatSelectableText(value: typed?.value ?? value, selection: selection, source: self.text, caret: typed?.caret,
+                               wordWidth: wordWidth)
                 .modifier(ChatSelectableBaseline())
         } else {
             Text(cut.map { $0.apply(to: attributed(text, color: color), color: theme.accent).value } ?? attributed(text, color: color))
                 .textSelection(.enabled).lineSpacing(theme.typography.naturalLineSpacing).tint(theme.blue)
+                .modifier(ChatMessageMenuFallback())
         }
     }
 
@@ -229,12 +232,16 @@ private struct ChatSelectableText: NSViewRepresentable {
     @Environment(\.font) private var font
     @Environment(\.fontResolutionContext) private var fontContext
     @Environment(\.openURL) private var openURL
+    @Environment(\.chatMessageMenu) private var messageMenu
     let value: AttributedString
     let selection: ChatMessageSelection
     /// The whole message's markdown, copied after Select All.
     let source: String
     /// A typing reply's caret, after the text's last character shown (`ChatTypingCut`).
     var caret: ChatTypingCaret? = nil
+    /// Proposed no width, it reports its longest word's (the narrowest it gets without breaking one, `ChatTableLayout`)
+    /// instead of none. Only table cells ask: stacks propose zero to every text to find how far it shrinks.
+    var wordWidth = false
     func makeNSView(context: Context) -> NSTextView {
         // TextKit 1: TextKit 2 adds and moves a view per text fragment during layout, and each one
         // asks the hosting views for another constraint pass. In a long transcript inside the
@@ -261,6 +268,8 @@ private struct ChatSelectableText: NSViewRepresentable {
             view.source = source
             if view.selection !== selection { view.selection = selection; selection.views.add(view) }
             view.caret = caret
+            view.messageMenu = messageMenu
+            view.theme = theme
         }
         let base = font ?? theme.typography.body
         let key = Coordinator.Key(value: value, lineSpacing: theme.typography.lineSpacing, ink: theme.ink, font: base, context: fontContext)
@@ -311,17 +320,37 @@ private struct ChatSelectableText: NSViewRepresentable {
         if let storage = view.textStorage { ChatTextStorageEdit.replace(storage, with: text) }
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
-        let width = proposal.width ?? .greatestFiniteMagnitude
+        let proposed = proposal.width ?? .greatestFiniteMagnitude
         // SwiftUI asks several times per layout pass, and again on every pass; the text only changes in updateNSView.
-        if let size = context.coordinator.sizes[width] { return size }
+        if let size = context.coordinator.sizes[proposed] { return size }
         ChatTextMetrics.measures += 1
         (view as? SelectableTextView)?.measures += 1
-        let size = (view.textStorage ?? view.attributedString()).boundingRect(
+        let text = view.textStorage ?? view.attributedString()
+        let width = proposed == 0 && wordWidth ? ceil(Self.longestWord(text)) : proposed
+        let size = text.boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).size
         let fitted = CGSize(width: min(width, ceil(size.width)), height: ceil(size.height))
         if context.coordinator.sizes.count >= 8 { context.coordinator.sizes.removeAll(keepingCapacity: true) }
-        context.coordinator.sizes[width] = fitted
+        context.coordinator.sizes[proposed] = fitted
         return fitted
+    }
+    /// The width of `text`'s widest run between spaces, tabs and line breaks. TextKit breaks lines at those and at
+    /// more places (after a hyphen or a slash, between CJK characters), so this is never narrower than its narrowest
+    /// line without a word broken.
+    static func longestWord(_ text: NSAttributedString) -> CGFloat {
+        let string = text.string as NSString, breaks = CharacterSet(charactersIn: " \t\n")
+        var widest: CGFloat = 0, location = 0
+        while location < string.length {
+            let gap = string.rangeOfCharacter(from: breaks, range: NSRange(location: location, length: string.length - location))
+            let end = gap.location == NSNotFound ? string.length : gap.location
+            if end > location {
+                let word = text.attributedSubstring(from: NSRange(location: location, length: end - location))
+                widest = max(widest, word.boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+                                                       options: [.usesLineFragmentOrigin, .usesFontLeading]).width)
+            }
+            location = gap.location == NSNotFound ? string.length : NSMaxRange(gap)
+        }
+        return widest
     }
     func makeCoordinator() -> Coordinator { Coordinator(open: openURL) }
     final class SelectableTextView: NSTextView, ChatTextCounting, ChatTypingCaretDrawing {
@@ -340,6 +369,24 @@ private struct ChatSelectableText: NSViewRepresentable {
         }
         func typingCaretRect(after offset: Int) -> NSRect? { caretRect(after: offset) }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        /// The message's actions (`ChatMessageMenu`) above the text's own items (Copy of a selection, Look Up, Services).
+        var messageMenu: ChatMessageMenu?
+        var theme: ChatTheme?
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let menu = super.menu(for: event) ?? NSMenu()
+            guard let message = messageMenu else { return menu }
+            let point = convert(event.locationInWindow, from: nil)
+            var items = [ChatMenuAction("Copy Message") { message.copy() }]
+            if let reply = message.reply { items.append(ChatMenuAction("Reply", reply)) }
+            if let info = message.info, let theme {
+                items.append(ChatMenuAction("Info") { [weak self] in
+                    guard let self, window != nil else { return }
+                    ChatMessageInfoPopover.show(info, theme: theme, at: point, in: self)
+                })
+            }
+            for (index, item) in (items + [.separator()]).enumerated() { menu.insertItem(item, at: index) }
+            return menu
+        }
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
             guard let caret, caret.alpha > 0, let rect = caretRect(after: caret.offset) else { return }
@@ -483,4 +530,31 @@ struct ChatTypingCaret: Equatable {
 @MainActor protocol ChatTypingCaretDrawing: NSTextView {
     var typingCaret: ChatTypingCaret? { get }
     func typingCaretRect(after offset: Int) -> NSRect?
+}
+
+/// A menu item that runs a closure (the message menu's items in a text view's own menu).
+final class ChatMenuAction: NSMenuItem {
+    private let handler: () -> Void
+    init(_ title: String, _ handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+    @objc private func run() { handler() }
+}
+
+/// Before macOS 26, where messages are SwiftUI text: the message's Copy Message and Reply (Info opens from the time).
+private struct ChatMessageMenuFallback: ViewModifier {
+    @Environment(\.chatMessageMenu) private var menu
+    func body(content: Content) -> some View {
+        if let menu {
+            content.contextMenu {
+                Button("Copy Message") { menu.copy() }
+                if let reply = menu.reply { Button("Reply", action: reply) }
+            }
+        } else {
+            content
+        }
+    }
 }

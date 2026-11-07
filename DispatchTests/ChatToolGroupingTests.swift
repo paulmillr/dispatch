@@ -138,15 +138,54 @@ final class ChatToolGroupingTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(group.elapsed), 10, accuracy: 0.001)
     }
 
+    /// Collapsed, the live group's header waits for the turn to end before it shows the steps' time, as it does
+    /// showing the current step.
+    func testCollapsedLiveGroupShowsNoTimeUntilTheTurnEnds() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let session = ChatSession(id: System.uuid())
+        session.sessionID = "collapsed-live-time"; session.toolSteps = .collapsed
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        session.activeTurnID = "turn"; session.busy = true
+        session.insert(ChatItem(id: "reply", kind: .assistant, text: "Checking the handler."), turnID: "turn", at: date)
+        for (id, seconds) in [("one", 1.0), ("two", 3.0), ("three", 10.0)] {
+            session.insert(tool(id), turnID: "turn", at: date.addingTimeInterval(seconds))
+        }
+        let group = try XCTUnwrap(session.transcriptRows.last?.group)
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .collapsed)
+        XCTAssertTrue(session.groupIsLive(group, turnID: "turn"))
+        let window = makeWindow()
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: ChatCoordinator(enabled: false),
+                                                              focused: false, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await TestSupport.eventually(diagnostic: "the live header showed a time") {
+            let text = try await PresentationTestSupport.capture(window, named: "collapsed-live", in: "chat-group-validation").text()
+            return text.contains("3 steps") && !text.contains("10s")
+        }
+        session.busy = false; session.activeTurnID = nil
+        try await TestSupport.eventually(diagnostic: "the finished header showed no time") {
+            let text = try await PresentationTestSupport.capture(window, named: "collapsed-done", in: "chat-group-validation").text()
+            return text.contains("3 steps") && text.contains("10s")
+        }
+    }
+
     /// An opened group's step names share one column, wide enough for the common names in the chat's font.
+    /// Measured as the step's header draws its name (semibold `detail`), in every chat font: the regular face's width
+    /// cut "Search" to "Sear…" in San Francisco.
     func testStepTitleColumnFitsTheCommonNames() {
         AppFont.register()
-        let typography = ChatTypography(preferences: Preferences())
-        let font = NSFont(name: typography.fontName, size: typography.detailSize) ?? .systemFont(ofSize: typography.detailSize)
-        for name in ChatTypography.stepNames {
-            XCTAssertGreaterThanOrEqual(typography.stepTitleWidth, (name as NSString).size(withAttributes: [.font: font]).width, name)
+        for choice in ChatFont.allCases {
+            for size in [11.0, 14, 20] {
+                var preferences = Preferences()
+                preferences.chatFont = choice; preferences.fontSize = size
+                let typography = ChatTypography(preferences: preferences)
+                for name in ChatTypography.stepNames {
+                    let drawn = NSHostingView(rootView: Text(name).font(typography.detail).fontWeight(.semibold).fixedSize()).fittingSize.width
+                    XCTAssertGreaterThanOrEqual(typography.stepTitleWidth, drawn, "\(name) in \(choice.rawValue) at \(size)")
+                }
+                XCTAssertLessThan(typography.stepTitleWidth, typography.characterWidth * 14, "The column stays narrow")
+            }
         }
-        XCTAssertLessThan(typography.stepTitleWidth, typography.characterWidth * 14, "The column stays narrow")
     }
 
     func testStepChartBarsShareWidthByTimeAndMergeWhenCrowded() {
@@ -533,6 +572,106 @@ extension ChatToolGroupingTests {
         XCTAssertTrue(local.text.hasSuffix("No helper record."))
     }
 
+    func testReplyQuotesTheMessageAboveTheDraft() {
+        let session = ChatSession(id: System.uuid())
+        session.draft = "Then ship it."
+        let focus = session.focusRequest
+        session.reply(quoting: "Checked the handler.\n\nTwo retries left.")
+        XCTAssertEqual(session.draft, "> Checked the handler.\n>\n> Two retries left.\n\nThen ship it.")
+        XCTAssertNotEqual(session.focusRequest, focus, "The composer takes focus")
+    }
+
+    /// Right-clicking a message's text, as the iPhone's long press: Copy Message, Reply (an agent's message only) and
+    /// Info above the text's own items; Info opens the message's details.
+    func testRightClickingAMessageOffersCopyReplyAndInfo() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Messages are native text views from macOS 26") }
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        func record(_ id: String, _ kind: String, _ text: String, at time: Int64) -> HelperChat.Record {
+            HelperChat.Record(id: id, turn: "turn", kind: kind, text: text, title: kind == "tool" ? "exec_command" : "", output: "",
+                              blocks: [], completed: true, exit_code: kind == "tool" ? 0 : nil, patch: nil, time_ms: time,
+                              documents: [], tool: nil, inline_reasoning: false)
+        }
+        let session = ChatSession(id: System.uuid())
+        session.sessionID = "message-menu"; session.atBottom = false
+        let ms: Int64 = 1_750_000_000_000
+        session.mergeHistorical([record("prompt", "user", "Hello", at: ms), record("reply", "assistant", "Checking the handler.", at: ms + 60_000),
+                                 record("one", "tool", #"{"cmd":"echo one"}"#, at: ms + 61_000),
+                                 record("two", "tool", #"{"cmd":"echo two"}"#, at: ms + 62_000),
+                                 record("final", "assistant", "Done.", at: ms + 120_000)]
+            .compactMap { $0.display(at: Date(timeIntervalSince1970: 0)) })
+        let window = makeWindow()
+        defer { window.close(); window.contentView = nil }
+        mount(session, in: window)
+        func menu(_ text: String) async throws -> (NSTextView, NSMenu) {
+            var found: NSTextView?
+            try await TestSupport.eventually(diagnostic: "No text view for \(text)") {
+                found = PresentationTestSupport.views(of: NSTextView.self, in: try XCTUnwrap(window.contentView)).first { $0.string == text }
+                return found != nil
+            }
+            let view = try XCTUnwrap(found)
+            let point = view.convert(NSPoint(x: 4, y: 4), to: nil)
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                                                         windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                         clickCount: 1, pressure: 1))
+            return (view, try XCTUnwrap(view.menu(for: event)))
+        }
+        let (_, prompt) = try await menu("Hello")
+        XCTAssertEqual(prompt.items.prefix(3).map(\.title), ["Copy Message", "Info", ""], "Your own message has no Reply")
+        let (_, reply) = try await menu("Done.")
+        XCTAssertEqual(reply.items.prefix(4).map(\.title), ["Copy Message", "Reply", "Info", ""])
+        XCTAssertTrue(reply.items[3].isSeparatorItem)
+        XCTAssertTrue(reply.items.dropFirst(4).contains { !$0.isSeparatorItem }, "The text's own items stay below")
+        reply.performActionForItem(at: 1)
+        XCTAssertEqual(session.draft, "> Done.\n\n")
+        reply.performActionForItem(at: 2)
+        var popover: NSWindow?
+        try await TestSupport.eventually(diagnostic: "Info opens the message's details") {
+            popover = NSApp.windows.first { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
+            return popover.map { !PresentationTestSupport.accessibilityFrames("chat-message-details", in: $0).isEmpty } ?? false
+        }
+        for part in ["chat-message-details-text", "chat-message-record-toggle"] {
+            XCTAssertFalse(PresentationTestSupport.accessibilityFrames(part, in: try XCTUnwrap(popover)).isEmpty, part)
+        }
+        popover?.close()
+    }
+
+    /// Info as the iPhone's M1 lays it out: who and when with the actions, the message raw, how the turn went, the
+    /// conversation's model, the turn's steps; the record closed under Record.
+    func testMessageDetailsShowTheTurnLikeThePhone() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        func record(_ id: String, _ kind: String, _ text: String, at time: Int64) -> HelperChat.Record {
+            HelperChat.Record(id: id, turn: "turn", kind: kind, text: text, title: kind == "tool" ? "exec_command" : "", output: "",
+                              blocks: [], completed: true, exit_code: kind == "tool" ? 0 : nil, patch: nil, time_ms: time,
+                              documents: [], tool: nil, inline_reasoning: false)
+        }
+        let session = ChatSession(id: System.uuid())
+        session.sessionID = "message-details"; session.model = "gpt-5.5"; session.effort = "high"
+        let ms: Int64 = 1_750_000_000_000
+        session.mergeHistorical([record("prompt", "user", "Hello", at: ms),
+                                 record("one", "tool", #"{"cmd":"echo one"}"#, at: ms + 61_000),
+                                 record("two", "tool", #"{"cmd":"echo two"}"#, at: ms + 62_000),
+                                 record("final", "assistant", "Retries now use the **event ID**.", at: ms + 120_000)]
+            .compactMap { $0.display(at: Date(timeIntervalSince1970: 0)) })
+        let row = try XCTUnwrap(session.transcriptRows.first { $0.item?.id == "final" })
+        let item = try XCTUnwrap(row.item)
+        let info = ChatMessageInfo(date: try XCTUnwrap(row.time ?? row.replyTime), item: item, rowID: row.id, turnID: row.turnID,
+                                   agent: "Codex", session: session, reply: {}, showTerminal: {})
+        XCTAssertEqual(info.turn?.id, row.turnID)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatMessageDetailsView(info: info).chatPopoverChrome(.standard))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(300))
+        let snapshot = try await PresentationTestSupport.capture(window, named: "message-details", in: "chat-formatting-validation")
+        let text = try snapshot.text()
+        for expected in ["Codex", "Copy", "Reply", "Show in Terminal", "**event ID**", "Finished", "Model", "gpt-5.5", "high",
+                         "STEPS 2", "Record"] {
+            XCTAssertTrue(text.contains(expected), "\(expected) in \(text)")
+        }
+        XCTAssertFalse(text.contains("Epoch ms"), "The record stays closed")
+    }
+
     func testClickingReplyTimesShowsRawMessageWithoutTogglingSteps() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         func record(_ id: String, _ kind: String, _ text: String, at time: Int64) -> HelperChat.Record {
@@ -566,10 +705,12 @@ extension ChatToolGroupingTests {
             }
             try await click(x: time!.midX, y: time!.midY, window: window)
             var popover: NSWindow?
-            try await TestSupport.eventually(diagnostic: "The raw message opens for \(row.id)") {
+            try await TestSupport.eventually(diagnostic: "The message's details open for \(row.id)") {
                 popover = NSApp.windows.first { $0 !== window && $0.isVisible && String(describing: type(of: $0)).contains("Popover") }
-                return popover.map { !PresentationTestSupport.accessibilityFrames("chat-message-record", in: $0).isEmpty } ?? false
+                return popover.map { !PresentationTestSupport.accessibilityFrames("chat-message-details-text", in: $0).isEmpty } ?? false
             }
+            // The record the time showed before is under Record, closed.
+            XCTAssertTrue(PresentationTestSupport.accessibilityFrames("chat-message-record", in: try XCTUnwrap(popover)).isEmpty)
             XCTAssertEqual(session.groupDisclosure(group, turnID: grouped.turnID), disclosure, "The time is not the steps' header")
             popover?.close()
             try await TestSupport.eventually(diagnostic: "The raw message closes") { !(popover?.isVisible ?? false) }

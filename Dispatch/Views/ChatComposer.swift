@@ -190,6 +190,23 @@ struct ChatComposer: NSViewRepresentable {
         override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
             super.acceptableDragTypes + Self.attachmentTypes.filter { !super.acceptableDragTypes.contains($0) }
         }
+        // The composer is one of the pane's two drop targets (ChatAttachmentDrag): the well stays up while it has the drag.
+        override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            if let session, canAttach() { ChatAttachmentDrag.entered(session, composer: true, pasteboard: sender.draggingPasteboard) }
+            return super.draggingEntered(sender)
+        }
+        override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+            if let session { ChatAttachmentDrag.exited(session, composer: true) }
+            super.draggingExited(sender)
+        }
+        override func draggingEnded(_ sender: any NSDraggingInfo) {
+            if let session { ChatAttachmentDrag.exited(session, composer: true) }
+            super.draggingEnded(sender)
+        }
+        override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            session?.attachmentDrag = nil
+            return super.performDragOperation(sender)
+        }
         /// Paste (⌘V) and drops both read here. Rows of a files view type their quoted paths, as on a terminal (they
         /// are already on a host); Finder's files and image data (a screenshot on the clipboard) become attachments
         /// when the draft takes them; anything else, plain text included, is the text view's.

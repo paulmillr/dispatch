@@ -511,6 +511,47 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(ChatMarkdownBlock.parse(opened + "\n\nnext").last?.text, "scroll.scrollTo(\"bottom\")\n\nnext")
         XCTAssertEqual(ChatMarkdownBlock.parse("~~~\nfirst\n~").last, .init(kind: .code("text"), text: "first"))
     }
+    func testTableColumnsFitTheWidthOffered() {
+        let layout = ChatTableLayout(columns: 3, columnSpacing: 10)
+        let cache = ChatTableLayout.Cache(ideal: [40, 300, 500], minimum: [40, 80, 100])
+        XCTAssertEqual(layout.widths(for: nil, cache: cache), [40, 300, 500], "No limit: every cell on one line")
+        XCTAssertEqual(layout.widths(for: 900, cache: cache), [40, 300, 500], "All fit: as wide as their widest cells")
+        // 500 points between the gutters: the minimums take 220, the 280 left goes 0 : 220 : 400 by what each wants more.
+        XCTAssertEqual(layout.widths(for: 520, cache: cache), [40, 179, 280])
+        XCTAssertEqual(layout.widths(for: 132, cache: cache), [20, 40, 50], "Longest words too wide: all narrowed alike")
+    }
+    func testTableWrapsLongCellsInsideANarrowMessage() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Word widths come from the native text view on macOS 26") }
+        AppFont.register()
+        let theme = ChatTheme.standard
+        let prose = "The retry guard keys every attempt on the event identifier, so a replayed webhook finds the earlier result and returns it instead of charging the card again"
+        let source = "| Step | Notes | State |\n| --- | --- | --- |\n| Guard | \(prose) | Done |\n| Tests | Two cases | Open |"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatMarkdown(text: source).font(theme.typography.body).padding(20))
+        window.makeKeyAndOrderFront(nil)
+        let root = try XCTUnwrap(window.contentView)
+        try await TestSupport.eventually { PresentationTestSupport.views(of: NSTextView.self, in: root).count == 9 }
+        root.layoutSubtreeIfNeeded()
+        let views = PresentationTestSupport.views(of: NSTextView.self, in: root)
+        func frame(_ text: String) throws -> NSRect {
+            let view = try XCTUnwrap(views.first { $0.string == text }, text)
+            let frame = view.convert(view.bounds, to: root)
+            // Top down, whichever way the hosting view is flipped.
+            return root.isFlipped ? frame : NSRect(x: frame.minX, y: root.bounds.height - frame.maxY, width: frame.width, height: frame.height)
+        }
+        let line = try frame("Step").height
+        for cell in ["Step", "Notes", "State", "Guard", prose, "Done", "Tests", "Two cases", "Open"] {
+            XCTAssertLessThanOrEqual(try frame(cell).maxX, root.bounds.maxX - 20, "\(cell) leaves the message")
+        }
+        XCTAssertGreaterThan(try frame(prose).height, line * 3, "The long cell wraps")
+        XCTAssertEqual(try frame("Two cases").height, line, accuracy: 1, "A short cell stays on one line")
+        XCTAssertEqual(try frame("Done").minX, try frame("State").minX, accuracy: 0.5, "A column's cells line up")
+        XCTAssertEqual(try frame("Done").minY, try frame(prose).minY, accuracy: 0.5, "Cells sit at their row's top")
+        XCTAssertGreaterThan(try frame("Tests").minY, try frame(prose).maxY, "The next row starts below the tallest cell")
+        _ = try await PresentationTestSupport.capture(window, named: "table-wrapped", in: "chat-formatting-validation")
+    }
     func testSelectableMarkdownPreservesFormattingAndWrapping() async throws {
         guard #available(macOS 26, *) else { throw XCTSkip("Native selection bridge requires macOS 26") }
         AppFont.register()

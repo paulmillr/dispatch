@@ -118,28 +118,13 @@ struct ChatMessageDetails: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "10:28 – 10:32 · 4m 12s" (the end with its day when the day changed, "Yesterday 23:58 – 00:03"); the start alone
-    /// while working; nil for a turn read without times.
+    /// The turn's times (`ChatTurnSummary.span`, shared with the Mac's message info).
     static func span(_ turn: ChatTurn?, duration: TimeInterval?, now: Date = Date(), calendar: Calendar = .current) -> String? {
-        guard let turn, turn.started.timeIntervalSince1970 > 0 else { return nil }
-        let start = moment(turn.started, now: now, calendar: calendar)
-        guard let ended = turn.ended, ended.timeIntervalSince1970 > 0, ended >= turn.started else { return start }
-        let end = calendar.isDate(ended, inSameDayAs: turn.started)
-            ? clock(ended, calendar: calendar) : moment(ended, now: now, calendar: calendar)
-        return [start + " – " + end, duration.map(ChatTurnSummary.elapsed)].compactMap { $0 }.joined(separator: " · ")
+        ChatTurnSummary.span(turn, duration: duration, now: now, calendar: calendar)
     }
 
-    /// A time as the thread's corners say it ("10:32", "Yesterday 10:32", "Thu 10:32"), with its time of day past a
-    /// week too ("Oct 12, 10:32"), where the corner says the date alone.
     static func moment(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        let day = ChatTurnSummary.time(date, now: now, calendar: calendar)
-        let time = clock(date, calendar: calendar)
-        return day.contains(time) ? day : day + ", " + time
-    }
-
-    private static func clock(_ date: Date, calendar: Calendar) -> String {
-        date.formatted(Date.FormatStyle(locale: calendar.locale ?? .autoupdatingCurrent, calendar: calendar,
-                                        timeZone: calendar.timeZone).hour().minute())
+        ChatTurnSummary.moment(date, now: now, calendar: calendar)
     }
 
     @ViewBuilder private func facts(_ summary: ChatTurnSummary?, steps: [ChatStep]) -> some View {
@@ -182,15 +167,9 @@ struct ChatMessageDetails: View {
         }
     }
 
-    /// "48.2K in · 3.1K out".
-    static func tokens(_ usage: ChatUsage) -> String? {
-        [usage.input.map { compact($0) + " in" }, usage.output.map { compact($0) + " out" }].compactMap { $0 }
-            .joined(separator: " · ").nilIfEmpty
-    }
+    static func tokens(_ usage: ChatUsage) -> String? { ChatTurnSummary.tokens(usage) }
 
-    static func compact(_ value: Int) -> String {
-        value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)))
-    }
+    static func compact(_ value: Int) -> String { ChatTurnSummary.compact(value) }
 
     private func stepsHeader(_ steps: [ChatStep]) -> some View {
         let folds = ChatStepFold.entries(steps).contains { if case .fold = $0 { true } else { false } }
@@ -336,85 +315,6 @@ struct ChatMessageDetails: View {
 private struct ChatDetailsLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) { configuration.icon; configuration.title }
-    }
-}
-
-/// Message details' step list, folded (M1): up to `threshold` steps show as they are; past it the patches, the failed
-/// steps and the last step stay, and each run of two or more steps between them folds into one row that says what they
-/// did ("Read 5 files, searched 3 times"). A run of one shows: a fold would hide no room.
-enum ChatStepFold {
-    static let threshold = 8
-
-    enum Entry: Equatable, Identifiable {
-        case step(Int)
-        case fold(Range<Int>, String)
-
-        var id: String {
-            switch self {
-            case .step(let index): "step-\(index)"
-            case .fold(let range, _): "fold-\(range.lowerBound)"
-            }
-        }
-    }
-
-    static func entries(_ steps: [ChatStep]) -> [Entry] {
-        guard steps.count > threshold else { return steps.indices.map(Entry.step) }
-        var entries: [Entry] = [], run: [Int] = []
-        func flush() {
-            if run.count == 1 { entries.append(.step(run[0])) }
-            else if let first = run.first, let last = run.last {
-                entries.append(.fold(first..<last + 1, summary(steps[first...last])))
-            }
-            run = []
-        }
-        for index in steps.indices {
-            let step = steps[index]
-            if step.kind == .patch || step.failed || index == steps.count - 1 {
-                flush()
-                entries.append(.step(index))
-            } else { run.append(index) }
-        }
-        flush()
-        return entries
-    }
-
-    /// What a run of steps did, by kind in the order each first appears: "Read 5 files, searched 3 times, ran 2 commands".
-    static func summary(_ steps: ArraySlice<ChatStep>) -> String {
-        var order: [ChatStep.Kind] = [], counts: [ChatStep.Kind: Int] = [:]
-        for step in steps {
-            if counts[step.kind] == nil { order.append(step.kind) }
-            counts[step.kind, default: 0] += 1
-        }
-        func times(_ count: Int) -> String { count == 1 ? "once" : count == 2 ? "twice" : "\(count) times" }
-        let parts = order.map { kind -> String in
-            let count = counts[kind] ?? 0
-            switch kind {
-            case .read: return "read " + ChatTurnSummary.count(count, "file")
-            case .search: return "searched " + times(count)
-            case .run: return "ran " + ChatTurnSummary.count(count, "command")
-            case .patch: return "patched " + ChatTurnSummary.count(count, "file")
-            case .think: return "thought " + times(count)
-            case .web: return "used the web " + times(count)
-            case .tool: return "used " + ChatTurnSummary.count(count, "tool")
-            }
-        }
-        let text = parts.joined(separator: ", ")
-        return text.prefix(1).uppercased() + text.dropFirst()
-    }
-}
-
-extension ChatStep.Kind {
-    /// Message details' glyph for the kind (its word is the glyph's VoiceOver label).
-    var symbol: String {
-        switch self {
-        case .read: "doc.text"
-        case .patch: "pencil.line"
-        case .run: "apple.terminal"
-        case .search: "magnifyingglass"
-        case .think: "brain"
-        case .web: "globe"
-        case .tool: "wrench.and.screwdriver"
-        }
     }
 }
 

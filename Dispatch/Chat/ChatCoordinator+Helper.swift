@@ -1168,6 +1168,7 @@ extension ChatCoordinator {
         session.attachmentUploads[index].draft = session.drafts.current.id
         session.attachmentUploads[index].scope = session.drafts.scope
         session.attachmentUploads[index].failure = nil
+        session.attachmentUploads[index].sent = nil
         startUpload(id, endpoint: helper.endpoint, session: session)
     }
 
@@ -1191,8 +1192,13 @@ extension ChatCoordinator {
             do {
                 let prepared = try await Task.detached(priority: .userInitiated) { try source.prepare() }.value
                 try Task.checkCancellation()
-                update { $0.name = prepared.name; $0.size = prepared.bytes.count; $0.thumbnail = prepared.thumbnail }
-                let stored = try await Self.put(prepared, endpoint: endpoint)
+                update { $0.name = prepared.name; $0.size = prepared.bytes.count; $0.thumbnail = prepared.thumbnail; $0.sent = 0 }
+                let progress = ChatAttachmentUpload.Progress { [weak session] fraction in
+                    guard let session, let index = session.attachmentUploads.firstIndex(where: { $0.id == id }),
+                          session.attachmentUploads[index].uploading else { return }
+                    session.attachmentUploads[index].sent = fraction
+                }
+                let stored = try await Self.put(prepared, endpoint: endpoint, sent: { progress($0) })
                 guard let session, let upload = session.attachmentUploads.first(where: { $0.id == id }) else { return }
                 try Self.land(stored.attachment(id: id, thumbnail: prepared.thumbnail), upload: upload, endpoint: endpoint, in: session)
             } catch {
@@ -1226,10 +1232,12 @@ extension ChatCoordinator {
     /// `attachments.put` on the helper of the conversation's host. Not bound to the chat's subscription: a copy belongs
     /// to the host, and the draft takes it whatever the chat did meanwhile. A remote upload has the Files view's bound
     /// for its size: a copy stored after the timeout is never named by a message and is swept with the rest.
-    static func put(_ prepared: ChatAttachmentImage.Prepared, endpoint: HelperWorkspace.Endpoint) async throws -> HelperChat.StoredAttachment {
+    /// `sent`: the share of the request written to the connection so far (ChatAttachmentUpload.sent).
+    static func put(_ prepared: ChatAttachmentImage.Prepared, endpoint: HelperWorkspace.Endpoint,
+                    sent: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> HelperChat.StoredAttachment {
         let params = HelperChat.AttachmentUpload(name: prepared.name, bytes: prepared.bytes)
         let put: @Sendable () async throws -> HelperChat.StoredAttachment = {
-            try await HelperApp.shared.connection(endpoint).request("attachments.put", params: params)
+            try await HelperApp.shared.connection(endpoint).request("attachments.put", params: params, sent: sent)
         }
         guard endpoint.connection != nil else { return try await put() }
         let bound = HelperFilesSource.Bound.bytes(UInt64(prepared.bytes.count))

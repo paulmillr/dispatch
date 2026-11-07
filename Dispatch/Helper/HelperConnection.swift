@@ -25,6 +25,8 @@ final class HelperConnection: @unchecked Sendable {
     var canceled = false
     var notify: (@Sendable (String, HelperBinary.Value) -> Void)?
     var complete: ((Result<HelperWire.Content, any Error>) -> Void)?
+    /// The request's frame as it is written: the share of it out so far (`request(_:params:sent:)`).
+    var sent: (@Sendable (Double) -> Void)?
   }
 
   private let transport: HelperTransport
@@ -108,6 +110,16 @@ final class HelperConnection: @unchecked Sendable {
     return try HelperBinary.decode(R.self, from: content.value)
   }
 
+  /// A request whose frame is large (an attachment's bytes), its writing followed: `sent` gets the share of the frame
+  /// written so far, 0 to 1, on the transport's queue. Written is not yet received (helper/PROTOCOL.md has no progress).
+  nonisolated(nonsending) func request<P: Encodable, R: Decodable>(
+    _ method: String, params: P, sent: @escaping @Sendable (Double) -> Void
+  ) async throws -> R {
+    let content = try await perform(method, params: params, notify: nil, sent: sent)
+    guard content.bytes == nil else { throw HelperWire.Failure.kind }
+    return try HelperBinary.decode(R.self, from: content.value)
+  }
+
   nonisolated(nonsending) func requestBinary<P: Encodable, R: Decodable>(
     _ method: String, params: P
   ) async throws -> (result: R, bytes: Data) {
@@ -117,11 +129,13 @@ final class HelperConnection: @unchecked Sendable {
   }
 
   private nonisolated(nonsending) func perform<P: Encodable>(
-    _ method: String, params: P, notify: (@Sendable (String, HelperBinary.Value) -> Void)?
+    _ method: String, params: P, notify: (@Sendable (String, HelperBinary.Value) -> Void)?,
+    sent: (@Sendable (Double) -> Void)? = nil
   ) async throws -> HelperWire.Content {
     let body = try encode(Request(method: method, params: params))
     let item = Pending()
     item.notify = notify
+    item.sent = sent
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { reply in
         transport.queue.async {
@@ -220,7 +234,8 @@ final class HelperConnection: @unchecked Sendable {
     next += 1
     item.id = id
     pending[id] = item
-    transport.send(bytes, asking: item.asking)
+    let total = Double(bytes.count)
+    transport.send(bytes, asking: item.asking, sent: item.sent.map { sent in { sent(Double($0) / total) } })
     return id
   }
 
