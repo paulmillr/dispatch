@@ -285,7 +285,7 @@ final class FilesOutlineView: NSOutlineView {
         return true
     }
 
-    @objc func copy(_ sender: Any?) { controller?.copyPaths() }
+    @objc func copy(_ sender: Any?) { controller?.copyFiles() }
     @objc func paste(_ sender: Any?) { controller?.paste() }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
@@ -660,6 +660,19 @@ final class FilesOutlineView: NSOutlineView {
         TerminalRuntime.shared.files.openInEditor(session.id, path: row.id)
     }
 
+    /// The selected rows' paths, in the list's order.
+    private var selectedPaths: [String] {
+        guard let session else { return [] }
+        return rows.filter { $0.isEntry && session.selection.contains($0.id) }.map(\.id)
+    }
+
+    /// Copy (⌘C): the files themselves, which Finder pastes (`FilesCoordinator.copyFiles`).
+    func copyFiles() {
+        guard let session, !selectedPaths.isEmpty else { return }
+        TerminalRuntime.shared.files.copyFiles(session.id, paths: selectedPaths)
+    }
+
+    /// Copy Path (⌥⌘C): the paths as text.
     func copyPaths() {
         guard let session else { return }
         let text = session.pathsText(in: rows)
@@ -688,12 +701,10 @@ final class FilesOutlineView: NSOutlineView {
         session?.findRequest = System.uuid()
     }
 
-    /// Double ⌃D, as chat's: an idle agent that can quit closes the tab and quits; anything else shows the terminal.
+    /// Double ⌃D, as chat's (`FilesCoordinator.exitFromFiles`).
     func leaveFiles() {
         guard let session else { return }
-        let chat = TerminalRuntime.shared.chat
-        if let agent = chat.sessions[session.id], chat.quitCommand(agent) != nil { return chat.quitFromChat(agent) }
-        TerminalRuntime.shared.files.switchMode(session.id, to: .terminal)
+        TerminalRuntime.shared.files.exitFromFiles(session.id)
     }
 
     @objc private func doubleClicked(_ sender: Any?) {
@@ -828,8 +839,14 @@ final class FilesOutlineView: NSOutlineView {
         add(single?.isDirectory == true ? "Open" : "Preview", #selector(menuOpen), enabled: single != nil)
         add("Open in Editor", #selector(menuOpenInEditor), key: "o", enabled: single != nil)
         menu.addItem(.separator())
+        add("Copy", #selector(menuCopyFiles), key: "c", enabled: !targets.isEmpty)
         add("Copy Path", #selector(menuCopy), key: "c", modifiers: [.command, .option], enabled: !targets.isEmpty)
-        add("Copy", #selector(menuCopy), key: "c", enabled: !targets.isEmpty)
+        if session?.source?.endpoint.isLocal == false {
+            add("Copy scp Command", #selector(menuCopyScp), enabled: !targets.isEmpty
+                && session.map { TerminalRuntime.shared.files.scpCommand($0.id, paths: targets.map(\.id)) != nil } == true)
+        }
+        menu.addItem(.separator())
+        add(targets.count > 1 ? "Download \(targets.count) Items…" : "Download…", #selector(menuDownload), enabled: !targets.isEmpty)
         menu.addItem(.separator())
         add("Show Enclosing Folder", #selector(menuEnclosingFolder), enabled: (single?.depth ?? 0) > 0)
         add("Refresh", #selector(menuRefresh), key: "r", enabled: true)
@@ -838,6 +855,15 @@ final class FilesOutlineView: NSOutlineView {
     @objc private func menuOpen() { openSelection() }
     @objc private func menuOpenInEditor() { openInEditor() }
     @objc private func menuCopy() { copyPaths() }
+    @objc private func menuCopyFiles() { copyFiles() }
+    @objc private func menuCopyScp() {
+        guard let session else { return }
+        TerminalRuntime.shared.files.copyScpCommand(session.id, paths: selectedPaths)
+    }
+    @objc private func menuDownload() {
+        guard let session else { return }
+        TerminalRuntime.shared.files.download(session.id, paths: selectedPaths, window: outline?.window)
+    }
     @objc private func menuRefresh() { refresh() }
 
     @objc private func menuEnclosingFolder() {

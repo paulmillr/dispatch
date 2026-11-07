@@ -22,13 +22,15 @@ struct RetainedTabView {
         var showHidden: Bool?
         var sort: FilesSort
         var sortDescending: Bool
+        /// Written for saves read by an older build, which took it as a hidden pane; read only when `oneView` is absent.
         var previewHidden: Bool
-        var previewRequested: Bool
+        /// The tab's views choice (`FilesSession.oneView`); nil follows the layout.
+        var oneView: Bool? = nil
         var previewWidth: CGFloat?
         var changesSelection: String?
         var changesFilter: String
         var diffMode: GitDiffMode
-        var diffWrap: Bool
+        var diffWrap: Bool?
         var logScope: GitLogScope
         var logFilter: String
         var selectedCommit: String?
@@ -37,8 +39,8 @@ struct RetainedTabView {
         @MainActor init(_ session: FilesSession) {
             tab = session.tab; pinnedRoot = session.pinnedRoot; expanded = session.expanded; selection = session.selection
             anchor = session.anchor; filter = session.filter; showHidden = session.showHidden; sort = session.sort
-            sortDescending = session.sortDescending; previewHidden = session.previewHidden
-            previewRequested = session.previewRequested; previewWidth = session.previewWidth
+            sortDescending = session.sortDescending; previewHidden = session.oneView == true; oneView = session.oneView
+            previewWidth = session.previewWidth
             changesSelection = session.changesSelection; changesFilter = session.changesFilter; diffMode = session.diffMode
             diffWrap = session.diffWrap; logScope = session.logScope; logFilter = session.logFilter
             selectedCommit = session.selectedCommit; commitFile = session.commitFile
@@ -47,8 +49,8 @@ struct RetainedTabView {
         @MainActor func apply(to session: FilesSession) {
             session.tab = tab; session.pinnedRoot = pinnedRoot; session.expanded = expanded; session.selection = selection
             session.anchor = anchor; session.filter = filter; session.showHidden = showHidden; session.sort = sort
-            session.sortDescending = sortDescending; session.previewHidden = previewHidden
-            session.previewRequested = previewRequested; session.previewWidth = previewWidth
+            session.sortDescending = sortDescending; session.oneView = oneView ?? (previewHidden ? true : nil)
+            session.previewWidth = previewWidth
             session.changesSelection = changesSelection; session.changesFilter = changesFilter; session.diffMode = diffMode
             session.diffWrap = diffWrap; session.logScope = logScope; session.logFilter = logFilter
             session.selectedCommit = selectedCommit; session.commitFile = commitFile

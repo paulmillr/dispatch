@@ -20,6 +20,8 @@ struct LayoutPicker: View {
                 .stripGlassButton()
                 .contentShape(Rectangle())
         }
+        // Its own style: floating beside the mode switch nothing around it sets one, and the default bezel showed.
+        .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .help(paneCount > 1 ? "Layout: \(shortLabel) · choose layout, moving existing tabs into panes"
                             : "Choose layout · move existing tabs into panes")

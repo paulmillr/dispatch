@@ -82,10 +82,11 @@ final class GitChangesPresentationTests: XCTestCase {
     }
 
     /// `inset`: room the floating mode switch takes at the header's trailing end, as `TerminalContentView` leaves it.
-    private func window(_ session: FilesSession, width: CGFloat = 1180, inset: CGFloat = 0) throws -> NSWindow {
+    private func window(_ session: FilesSession, width: CGFloat = 1180, height: CGFloat = 700,
+                        inset: CGFloat = 0) throws -> NSWindow {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 700), styleMask: [.titled],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: FilesView(session: session)
@@ -171,15 +172,17 @@ final class GitChangesPresentationTests: XCTestCase {
         XCTAssertFalse(try snapshot.reads(["Create review"]), "no Create review before a comment")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-add-patch", in: window).isEmpty, "no git add -p")
 
-        // The files header's row (34 pt at the 12.5 design base) as on every tab: the repository and its branch (no host, no path), the search and
-        // the diff's toggle, then the tabs at the end; the counts are the groups', the totals on the line over them.
+        // The files header's row (34 pt at the 12.5 design base) as on every tab: the tab's name, the repository and its
+        // branch (no host, no path), the search and the diff's toggle at the end; the counts are the groups', the totals
+        // on the line over them.
         let header = try await frame("files-header", in: window)
         let place = try await frame("files-location", in: window)
-        let files = try await frame("files-segment-files", in: window)
+        let title = try await frame("files-tab-title", in: window)
         let list = try await frame("git-changes-list", in: window)
         XCTAssertEqual(header.height, AppTypography().expanded(34), accuracy: 0.5)
         XCTAssertEqual(place.midY, header.midY, accuracy: 1)
-        XCTAssertLessThan(place.maxX, files.minX)
+        XCTAssertLessThan(title.maxX, place.minX)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-tab-title", in: window).contains("Review"))
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).isEmpty, "no crumbs on Review")
         XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-location", in: window)
             .contains("api · main · up to date with origin/main"))
@@ -187,7 +190,7 @@ final class GitChangesPresentationTests: XCTestCase {
         let totals = try await frame("git-changes-totals", in: window)
         XCTAssertGreaterThan(totals.minY, list.maxY - 40, "the totals lead the list")
         _ = try await frame("files-search", in: window)
-        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-preview-toggle", in: window).contains("Hide diff"))
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-views-toggle", in: window).contains("Show one view"))
 
         // The badges: amber M on the modified rows, green U on the untracked one.
         let labels = PresentationTestSupport.accessibilityLabels("git-change-untracked-tests/idempotency.test.ts", in: window)
@@ -218,36 +221,65 @@ final class GitChangesPresentationTests: XCTestCase {
             .contains { $0.contains("4 unmodified lines") }, "\(PresentationTestSupport.accessibilityLabels("git-diff-gap-2", in: window))")
     }
 
-    func testNarrowHeaderKeepsTheLineBesideGlyphSegments() async throws {
+    func testNarrowHeaderKeepsTheLineInside() async throws {
         let session = mockupSession()
         let inset: CGFloat = 70
         let window = try window(session, inset: inset)
         try await read([["api"], ["main"]], in: window, named: "git-changes-header-wide")
-        let wide = try await frame("files-segment-changes", in: window)
         for width: CGFloat in [600, 480, 360] {
             window.setContentSize(NSSize(width: width, height: 700))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
-                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
-                let toggle = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                return files.flatMap { files in toggle.map { $0.maxX < files.minX } } ?? false
+                let toggle = PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first
+                return toggle.map { $0.maxX <= width - 12 - inset + 0.5 } ?? false
             }
-            if width == 360 {
-                // At last the segments drop their names (the line has clipped all it can).
-                let narrow = try await frame("files-segment-changes", in: window)
-                XCTAssertLessThan(narrow.width, wide.width - 20, "the segments kept their names at \(width) pt")
-            }
-            let files = try await frame("files-segment-files", in: window)
-            let commits = try await frame("files-segment-commits", in: window)
-            let toggle = try await frame("files-preview-toggle", in: window)
+            let title = try await frame("files-tab-title", in: window)
             let place = try await frame("files-location", in: window)
-            XCTAssertGreaterThanOrEqual(place.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
-            XCTAssertLessThan(toggle.maxX, files.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(commits.maxX, width - 12 - inset + 0.5, "the tabs stay out of the switch's room at \(width) pt")
-            // Narrowed to glyphs, the segment keeps its name for VoiceOver.
-            XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-segment-changes", in: window).contains("Review"))
+            XCTAssertGreaterThanOrEqual(title.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
+            XCTAssertLessThanOrEqual(title.maxX, place.minX, "at \(width) pt")
         }
         _ = try await PresentationTestSupport.capture(window, named: "git-changes-header-narrow", in: "files-audit")
+    }
+
+    /// Half a laptop's window: the changes at their own height over the diff, which has the view's width, one gutter
+    /// and wrapped lines.
+    func testANarrowTallReviewStacksTheDiffUnderTheChanges() async throws {
+        let session = mockupSession()
+        let window = try window(session, width: 602, height: 840)
+        let list = try await frame("git-changes-list", in: window)
+        let pane = try await frame("git-changes-diff", in: window)
+        XCTAssertLessThanOrEqual(pane.maxY, list.minY + 1, "the diff sits under the changes")
+        XCTAssertGreaterThan(pane.width, 600)
+        XCTAssertLessThan(list.height, 840 * 0.4 + 1, "the list takes at most 40%")
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-diff-wrap", in: window).contains("on"),
+                      "a narrow diff wraps")
+        let long = try await frame("git-diff-line-7", in: window)
+        XCTAssertLessThanOrEqual(long.width, pane.width + 1)
+        // One gutter: the removed line keeps its old number, the line after it starts where the code does.
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-diff-line-8", in: window)
+            .contains { $0.contains("11") && $0.contains("const attempt") })
+        _ = try await PresentationTestSupport.capture(window, named: "git-changes-stacked", in: "files-audit")
+    }
+
+    /// A quarter of a laptop's window: one column, open on the selected change's diff; the header's name goes back to
+    /// the changes, ↑↓ step through them and the change's name says which it is.
+    func testANarrowShortReviewOpensOnTheDiffAndSteps() async throws {
+        let session = mockupSession()
+        let window = try window(session, width: 602, height: 430)
+        _ = try await frame("git-changes-diff", in: window)
+        XCTAssertTrue(session.drilled, "one column opens on the diff")
+        _ = try await frame("files-split-back", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-opened", in: window).contains("src/routes/billing.ts"))
+        let ordered = session.orderedChanges.map(\.id)
+        let start = try XCTUnwrap(ordered.firstIndex(of: session.changesSelection ?? ""))
+        try await click("files-step-next", in: window, until: { session.changesSelection == ordered[start + 1] })
+        try await click("files-step-previous", in: window, until: { session.changesSelection == ordered[start] })
+        _ = try await PresentationTestSupport.capture(window, named: "git-changes-one-column", in: "files-audit")
+        try await click("files-split-back", in: window, until: { !session.narrowDetail })
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("files-split-back", in: window).isEmpty }
+        _ = try await frame("git-change-unstaged-src/routes/billing.ts", in: window)
+        XCTAssertFalse(session.narrowDetail, "the list stays once gone back to")
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityLabels("files-tab-title", in: window).contains("Review") }
     }
 
     func testClickingARowSelectsItAndArrowsMoveTheSelection() async throws {
@@ -366,7 +398,7 @@ final class GitChangesPresentationTests: XCTestCase {
         // `const event = stripe.webhooks.constructEvent(raw, signature, process.env.STRIPE_SECRET!)`.
         let long = try await frame("git-diff-line-7", in: window)
         XCTAssertGreaterThan(long.width, pane.width, "unwrapped, every row is as wide as the widest line")
-        try await click("git-diff-wrap", in: window, until: { session.diffWrap })
+        try await click("git-diff-wrap", in: window, until: { session.diffWrap == true })
         try await TestSupport.eventually(diagnostic: "line \(PresentationTestSupport.accessibilityFrames("git-diff-line-7", in: window))") {
             guard let line = PresentationTestSupport.accessibilityFrames("git-diff-line-7", in: window).first else { return false }
             return line.width <= pane.width + 1 && line.height > 30

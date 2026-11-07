@@ -22,11 +22,11 @@ struct GitRepository: Hashable, Sendable {
 enum GitState: Hashable, Sendable {
     case loading
     case repository(GitRepository)
-    /// Not a repository: the Changes and Commits segments do not show.
+    /// Not a repository: the Review and Commits tabs cannot show.
     case none
     /// git is missing on the host, or the connection's grant lacks git.
     case unavailable(String)
-    /// Settings › Features turned git off: no segments, no marks, and the footer says nothing of git.
+    /// Settings › Features turned git off: no git tabs, no marks, and the footer says nothing of git.
     case off
 
     var repository: GitRepository? {

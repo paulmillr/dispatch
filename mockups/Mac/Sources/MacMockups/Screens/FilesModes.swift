@@ -32,7 +32,7 @@ enum FilesModes {
             Pane(strip: StripModel(tabs: [
                 TabItem(title: tab, shortcut: 1, selected: true),
                 TabItem(title: "Theme contrast", activity: .finished, shortcut: 2),
-            ], mode: .files, titleRow: true)) {
+            ], mode: .files, titleRow: true, modeSymbol: segment.symbol)) {
                 VStack(spacing: 0) {
                     FilesHeader(segment: segment)
                     content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -67,7 +67,7 @@ enum FilesSegment { case files, review, commits }
 
 /// The code font as the preview and diffs draw it (ChatTypography.codeFont): Source Code Pro at Settings › Font size
 /// (`Preferences.fontSize`, 14), unscaled.
-@MainActor private enum CodeMetrics {
+@MainActor enum CodeMetrics {
     static var size: CGFloat { Mock.contentSize }
     static func font(_ offset: CGFloat = 0) -> Font { AppFont.code(size: size + offset) }
     /// FilePreviewMetrics.metrics: TextKit's line for the code font, rounded up.
@@ -84,7 +84,7 @@ enum FilesSegment { case files, review, commits }
 
 /// A glass capsule (`liquidGlass(in: Capsule())`, `glassEffect(.regular, in: Capsule())`) as the kit draws glass
 /// offscreen: GlassTone's track and rim, the strip's soft shadow (Kit/Strip.swift).
-private struct GlassCapsule: View {
+struct GlassCapsule: View {
     var fill: Color = GlassTone.track
     var body: some View {
         Capsule().fill(fill)
@@ -93,30 +93,63 @@ private struct GlassCapsule: View {
     }
 }
 
-/// The files header (FilesHeader): where you are (crumbs and the follow link on Files; the repository line, and on
-/// Review Create review), the search and the pane's toggle on one glass pill, then Files | Review | Commits.
-private struct FilesHeader: View {
+/// The files header (FilesHeader): the tab's name (FilesPill), where you are (crumbs and the follow link on Files; the
+/// repository line, and on Review Create review with the comments' count), the search and the pane's toggle on one
+/// glass pill. The files tabs are the strip's mode button's (its glyph names the one shown, its menu switches).
+struct FilesHeader: View {
     let segment: FilesSegment
+    /// One column with a commit open in the log's place (FilesSession.drilled): "‹ Commits", back to the log, then the
+    /// commit's subject; ↑ ↓ step through the log.
+    var commit: String?
+    /// One column on a change's diff: "‹ Review", back to the changes, then the change (its name opens the others,
+    /// `fileMenu` open) and where it is among them; ↑ ↓ step through them.
+    var reviewFile = false
+    var fileMenu = false
     var body: some View {
         HStack(spacing: 12) {
+            FilesPill(segment: segment, back: commit != nil || reviewFile)
             if segment == .files {
                 HStack(spacing: 6) {
                     Crumbs()
                     // followToggle: lit while the view follows the shell's cd (FilesSession.followsShell, the default).
                     HeaderButton(symbol: "link", on: true)
                 }
+            } else if reviewFile {
+                // FilesHeader.opened: the change (changesMenu) and "2 of 3".
+                HStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Badge(letter: "M", side: 14, plain: true)
+                        Text("Sidebar.swift").font(t.font(.label, weight: .semibold)).foregroundStyle(p.ink)
+                        Image(systemName: "chevron.up.chevron.down").font(t.symbol(.micro, weight: .semibold))
+                    }
+                    .fixedSize()
+                    .padding(.horizontal, 6).frame(height: t.expanded(22))
+                    .background(RoundedRectangle(cornerRadius: 6).fill(p.ink.opacity(fileMenu ? 0.12 : 0)))
+                    .padding(.horizontal, -6)
+                    Text("2 of 3").font(t.font(.caption)).foregroundStyle(p.detail).fixedSize()
+                }
+                .lineLimit(1)
+            } else if let commit {
+                Text(commit).font(t.font(.label, weight: .semibold)).foregroundStyle(p.ink).lineLimit(1)
             } else {
                 RepositoryLine()
-                if segment == .review { CreateReviewButton() }
             }
+            if segment == .review { CreateReviewButton(count: 3) }
             Spacer(minLength: 0)
+            if commit != nil || reviewFile {
+                // stepButton: the previous and next change or commit.
+                HStack(spacing: Mock.glass ? 2 : 12) {
+                    HeaderButton(symbol: "chevron.up")
+                    HeaderButton(symbol: "chevron.down")
+                }
+                .modifier(GlassControlGroup())
+            }
             // searchSlot and paneToggle (lit while the pane shows), `glassControlGroup()`: spacing 2 on glass, 12 flat.
             HStack(spacing: Mock.glass ? 2 : 12) {
                 HeaderButton(symbol: "magnifyingglass")
                 HeaderButton(symbol: "rectangle.righthalf.inset.filled", on: true)
             }
             .modifier(GlassControlGroup())
-            Segments(selected: segment)
         }
         .padding(.horizontal, 12)
         // FilesHeader.height: expanded(34).
@@ -128,7 +161,7 @@ private struct FilesHeader: View {
 }
 
 /// GlassControlGroup: the buttons on one glass capsule, 3 × 2 inside it; flat chrome leaves them bare.
-private struct GlassControlGroup: ViewModifier {
+struct GlassControlGroup: ViewModifier {
     func body(content: Content) -> some View {
         if Mock.glass {
             content.padding(.horizontal, 3).padding(.vertical, 2).background(GlassCapsule())
@@ -140,7 +173,7 @@ private struct GlassControlGroup: ViewModifier {
 
 /// FilesHeaderButtonStyle: muted, the ink and a 6% wash while on; a capsule on glass, a 4-point square flat. The symbol
 /// at the body size in an expanded(22) square (searchButton, paneToggle, followToggle).
-private struct HeaderButton: View {
+struct HeaderButton: View {
     let symbol: String
     var on = false
     var body: some View {
@@ -156,7 +189,7 @@ private struct HeaderButton: View {
 
 /// crumbRow: FilesPath.crumbs from home ("~ / src / app"), the shown folder in `secondary`, the others `sidebarDetail`,
 /// the "/" between them `faint`.
-private struct Crumbs: View {
+struct Crumbs: View {
     let crumbs = ["~", "src", "app"]
     var body: some View {
         HStack(spacing: 6) {
@@ -171,10 +204,11 @@ private struct Crumbs: View {
 
 /// repositoryLine: the repository's name in `secondary`, the branch glyph `faint`, the branch; no ↑/↓ while it is up to
 /// date with its upstream (the kit's `git status`).
-private struct RepositoryLine: View {
+struct RepositoryLine: View {
+    var name = true
     var body: some View {
         HStack(spacing: 6) {
-            Text("app").foregroundStyle(p.secondary)
+            if name { Text("app").foregroundStyle(p.secondary) }
             Image(systemName: "arrow.triangle.branch").font(t.symbol(.caption)).foregroundStyle(p.faint)
             Text("dark-mode")
         }
@@ -183,17 +217,25 @@ private struct RepositoryLine: View {
 }
 
 /// Where Create review is, for its popover (J2b).
-private struct CreateReviewAnchor: PreferenceKey {
+struct CreateReviewAnchor: PreferenceKey {
     static var defaultValue: Anchor<CGRect>? { nil }
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
 /// ReviewHeaderButton in ReviewCreateButtonStyle: title and icon in white at the header's label size, 10 in, expanded(22)
 /// tall, on a capsule of the theme's blue at 90%.
-private struct CreateReviewButton: View {
+struct CreateReviewButton: View {
+    /// ReviewHeaderButton.countPill: the review's comments, in the blue on white.
+    var count: Int? = 3
     var body: some View {
-        Label("Create review", systemImage: "text.bubble.fill")
-            .labelStyle(.titleAndIcon)
+        HStack(spacing: 6) {
+            Label("Create review", systemImage: "text.bubble.fill").labelStyle(.titleAndIcon)
+            if let count {
+                Text("\(count)").font(t.font(.caption)).foregroundStyle(theme.blue)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(.white))
+            }
+        }
             .font(t.font(.label)).foregroundStyle(.white)
             .lineLimit(1).fixedSize()
             .padding(.horizontal, 10).frame(height: t.expanded(22))
@@ -202,68 +244,34 @@ private struct CreateReviewButton: View {
     }
 }
 
-/// FilesSegments: segments 1 apart on the track (`glassSegmentTrack`, inset 2), each the symbol at the caption size, the
-/// title and a count pill 6 apart, 10 in, expanded(22) tall; the shown one raised (`glassSegmentPill`). Review's count
-/// is its comments, in the theme's blue (FilesHeader.segments).
-private struct Segments: View {
-    let selected: FilesSegment
-    var body: some View {
-        HStack(spacing: 1) {
-            segment(.files, "Files", "folder")
-            segment(.review, "Review", "text.bubble", count: 3)
-            segment(.commits, "Commits", "clock.arrow.circlepath")
-        }
-        .padding(2)
-        .background {
-            if Mock.glass { GlassCapsule() } else { RoundedRectangle(cornerRadius: 6).fill(p.control) }
-        }
-        .font(t.font(.label))
-        .fixedSize()
-    }
-
-    private func segment(_ kind: FilesSegment, _ title: String, _ symbol: String, count: Int? = nil) -> some View {
-        let on = kind == selected
-        return HStack(spacing: 6) {
-            Image(systemName: symbol).font(t.symbol(.caption))
-            Text(title).lineLimit(1)
-            if let count {
-                Text("\(count)").font(t.font(.caption)).foregroundStyle(theme.blue)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(theme.blue.opacity(0.16)))
-            }
-        }
-        .foregroundStyle(on ? p.ink : p.muted)
-        .padding(.horizontal, 10)
-        .frame(height: t.expanded(22))
-        .background {
-            if on {
-                if Mock.glass { Capsule().fill(GlassTone.selected) } else { RoundedRectangle(cornerRadius: 4).fill(p.selectedControl) }
-            }
-        }
-    }
-}
-
-/// FilesSplit at FilesView.layout's widths: the detail 560 once the view is 1,000 wide (else half), its 1-point
-/// `Chrome.border` inside that width.
-private struct FilesSplit<List: View, Detail: View>: View {
+/// FilesSplit at FilesView.layout's widths: the detail 560 once the view is 1,000 wide (else half, within the list's
+/// 320 and the preview's 240), its 1-point `Chrome.border` inside that width; none under 900.
+struct FilesSplit<List: View, Detail: View>: View {
     @ViewBuilder let list: List
     @ViewBuilder let detail: Detail
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            let preview = (width >= 1_000 ? 560 : width / 2).rounded()
+            // FilesView.layout: under columnsWidth (900) no column beside the list (NarrowPanes draws the stacked and
+            // one-column shapes); else the preview within the minima (list 320, preview 240).
+            let preview: CGFloat? = width < 900 ? nil
+                : min(max(width >= 1_000 ? 560 : width / 2, 240), max(240, width - 320)).rounded()
+            let height = geometry.size.height
             HStack(spacing: 0) {
-                list.frame(width: width - preview).frame(maxHeight: .infinity, alignment: .top)
-                Chrome.border.frame(width: 1)
-                detail.frame(width: preview - 1).frame(maxHeight: .infinity, alignment: .top).clipped()
+                list.frame(width: width - (preview ?? 0), height: height, alignment: .topLeading).clipped()
+                if let preview {
+                    Chrome.border.frame(width: 1)
+                    detail.frame(width: preview - 1, height: height, alignment: .topLeading).clipped()
+                }
             }
+            .frame(width: width, height: height, alignment: .topLeading)
         }
     }
 }
 
 /// GitChangeBadge: the status letter in its kind's colour, plain at the body size semibold (Review), or at the caption
 /// size on its tint at 12% (14% deleted) on a 5-point corner (Commits).
-private struct Badge: View {
+struct Badge: View {
     let letter: String
     var side: CGFloat = 20
     var plain = false
@@ -286,7 +294,7 @@ private struct Badge: View {
 
 /// GitCounts: "+8 −5" 4 apart in GitChangeBadge's added and deleted colours; `totals` shows both signs. The caller sets
 /// the font.
-private struct Counts: View {
+struct Counts: View {
     let added: Int
     var removed = 0
     var totals = false
@@ -301,7 +309,7 @@ private struct Counts: View {
 
 /// FilePreviewButtonStyle: the body size, 10 in, 22 tall; prominent, the ink at 90% on a glass capsule (flat: a 7% well),
 /// else the ink at 60% with no ground.
-@MainActor private func previewButton(_ title: String, prominent: Bool = true) -> some View {
+@MainActor func previewButton(_ title: String, prominent: Bool = true) -> some View {
     Text(title).font(t.font(.body))
         .foregroundStyle(theme.ink.opacity(prominent ? 0.9 : 0.6))
         .lineLimit(1).fixedSize()
@@ -314,7 +322,7 @@ private struct Counts: View {
 }
 
 /// FilePreviewIconButtonStyle: the ink at 60%, 5 in, at least 22 × 22; lit (the ink, an 8% wash) while on.
-private struct IconButton<Label: View>: View {
+struct IconButton<Label: View>: View {
     var on = false
     @ViewBuilder let label: Label
     var body: some View {
@@ -329,7 +337,7 @@ private struct IconButton<Label: View>: View {
 }
 
 /// FileWrapGlyph: three lines, the middle one turning back under itself, on a 14-point grid.
-private struct WrapGlyph: View {
+struct WrapGlyph: View {
     var body: some View {
         Canvas { context, size in
             let unit = min(size.width, size.height) / 14
@@ -349,7 +357,7 @@ private struct WrapGlyph: View {
 
 /// A text editor as ReviewTextEditor draws it: the chat reply font (ChatTypography.reply) 8 × 6 in, the caret in the
 /// ink (ChatCaretTextView), on the terminal's ground in a 6-point frame of `border`; at least `minimum` tall.
-private struct Editor: View {
+struct Editor: View {
     let text: String
     var caret = true
     let minimum: CGFloat
@@ -369,7 +377,7 @@ private struct Editor: View {
 // MARK: Code
 
 /// A run of code coloured by an ANSI index of the terminal scheme (nil: the foreground).
-private struct Code {
+struct Code {
     var spans: [(String, Int?)]
     init(_ spans: (String, Int?)...) { self.spans = spans }
     init(plain: String) { spans = [(plain, nil)] }
@@ -384,15 +392,15 @@ private struct Code {
 // SyntaxHighlight.tokens on the desktop profile (SyntaxScanner), in ChatTheme's colours: keywords `keyword` (palette 5),
 // capitalised names and calls `blue` (4), strings `string` (2), numbers `number` (3), comments `comment` (8). `some` is
 // not a desktop keyword; "@State" is a plain "@" and a capitalised name.
-private func kw(_ s: String) -> (String, Int?) { (s, 5) }
-private func ty(_ s: String) -> (String, Int?) { (s, 4) }
-private func fn(_ s: String) -> (String, Int?) { (s, 4) }
-private func st(_ s: String) -> (String, Int?) { (s, 2) }
-private func nu(_ s: String) -> (String, Int?) { (s, 3) }
-private func cm(_ s: String) -> (String, Int?) { (s, 8) }
-private func pl(_ s: String) -> (String, Int?) { (s, nil) }
+func kw(_ s: String) -> (String, Int?) { (s, 5) }
+func ty(_ s: String) -> (String, Int?) { (s, 4) }
+func fn(_ s: String) -> (String, Int?) { (s, 4) }
+func st(_ s: String) -> (String, Int?) { (s, 2) }
+func nu(_ s: String) -> (String, Int?) { (s, 3) }
+func cm(_ s: String) -> (String, Int?) { (s, 8) }
+func pl(_ s: String) -> (String, Int?) { (s, nil) }
 
-private enum DiffRow {
+enum DiffRow {
     case hunk(String, String)
     case line(old: Int?, new: Int?, Code, hoverPlus: Bool = false, draft: Bool = false)
     /// GitDiffView.gapRow: the lines between two hunks, opened from the file.
@@ -403,11 +411,15 @@ private enum DiffRow {
 
 /// GitDiffView.rowsView in Diff mode: hunk headers, two number gutters, the sign column and the code, green and red
 /// washes, gaps; reviewing, the 20-point column for the + ahead of every line and the cards under their line.
-private struct DiffBody: View {
+struct DiffBody: View {
     let rows: [DiffRow]
     var review = true
     /// How far the diff is scrolled down.
     var scroll: CGFloat = 0
+    /// Proposed for narrow panes: one number column (the new line's, a deleted line's old number in `faint`).
+    var oneGutter = false
+    /// Long lines wrap under their code's start instead of running off the pane.
+    var wrap = false
 
     /// ReviewLineAction's column.
     private var inset: CGFloat { review ? 20 : 0 }
@@ -415,7 +427,7 @@ private struct DiffBody: View {
     private var gutter: CGFloat {
         max(34, (2 * CodeMetrics.digitWidth * (CodeMetrics.size - 1.5) / CodeMetrics.size + 12).rounded(.up))
     }
-    private var codeLeading: CGFloat { inset + gutter * 2 + 14 }
+    private var codeLeading: CGFloat { inset + gutter * (oneGutter ? 1 : 2) + 14 }
 
     var body: some View {
         GeometryReader { geometry in
@@ -423,6 +435,8 @@ private struct DiffBody: View {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in rowView(row, pane: geometry.size.width) }
             }
             .padding(.top, 4)
+            // Rows that wrap keep their height when the diff runs past the pane.
+            .fixedSize(horizontal: false, vertical: true)
             .frame(width: geometry.size.width, alignment: .topLeading)
             .offset(y: -scroll)
         }
@@ -431,14 +445,14 @@ private struct DiffBody: View {
 
     @ViewBuilder private func rowView(_ row: DiffRow, pane: CGFloat) -> some View {
         // reviewRow: in line with the code, no wider than the pane.
-        let cardWidth = max(260, min(pane - codeLeading - 14, 720))
+        let cardWidth = max(oneGutter ? 200 : 260, min(pane - codeLeading - 14, 720))
         switch row {
         case .hunk(let range, let section):
             HStack(spacing: 10) {
                 Text(range).foregroundStyle(theme.blue)
                 Text(section).foregroundStyle(theme.muted)
             }
-            .font(CodeMetrics.font(-1)).lineLimit(1).fixedSize()
+            .font(CodeMetrics.font(-1)).lineLimit(1)
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22, alignment: .leading)
             .background(theme.blue.opacity(0.07))
@@ -447,15 +461,27 @@ private struct DiffBody: View {
             let tint: Color = old == nil ? theme.green.opacity(0.10) : new == nil ? theme.red.opacity(0.10) : .clear
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 if inset > 0 { Color.clear.frame(width: inset, height: 1) }
-                number(old)
-                number(new)
+                if oneGutter {
+                    number(new ?? old, faint: new == nil)
+                } else {
+                    number(old)
+                    number(new)
+                }
                 Text(old == nil ? "+" : new == nil ? "−" : "").foregroundStyle(old == nil ? theme.green : theme.red)
                     .frame(width: 14)
-                code.text.lineLimit(1).fixedSize()
-                Spacer(minLength: 0)
+                if wrap {
+                    code.text.lineSpacing(CodeMetrics.rowHeight - CodeMetrics.lineHeight)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 10)
+                } else {
+                    code.text.lineLimit(1).fixedSize()
+                    Spacer(minLength: 0)
+                }
             }
             .font(CodeMetrics.font())
-            .frame(maxWidth: .infinity, minHeight: CodeMetrics.rowHeight, maxHeight: CodeMetrics.rowHeight, alignment: .leading)
+            .padding(.vertical, wrap ? (CodeMetrics.rowHeight - CodeMetrics.lineHeight) / 2 : 0)
+            .frame(maxWidth: .infinity, minHeight: CodeMetrics.rowHeight, maxHeight: wrap ? nil : CodeMetrics.rowHeight,
+                   alignment: .leading)
             .background(tint)
             // ReviewLineAction: the comment being written tints its lines; the + shows on the line under the pointer.
             .background(draft ? theme.blue.opacity(0.14) : .clear)
@@ -491,15 +517,15 @@ private struct DiffBody: View {
     }
 
     /// GitDiffView.number: the code font 1.5 smaller, muted, right-aligned 8 in from the gutter's end.
-    private func number(_ value: Int?) -> some View {
-        Text(value.map(String.init) ?? "").font(CodeMetrics.font(-1.5)).foregroundStyle(theme.muted)
+    private func number(_ value: Int?, faint: Bool = false) -> some View {
+        Text(value.map(String.init) ?? "").font(CodeMetrics.font(-1.5)).foregroundStyle(faint ? theme.muted.opacity(0.5) : theme.muted)
             .frame(width: gutter - 8, alignment: .trailing).padding(.trailing, 8)
     }
 }
 
 /// ReviewCommentCard: where it is, Edit and Delete (not prominent), the text at the label size; 8 · 10 · 10 · 8 in,
 /// on `Chrome.window` in an 8-point frame of `border`.
-private struct CommentCard: View {
+struct CommentCard: View {
     let location: String
     let text: String
     var body: some View {
@@ -522,7 +548,7 @@ private struct CommentCard: View {
 
 /// ReviewComposer: what it comments on, the editor (at least 30 tall), the keys, Cancel and Comment; 10 in, on
 /// `Chrome.window` in an 8-point frame of the blue at 50%.
-private struct CommentComposer: View {
+struct CommentComposer: View {
     let location: String
     let draft: String
     var body: some View {
@@ -546,12 +572,14 @@ private struct CommentComposer: View {
 /// GitDiffView.header: 40 tall, 14 in, 10 apart: the status letter (Review only; GitCommitDiff passes no kind), the
 /// path, the counts at the body size, then wrap (FileWrapGlyph, off: `diffWrap`), comment on the file (Review) and
 /// Diff | Source; a 1-point `border` under it.
-private struct DiffHeader: View {
+struct DiffHeader: View {
     var letter: String?
     let path: String
     let added: Int
     let removed: Int
     var review = true
+    /// A compact split (FilesView.columnsWidth): Diff | Source as glyphs, wrap on (`FilesSession.wraps`).
+    var compact = false
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -560,11 +588,11 @@ private struct DiffHeader: View {
                     .layoutPriority(1)
                 Counts(added: added, removed: removed).font(t.font(.body))
                 Spacer(minLength: 0)
-                IconButton { WrapGlyph() }
+                IconButton(on: compact) { WrapGlyph() }
                 if review {
                     IconButton { Image(systemName: "text.bubble").font(.system(size: 11, weight: .medium)).frame(width: 14, height: 14) }
                 }
-                ModePicker()
+                if compact { GlyphModePicker() } else { ModePicker() }
             }
             .padding(.horizontal, 14)
             .frame(height: 40)
@@ -575,7 +603,7 @@ private struct DiffHeader: View {
 
 /// GitDiffModePicker: Diff | Source 1 apart on the track (inset 1, a 5-point corner flat), each at the body size, 8 in,
 /// 20 tall, Diff (`diffMode`'s default) raised.
-private struct ModePicker: View {
+struct ModePicker: View {
     var body: some View {
         HStack(spacing: 1) {
             segment("Diff", on: true)
@@ -599,7 +627,7 @@ private struct ModePicker: View {
 
 // MARK: Review
 
-private struct Change {
+struct Change {
     let letter: String
     let name: String
     let folder: String
@@ -609,7 +637,7 @@ private struct Change {
     var selected = false
 }
 
-private struct ReviewTab: View {
+struct ReviewTab: View {
     /// J2b: the popover's editor has the keyboard; the composer is closed.
     var composing = true
     let unstaged = [
@@ -649,7 +677,7 @@ private struct ReviewTab: View {
 
     /// GitChangesList.group (semibold ink, the count `detail`, expanded(26) tall, 6 down) and GitChangeRow: the plain
     /// 14-point letter, the name at the content size and its folder `detail`, 8 apart; the comments in blue; the counts.
-    @ViewBuilder private func group(_ title: String, _ changes: [Change]) -> some View {
+    @ViewBuilder func group(_ title: String, _ changes: [Change]) -> some View {
         HStack {
             Text(title).fontWeight(.semibold).foregroundStyle(p.ink)
             Spacer(minLength: 8)
@@ -718,7 +746,7 @@ private struct ReviewTab: View {
 
 /// ReviewFinish in its popover: the overview of the comments, the overall comment, Copy review and Send to this tab's
 /// agent, the other agent tabs in a menu. 14 in, 520 wide.
-private struct FinishReview: View {
+struct FinishReview: View {
     static let width: CGFloat = 520
     /// The arrow's x, under Create review's middle.
     let arrow: CGFloat
@@ -800,7 +828,7 @@ nonisolated private struct PopoverShape: Shape {
 
 // MARK: Files
 
-private struct FileNode {
+struct FileNode {
     let name: String
     var depth = 0
     var folder = false
@@ -810,7 +838,7 @@ private struct FileNode {
     var selected = false
 }
 
-private struct FilesTab: View {
+struct FilesTab: View {
     /// ~/src/app with Sources and Sources/Theme open; ages as FilesFormatting.age ("6m", "2h", "13d"), sizes as
     /// FilesFormatting.size, folders "—".
     let nodes = [
@@ -880,12 +908,12 @@ private struct FilesTab: View {
     }
 
     /// FilesColumns.headerHeight: max(40, expanded(34)), rounded.
-    private static var headerHeight: CGFloat { max(40, t.expanded(34)).rounded() }
+    static var headerHeight: CGFloat { max(40, t.expanded(34)).rounded() }
 
     /// FilesOutlineView's row: the native disclosure at 14 − 3 + level × indent, the name cell at 14 + level × indent +
     /// (indent − 3); in it the icon (expanded(14), the symbol at 86%) and 7 on the name (its label 2 in); Modified and
     /// Size right-aligned (FilesOutlineStyle's fonts and inks).
-    private func row(_ node: FileNode) -> some View {
+    func row(_ node: FileNode) -> some View {
         let indent = t.expanded(20), iconSize = t.expanded(14)
         let level = CGFloat(node.depth)
         return HStack(spacing: 0) {
@@ -979,7 +1007,7 @@ private struct FilesTab: View {
 
 /// FileTextPreview with line numbers (Settings › Files, on): numbers right-aligned in two digits' room, 24 before the
 /// code, in the code font and `muted`; rows FilePreviewMetrics' height, 10 down; a 1-point `border` rule 10 after them.
-private struct SourcePreview: View {
+struct SourcePreview: View {
     let lines: [Code]
     var body: some View {
         let gutter = CGFloat(max(2, String(lines.count).count)) * CodeMetrics.digitWidth
@@ -1010,7 +1038,7 @@ private struct SourcePreview: View {
 
 // MARK: Commits
 
-private struct Commit {
+struct Commit {
     let subject: String
     var lane = 0
     var refs: [Ref] = []
@@ -1020,7 +1048,7 @@ private struct Commit {
     var selected = false
 }
 
-private struct Ref {
+struct Ref {
     enum Kind { case current, branch, remote, tag }
     let name: String
     let kind: Kind
@@ -1028,7 +1056,7 @@ private struct Ref {
 
 /// One row of the graph (GitGraph.Row as GitGraphCell draws it): lines through it, from the row above into its dot, out
 /// of its dot to the row below; `current` lines are HEAD's first parents.
-private struct GraphRow {
+struct GraphRow {
     enum Kind { case pass, into, out }
     struct Line { let kind: Kind; let from: Int; let to: Int; var current = true }
     let lane: Int
@@ -1036,7 +1064,7 @@ private struct GraphRow {
     let lines: [Line]
 }
 
-private struct CommitsTab: View {
+struct CommitsTab: View {
     static let commits = [
         Commit(subject: "Theme: high-contrast sidebar rows",
                refs: [Ref(name: "dark-mode", kind: .current), Ref(name: "origin/dark-mode", kind: .remote)],
@@ -1091,7 +1119,7 @@ private struct CommitsTab: View {
 
     /// GitCommitsList.rows: expanded(28) rows, the graph `GitGraphCell.width` wide (two lanes, × expanded(1)), the author
     /// column by the list's width (GitAuthorColumn.style).
-    private func rows(width: CGFloat) -> some View {
+    func rows(width: CGFloat) -> some View {
         let height = t.expanded(28), scale = t.expanded(1)
         let graphWidth = max(56, 42 + 14 * CGFloat(2 - 1)) * scale
         let author: AuthorStyle = width >= t.expanded(760) ? .name : width >= t.expanded(460) ? .initials : .hidden
@@ -1159,7 +1187,7 @@ private struct CommitsTab: View {
 
     /// GitCommitsFooter: how much of the log is loaded, and the scope (FilesSession.logScope, "This branch") as a
     /// borderless menu; expanded(24) tall at the caption size.
-    private var footer: some View {
+    var footer: some View {
         HStack(spacing: 8) {
             Text("200 loaded · scroll for more")
             Spacer(minLength: 0)
@@ -1186,7 +1214,7 @@ private struct CommitsTab: View {
 
 /// GitRefChip: the checked-out branch green on its 18% capsule; tags `warning`, other branches and remotes `muted`, in a
 /// `selectedControl` outline; the caption size, 6 in, expanded(16) tall, 6 apart (GitRefChips).
-private struct RefChips: View {
+struct RefChips: View {
     let refs: [Ref]
     var body: some View {
         HStack(spacing: 6) {
@@ -1205,7 +1233,7 @@ private struct RefChips: View {
 
 /// GitGraphCell: lanes on a 14-point grid from x 22, × expanded(1); 2-point lines, 4.5-point dots, `graphCurrent` for
 /// HEAD's first parents and `graphMerged` for the rest; the uncommitted dot hollow on the terminal's ground.
-private struct GraphCell: View {
+struct GraphCell: View {
     let row: GraphRow
     let hollow: Bool
     let width: CGFloat
@@ -1253,7 +1281,7 @@ private struct GraphCell: View {
 
 /// GitCommitDetailPane: the summary and the files at their own height (GitCommitDetailStack), then the picked file's
 /// diff under a `controlBorder` rule.
-private struct CommitDetail: View {
+struct CommitDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             summary
@@ -1321,7 +1349,7 @@ private struct CommitDetail: View {
 
     /// GitCommitFiles: "CHANGED FILES" and its count, the totals; each file a GitCommitFileRow (the tinted letter, the
     /// path at the content size, the counts; 10 apart, expanded(32) tall); 6 under them.
-    private var files: some View {
+    var files: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 Text("CHANGED FILES").tracking(0.4)

@@ -95,6 +95,91 @@ final class FilesDropTests: XCTestCase {
         XCTAssertEqual(pasteboard.pasteboardItems?.compactMap { $0.string(forType: .string) }, rows)
     }
 
+    /// Copy (⌘C) puts the files themselves on the pasteboard, which Finder pastes: a local row's file URL at once; a
+    /// remote row's path at once (a terminal here types it), then its file fetched into the app's private folder. A
+    /// copy of something else meanwhile wins: the fetched file is not put over it.
+    func testCopyPutsTheFilesThemselvesOnThePasteboard() async throws {
+        let session = coordinator.session(for: System.uuid())
+        session.availability = .available(FakeFilesSource(endpoint: .local))
+        let local = pasteboard()
+        let rows = ["/Users/ivan/src/api/README.md", "/Users/ivan/src/api/src"]
+        controller().copyToClipboard(rows, in: session, pasteboard: local)
+        XCTAssertEqual(FilesDragController.fileURLs(local).map(\.path), rows)
+        XCTAssertEqual(FilesDragPayload.read(local)?.paths, rows)
+        XCTAssertEqual(local.string(forType: .string), rows.joined(separator: "\n"))
+
+        let host = FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab")
+        host.file("/home/ivan/nightly/bench.json", "{}")
+        host.file("/home/ivan/nightly/run.log", "ok")
+        let fetched = FakeFilesSource(endpoint: .local)
+        let remoteSession = coordinator.session(for: System.uuid())
+        remoteSession.availability = .available(host)
+        let remote = pasteboard()
+        controller(local: fetched).copyToClipboard(["/home/ivan/nightly/bench.json"], in: remoteSession, pasteboard: remote)
+        // The private folder is made on this Mac's disk; the fake local side learns of it before the copy runs.
+        fetched.directory(try XCTUnwrap(remoteSession.transfers.first?.targetPath))
+        XCTAssertEqual(remote.string(forType: .string), "/home/ivan/nightly/bench.json")
+        XCTAssertEqual(FilesDragController.fileURLs(remote), [], "Not on this Mac yet")
+        XCTAssertEqual(remoteSession.transfers.first?.targetLabel, "Clipboard")
+        try await TestSupport.eventually(diagnostic: "\(String(describing: remoteSession.transfers.first?.stage))") {
+            !FilesDragController.fileURLs(remote).isEmpty
+        }
+        let url = try XCTUnwrap(FilesDragController.fileURLs(remote).first)
+        XCTAssertEqual(url.lastPathComponent, "bench.json")
+        XCTAssertTrue(url.deletingLastPathComponent().lastPathComponent.hasPrefix(FilesClipboardFolder.prefix), url.path)
+        XCTAssertEqual(fetched.text(url.path), "{}")
+        XCTAssertEqual(remote.string(forType: .string), "/home/ivan/nightly/bench.json", "Still the host's path as text")
+        XCTAssertEqual(FilesDragPayload.read(remote)?.endpoint, host.endpoint)
+
+        controller(local: fetched).copyToClipboard(["/home/ivan/nightly/run.log"], in: remoteSession, pasteboard: remote)
+        fetched.directory(try XCTUnwrap(remoteSession.transfers.last?.targetPath))
+        remote.clearContents()
+        remote.setString("copied elsewhere", forType: .string)
+        try await TestSupport.eventually { remoteSession.transfers.last?.stage == .done }
+        XCTAssertEqual(remote.string(forType: .string), "copied elsewhere")
+        XCTAssertEqual(FilesDragController.fileURLs(remote), [])
+    }
+
+    /// Download… into a folder: each item under its own name, or Finder's "name 2" beside one there or picked for an
+    /// earlier item; a download whose file cannot be moved where asked says why.
+    func testDownloadNamesBesideWhatIsThereAndReportsAFailedMove() async throws {
+        let folder = URL(fileURLWithPath: "/Users/ivan/Downloads")
+        let there: Set<String> = ["/Users/ivan/Downloads/report.pdf", "/Users/ivan/Downloads/logs"]
+        let urls = FilesDragController.destinations(for: ["report.pdf", "logs", "report.pdf", "notes"],
+                                                    folders: [false, true, false, false], in: folder,
+                                                    exists: { there.contains($0.path) })
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["report 2.pdf", "logs 2", "report 3.pdf", "notes"])
+
+        // The fake fetches into its own memory, not the folder on disk, so the move finds nothing: the reason comes back.
+        let fetched = FakeFilesSource(endpoint: .local)
+        let host = FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab")
+        host.file("/home/ivan/nightly/bench.json", "{}")
+        let session = coordinator.session(for: System.uuid())
+        session.availability = .available(host)
+        var failure: (any Error)?, settled = false
+        controller(local: fetched).download(["/home/ivan/nightly/bench.json"],
+                                            to: [System.temporary.appendingPathComponent("bench-\(System.uuid()).json")],
+                                            in: session) { failure = $0; settled = true }
+        XCTAssertEqual(session.transfers.first?.kind, .copyOut)
+        fetched.directory(try XCTUnwrap(session.transfers.first?.targetPath))
+        try await TestSupport.eventually { settled }
+        XCTAssertNotNil(failure)
+    }
+
+    /// Copy scp Command: the destination the tab's ssh started with, its port as `-P`, `-r` for folders, every path in
+    /// single quotes for the shell it is pasted into.
+    func testScpCommandsQuotePathsAndCarryThePort() {
+        XCTAssertEqual(FilesScpCommand.make(destination: "dev@build-box", paths: ["/srv/app/release notes.md"], folders: false),
+                       "scp dev@build-box:'/srv/app/release notes.md' .")
+        XCTAssertEqual(FilesScpCommand.make(destination: "ssh://dev@build-box:2222", paths: ["/srv/logs", "/srv/it's.txt"], folders: true),
+                       #"scp -r -P 2222 dev@build-box:'/srv/logs' dev@build-box:'/srv/it'\''s.txt' ."#)
+        XCTAssertEqual(FilesScpCommand.make(destination: "ssh://[fd00::12]:2200/", paths: ["/x"], folders: false),
+                       "scp -P 2200 [fd00::12]:'/x' .")
+        XCTAssertEqual(FilesScpCommand.make(destination: "build box", paths: ["/x"], folders: false), "scp 'build box':'/x' .")
+        XCTAssertNil(FilesScpCommand.make(destination: "ssh://", paths: ["/x"], folders: false))
+        XCTAssertNil(FilesScpCommand.make(destination: "dev@build-box", paths: [], folders: false))
+    }
+
     func testPasteRefusesWhatADropWould() throws {
         let local = FakeFilesSource(endpoint: .local)
         local.file("/Users/ivan/proj/sub/a.txt", "a")

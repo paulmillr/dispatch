@@ -524,3 +524,125 @@ final class FilesPromiseProvider: NSFilePromiseProvider, NSFilePromiseProviderDe
         MainActor.assumeIsolated { write(url) { completion($0) } }
     }
 }
+
+// MARK: Copy and Download (the row menu)
+
+extension FilesDragController {
+    /// Copy (⌘C) on rows: their paths at once, as text and `.filesPaths` (a terminal or chat here types them, another
+    /// files view copies them), and the files themselves for Finder and other apps: a local row's file URL; a remote
+    /// row's once fetched into a private folder (`FilesClipboardFolder`, a row "Copying … to Clipboard"), added only
+    /// while the clipboard still holds this copy. Rows sharing a name (from different folders) stay text.
+    func copyToClipboard(_ paths: [String], in session: FilesSession, pasteboard: NSPasteboard = .general) {
+        guard let source = session.source, !paths.isEmpty else { return }
+        let payload = FilesDragPayload(endpoint: source.endpoint, session: session.id, paths: paths)
+        if source.endpoint.isLocal {
+            Self.write(payload, files: paths.map { URL(fileURLWithPath: $0) }, to: pasteboard)
+            return
+        }
+        Self.write(payload, files: [], to: pasteboard)
+        let names = paths.map { ($0 as NSString).lastPathComponent }
+        guard Set(names).count == names.count, let local = localSource(),
+              let folder = try? FilesClipboardFolder.next() else { return }
+        let change = pasteboard.changeCount
+        engine.copy(items: paths, from: source, to: local, directory: folder.path, in: session, kind: .copyOut,
+                    label: "Clipboard", retryable: false) { transfer in
+            guard transfer.stage == .done, pasteboard.changeCount == change else { return }
+            Self.write(payload, files: names.map { folder.appendingPathComponent($0) }, to: pasteboard)
+        }
+    }
+
+    /// One item per row: the first carries every path as text and `.filesPaths`, each its file URL when it has one.
+    static func write(_ payload: FilesDragPayload, files: [URL], to pasteboard: NSPasteboard) {
+        let first = NSPasteboardItem()
+        first.setPropertyList(payload.propertyList, forType: .filesPaths)
+        first.setString(payload.paths.joined(separator: "\n"), forType: .string)
+        if let url = files.first { first.setString(url.absoluteString, forType: .fileURL) }
+        let rest = files.dropFirst().map { url in
+            let item = NSPasteboardItem()
+            item.setString(url.absoluteString, forType: .fileURL)
+            return item
+        }
+        pasteboard.clearContents()
+        pasteboard.writeObjects([first] + rest)
+    }
+
+    /// Download…: `paths` fetched into a private folder, as a drag out is, then moved by the app to `destinations`
+    /// (one URL per path, which a save or open panel let it write; the helper may not write in Downloads or Desktop).
+    /// A destination that exists is replaced: the panel asked. `done` gets the failure, if any, once it settles.
+    func download(_ paths: [String], to destinations: [URL], in session: FilesSession,
+                  done: @escaping @MainActor ((any Error)?) -> Void = { _ in }) {
+        guard let source = session.source, let local = localSource(), paths.count == destinations.count, !paths.isEmpty else { return }
+        let folder = System.temporary.appendingPathComponent("dispatch-download-" + System.uuid().uuidString)
+        do { try System.directory(folder) } catch { done(error); return }
+        let label = destinations[0].deletingLastPathComponent().lastPathComponent
+        engine.copy(items: paths, from: source, to: local, directory: folder.path, in: session, kind: .copyOut,
+                    label: label, retryable: false) { transfer in
+            defer { try? System.remove(folder) }
+            guard transfer.stage == .done else { return done(nil) }
+            do {
+                for (path, destination) in zip(paths, destinations) {
+                    if System.exists(destination) { try System.remove(destination) }
+                    try System.move(folder.appendingPathComponent((path as NSString).lastPathComponent), to: destination)
+                }
+                done(nil)
+            } catch { done(error) }
+        }
+    }
+
+    /// Where Download… puts `names` in `folder`: each under its own name, or Finder's "name 2" beside one already
+    /// there (or picked for an earlier one).
+    nonisolated static func destinations(for names: [String], folders: [Bool], in folder: URL,
+                                         exists: (URL) -> Bool) -> [URL] {
+        var taken = Set<String>(), chosen: [URL] = []
+        for (name, isFolder) in zip(names, folders) {
+            func free(_ candidate: String) -> Bool { !taken.contains(candidate) && !exists(folder.appendingPathComponent(candidate)) }
+            let name = free(name) ? name : FileTransferEngine.keptName(name, folder: isFolder) { !free($0) }
+            taken.insert(name)
+            chosen.append(folder.appendingPathComponent(name))
+        }
+        return chosen
+    }
+}
+
+/// The private folder a Copy of remote rows is fetched into, in the app's temporary folder: one at a time, the
+/// previous copy's removed when the next starts (a paste in Finder copies out of it; it never holds the original).
+enum FilesClipboardFolder {
+    static let prefix = "dispatch-clipboard-"
+
+    @MainActor static func next() throws -> URL {
+        if let current { try? System.remove(current) }
+        let folder = System.temporary.appendingPathComponent(prefix + System.uuid().uuidString)
+        try System.directory(folder)
+        current = folder
+        return folder
+    }
+
+    @MainActor private static var current: URL?
+}
+
+/// The `scp` command that fetches rows of a remote files view into the current folder, by the destination the tab's
+/// ssh connection was started with: `scp [-r] [-P port] dest:'/path' … .`.
+enum FilesScpCommand {
+    nonisolated static func make(destination: String, paths: [String], folders: Bool) -> String? {
+        guard !paths.isEmpty else { return nil }
+        var target = destination.trimmingCharacters(in: .whitespaces), port: String?
+        if target.hasPrefix("ssh://") {
+            target.removeFirst("ssh://".count)
+            while target.hasSuffix("/") { target.removeLast() }
+            if let colon = target.lastIndex(of: ":") {
+                let digits = target[target.index(after: colon)...]
+                if !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber) {
+                    port = String(digits)
+                    target = String(target[..<colon])
+                }
+            }
+        }
+        guard !target.isEmpty else { return nil }
+        let host = target.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "@._-[]:%".contains($0)) } ? target : quote(target)
+        let sources = paths.map { host + ":" + quote($0) }
+        return (["scp"] + (folders ? ["-r"] : []) + (port.map { ["-P", $0] } ?? []) + sources + ["."]).joined(separator: " ")
+    }
+
+    /// Single quotes for the shell the command is pasted into.
+    nonisolated static func quote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+}

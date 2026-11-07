@@ -144,11 +144,19 @@ enum TabMode: String, Hashable, Sendable {
         // With Files off the button is chat's alone, and no host is blamed for files it would not show anyway.
         let host = enabled ? plainSSHHost(id) : nil
         let reachable = chatAvailable(id), leads = reachable && chat.map { $0.chatLeads($0.session(for: id)) } == true
-        return ModeSwitchState(mode: mode(for: id), chat: leads, files: enabled && host == nil, host: host, retained: reachable && !leads)
+        return ModeSwitchState(mode: mode(for: id), chat: leads, files: enabled && host == nil, host: host, retained: reachable && !leads,
+                               tab: existing(id)?.tab ?? .files)
     }
 
     /// Settings › Features › Files.
     var enabled: Bool { TerminalRuntime.shared.preferences.filesEnabled }
+
+    /// Double ⌃D anywhere in files mode (the list, Review, Commits, a preview), as chat's: an idle agent that can quit
+    /// closes the tab and quits; anything else shows the terminal.
+    func exitFromFiles(_ id: UUID) {
+        if let chat, let agent = chat.sessions[id], chat.quitCommand(agent) != nil { return chat.quitFromChat(agent) }
+        switchMode(id, to: .terminal)
+    }
 
     /// Files turned off: the tabs showing it go back to their terminals.
     func leaveFiles() {

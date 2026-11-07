@@ -10,6 +10,8 @@ import SwiftUI
 struct FilePreviewPane: View {
     @Environment(\.appTypography) private var typography
     let session: FilesSession
+    /// The folder the list shows (the files header's crumbs): on one column, the file's folder is named from it.
+    var root: String? = nil
 
     private struct LoadKey: Hashable {
         let preview: ObjectIdentifier?
@@ -21,7 +23,7 @@ struct FilePreviewPane: View {
         let source = session.source
         Group {
             if let preview = session.preview {
-                FilePreviewDetail(session: session, preview: preview)
+                FilePreviewDetail(session: session, preview: preview, root: root)
                     .id(ObjectIdentifier(preview))
             } else {
                 Text("Select a file to preview it")
@@ -80,6 +82,7 @@ private struct FilePreviewDetail: View {
     @Environment(\.appTypography) private var typography
     let session: FilesSession
     let preview: FilePreviewState
+    var root: String?
     @State private var find = FilePreviewFind()
     @State private var rendered = false
     @State private var zoom = FileImageZoom.fit
@@ -137,7 +140,26 @@ private struct FilePreviewDetail: View {
 
     private var header: some View {
         let notice = FilesEditorNotices.shared.notice(for: session.id)
+        // One column: the files header gives way to this one, which is then the pane's bar and looks like it.
+        let bar = session.drilled && session.tab == .files
         return HStack(spacing: 10) {
+            // Led by the way back, where the files header's label was, the name where its path started (12 + 12 in).
+            if bar { FilesBackButton(session: session).padding(.trailing, 2) }
+            // As the bar, the list and its path are out of sight: the file's folder, dimmed, before its name (relative to
+            // the list's folder, as its crumbs show it), while there is room; it gives way before the name does.
+            if bar {
+                ViewThatFits(in: .horizontal) {
+                    Text(verbatim: TextRendering.visible(FilesFormatting.location(of: preview.path, root: root, home: session.home)) + " /")
+                        .font(typography, .content)
+                        .foregroundStyle(theme.muted)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .help(FilesPath.parent(preview.path) ?? preview.path)
+                        .accessibilityIdentifier("file-preview-location")
+                    Color.clear.frame(width: 0, height: 0)
+                }
+                .layoutPriority(0.5)
+            }
             Text(verbatim: TextRendering.visible(preview.name))
                 .font(typography, .content)
                 .foregroundStyle(theme.ink)
@@ -154,6 +176,7 @@ private struct FilePreviewDetail: View {
                 .help("Copy path · ⌥⌘C")
                 .accessibilityLabel("Copy path")
                 .accessibilityIdentifier("file-preview-copy-path")
+                .layoutPriority(1)
             }
             Text(verbatim: TextRendering.visible(FilesFormatting.meta(preview, now: System.date())))
                 .font(typography, .body)
@@ -170,11 +193,14 @@ private struct FilePreviewDetail: View {
                     .accessibilityIdentifier("file-preview-notice")
             }
             if find.open { findField }
-            controls
+            // The buttons keep their room before the folder takes any.
+            controls.fixedSize().layoutPriority(1)
         }
-        .padding(.horizontal, 14)
-        // The list's column header beside it is as tall (FilesColumns.headerHeight).
-        .frame(height: FilesColumns.headerHeight(typography))
+        .padding(.leading, bar ? 12 : 14).padding(.trailing, 14)
+        // The list's column header beside it is as tall (FilesColumns.headerHeight); as the bar, the files header is.
+        .frame(height: bar ? FilesHeader.height(typography) : FilesColumns.headerHeight(typography))
+        .background { if bar { Chrome.window } }
+        .overlay(alignment: .bottom) { if bar && !LiquidGlassStore.shared.active { Chrome.palette.separator.frame(height: 1) } }
         .background {
             // Edit › Find reaches the preview through `findRequest`; this keeps ⌘F working while the preview has
             // focus even where the menu routes it elsewhere. Opening twice is harmless.
@@ -334,15 +360,14 @@ private struct FilePreviewDetail: View {
         case .tooLarge(let size, let head):
             if let head {
                 VStack(spacing: 0) {
-                    headBar("First 64 KB of \(FilesFormatting.size(size)) · the terminal has the rest")
+                    headBar("First 64 KB of \(FilesFormatting.size(size))")
                     FileTextPreview(owner: owner, content: .text(head, language: preview.name), wrap: wrap, lineNumbers: lineNumbers,
                                     find: find, highlightsQuery: find.open)
                 }
             } else {
                 FileLargeNotice(title: "Too large to preview here",
-                                detail: "Text over 2 MB is read on request. The first 64 KB shows below; the terminal has the rest.",
-                                loading: headRequest != nil, showHead: { headRequest = System.uuid() },
-                                openTerminal: openTerminal)
+                                detail: "Text over 2 MB is read on request: show its first 64 KB here, or download it.",
+                                loading: headRequest != nil, showHead: { headRequest = System.uuid() }, download: download)
             }
         case .binary(let size, let head, _):
             if FilePreviewVideo.isVideo(preview.name), !showBytes {
@@ -350,7 +375,7 @@ private struct FilePreviewDetail: View {
             } else {
                 FileHexPreview(document: hex.document(preview, size: size, head: head, source: session.source),
                                focused: focused, activate: { if focus != .content { focus = .content } },
-                               openTerminal: openTerminal,
+                               download: download,
                                reload: {
                                    guard let source = session.source else { return }
                                    Task { await FilePreviewLoader.reload(preview, from: source) }
@@ -408,10 +433,9 @@ private struct FilePreviewDetail: View {
                         .buttonStyle(FilePreviewButtonStyle(prominent: false))
                         .disabled(video.copying)
                         .accessibilityIdentifier("file-preview-show-bytes")
-                    Button("Open in terminal", action: openTerminal)
+                    Button("Download…", action: download)
                         .buttonStyle(FilePreviewButtonStyle(prominent: false))
-                        .help("Show this tab’s terminal")
-                        .accessibilityIdentifier("file-preview-open-terminal")
+                        .accessibilityIdentifier("file-preview-download")
                 }
             }
             .padding(.horizontal, 30)
@@ -423,10 +447,9 @@ private struct FilePreviewDetail: View {
         HStack(spacing: 8) {
             Text(text).foregroundStyle(theme.muted).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 8)
-            Button("Open in terminal", action: openTerminal)
+            Button("Download…", action: download)
                 .buttonStyle(FilePreviewButtonStyle())
-                .help("Show this tab’s terminal")
-                .accessibilityIdentifier("file-preview-open-terminal")
+                .accessibilityIdentifier("file-preview-download")
         }
         .font(typography, .body)
         .padding(.horizontal, 14)
@@ -434,13 +457,14 @@ private struct FilePreviewDetail: View {
         .overlay(alignment: .bottom) { Rectangle().fill(theme.border).frame(height: 1) }
     }
 
+    /// Download… for the previewed file (`FilesCoordinator.download`).
+    private func download() {
+        files.download(session.id, paths: [preview.path], window: NSApp.keyWindow)
+    }
+
     private func copyPath() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(preview.path, forType: .string)
-    }
-
-    private func openTerminal() {
-        files.switchMode(session.id, to: .terminal)
     }
 
     private func openFind() {
@@ -455,7 +479,7 @@ private struct FilePreviewDetail: View {
     }
 }
 
-/// "Too large to preview here", with Show first 64 KB and Open in terminal (F2d).
+/// "Too large to preview here", with Show first 64 KB and Download… (F2d).
 private struct FileLargeNotice: View {
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
@@ -463,7 +487,7 @@ private struct FileLargeNotice: View {
     let detail: String
     let loading: Bool
     let showHead: () -> Void
-    let openTerminal: () -> Void
+    let download: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
@@ -483,10 +507,9 @@ private struct FileLargeNotice: View {
                     .buttonStyle(FilePreviewButtonStyle())
                     .disabled(loading)
                     .accessibilityIdentifier("file-preview-show-head")
-                Button("Open in terminal", action: openTerminal)
-                    .buttonStyle(FilePreviewButtonStyle())
-                    .help("Show this tab’s terminal")
-                    .accessibilityIdentifier("file-preview-open-terminal")
+                Button("Download…", action: download)
+                    .buttonStyle(FilePreviewButtonStyle(prominent: false))
+                    .accessibilityIdentifier("file-preview-download")
             }
         }
         .padding(.horizontal, 30)

@@ -11,8 +11,8 @@ import SwiftUI
 struct GitDiffView: View {
     let diff: GitDiff
     @Binding var mode: GitDiffMode
-    /// Long lines wrap to the pane rather than scroll sideways.
-    @Binding var wrap: Bool
+    /// Long lines wrap to the pane rather than scroll sideways; nil wraps in a compact split (`wraps`).
+    @Binding var wrap: Bool?
     /// The status letter beside the path; nil draws none.
     var kind: GitChangeKind?
     /// Reads the file Source shows, as text; nil shows the diff's new side.
@@ -28,6 +28,9 @@ struct GitDiffView: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Narrower than `FilesView.columnsWidth`: one gutter in Diff, lines wrapped unless the wrap button said otherwise,
+    /// Diff | Source as glyphs.
+    @Environment(\.filesCompact) private var compact
     @State private var model = GitDiffLines()
     @State private var opened: Set<Int> = []
     /// The `Gap.hunk` of every gap between hunks the user opened; its lines show once the file is read.
@@ -87,6 +90,12 @@ struct GitDiffView: View {
 
     private var isBinary: Bool { diff.binary || model.presentation.binary }
 
+    /// The lines wrap: as the wrap button set them, else in a compact split.
+    private var wraps: Bool { wrap ?? compact }
+
+    /// Diff numbers its lines in one gutter in a compact split: the new side's number, a removed line's old one faint.
+    private var oneGutter: Bool { compact && mode == .diff }
+
     /// Reviewing, every line starts with a column for its + (`ReviewLineAction`), so it covers no number or sign.
     private var inset: CGFloat { review == nil ? 0 : 20 }
 
@@ -115,13 +124,13 @@ struct GitDiffView: View {
                 .font(typography, .body)
                 .accessibilityIdentifier("git-diff-meta")
             Spacer(minLength: 0)
-            Button { wrap.toggle() } label: {
+            Button { wrap = !wraps } label: {
                 FileWrapGlyph().frame(width: 14, height: 14)
             }
-            .buttonStyle(FilePreviewIconButtonStyle(on: wrap))
-            .help(wrap ? "Don’t wrap lines" : "Wrap lines")
+            .buttonStyle(FilePreviewIconButtonStyle(on: wraps))
+            .help(wraps ? "Don’t wrap lines" : "Wrap lines")
             .accessibilityLabel("Wrap lines")
-            .accessibilityValue(wrap ? "on" : "off")
+            .accessibilityValue(wraps ? "on" : "off")
             .accessibilityIdentifier("git-diff-wrap")
             if let review {
                 Button { review.beginOnFile() } label: {
@@ -132,7 +141,7 @@ struct GitDiffView: View {
                 .accessibilityLabel("Comment on the file")
                 .accessibilityIdentifier("git-diff-comment-file")
             }
-            GitDiffModePicker(mode: $mode)
+            GitDiffModePicker(mode: $mode, glyphs: compact)
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
@@ -218,7 +227,7 @@ struct GitDiffView: View {
         let single = mode == .source
         let gutter = Self.gutterWidth(digits: model.digits(source: whole),
                                       digitWidth: metrics.digitWidth * (theme.typography.size - 1.5) / theme.typography.size)
-        let codeLeading = inset + (single ? 14 + gutter + 10 + 14 : gutter * 2 + 14)
+        let codeLeading = inset + (single ? 14 + gutter + 10 + 14 : oneGutter ? gutter + 14 : gutter * 2 + 14)
         // Opened gaps draw the read file's lines among the diff's: the widest of either sets the width.
         let gapLines = !single && rows.contains { if case .diff(.gapLine) = $0 { return true }; return false }
         let widest = gapLines ? max(model.widest(source: false), model.widest(source: true)) : model.widest(source: whole)
@@ -226,10 +235,10 @@ struct GitDiffView: View {
         return GeometryReader { geometry in
             // Every row as wide as the widest line, so the tints run the whole width when scrolled sideways (the code
             // font is monospaced: characters times the digit's advance); wrapped, as wide as the pane.
-            let width = wrap ? geometry.size.width : max(geometry.size.width, contentWidth.rounded(.up))
+            let width = wraps ? geometry.size.width : max(geometry.size.width, contentWidth.rounded(.up))
             let page = max(1, Int(geometry.size.height / metrics.rowHeight) - 2)
             ScrollViewReader { proxy in
-                ScrollView(wrap ? [.vertical] : [.horizontal, .vertical]) {
+                ScrollView(wraps ? [.vertical] : [.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(rows, id: \.self) { row in
                             self.row(row, gutter: gutter, width: width, metrics: metrics, layout: layout,
@@ -447,7 +456,7 @@ struct GitDiffView: View {
             }
             .font(theme.typography.codeFont(offset: -1))
             .lineLimit(1)
-            .fixedSize(horizontal: !wrap, vertical: false)
+            .fixedSize(horizontal: !wraps, vertical: false)
             .padding(.horizontal, 14)
             .frame(minWidth: width, minHeight: 22, maxHeight: 22, alignment: .leading)
             .background(theme.blue.opacity(0.07))
@@ -484,7 +493,7 @@ struct GitDiffView: View {
             Text("No newline at end of file")
                 .font(typography, .caption)
                 .foregroundStyle(theme.muted)
-                .padding(.leading, inset + (mode == .diff ? gutter * 2 + 14 : 14 + gutter + 10 + 14))
+                .padding(.leading, inset + (mode == .diff ? gutter * (oneGutter ? 1 : 2) + 14 : 14 + gutter + 10 + 14))
                 .frame(minWidth: width, minHeight: 18, alignment: .leading)
                 .accessibilityIdentifier("git-diff-no-newline-\(index)")
         case .diff(.omitted(let after, let count)):
@@ -525,21 +534,25 @@ struct GitDiffView: View {
             if single {
                 number(line.new, width: gutter).padding(.leading, 14).padding(.trailing, 10 + 14)
             } else {
-                number(line.old, width: gutter)
-                number(line.new, width: gutter)
+                if oneGutter {
+                    number(line.new ?? line.old, width: gutter, faint: line.new == nil)
+                } else {
+                    number(line.old, width: gutter)
+                    number(line.new, width: gutter)
+                }
                 Text(verbatim: sign)
                     .foregroundStyle(line.kind == .added ? theme.green : theme.red)
                     .frame(width: 14)
             }
             Text(code)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: !wrap, vertical: true)
+                .fixedSize(horizontal: !wraps, vertical: true)
             Spacer(minLength: 0)
         }
         // Exactly the text preview's 20 pt row, the line centred in it: unwrapped rows never wrap, and the baseline
         // alignment of 11 pt numbers with 12.5 pt code would otherwise make the row taller than its text.
-        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
-               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
+        .frame(minWidth: width, maxWidth: wraps ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wraps ? nil : metrics.rowHeight, alignment: .leading)
         .background(tint)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken(single ? [line.new] : [line.old, line.new], sign: single ? "" : sign, code))
@@ -552,17 +565,17 @@ struct GitDiffView: View {
         let code = model.sourceAttributed(new - 1, theme: theme)
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if inset > 0 { Color.clear.frame(width: inset, height: 1) }
-            number(old, width: gutter)
+            if !oneGutter { number(old, width: gutter) }
             number(new, width: gutter)
             Color.clear.frame(width: 14, height: 1)
             Text(code)
                 .foregroundStyle(theme.ink)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: !wrap, vertical: true)
+                .fixedSize(horizontal: !wraps, vertical: true)
             Spacer(minLength: 0)
         }
-        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
-               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
+        .frame(minWidth: width, maxWidth: wraps ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wraps ? nil : metrics.rowHeight, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken([old, new], code))
         .accessibilityIdentifier("git-diff-gap-line-\(new)")
@@ -576,11 +589,11 @@ struct GitDiffView: View {
             Text(code)
                 .foregroundStyle(theme.ink)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: !wrap, vertical: true)
+                .fixedSize(horizontal: !wraps, vertical: true)
             Spacer(minLength: 0)
         }
-        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
-               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
+        .frame(minWidth: width, maxWidth: wraps ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wraps ? nil : metrics.rowHeight, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken([index + 1], code))
         .accessibilityIdentifier("git-diff-source-line-\(index + 1)")
@@ -593,10 +606,10 @@ struct GitDiffView: View {
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.joined(separator: ", ")
     }
 
-    private func number(_ value: Int?, width: CGFloat) -> some View {
+    private func number(_ value: Int?, width: CGFloat, faint: Bool = false) -> some View {
         Text(verbatim: value.map(String.init) ?? "")
             .font(theme.typography.codeFont(offset: -1.5))
-            .foregroundStyle(theme.muted)
+            .foregroundStyle(faint ? theme.muted.opacity(0.5) : theme.muted)
             .frame(width: width - 8, alignment: .trailing)
             .padding(.trailing, 8)
     }
@@ -925,23 +938,31 @@ struct GitSourceText: Equatable {
 struct GitDiffModePicker: View {
     @Environment(\.appTypography) private var typography
     @Binding var mode: GitDiffMode
+    /// A compact split's header: each mode as a glyph, its name in the help and for VoiceOver.
+    var glyphs = false
     @Environment(\.chatTheme) private var theme
 
     var body: some View {
         HStack(spacing: 1) {
-            segment("Diff", .diff, help: "Show the changes")
-            segment("Source", .source, help: "Show the whole file")
+            segment("Diff", .diff, symbol: "plus.forwardslash.minus", help: "Show the changes")
+            segment("Source", .source, symbol: "doc.plaintext", help: "Show the whole file")
         }
         .glassSegmentTrack(fallback: Chrome.palette.control, corner: 5, inset: 1)
         .fixedSize()
     }
 
-    private func segment(_ title: String, _ value: GitDiffMode, help: String) -> some View {
+    private func segment(_ title: String, _ value: GitDiffMode, symbol: String, help: String) -> some View {
         let palette = Chrome.palette
         let on = mode == value
         return Button { mode = value } label: {
-            Text(title)
-                .font(typography, .body)
+            Group {
+                if glyphs {
+                    Image(systemName: symbol).font(.system(size: typography.size(offset: -2.5), weight: .medium))
+                        .frame(width: typography.expanded(16))
+                } else {
+                    Text(title).font(typography, .body)
+                }
+            }
                 .foregroundStyle(on ? palette.ink : palette.muted)
                 .padding(.horizontal, 8)
                 .frame(height: 20)
@@ -950,6 +971,7 @@ struct GitDiffModePicker: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(title)
         .accessibilityIdentifier("git-diff-mode-\(value.rawValue)")
         .accessibilityAddTraits(on ? .isSelected : [])
     }

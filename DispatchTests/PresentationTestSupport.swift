@@ -288,6 +288,15 @@ enum PresentationTestSupport {
         return values
     }
 
+    /// Every element's identifier in the window, for a diagnostic when one is missing.
+    static func accessibilityIdentifiers(in window: NSWindow) -> [String] {
+        var identifiers: [String] = []
+        eachAccessibilityElement(in: window) { element in
+            if let identifier = element.accessibilityIdentifier?(), !identifier.isEmpty { identifiers.append(identifier) }
+        }
+        return identifiers
+    }
+
     private static func eachAccessibilityElement(in window: NSWindow, _ body: (AnyObject) -> Void) {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced) as? Bool ?? false

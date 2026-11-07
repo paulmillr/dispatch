@@ -170,14 +170,16 @@ final class FilePreviewPresentationTests: XCTestCase {
         let snapshot = try await PresentationTestSupport.capture(window, named: "file-preview-too-large", in: "files-audit")
         try PresentationTestSupport.assertText("Too large to preview here", in: snapshot)
         try PresentationTestSupport.assertText("Show first 64 KB", in: snapshot)
-        try PresentationTestSupport.assertText("Open in terminal", in: snapshot)
+        try PresentationTestSupport.assertText("Download", in: snapshot)
+        XCTAssertFalse(try snapshot.reads(["Open in terminal"]), "Files open nothing in the terminal")
         try PresentationTestSupport.assertText("3.3 MB", in: snapshot)
 
         try click("file-preview-show-head", in: window)
         try await TestSupport.eventually { if case .tooLarge(_, .some) = session.preview?.kind { return true }; return false }
+        // OCR misreads the code font's quotes ('"run"' as "''run\""): the rows' words and the bar are what it reads.
         try await TestSupport.eventually {
             let snapshot = try await PresentationTestSupport.capture(window, published: true)
-            return try snapshot.reads(["\"run\": 0", "\"run\": 1"])
+            return try snapshot.reads(["First 64 KB of 3.3 MB", "run", "ms"])
         }
     }
 

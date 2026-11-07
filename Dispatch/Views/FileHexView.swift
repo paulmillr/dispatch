@@ -32,7 +32,8 @@ struct FileHexPreview: View {
     /// The preview has focus: ⌘C, ⌘A and ⌘L are the hex view's then.
     let focused: Bool
     let activate: () -> Void
-    let openTerminal: () -> Void
+    /// Download… for the file (`FilesCoordinator.download`).
+    let download: () -> Void
     /// The file changed under the rows: read it again.
     let reload: () -> Void
     @State private var target = ""
@@ -94,10 +95,9 @@ struct FileHexPreview: View {
                 .accessibilityLabel("Go to the end")
                 .accessibilityIdentifier("file-preview-hex-end")
             }
-            Button("Open in terminal", action: openTerminal)
+            Button("Download…", action: download)
                 .buttonStyle(FilePreviewButtonStyle())
-                .help("Show this tab’s terminal")
-                .accessibilityIdentifier("file-preview-open-terminal")
+                .accessibilityIdentifier("file-preview-download")
         }
         .font(typography, .body)
         .padding(.horizontal, 14)

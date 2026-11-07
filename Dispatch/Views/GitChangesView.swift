@@ -39,9 +39,10 @@ struct GitChangesView: View {
                     // Comments written before the changes were committed can still go out: the header keeps Create review.
                     GitCentredNote(text: "No changes · the working tree matches HEAD", identifier: "git-changes-empty")
                 } else {
+                    let shown = status.matching(session.changesFilter)
                     FilesSplit(session: session,
                                list: GitChangesList(session: session, status: status,
-                                                    shown: status.matching(session.changesFilter), repository: repository,
+                                                    shown: shown, repository: repository,
                                                     focused: focused, focusRequest: listFocus,
                                                     openDiff: { diffFocus = System.uuid() }),
                                detail: GitChangesDetail(session: session, status: status, repository: repository,
@@ -50,7 +51,8 @@ struct GitChangesView: View {
                                                             session.narrowDetail = false
                                                             listFocus = System.uuid()
                                                         }),
-                               back: "Review")
+                               listIdeal: GitChangesList.height(shown, typography: typography),
+                               opensOnDetail: session.changesSelection != nil)
                 }
             } else {
                 GitDelayedSpinner()
@@ -145,6 +147,15 @@ private struct GitChangesList: View {
         .onChange(of: focusRequest) { listFocused = true }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-changes-list")
+    }
+
+    /// The list's own height with `shown`'s changes: the summary, the groups' names when there are more than one, the
+    /// rows, the bottom inset. A stacked split gives the list this much and no more (`FilesSplit.listIdeal`).
+    static func height(_ shown: GitStatus, typography: AppTypography) -> CGFloat {
+        let groups = GitChangeArea.allCases.filter { !shown.changes(in: $0).isEmpty }.count
+        let rows = CGFloat(shown.changes.count) * typography.expanded(28)
+        let names = groups > 1 ? CGFloat(groups) * (typography.expanded(26) + 6) : 0
+        return typography.expanded(28) + 4 + names + rows + 6
     }
 
     /// "18 files · +1,754 −61" over the list (what the search leaves), and that the helper cut the status short.

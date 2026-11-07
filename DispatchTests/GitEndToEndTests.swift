@@ -280,16 +280,16 @@ final class GitEndToEndTests: XCTestCase {
         coordinator.observe(session)
         defer { coordinator.forget(session.id) }
 
-        // Files: the repository resolved, the segments shown, the listing without git on it.
+        // Files: the repository resolved, the git tabs reachable, the listing without git on it.
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(timeout: .seconds(20)) { session.git != .loading }
         XCTAssertEqual(session.git, .repository(GitRepository(root: path)))
         try await TestSupport.eventually(timeout: .seconds(20)) {
             session.status?.changes.contains { $0.path == "new.txt" } == true && session.listings[path]?.listing != nil
         }
-        XCTAssertEqual(FilesHeader.segments(for: session).map(\.id), [.files, .changes, .commits])
+        XCTAssertTrue(session.showsGitTabs)
         try await TestSupport.eventually(timeout: .seconds(20)) { session.changedCount == 5 }
-        XCTAssertNil(FilesHeader.segments(for: session)[1].count, "Review counts its comments, not the changed files")
+        XCTAssertNil(session.reviewCommentCount, "Review counts its comments, not the changed files")
 
         // Changes: the status with every file's counts, then a text diff and a binary one.
         session.select(.changes)

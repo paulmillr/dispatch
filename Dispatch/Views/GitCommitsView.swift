@@ -10,7 +10,7 @@ struct GitCommitsView: View {
     let focused: Bool
     @FocusState private var focus: GitCommitsFocus?
     @State private var graph = GitGraphCache()
-    /// The detail pane is mounted: the split leaves it out under 600 pt and while ⌥⌘P hides it, and then ⏎ has nowhere
+    /// The detail pane is mounted: the split leaves it out on one column and while ⌥⌘P hides it, and then ⏎ has nowhere
     /// to take the keyboard.
     @State private var detailShown = false
 
@@ -25,8 +25,7 @@ struct GitCommitsView: View {
                            list: GitCommitsList(session: session, graph: graph, focus: $focus, detailShown: detailShown),
                            detail: GitCommitDetailPane(session: session, focus: $focus)
                                .onAppear { detailShown = true }
-                               .onDisappear { detailShown = false },
-                           back: "Commits")
+                               .onDisappear { detailShown = false })
             }
         }
         // ⌘C while the list or the commit's files have the keyboard: the selected commit's hash.
@@ -853,10 +852,12 @@ private struct GitCommitsFooter: View {
 // MARK: Detail
 
 /// The selected commit (F4a's right pane): subject, hash, author, date, refs, body, its files, and under them the
-/// picked file's diff.
+/// picked file's diff. On one column, which leaves too little height for both, the commit and its files take the whole
+/// pane, and a picked file's diff takes it in their place (`FilesSession.drilledFile`), a level deeper.
 private struct GitCommitDetailPane: View {
     @Bindable var session: FilesSession
     var focus: FocusState<GitCommitsFocus?>.Binding
+    @Environment(\.filesSplitNarrow) private var narrow
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -870,16 +871,30 @@ private struct GitCommitDetailPane: View {
 
     @ViewBuilder private var detail: some View {
         if let commit = GitCommitsText.selected(session) {
-            GitCommitDetailStack {
-                ScrollView(.vertical) {
-                    VStack(spacing: 0) {
-                        GitCommitSummary(session: session, commit: commit)
-                        GitCommitFiles(session: session, commit: commit, focus: focus)
-                    }
+            let summary = ScrollView(.vertical) {
+                VStack(spacing: 0) {
+                    GitCommitSummary(session: session, commit: commit)
+                    GitCommitFiles(session: session, commit: commit, focus: focus)
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                GitCommitDiff(session: session)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            Group {
+                if !narrow {
+                    GitCommitDetailStack {
+                        summary
+                        GitCommitDiff(session: session)
+                    }
+                } else if session.drilledFile {
+                    GitCommitDiff(session: session, framed: false)
+                        // Esc the diff did not take itself goes back to the commit's files.
+                        .onExitCommand { session.goBack() }
+                        .transition(.opacity)
+                } else {
+                    summary.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.opacity)
+                }
+            }
+            .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.12), value: session.drilledFile)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("git-commit-detail")
             .id(commit.hash)
@@ -913,12 +928,61 @@ private struct GitCommitSummary: View {
     let session: FilesSession
     let commit: GitCommit
     @Environment(\.appTypography) private var typography
+    /// Narrower than `FilesView.columnsWidth`: three lines (the subject, the hash's, the body's first) and More.
+    @Environment(\.filesCompact) private var compact
     /// The hash just copied: its button shows a check for a moment.
     @State private var copied: String?
+    /// More in a compact split: the whole summary, as a wide one shows it.
+    @State private var expanded = false
 
     var body: some View {
+        if compact && !expanded { short } else { full }
+    }
+
+    /// A compact split's summary: the subject on one line (none on one column, where the header names the commit), the
+    /// hash's line without the refs (the commit's row has them), the body's first line and More.
+    private var short: some View {
         let palette = Chrome.palette
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 5) {
+            if !session.drilled {
+                Text(verbatim: commit.subject)
+                    .font(.system(size: typography.size(offset: 1.5), weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                    .help(commit.subject)
+                    .accessibilityIdentifier("git-commit-subject")
+            }
+            metaLine(refs: false)
+            let more = !commit.body.isEmpty || !commit.refs.isEmpty || commit.distinctCommitter != nil
+            if more {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let first = commit.body.split(separator: "\n", omittingEmptySubsequences: true).first {
+                        Text(verbatim: String(first))
+                            .font(.system(size: typography.size(offset: -0.5)))
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("git-commit-body")
+                    }
+                    Button("More") { expanded = true }
+                        .buttonStyle(.plain)
+                        .font(.system(size: typography.size(offset: -0.5)))
+                        .foregroundStyle(palette.accent)
+                        .fixedSize()
+                        .help("Show the whole message, the refs and the committer")
+                        .accessibilityIdentifier("git-commit-more")
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
+        .onChange(of: commit.hash) { expanded = false }
+    }
+
+    private var full: some View {
+        let palette = Chrome.palette
+        return VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: commit.subject)
                 // Prose in the system face, as the mockup sets the subject and body; the rest stays in the UI font.
                 .font(.system(size: typography.size(offset: 1.5), weight: .semibold))
@@ -1034,6 +1098,8 @@ private struct GitCommitFiles: View {
     let commit: GitCommit
     var focus: FocusState<GitCommitsFocus?>.Binding
     @Environment(\.appTypography) private var typography
+    /// One column: a file opens its diff in the commit's place (`FilesSession.narrowFile`).
+    @Environment(\.filesSplitNarrow) private var narrow
 
     var body: some View {
         let palette = Chrome.palette
@@ -1089,6 +1155,7 @@ private struct GitCommitFiles: View {
                         Button {
                             session.commitFile = file.path
                             focus.wrappedValue = .files
+                            if narrow { session.narrowFile = true }
                         } label: {
                             GitCommitFileRow(file: file, selected: file.path == session.commitFile,
                                              diff: file.path == session.commitFile ? GitCommitDiff.shown(session)?.diff : nil)
@@ -1101,6 +1168,9 @@ private struct GitCommitFiles: View {
                 .focused(focus, equals: .files)
                 .onKeyPress(.upArrow) { move(-1, in: files) }
                 .onKeyPress(.downArrow) { move(1, in: files) }
+                // One column: ⏎ and → open the picked file's diff in the commit's place.
+                .onKeyPress(.return) { open() }
+                .onKeyPress(.rightArrow) { open() }
                 .onKeyPress(.leftArrow) { leave() }
                 .onKeyPress(.escape) { leave() }
                 .accessibilityElement(children: .contain)
@@ -1114,6 +1184,12 @@ private struct GitCommitFiles: View {
     private func leave() -> KeyPress.Result {
         session.narrowDetail = false
         focus.wrappedValue = .list
+        return .handled
+    }
+
+    private func open() -> KeyPress.Result {
+        guard narrow, session.commitFile != nil else { return .ignored }
+        session.narrowFile = true
         return .handled
     }
 
@@ -1165,6 +1241,8 @@ struct GitCommitFileRow: View {
 /// The picked file's diff in the shared view, or why there is none yet.
 private struct GitCommitDiff: View {
     @Bindable var session: FilesSession
+    /// Under the commit's files, a rule between them; alone in their place (one column), none.
+    var framed = true
 
     /// The loaded diff when it is the picked file's in the selected commit: the data layer keys it "<hash>:<path>", so
     /// the same path in another commit, or a diff left from the file picked before, is never shown as this one.
@@ -1195,7 +1273,7 @@ private struct GitCommitDiff: View {
         VStack(spacing: 0) {
             // Between the commit's files and the picked file's diff: the control border, which (unlike the separator)
             // still shows on the dark palette's near-black.
-            palette.controlBorder.frame(height: 1)
+            if framed { palette.controlBorder.frame(height: 1) }
             if session.commitFile == nil {
                 Color.clear
             } else if let state, let diff = state.diff {

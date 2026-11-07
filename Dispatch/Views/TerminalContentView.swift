@@ -91,6 +91,11 @@ struct TerminalContentView: View {
     let focused: Bool
     let isPresented: Bool
     let floatingSwitch: Bool
+    /// Vertical tabs' top-right pane: the layout picker floats beside the switch, as its strip would hold it.
+    var floatingLayout: Space?
+    /// Vertical tabs: over the terminal the floating switch hides until the pointer reaches its corner, as in full
+    /// screen, so it covers no text; over chat and files it stays.
+    var revealOverTerminal = false
     /// Full screen with one tab: the floating switch centers on the row leading the window (`Chrome.bareLeadingRowHeight`)
     /// beside the edge reveal's host mark, at the strip's trailing inset, as it would sit on a strip.
     var switchRow: CGFloat?
@@ -109,7 +114,7 @@ struct TerminalContentView: View {
     /// Full screen without the sidebar, where the sidebar button hides at the leading edge: the switch hides over the
     /// terminal the same way at the trailing one. Over chat or files it stays: it is lit there, the way back, and they
     /// leave it room.
-    private var revealsSwitch: Bool { floatingSwitch && switchRow != nil }
+    private var revealsSwitch: Bool { floatingSwitch && (switchRow != nil || revealOverTerminal) }
 
     var body: some View {
         let runtime = TerminalRuntime.shared
@@ -154,7 +159,14 @@ struct TerminalContentView: View {
                 if mode == .files {
                     // Files sits below a glass strip like the terminal: its header must stay readable, not scroll under it.
                     FilesView(session: runtime.files.session(for: tab.id), focused: focused)
-                        .environment(\.filesHeaderTrailingInset, floatingSwitch ? floatingSwitchWidth + switchTrailing + 8 : 0)
+                        // A space of many panes shows Files one view at a time, whatever the pane's size.
+                        .environment(\.filesOneAtATime, (workspace.spaces.first { $0.id == spaceID }?.layout.paneIDs.count ?? 1)
+                                     >= FilesView.oneAtATimePanes)
+                        // The switch is the header's last control there, never over its own.
+                        .environment(\.filesHeaderAccessory, floatingSwitch ? AnyView(HStack(spacing: 2) {
+                            ChatModeSwitch(session: session, coordinator: chat)
+                            if let floatingLayout { LayoutPicker(space: floatingLayout, workspace: workspace) }
+                        }) : nil)
                         .padding(.top, glassInset)
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
                         .zIndex(1)
@@ -162,14 +174,17 @@ struct TerminalContentView: View {
                 if revealsSwitch {
                     // Tracks the pointer in every mode, so a switch just clicked back to the terminal stays under it.
                     FloatingSwitchReveal(corner: CGSize(width: floatingSwitchWidth + switchTrailing + 6,
-                                                        height: glassInset + (switchRow ?? 0) + 6)) { switchRevealed = $0 }
+                                                        height: glassInset + (switchRow ?? 10 + StripTab.glassTrackHeight(typography)) + 6)) { switchRevealed = $0 }
                         .zIndex(2)
                 }
-                if floatingSwitch && !searchShown {
+                // Over files it is the header's; over an unfocused split's chat it hides, the focused pane's alone showing.
+                if floatingSwitch && !searchShown && mode != .files && !(mode == .chat && !focused) {
                     let hidden = revealsSwitch && mode == .terminal && !switchRevealed
-                    // Over files it sits in the header's row, one of the bar's controls, rather than hanging below it.
-                    let row = mode == .files ? FilesHeader.height(typography) : switchRow
-                    ChatModeSwitch(session: session, coordinator: chat, floating: true)
+                    let row = switchRow
+                    HStack(spacing: 2) {
+                        ChatModeSwitch(session: session, coordinator: chat, floating: true)
+                        if let floatingLayout { LayoutPicker(space: floatingLayout, workspace: workspace) }
+                    }
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { floatingSwitchWidth = $0 }
                         // Centered on a fixed row, not offset by a measured height: no frame shows it elsewhere.
                         .frame(height: row, alignment: .center)

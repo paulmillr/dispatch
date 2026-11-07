@@ -1,74 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The files tabs as a segmented control: a well with the shown tab raised, a segment's
-/// count in a pill after its title.
-struct FilesSegments<ID: Hashable>: View {
-    struct Segment: Identifiable {
-        let id: ID
-        let title: String
-        let symbol: String
-        var count: Int?
-        /// The count pill's colour; nil draws it quiet.
-        var countTint: Color?
-        var enabled = true
-        let help: String
-        /// Read for the segment instead of its title and count.
-        var accessibilityLabel: String?
-        let accessibilityID: String
-    }
-
-    let segments: [Segment]
-    @Binding var selection: ID
-    /// Glyphs and counts without the titles, for a header too narrow for them (the help and labels keep the names).
-    var compact = false
-    @Environment(\.appTypography) private var typography
-
-    var body: some View {
-        let palette = Chrome.palette
-        HStack(spacing: 1) {
-            ForEach(segments) { segment in
-                let on = segment.id == selection
-                Button { selection = segment.id } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: segment.symbol).font(typography.symbol(.caption))
-                        if !compact {
-                            Text(verbatim: segment.title).lineLimit(1)
-                        }
-                        if let count = segment.count {
-                            Text("\(count)")
-                                .font(typography, .caption)
-                                .foregroundStyle(segment.countTint ?? (on ? palette.sidebarHostLabel : palette.detail))
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(segment.countTint.map { $0.opacity(0.16) } ?? palette.ink.opacity(0.06)))
-                        }
-                    }
-                    .foregroundStyle(!segment.enabled ? palette.faint : on ? palette.ink : palette.muted)
-                    .padding(.horizontal, compact ? 7 : 10)
-                    .frame(height: typography.expanded(22))
-                    .glassSegmentPill(on, fallback: palette.selectedControl)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!segment.enabled)
-                .help(segment.help)
-                // As drawn: "Changes 4".
-                .accessibilityLabel(segment.accessibilityLabel ?? segment.count.map { "\(segment.title) \($0)" } ?? segment.title)
-                .accessibilityIdentifier(segment.accessibilityID)
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
-        }
-        .glassSegmentTrack(fallback: palette.control)
-        .font(typography, .label)
-        .fixedSize()
-    }
-}
-
-/// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: where you are, then (on Review, once it holds
-/// comments) Create review; at the trailing end the search and the pane's toggle, then the files tabs (Files · Review ·
-/// Commits), always last. Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the
-/// follow-the-shell link after it, the host first), and on Review and Commits the repository and its branch. The Files
-/// tab shows nothing of git.
+/// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: the tab's name, where you are, then (on
+/// Review, once it holds comments) Create review with their count; at the trailing end the search and the views button
+/// (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
+/// Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the follow-the-shell link
+/// after it, the host first), and on Review and Commits the repository and its branch. The Files tab shows nothing of
+/// git. The files tabs are not here: the strip's mode button names the one shown and its menu switches (and ⌃⌘1–3).
+/// On one column with a row's detail in the list's place (`FilesSession.drilled`) the name is a button back to the list,
+/// what is open follows it (the file; the change, a menu of the others; the commit's subject), and on the git tabs ↑ ↓
+/// step to the next change or commit.
 struct FilesHeader: View {
     @Bindable var session: FilesSession
     let root: String?
@@ -77,20 +18,25 @@ struct FilesHeader: View {
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     /// Room for the floating mode switch over the header's trailing end.
-    @Environment(\.filesHeaderTrailingInset) private var trailingInset
+    @Environment(\.filesHeaderAccessory) private var accessory
     @FocusState private var filterFocused: Bool
     /// The search shows as its glyph until clicked or ⌘F, and folds back once it is empty and loses focus.
     @State private var searching = false
+    /// The one-column Review's list of changes is open under the change's name.
+    @State private var choosingChange = false
     private var glass: Bool { LiquidGlassStore.shared.active }
-    /// The bar's height; a floating mode switch over its trailing end centers on it (TerminalContentView).
+    /// The bar's height.
     static func height(_ typography: AppTypography) -> CGFloat { typography.expanded(34) }
 
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 12) {
+            tabName.layoutPriority(1)
             // Where you are: the crumbs fold and clip rather than push the controls out.
             Group {
-                if session.tab == .files {
+                if session.drilled {
+                    opened
+                } else if session.tab == .files {
                     HStack(spacing: 6) {
                         crumbs(root)
                         // The link belongs to the folder it follows: right after the path, the crumbs folding before it.
@@ -106,26 +52,26 @@ struct FilesHeader: View {
             if session.tab == .files, session.source?.readOnly == true { FilesReadOnlyTag() }
             if session.tab == .changes { ReviewHeaderButton(session: session, focused: focused).layoutPriority(1) }
             Spacer(minLength: 0)
+            if session.drilled, session.tab != .files {
+                HStack(spacing: glass ? 2 : 12) {
+                    stepButton(-1)
+                    stepButton(1)
+                }
+                .glassControlGroup()
+                .layoutPriority(1)
+            }
             // The search and the pane's toggle: one glass pill with Liquid Glass.
             HStack(spacing: glass ? 2 : 12) {
                 searchSlot
-                // Nothing to toggle on Files with its previews off in Settings.
-                if session.hasPane { paneToggle }
+                // Nothing to switch on Files with its previews off in Settings, nor where two views do not fit.
+                if session.hasPane && !session.previewOff && session.canShowBoth { viewsToggle }
             }
             .glassControlGroup()
             .layoutPriority(1)
-            // Named segments overflow a narrow pane: there they drop their names, but only once the line has given up
-            // what it can (the crumbs folded and the filter narrowed); the higher priority is offered room first.
-            let segments = Self.segments(for: session)
-            let selection = Binding(get: { session.tab }, set: { session.select($0) })
-            ViewThatFits(in: .horizontal) {
-                FilesSegments(segments: segments, selection: selection)
-                FilesSegments(segments: segments, selection: selection, compact: true)
-            }
-            .layoutPriority(2)
+            if let accessory { accessory.fixedSize().layoutPriority(1) }
         }
         .padding(.leading, 12)
-        .padding(.trailing, 12 + trailingInset)
+        .padding(.trailing, 12)
         .frame(height: Self.height(typography))
         .frame(maxWidth: .infinity)
         .font(typography, .label)
@@ -150,23 +96,134 @@ struct FilesHeader: View {
         .accessibilityIdentifier("files-header")
     }
 
-    /// The files tabs as the header shows them (F2a): Files alone outside a repository; inside one Files · Review, with
-    /// the count of its review comments in the review's blue once there are any · Commits. Fixed names: the branch is
-    /// where you are (`repositoryLine`), not a tab.
-    static func segments(for session: FilesSession) -> [FilesSegments<FilesTab>.Segment] {
-        let files = FilesSegments<FilesTab>.Segment(id: .files, title: "Files", symbol: "folder", help: "Files · ⌃⌘1",
-                                                    accessibilityID: "files-segment-files")
-        guard session.showsGitTabs else { return [files] }
-        let comments = session.reviewCommentCount
-        let commits = FilesSegments<FilesTab>.Segment(id: .commits, title: "Commits", symbol: "clock.arrow.circlepath",
-                                                      help: "Commits · ⌃⌘3", accessibilityID: "files-segment-commits")
-        return [files,
-                .init(id: .changes, title: "Review", symbol: "text.bubble", count: comments,
-                      countTint: ChatThemeStore.shared.current.blue,
-                      help: comments.map { "Review · \(ReviewText.count($0)) · ⌃⌘2" } ?? "Review · ⌃⌘2",
-                      accessibilityLabel: comments.map { "Review, \(ReviewText.count($0))" },
-                      accessibilityID: "files-segment-changes"),
-                commits]
+    /// The files tab's name as the header leads with it.
+    static func title(_ tab: FilesTab) -> String {
+        switch tab {
+        case .files: "Files"
+        case .changes: "Review"
+        case .commits: "Commits"
+        }
+    }
+
+    // MARK: Tab, back, opened
+
+    /// The tab's name; on one column with a detail shown, a button back to the list: "‹", the tab's glyph, its name.
+    /// The mode's label (its glyph and name), the way back once drilled: as wide either way (`FilesBackButton.label`).
+    @ViewBuilder private var tabName: some View {
+        if session.drilled {
+            FilesBackButton(session: session)
+        } else {
+            FilesBackButton.label(session.tab, typography: typography, back: false)
+                .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Self.title(session.tab))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("files-tab-title")
+        }
+    }
+
+    /// What one column shows in the list's place: the file previewed, the change (its name a menu of the others, then
+    /// where it is among them), the commit's subject.
+    @ViewBuilder private var opened: some View {
+        let palette = Chrome.palette
+        switch session.tab {
+        case .files:
+            let path = session.preview?.path
+            Text(verbatim: path.map(FilesPath.name) ?? "")
+                .font(typography, .label, weight: .semibold)
+                .foregroundStyle(palette.ink)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(path ?? "")
+                .accessibilityIdentifier("files-opened")
+        case .changes:
+            let changes = session.orderedChanges
+            if let index = changes.firstIndex(where: { $0.id == session.changesSelection }) {
+                let change = changes[index]
+                HStack(spacing: 8) {
+                    changesMenu(change, changes)
+                    if changes.count > 1 {
+                        Text(verbatim: "\(index + 1) of \(changes.count)")
+                            .font(typography, .caption)
+                            .foregroundStyle(palette.detail)
+                            .fixedSize()
+                            .accessibilityIdentifier("files-opened-position")
+                    }
+                }
+            }
+        case .commits where session.drilledFile:
+            // A commit's file: its name (the path in its tooltip), then where it is among the commit's files.
+            let files = session.commitDetail?.files ?? []
+            if let path = session.commitFile {
+                HStack(spacing: 8) {
+                    Text(verbatim: FilesPath.name(path))
+                        .font(typography, .label, weight: .semibold)
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path)
+                        .accessibilityIdentifier("files-opened")
+                    if files.count > 1, let index = files.firstIndex(where: { $0.path == path }) {
+                        Text(verbatim: "\(index + 1) of \(files.count)")
+                            .font(typography, .caption)
+                            .foregroundStyle(palette.detail)
+                            .fixedSize()
+                            .accessibilityIdentifier("files-opened-position")
+                    }
+                }
+            }
+        case .commits:
+            if let commit = GitCommitsText.selected(session) {
+                Text(verbatim: commit.subject)
+                    .font(typography, .label, weight: .semibold)
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                    .help(commit.subject)
+                    .accessibilityIdentifier("files-opened")
+            }
+        }
+    }
+
+    /// The change shown; a click lists every change (by area, the shown one checked) to show another.
+    private func changesMenu(_ change: GitChange, _ changes: [GitChange]) -> some View {
+        let palette = Chrome.palette
+        return Button { choosingChange = true } label: {
+            HStack(spacing: 6) {
+                GitChangeBadge(kind: change.kind, side: 14, plain: true)
+                Text(verbatim: change.name)
+                    .font(typography, .label, weight: .semibold)
+                    .foregroundStyle(palette.ink)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down").font(typography.symbol(.micro, weight: .semibold))
+            }
+            .lineLimit(1)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(change.path)
+        .accessibilityLabel(change.path)
+        .accessibilityIdentifier("files-opened")
+        .popover(isPresented: $choosingChange, arrowEdge: .bottom) {
+            FilesChangeChooser(changes: changes, selection: session.changesSelection) { id in
+                session.changesSelection = id
+                choosingChange = false
+            }
+        }
+    }
+
+    /// ↑ or ↓ on one column: the previous or next change or commit, in the list's order.
+    private func stepButton(_ delta: Int) -> some View {
+        let noun = session.drilledFile ? "file" : session.tab == .commits ? "commit" : "change"
+        return Button { session.step(by: delta) } label: {
+            Image(systemName: delta < 0 ? "chevron.up" : "chevron.down")
+                .font(typography.symbol(.body))
+                .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(FilesHeaderButtonStyle())
+        .help(delta < 0 ? "Previous \(noun)" : "Next \(noun)")
+        .accessibilityLabel(delta < 0 ? "Previous \(noun)" : "Next \(noun)")
+        .accessibilityIdentifier(delta < 0 ? "files-step-previous" : "files-step-next")
     }
 
     // MARK: Crumbs
@@ -438,24 +495,118 @@ struct FilesHeader: View {
         DispatchQueue.main.async { filterFocused = true }
     }
 
-    /// ⌥⌘P: lit while the pane is on (the preview, the change's diff, the commit's detail). A view under 600 pt has no
-    /// room for it, but the button still says whether it comes back when there is.
-    private var paneToggle: some View {
-        let showing = session.paneShown
+    /// ⌥⌘P: one view at a time, or the list with its detail (the preview, the change's diff, the commit's detail)
+    /// beside or under it; lit while both show. Its glyph is the arrangement it gives: two panes side by side or one
+    /// over the other where the view stacks them, one pane alone.
+    private var viewsToggle: some View {
+        let both = !session.splitNarrow
         let pane = session.tab == .files ? "preview" : session.showsLog ? "details" : "diff"
         return Button {
-            session.togglePreview()
+            session.toggleViews()
         } label: {
-            // Not a sidebar glyph: the window's sidebar button already draws one.
-            Image(systemName: "rectangle.righthalf.inset.filled")
+            Image(systemName: both ? (session.stackedViews ? "rectangle.split.1x2" : "rectangle.split.2x1") : "rectangle")
                 .font(typography.symbol(.body))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(FilesHeaderButtonStyle(on: showing))
-        .help(showing ? "Hide \(pane) · ⌥⌘P" : "Show \(pane) · ⌥⌘P")
-        .accessibilityLabel(showing ? "Hide \(pane)" : "Show \(pane)")
-        .accessibilityIdentifier("files-preview-toggle")
+        .buttonStyle(FilesHeaderButtonStyle(on: both))
+        .help(both ? "One view at a time · ⌥⌘P" : "List and \(pane) together · ⌥⌘P")
+        .accessibilityLabel(both ? "Show one view" : "Show list and \(pane)")
+        .accessibilityIdentifier("files-views-toggle")
+    }
+}
+
+/// One column with a detail in the list's place: back to the list ("‹" and the tab's name on a pill), as esc. It leads
+/// the files header on Review and Commits, and the preview's own header on Files, which then stands for both.
+struct FilesBackButton: View {
+    let session: FilesSession
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let title = FilesHeader.title(session.tab)
+        Button {
+            session.goBack()
+            session.focusRequest = System.uuid()
+        } label: {
+            Self.label(session.tab, typography: typography, back: true)
+                .glassSegmentPill(true, fallback: Chrome.palette.selectedControl)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Back to \(title) · esc")
+        .accessibilityLabel("Back to \(title)")
+        .accessibilityIdentifier("files-split-back")
+    }
+
+    /// The mode's label: on the list its glyph and name; drilled (`back`), "‹" in the glyph's slot, on the pill. The
+    /// slot is one width and the padding the same either way, so the label never changes width and what follows it
+    /// never moves; nothing is reserved that isn't drawn. The pill shows only where the label is a button.
+    @MainActor static func label(_ tab: FilesTab, typography: AppTypography, back: Bool) -> some View {
+        HStack(spacing: 5) {
+            Group {
+                if back { Image(systemName: "chevron.left").font(typography.symbol(.caption, weight: .bold)) }
+                else { Image(systemName: ModeSwitchState.glyph(tab)).font(typography.symbol(.caption)) }
+            }
+            .frame(width: typography.expanded(14))
+            Text(verbatim: FilesHeader.title(tab)).foregroundStyle(Chrome.palette.ink)
+        }
+        .font(typography, .label, weight: .semibold)
+        .foregroundStyle(Chrome.palette.accent)
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .frame(height: typography.expanded(22))
+    }
+}
+
+/// The one-column Review's changes under the shown one's name, as the list groups them: each with its letter, name
+/// and folder, the shown one checked; a click shows it.
+private struct FilesChangeChooser: View {
+    let changes: [GitChange]
+    let selection: String?
+    let choose: (String) -> Void
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let palette = Chrome.palette
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(GitChangeArea.allCases, id: \.self) { area in
+                    let inArea = changes.filter { $0.area == area }
+                    if !inArea.isEmpty {
+                        Text(GitChangesText.title(area))
+                            .font(typography, .caption, weight: .semibold)
+                            .foregroundStyle(palette.detail)
+                            .padding(.leading, 30).padding(.top, 6).padding(.bottom, 2)
+                        ForEach(inArea) { change in
+                            Button { choose(change.id) } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark").font(typography.symbol(.caption, weight: .semibold))
+                                        .opacity(change.id == selection ? 1 : 0)
+                                        .frame(width: 14)
+                                    GitChangeBadge(kind: change.kind, side: 14, plain: true)
+                                    Text(verbatim: change.name).foregroundStyle(palette.ink)
+                                    Text(verbatim: GitChangesText.folder(change)).foregroundStyle(palette.detail)
+                                        .truncationMode(.head)
+                                    Spacer(minLength: 0)
+                                }
+                                .font(typography, .body)
+                                .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .frame(height: typography.expanded(24))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("files-change-choice-\(change.id)")
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 6)
+        }
+        .frame(width: typography.expanded(320))
+        .frame(maxHeight: typography.expanded(360))
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

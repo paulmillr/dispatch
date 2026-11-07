@@ -43,9 +43,8 @@ final class GitCommitsPresentationTests: XCTestCase {
         ]
     }
 
-    private func mockupSession() -> FilesSession {
+    private func mockupSession(_ session: FilesSession = FilesSession(id: System.uuid())) -> FilesSession {
         let source = FakeFilesSource.mockupAPI()
-        let session = FilesSession(id: System.uuid())
         session.home = source.home
         session.availability = .available(source)
         session.git = .repository(GitRepository(root: "/Users/ivan/src/api"))
@@ -68,15 +67,16 @@ final class GitCommitsPresentationTests: XCTestCase {
         return session
     }
 
-    /// `inset`: room the floating mode switch takes at the header's trailing end, as `TerminalContentView` leaves it.
-    private func window(_ session: FilesSession, width: CGFloat = 1180, inset: CGFloat = 0) throws -> NSWindow {
+    /// `inset`: the width of the pane's controls the header ends with, as `TerminalContentView` puts its mode switch there.
+    private func window(_ session: FilesSession, width: CGFloat = 1180, height: CGFloat = 700,
+                        inset: CGFloat = 0) throws -> NSWindow {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 700), styleMask: [.titled],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: FilesView(session: session)
-            .environment(\.filesHeaderTrailingInset, inset)
+            .environment(\.filesHeaderAccessory, inset > 0 ? AnyView(Color.clear.frame(width: inset, height: 1)) : nil)
             .environment(\.appTypography, AppTypography())
             .preferredColorScheme(.dark))
         window.makeKeyAndOrderFront(nil)
@@ -163,59 +163,75 @@ final class GitCommitsPresentationTests: XCTestCase {
         // The commit opens on its first file, as the mockup shows it.
         XCTAssertEqual(session.commitFile, "src/routes/billing.ts")
 
-        // The files header's row (34 pt at the 12.5 design base) as on every tab: the repository and its branch, the search and the details'
-        // toggle, then the tabs at the trailing end; the list starts right under it, and the scope menu sits in its footer.
+        // The files header's row (34 pt at the 12.5 design base) as on every tab: the tab's name, the repository and its
+        // branch, the search and the details' toggle at the trailing end; the list starts right under it, and the scope
+        // menu sits in its footer.
         let header = try await frame("files-header", in: window)
-        let segment = try await frame("files-segment-commits", in: window)
+        let title = try await frame("files-tab-title", in: window)
         let crumbs = try await frame("files-location", in: window)
         let scope = try await frame("git-log-scope", in: window)
         let footer = try await frame("git-commits-footer", in: window)
         let search = try await frame("files-search", in: window)
-        let toggle = try await frame("files-preview-toggle", in: window)
+        let toggle = try await frame("files-views-toggle", in: window)
         let list = try await frame("git-commits-list", in: window)
         XCTAssertEqual(header.height, AppTypography().expanded(34), accuracy: 0.5)
         XCTAssertLessThan(crumbs.maxX, search.minX)
         XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
         XCTAssertEqual(scope.midY, footer.midY, accuracy: 1)
         XCTAssertLessThanOrEqual(scope.maxX, footer.maxX)
-        XCTAssertLessThanOrEqual(toggle.maxX, segment.minX)
-        XCTAssertGreaterThan(segment.maxX, header.maxX - 12 - 40, "the tabs sit at the trailing end")
+        XCTAssertLessThan(title.maxX, crumbs.minX)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-tab-title", in: window).contains("Commits"))
+        XCTAssertGreaterThan(toggle.maxX, header.maxX - 12 - 40, "the toggle sits at the trailing end")
         XCTAssertEqual(list.maxY, header.minY, accuracy: 1.5, "no second bar between the header and the list")
-        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-preview-toggle", in: window).contains("Hide details"))
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-views-toggle", in: window).contains("Show one view"))
 
         // The search opens from its glyph.
         session.logFilter = "sam"
         _ = try await frame("git-commits-filter", in: window)
     }
 
-    func testNarrowHeaderKeepsTheControlsBesideGlyphSegments() async throws {
+    func testNarrowHeaderKeepsTheControlsInside() async throws {
         let session = mockupSession()
         let inset: CGFloat = 70
         let window = try window(session, inset: inset)
         try await read(["All branches"], in: window, named: "git-commits-header-wide")
-        let wide = try await frame("files-segment-commits", in: window)
         for width: CGFloat in [600, 480, 360] {
             window.setContentSize(NSSize(width: width, height: 700))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
-                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
-                let filter = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                return files.flatMap { files in filter.map { $0.maxX < files.minX } } ?? false
+                let toggle = PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first
+                return toggle.map { $0.maxX <= width - 12 - inset + 0.5 } ?? false
             }
-            if width == 360 {
-                // At last the segments drop their names (the line has clipped all it can).
-                let narrow = try await frame("files-segment-commits", in: window)
-                XCTAssertLessThan(narrow.width, wide.width - 20, "the segments kept their names at \(width) pt")
-            }
-            let files = try await frame("files-segment-files", in: window)
-            let commits = try await frame("files-segment-commits", in: window)
-            let filter = try await frame("files-preview-toggle", in: window)
+            let title = try await frame("files-tab-title", in: window)
             let place = try await frame("files-location", in: window)
-            XCTAssertGreaterThanOrEqual(place.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
-            XCTAssertLessThan(filter.maxX, files.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(commits.maxX, width - 12 - inset + 0.5, "the tabs stay out of the switch's room at \(width) pt")
+            XCTAssertGreaterThanOrEqual(title.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
+            XCTAssertLessThanOrEqual(title.maxX, place.minX, "at \(width) pt")
         }
         _ = try await PresentationTestSupport.capture(window, named: "git-commits-header-narrow", in: "files-audit")
+    }
+
+    /// Double ⌃D leaves files from the log as it does from the Files list: a tab with no agent shows its terminal.
+    func testControlDTwiceShowsTheTerminal() async throws {
+        let files = TerminalRuntime.shared.files
+        let session = mockupSession(files.session(for: System.uuid()))
+        session.visible = true
+        defer { session.visible = false; files.forget(session.id) }
+        let window = try window(session)
+        _ = try await frame("git-commits-list", in: window)
+        session.focusRequest = System.uuid()
+        try await TestSupport.pause(for: .milliseconds(200))
+        func controlD() throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+                                                       windowNumber: window.windowNumber, context: nil, characters: "\u{4}",
+                                                       charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2))
+            window.sendEvent(event)
+        }
+        try controlD()
+        XCTAssertEqual(files.mode(for: session.id), .files, "one ⌃D only arms")
+        try controlD()
+        try await TestSupport.eventually(diagnostic: "still \(files.mode(for: session.id))") {
+            files.mode(for: session.id) == .terminal
+        }
     }
 
     func testClickingARowSelectsItAndTheUncommittedRowOpensChanges() async throws {
@@ -237,23 +253,86 @@ final class GitCommitsPresentationTests: XCTestCase {
         XCTAssertEqual(session.selectedCommit, bump.hash)
     }
 
-    /// Under 600 pt there is one column: a chosen commit's detail takes the log's place under a bar back to it.
+    /// Narrow and short, there is one column: a chosen commit's detail takes the log's place, the header's name turned
+    /// into a button back to it with the commit's subject after it, and ↑↓ step through the log.
     func testANarrowViewShowsAChosenRowsDetailInTheLogsPlace() async throws {
         let session = mockupSession()
         session.selectedCommit = nil
         session.commitDetail = nil
-        let window = try window(session, width: 360)
+        let window = try window(session, width: 360, height: 430)
         let bump = mockupCommits[4]
         try await click("git-commit-\(bump.short)", in: window) { session.selectedCommit == bump.hash }
         XCTAssertTrue(session.narrowDetail)
-        try await says("Bump stripe to 14.2", "git-commit-subject", in: window)
+        try await says("Bump stripe to 14.2", "files-opened", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-commit-subject", in: window).isEmpty,
+                      "the header names the commit; the summary does not again")
         let back = try await frame("files-split-back", in: window)
-        let subject = try await frame("git-commit-subject", in: window)
-        XCTAssertGreaterThan(back.minY, subject.maxY, "the bar back sits over the detail")
-        XCTAssertLessThan(subject.minX, 60, "the detail takes the whole width")
+        let hash = try await frame("git-commit-hash", in: window)
+        XCTAssertGreaterThan(back.minY, hash.maxY, "the way back is the header's, over the detail")
+        XCTAssertLessThan(hash.minX, 60, "the detail takes the whole width")
+        let author = try await frame("git-commit-author", in: window)
+        let opened = try await frame("files-opened", in: window)
+        try await click("files-step-next", in: window) { session.selectedCommit == self.mockupCommits[5].hash }
+        try await says(mockupCommits[5].subject, "files-opened", in: window)
+        // The hash holds room for any seven digits: the author does not move from commit to commit.
+        try await TestSupport.eventually(diagnostic: "the author moved") {
+            PresentationTestSupport.accessibilityLabels("git-commit-hash", in: window).contains(self.mockupCommits[5].short)
+        }
+        let nextAuthor = try await frame("git-commit-author", in: window)
+        XCTAssertEqual(nextAuthor.minX, author.minX, accuracy: 0.5)
         try await click("files-split-back", in: window) { !session.narrowDetail }
         try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("files-split-back", in: window).isEmpty }
-        _ = try await frame("git-commit-\(bump.short)", in: window)
+        _ = try await frame("git-commit-\(mockupCommits[5].short)", in: window)
+        // The mode's label is as wide drilled or not: the repository starts where the commit's subject did. Under the
+        // header the view is too short for both (FilesView.fitsBoth): no views button.
+        let location = try await frame("files-location", in: window)
+        XCTAssertEqual(location.minX, opened.minX, accuracy: 1)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).isEmpty)
+    }
+
+    /// On one column a commit's files take the whole pane, with no diff squeezed under them; a file opens its diff a
+    /// level deeper, in their place at the pane's full height, where ↑ ↓ step through the files and Back returns to
+    /// them, then to the log.
+    func testOneColumnOpensACommitsFileAtFullHeight() async throws {
+        let session = mockupSession()
+        let window = try window(session, width: 360, height: 430)
+        let head = mockupCommits[0]
+        try await click("git-commit-\(head.short)", in: window) { session.narrowDetail }
+        _ = try await frame("git-commit-files", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-diff-header", in: window).isEmpty,
+                      "the commit's level shows no diff")
+        _ = try await PresentationTestSupport.capture(window, named: "git-commit-one-column", in: "files-audit")
+        let text = "diff --git a/src/lib/db.ts b/src/lib/db.ts\n--- a/src/lib/db.ts\n+++ b/src/lib/db.ts\n@@ -1 +1 @@\n-a\n+b\n"
+        session.commitDiff = GitDiffState(key: GitCommitsText.diffKey(hash: head.hash, path: "src/lib/db.ts"),
+                                          diff: GitDiff(path: "src/lib/db.ts", text: text))
+        try await click("git-commit-file-src/lib/db.ts", in: window) { session.drilledFile }
+        XCTAssertEqual(session.commitFile, "src/lib/db.ts")
+        _ = try await PresentationTestSupport.capture(window, named: "git-commit-file-level", in: "files-audit")
+        let header = try await frame("git-diff-header", in: window)
+        let rows = try await frame("git-diff-rows", in: window)
+        let back = try await frame("files-split-back", in: window)
+        // Window coordinates run up: the diff's header starts right under the files header, its rows reach the bottom.
+        XCTAssertLessThan(back.minY - header.maxY, 16, "right under the header: \(header) under \(back)")
+        XCTAssertLessThan(rows.minY, 8, "to the pane's foot: \(rows)")
+        XCTAssertGreaterThan(rows.height, 430 * 0.6, "the diff takes the pane's height")
+        try await TestSupport.eventually(diagnostic: "the commit's files stayed: \(PresentationTestSupport.accessibilityIdentifiers(in: window))") {
+            PresentationTestSupport.accessibilityFrames("git-commit-files", in: window).isEmpty
+        }
+        try await says("db.ts", "files-opened", in: window)
+        try await says("2 of 3", "files-opened-position", in: window)
+        // ↑ ↓ step through the commit's files here, not its commits.
+        try await click("files-step-next", in: window) { session.commitFile == "CHANGELOG.md" }
+        XCTAssertEqual(session.selectedCommit, head.hash)
+        try await says("CHANGELOG.md", "files-opened", in: window)
+        // Back: the commit's files, then the log.
+        try await click("files-split-back", in: window) { !session.drilledFile && session.narrowDetail }
+        _ = try await frame("git-commit-files", in: window)
+        try await click("files-split-back", in: window) { !session.narrowDetail }
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("files-split-back", in: window).isEmpty }
+        // Another commit never opens on a file.
+        session.narrowFile = true
+        session.selectedCommit = mockupCommits[1].hash
+        XCTAssertFalse(session.narrowFile)
     }
 
     func testADiffShowsOnlyUnderItsCommitAndPath() async throws {
@@ -377,10 +456,10 @@ final class GitCommitsPresentationTests: XCTestCase {
 
     func testReturnUnderTheNarrowWidthKeepsTheKeyboardInTheList() async throws {
         let session = mockupSession()
-        let window = try window(session, width: 560)
+        let window = try window(session, width: 560, height: 430)
         _ = try await frame("git-commits-list", in: window)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-commit-detail", in: window).isEmpty,
-                      "no detail under 600 pt")
+                      "no detail on one column")
         session.focusRequest = System.uuid()
         try await TestSupport.pause(for: .milliseconds(200))
         try key("\r", code: 36, in: window)

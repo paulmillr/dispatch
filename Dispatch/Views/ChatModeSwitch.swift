@@ -14,6 +14,9 @@ struct ModeSwitchState: Equatable {
     let host: String?
     /// The agent exited: its transcript opens from the menu (and ⇧⌘C), not the click, which goes where a terminal's does.
     var retained = false
+    /// The files tab the tab shows, or would show: in files mode the button names it (the files header has no tabs of its
+    /// own; the menu switches them).
+    var tab: FilesTab = .files
 
     /// `FilesCoordinator.nextMode`: where a click goes; nil when it can go nowhere (the button dims). Chat never leads on
     /// to files: a click there always returns to the terminal.
@@ -26,14 +29,30 @@ struct ModeSwitchState: Equatable {
 
     var glyph: String {
         switch mode {
-        case .files: "folder"
+        case .files: Self.glyph(tab)
         case .chat: "text.bubble"
         // Muted, it names where the click goes; with nowhere to go, what is missing.
         case .terminal: next == .chat || (next == nil && host == nil) ? "text.bubble" : "folder"
         }
     }
 
+    /// Every glyph the button can show: it lays them all out, so it keeps one width whichever shows.
+    static let glyphs = ["text.bubble", "folder", "pencil.and.list.clipboard", "clock.arrow.circlepath"]
+
+    /// A files tab's glyph: the folder, Review the phone's clipboard (the chat bubble is Chat's), Commits the clock.
+    static func glyph(_ tab: FilesTab) -> String {
+        switch tab {
+        case .files: "folder"
+        case .changes: "pencil.and.list.clipboard"
+        case .commits: "clock.arrow.circlepath"
+        }
+    }
+
     var lit: Bool { mode != .terminal }
+
+    /// No agent leads the tab: Files is all a click could open, and which of its tabs is the question, so a click opens
+    /// the modes menu (as a hold does) rather than switching; from files the menu has the way back to the terminal too.
+    var opensMenu: Bool { files && !chat && mode != .chat }
     var dimmed: Bool { next == nil }
 
     /// The next step, as VoiceOver reads the button.
@@ -49,13 +68,14 @@ struct ModeSwitchState: Equatable {
         switch mode {
         case .terminal: "Terminal selected"
         case .chat: "Chat selected"
-        case .files: "Files selected"
+        case .files: tab == .changes ? "Review selected" : tab == .commits ? "Commits selected" : "Files selected"
         }
     }
 
     /// Hover text; `chatHint` is chat's own (why it cannot open yet, or "Show agent chat").
     func help(chatHint: String) -> String {
-        switch next {
+        if opensMenu { return mode == .files ? "Terminal, Files, Review or Commits · ⇧⌘F" : "Files, Review or Commits · ⇧⌘F" }
+        return switch next {
         case .chat: chatHint
         case .files: "Show files · ⇧⌘F"
         case .terminal: mode == .files ? "Show terminal · ⇧⌘F" : "Show terminal · ⇧⌘C"
@@ -120,8 +140,8 @@ struct ChatModeSwitch: View {
                 .contentShape(Rectangle())
                 // Clicks and press-and-hold are AppKit's: a held press opens the modes menu instead of clicking.
                 .overlay {
-                    ModeSwitchPressTracker(enabled: !state.dimmed, help: help, click: { choose(state.next) },
-                                           menu: { menuItems(state) })
+                    ModeSwitchPressTracker(enabled: !state.dimmed, opensMenu: state.opensMenu, help: help,
+                                           click: { choose(state.next) }, menu: { menuItems(state) })
                 }
         }
         .buttonStyle(.plain)
@@ -132,8 +152,10 @@ struct ChatModeSwitch: View {
         .help(help)
         .contextMenu {
             ForEach(menuItems(state)) { item in
-                Toggle(item.title, isOn: Binding(get: { item.checked }, set: { _ in item.choose() }))
-                    .disabled(!item.enabled)
+                Toggle(isOn: Binding(get: { item.checked }, set: { _ in item.choose() })) {
+                    Label(item.title, systemImage: item.symbol)
+                }
+                .disabled(!item.enabled)
             }
         }
         .opacity(floating && typing && !hovering ? 0.4 : 1)
@@ -179,6 +201,8 @@ struct ModeSwitchMenuItem: Identifiable {
 
     let target: Target
     let title: String
+    /// The item's glyph, the one the button shows for it.
+    let symbol: String
     let checked: Bool
     let enabled: Bool
     let choose: @MainActor () -> Void
@@ -190,15 +214,16 @@ struct ModeSwitchMenuItem: Identifiable {
     /// stand-alone chat), or with Files off, the menu is Terminal and Chat.
     @MainActor static func items(_ state: ModeSwitchState, files: FilesCoordinator?, id: UUID,
                                  choose: @escaping @MainActor (Target) -> Void) -> [ModeSwitchMenuItem] {
-        func item(_ target: Target, _ title: String, checked: Bool, enabled: Bool) -> ModeSwitchMenuItem {
-            ModeSwitchMenuItem(target: target, title: title, checked: checked, enabled: enabled) { choose(target) }
+        func item(_ target: Target, _ title: String, _ symbol: String, checked: Bool, enabled: Bool) -> ModeSwitchMenuItem {
+            ModeSwitchMenuItem(target: target, title: title, symbol: symbol, checked: checked, enabled: enabled) { choose(target) }
         }
-        var items = [item(.mode(.terminal), "Terminal", checked: state.mode == .terminal, enabled: state.reaches(.terminal)),
-                     item(.mode(.chat), "Chat", checked: state.mode == .chat, enabled: state.reaches(.chat))]
+        var items = [item(.mode(.terminal), "Terminal", "apple.terminal", checked: state.mode == .terminal,
+                          enabled: state.reaches(.terminal)),
+                     item(.mode(.chat), "Chat", "text.bubble", checked: state.mode == .chat, enabled: state.reaches(.chat))]
         guard let files, files.enabled else { return items }
         let shown = state.mode == .files ? files.existing(id)?.tab ?? .files : nil
         for (tab, title) in [(FilesTab.files, "Files"), (.changes, "Review"), (.commits, "Commits")] {
-            items.append(item(.files(tab), title, checked: shown == tab,
+            items.append(item(.files(tab), title, ModeSwitchState.glyph(tab), checked: shown == tab,
                               enabled: state.reaches(.files) && files.canShowFiles(id, tab: tab)))
         }
         return items
@@ -233,11 +258,11 @@ private struct ModeSwitchLabel: View {
             .overlay { if !glass { RoundedRectangle(cornerRadius: 5).strokeBorder(Chrome.border) } }
             .frame(minHeight: typography.expanded(22))
         } else {
-            // Same glyph size and height as the layout picker, so the strip's icons scale together. Both glyphs are laid
+            // Same glyph size and height as the layout picker, so the strip's icons scale together. Every glyph is laid
             // out, so the button keeps one width; the shown one cross-fades in with the mode switch, and only it animates.
             let glyph = state?.glyph ?? "text.bubble"
             ZStack {
-                ForEach(["text.bubble", "folder"], id: \.self) { name in
+                ForEach(ModeSwitchState.glyphs, id: \.self) { name in
                     Image(systemName: name).opacity(name == glyph ? 1 : 0)
                 }
             }
@@ -301,11 +326,14 @@ extension EnvironmentValues {
     }
 }
 
-/// The mode button's pointer: a click acts on release inside, as a button does; a press held past the delay opens the
-/// modes menu under the button instead, as a toolbar back button does. A right-click falls through to SwiftUI's menu.
+/// The mode button's pointer: a click acts on release inside, as a button does (`opensMenu`: it opens the modes menu); a
+/// press held past the delay opens the modes menu under the button instead, as a toolbar back button does. A right-click
+/// falls through to SwiftUI's menu.
 /// Internal, not private, so the presentation tests can read the menu a hold opens.
 struct ModeSwitchPressTracker: NSViewRepresentable {
     let enabled: Bool
+    /// A click opens the menu too (`ModeSwitchState.opensMenu`).
+    var opensMenu = false
     let help: String
     let click: @MainActor () -> Void
     let menu: @MainActor () -> [ModeSwitchMenuItem]
@@ -314,6 +342,7 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
 
     func updateNSView(_ view: TrackerView, context: Context) {
         view.enabled = enabled
+        view.opensMenu = opensMenu
         view.click = click
         view.items = menu
         // The tracker is what the pointer is over, so it carries the hover text.
@@ -324,6 +353,7 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
         /// How long a press waits before it becomes the menu, about a toolbar button's menu delay.
         static let holdDelay: TimeInterval = 0.45
         var enabled = true
+        var opensMenu = false
         var click: @MainActor () -> Void = {}
         var items: @MainActor () -> [ModeSwitchMenuItem] = { [] }
 
@@ -349,7 +379,9 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
                     showMenu()
                     return
                 case .leftMouseUp:
-                    if enabled, bounds.contains(convert(next.locationInWindow, from: nil)) { click() }
+                    if enabled, bounds.contains(convert(next.locationInWindow, from: nil)) {
+                        if opensMenu { showMenu() } else { click() }
+                    }
                     return
                 default:
                     continue
@@ -367,6 +399,7 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
             menu.autoenablesItems = false
             for item in items() {
                 let entry = ClosureMenuItem(title: item.title, action: item.choose)
+                entry.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
                 entry.state = item.checked ? .on : .off
                 entry.isEnabled = item.enabled
                 menu.addItem(entry)

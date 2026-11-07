@@ -15,8 +15,8 @@ import Foundation
     @ObservationIgnored private var presenters: Set<UUID> = []
     /// Which files tab the tab last showed (F1a: each tab remembers).
     var tab: FilesTab = .files {
-        // A narrow detail belongs to its list: another tab opens on its own list.
-        didSet { if (tab == .files) != (oldValue == .files) { narrowDetail = false } }
+        // A narrow detail belongs to its list: another tab opens on its own list (Review then on its diff, `FilesSplit`).
+        didSet { if tab != oldValue { narrowDetail = false } }
     }
 
     // Root. Nil follows the shell's directory; a crumb or folder click pins it (F2a).
@@ -66,23 +66,39 @@ import Foundation
     /// default (`FilesCoordinator.previewPreference`, `FilesView.layout`). Kept while the view is too narrow for it,
     /// so the pane comes back at the width the user chose.
     var previewWidth: CGFloat?
-    /// ⌥⌘P or the header's button: the list spans the view and the pane is not mounted, so selections load nothing.
-    /// `preview` still follows the selection, so showing the pane again loads what is selected.
-    var previewHidden = false
-    /// Files shows no preview until one is asked for on this tab: a double click or ⏎ on a file, or ⌥⌘P. The Changes and
-    /// Commits tabs' diffs, in the same place, are what those tabs are for and show from the start.
-    var previewRequested = false
-    /// The pane is off for the tab shown: hidden, or on Files not yet asked for or with previews off in Settings.
-    var previewOff: Bool { previewHidden || (tab == .files && (!previewRequested || !Self.previews)) }
+    /// The header's views button and ⌥⌘P on this tab: one view at a time (true: the list, a chosen row's detail in its
+    /// place) or the list with its detail beside or under it (false). Nil follows the layout (`FilesView.shape`: one at
+    /// a time in a space of four panes or more, or where two do not fit the view's size). Either choice holds only where
+    /// there is room for two (`canShowBoth`).
+    var oneView: Bool?
+    /// The view has room for the list and its detail together (`FilesView.fitsBoth`), as `FilesSplit` last laid it
+    /// out: the views button shows only then.
+    var canShowBoth = true
+    /// Both views show one over the other (`FilesSplitShape.stacked`), as `FilesSplit` last laid them out.
+    var stackedViews = false
+    /// The pane is off for the tab shown: on Files with previews off in Settings, the list alone with no button.
+    var previewOff: Bool { tab == .files && !Self.previews }
     /// Settings › Features › Files › Disable file previews, inverted: off, the Files tab never mounts its preview.
     static var previews: Bool { TerminalRuntime.shared.preferences.filesPreviews }
     /// The tab shown has a pane to show: the git tabs always, Files unless its previews are off.
     var hasPane: Bool { tab != .files || Self.previews }
-    /// Under `FilesView.collapseWidth` the split has room for one column (`splitNarrow`, as `FilesSplit` last laid it
-    /// out): a row chosen there (a git row's click or ⏎, a file's ⏎ or double click) shows its detail or preview in the
-    /// list's place, under a bar back to the list (or esc). Kept while the view is wide.
-    var narrowDetail = false
+    /// A view too narrow for two columns and too short to stack them has room for one (`splitNarrow`, as `FilesSplit`
+    /// last laid it out, `FilesSplitShape.single`): a row chosen there (a git row's click or ⏎, a file's ⏎ or double
+    /// click) shows its detail or preview in the list's place, the header's tab name turned into a button back to the
+    /// list (or esc). Review opens on its diff there. Kept while the view is wide.
+    var narrowDetail = false { didSet { if !narrowDetail { narrowFile = false } } }
     var splitNarrow = false
+    /// One column shows a row's detail in the list's place: the header goes back from it and steps through the rows.
+    var drilled: Bool { splitNarrow && narrowDetail }
+    /// One column, drilled into a commit: the picked file's diff takes the commit's place, all of the pane's height
+    /// (`GitCommitDetailPane`); Back and esc return to the commit's files, ↑ ↓ step through them.
+    var narrowFile = false
+    var drilledFile: Bool { drilled && tab == .commits && narrowFile && commitFile != nil }
+
+    /// Back one level on one column: from a commit's file to the commit, else from a detail to the list.
+    func goBack() {
+        if drilledFile { narrowFile = false } else { narrowDetail = false }
+    }
     /// The pane shows: beside the list, or on one column in its place.
     var paneShown: Bool { splitNarrow ? narrowDetail : !previewOff }
 
@@ -115,8 +131,9 @@ import Foundation
     /// The comment ⌥↓ / ⌥↑ last went to, where they go on from.
     @ObservationIgnored var reviewPosition: UUID?
     var diffMode: GitDiffMode = .diff
-    /// The diffs' long lines wrap to the pane instead of scrolling sideways (the header's wrap button).
-    var diffWrap = false
+    /// The diffs' long lines wrap to the pane instead of scrolling sideways (the header's wrap button); nil wraps in a
+    /// view narrower than `FilesView.columnsWidth` and scrolls in a wider one (`wraps(compact:)`).
+    var diffWrap: Bool?
     var log: GitLog?
     var logScope: GitLogScope = .branch
     var logFilter = ""
@@ -124,7 +141,8 @@ import Foundation
     /// the git data layer fills `log` up to it.
     var logWanted = GitLoader.page
     /// The hash selected in the Commits list, its detail, the file picked there and that file's diff.
-    var selectedCommit: String?
+    /// Another commit leaves the file a one-column view had open (`narrowFile`) for that commit's files.
+    var selectedCommit: String? { didSet { if selectedCommit != oldValue { narrowFile = false } } }
     var commitDetail: GitCommitDetail?
     /// Why the selected commit's detail did not load; the loader tries again on its tick and on ⌘R.
     var commitDetailError: String?
@@ -184,7 +202,7 @@ import Foundation
         }
     }
 
-    /// A segment click, ⌃⌘1–3 or ⇧⌘U / ⇧⌘L: the tab shows `tab` if it can, and the new tab's view takes the keyboard
+    /// The mode button's menu, ⌃⌘1–3 or ⇧⌘U / ⇧⌘L: the tab shows `tab` if it can, and the new tab's view takes the keyboard
     /// (the one that had it is gone).
     func select(_ tab: FilesTab) {
         guard canShow(tab), tab != self.tab else { return }
@@ -195,6 +213,38 @@ import Foundation
     /// Commits shows (its log and refs are read).
     var showsLog: Bool { tab == .commits }
 
+    /// Whether the diffs wrap in a view that is `compact` (narrower than `FilesView.columnsWidth`).
+    func wraps(compact: Bool) -> Bool { diffWrap ?? compact }
+
+    /// The Review list's changes in its order, as the header's search leaves them.
+    var orderedChanges: [GitChange] {
+        guard let status else { return [] }
+        return GitChangesText.ordered(status.matching(changesFilter))
+    }
+
+    /// The header's ↑↓ on one column: the change or commit `delta` rows on from the shown one. False when there is none.
+    @discardableResult func step(by delta: Int) -> Bool {
+        switch tab {
+        case .changes:
+            guard let next = GitChangesText.moved(changesSelection, by: delta, in: orderedChanges),
+                  next != changesSelection else { return false }
+            changesSelection = next
+        case .commits where drilledFile:
+            let files = (commitDetail?.files ?? []).map(\.path)
+            guard let current = commitFile.flatMap({ files.firstIndex(of: $0) }),
+                  files.indices.contains(current + delta) else { return false }
+            commitFile = files[current + delta]
+        case .commits:
+            let hashes = (log?.commits ?? []).map(\.hash)
+            guard let current = selectedCommit.flatMap({ hash in hashes.firstIndex(of: hash) }),
+                  hashes.indices.contains(current + delta) else { return false }
+            selectedCommit = hashes[current + delta]
+        case .files:
+            return false
+        }
+        return true
+    }
+
     /// Whose comments the Review tab shows: the repository's working tree on this tab's host, a remote host by its
     /// stable identity (`ReviewScope`). Nil until both are known.
     var reviewScope: String? {
@@ -204,11 +254,11 @@ import Foundation
         return ReviewRepository.scope(local: false, host: host, root: repository.root)
     }
 
-    /// The header shows the git segments: inside a repository, or while a git tab waits for the repository to resolve
+    /// The git tabs can be reached: inside a repository, or while a git tab waits for the repository to resolve
     /// (outside one the tab has already fallen back to Files).
     var showsGitTabs: Bool { git.repository != nil || tab != .files }
 
-    /// The review comments the Review segment counts: nil while there are none (or no repository).
+    /// The review comments Create review counts: nil while there are none (or no repository).
     var reviewCommentCount: Int? {
         guard let scope = reviewScope else { return nil }
         let count = ReviewRepository.shared.review(scope).comments.count

@@ -285,21 +285,20 @@ final class FilesListTests: XCTestCase {
         func columns(_ width: CGFloat, _ preference: CGFloat? = nil, hidden: Bool = false) -> FilesSplitColumns {
             FilesView.layout(width: width, preference: preference, hidden: hidden)
         }
-        // The default: 560 pt from 1,000 pt, half below, the list never under 320 pt, nothing under 600 pt.
+        // The default: 560 pt from 1,000 pt, half below, the list never under 320 pt, nothing beside it under 900 pt.
         XCTAssertEqual(columns(1_200), FilesSplitColumns(list: 640, preview: 560))
         XCTAssertEqual(columns(1_000), FilesSplitColumns(list: 440, preview: 560))
         XCTAssertEqual(columns(999), FilesSplitColumns(list: 499, preview: 500))
-        XCTAssertEqual(columns(800), FilesSplitColumns(list: 400, preview: 400))
-        XCTAssertEqual(columns(600), FilesSplitColumns(list: 320, preview: 280), "half would leave the list 300 pt")
-        XCTAssertEqual(columns(599), FilesSplitColumns(list: 599, preview: nil))
-        XCTAssertEqual(columns(500), FilesSplitColumns(list: 500, preview: nil))
+        XCTAssertEqual(columns(900), FilesSplitColumns(list: 450, preview: 450))
+        XCTAssertEqual(columns(899), FilesSplitColumns(list: 899, preview: nil))
+        XCTAssertEqual(columns(600), FilesSplitColumns(list: 600, preview: nil), "half a laptop's window")
 
         // A chosen width holds where it fits and is clamped to the minima where it does not.
         XCTAssertEqual(columns(1_000, 300), FilesSplitColumns(list: 700, preview: 300))
-        XCTAssertEqual(columns(800, 300), FilesSplitColumns(list: 500, preview: 300))
+        XCTAssertEqual(columns(900, 300), FilesSplitColumns(list: 600, preview: 300))
         XCTAssertEqual(columns(1_000, 900), FilesSplitColumns(list: 320, preview: 680), "the list keeps 320 pt")
         XCTAssertEqual(columns(1_000, 100), FilesSplitColumns(list: 760, preview: 240), "the preview keeps 240 pt")
-        XCTAssertEqual(columns(600, 500), FilesSplitColumns(list: 320, preview: 280))
+        XCTAssertEqual(columns(900, 700), FilesSplitColumns(list: 320, preview: 580))
         XCTAssertEqual(columns(1_000, 333.4), FilesSplitColumns(list: 667, preview: 333), "on whole points")
         XCTAssertEqual(columns(500, 300), FilesSplitColumns(list: 500, preview: nil), "too narrow for both: no preview")
 
@@ -311,59 +310,100 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesView.clampedPreview(10, width: 1_180), 240)
         XCTAssertEqual(FilesView.clampedPreview(2_000, width: 1_180), 860)
         XCTAssertEqual(FilesView.clampedPreview(456.6, width: 1_180), 457)
+
+        // Under 900 pt: a tall view stacks the list (its own height, at most 40%) over the detail; a short one keeps
+        // one column. Half a laptop's window stacks, a quarter keeps one column.
+        func shape(_ width: CGFloat, _ height: CGFloat, one: Bool? = nil, off: Bool = false, ideal: CGFloat? = nil,
+                   many: Bool = false, preference: CGFloat? = nil) -> FilesSplitShape {
+            FilesView.shape(width: width, height: height, preference: preference, oneView: one, off: off, listIdeal: ideal,
+                            oneAtATime: many)
+        }
+        XCTAssertEqual(shape(1_180, 400), .columns(FilesSplitColumns(list: 620, preview: 560)), "wide enough: side by side")
+        XCTAssertEqual(shape(602, 840), .stacked(list: 336))
+        XCTAssertEqual(shape(602, 840, ideal: 190.5), .stacked(list: 191), "a short list keeps its own height")
+        XCTAssertEqual(shape(602, 840, ideal: 900), .stacked(list: 336), "a long one at most 40%")
+        XCTAssertEqual(shape(602, 840, off: true), .columns(FilesSplitColumns(list: 602, preview: nil)),
+                       "previews off in Settings: the list alone")
+        XCTAssertEqual(shape(602, 386), .single)
+        XCTAssertEqual(shape(899, 559), .single)
+        XCTAssertEqual(shape(899, 560), .stacked(list: 224))
+        // A space of four panes or more shows one view at a time, whatever the pane's size: the layout decides.
+        for (width, height) in [(1_180.0, 900.0), (602, 840), (899, 560), (300, 300)] {
+            XCTAssertEqual(shape(width, height, many: true), .single, "\(width) × \(height)")
+        }
+        XCTAssertEqual(FilesView.oneAtATimePanes, 4)
+        // The tab's choice (the views button, ⌥⌘P) outranks both rules where two views fit.
+        XCTAssertEqual(shape(1_180, 900, one: true), .single, "one view at any size")
+        XCTAssertEqual(shape(1_180, 900, one: false, many: true), .columns(FilesSplitColumns(list: 620, preview: 560)))
+        XCTAssertEqual(shape(602, 500, one: false, many: true), .stacked(list: 200), "stacked from 400 pt tall")
+        XCTAssertEqual(shape(602, 386, one: false), .columns(FilesSplitColumns(list: 320, preview: 282)),
+                       "shorter, side by side at the minima")
+        // Too small for both: one view whatever the tab chose, and no button.
+        XCTAssertTrue(FilesView.fitsBoth(width: 560, height: 300))
+        XCTAssertTrue(FilesView.fitsBoth(width: 400, height: 400))
+        XCTAssertFalse(FilesView.fitsBoth(width: 559, height: 399))
+        XCTAssertEqual(shape(500, 380, one: false), .single)
+        XCTAssertFalse(FilesSplitShape.single.showsPane)
+        XCTAssertTrue(FilesSplitShape.stacked(list: 200).showsPane)
     }
 
-    func testHidingThePreviewKeepsItsWidthAndOpeningAFileShowsIt() async throws {
+    /// The views button (⌥⌘P) switches between one view and the list with its detail where both fit; the detail keeps
+    /// its width meanwhile, a selection on one view sets the preview without leaving the list, and ⏎ on a file opens it
+    /// in the list's place.
+    func testTheViewsButtonKeepsTheWidthAndOpeningAFileShowsIt() async throws {
         let source = FakeFilesSource.mockupAPI()
         let session = await session(source)
         let rows = session.rows(root: root, settingHidden: true)
         let readme = try row("README.md", in: rows), package = try row("package.json", in: rows)
         let src = try row("src", in: rows)
-        XCTAssertTrue(session.previewOff, "Files starts without the pane; a double click brings it")
-        XCTAssertFalse(session.previewHidden)
+        XCTAssertFalse(session.previewOff, "Files starts with the pane, as the git tabs do")
+        XCTAssertNil(session.oneView, "the layout decides until the tab chooses")
         session.tab = .changes
         XCTAssertFalse(session.previewOff, "the git tabs' diffs show from the start")
         session.tab = .files
         XCTAssertNil(session.previewWidth)
-        session.togglePreview()
-        XCTAssertFalse(session.previewOff, "⌥⌘P asks for it")
 
+        // Laid out with both (FilesSplit sets these): the button gives one view.
         session.previewWidth = 420
-        session.togglePreview()
-        XCTAssertTrue(session.previewHidden)
-        XCTAssertEqual(session.previewWidth, 420, "hiding keeps the width")
-        XCTAssertEqual(FilesView.layout(width: 1_180, preference: session.previewWidth, hidden: session.previewHidden),
-                       FilesSplitColumns(list: 1_180, preview: nil))
+        session.splitNarrow = false
+        session.toggleViews()
+        XCTAssertEqual(session.oneView, true)
+        XCTAssertEqual(session.previewWidth, 420, "one view keeps the width")
+        XCTAssertEqual(FilesView.shape(width: 1_180, height: 700, preference: session.previewWidth, oneView: session.oneView), .single)
 
-        // A selection while hidden still sets the preview, so the pane loads it once shown; it does not show the pane.
+        // On one view a selection sets the preview without leaving the list; ⏎ on a folder pins it, on a file opens it
+        // in the list's place.
+        session.splitNarrow = true
         session.selectionChanged(to: [package], anchor: package)
         XCTAssertEqual(session.preview?.path, package.id)
-        XCTAssertTrue(session.previewHidden)
-
-        // ⏎ on a folder pins it and leaves the pane hidden; on a file it shows the pane with that file.
+        XCTAssertFalse(session.narrowDetail)
         session.open(src)
-        XCTAssertTrue(session.previewHidden)
+        XCTAssertFalse(session.narrowDetail)
         session.followShell()
         session.open(readme)
-        XCTAssertFalse(session.previewHidden)
+        XCTAssertTrue(session.narrowDetail)
         XCTAssertEqual(session.preview?.path, readme.id)
-        XCTAssertEqual(session.previewWidth, 420)
-        XCTAssertEqual(FilesView.layout(width: 1_180, preference: session.previewWidth, hidden: session.previewHidden),
-                       FilesSplitColumns(list: 760, preview: 420))
 
-        // Hiding a preview that has the keyboard hands it to the list; hiding one that has not leaves focus alone.
+        // Both again, at the width kept.
+        session.toggleViews()
+        XCTAssertEqual(session.oneView, false)
+        XCTAssertEqual(FilesView.shape(width: 1_180, height: 700, preference: session.previewWidth, oneView: session.oneView),
+                       .columns(FilesSplitColumns(list: 760, preview: 420)))
+
+        // One view opens on the list, and a preview that had the keyboard hands it to the list.
+        session.splitNarrow = false
         session.previewFocused = true
         let request = session.focusRequest
-        session.setPreviewHidden(true)
+        session.toggleViews()
+        XCTAssertFalse(session.narrowDetail)
         XCTAssertFalse(session.previewFocused)
         XCTAssertNotEqual(session.focusRequest, request)
-        let hiddenRequest = session.focusRequest
-        session.setPreviewHidden(true)
-        session.togglePreview()
-        XCTAssertFalse(session.previewHidden)
-        session.togglePreview()
-        XCTAssertTrue(session.previewHidden)
-        XCTAssertEqual(session.focusRequest, hiddenRequest)
+
+        // Where both do not fit, the button does nothing.
+        session.splitNarrow = true
+        session.canShowBoth = false
+        session.toggleViews()
+        XCTAssertEqual(session.oneView, true)
     }
 
     func testSelectionPreviewsAndSurvivesARefresh() async throws {
@@ -577,6 +617,26 @@ final class FilesListTests: XCTestCase {
         XCTAssertNotNil(controller.outlineView(outline, child: 0, ofItem: file) as? FilesOutlineController.Node)
     }
 
+    /// The row menu: Copy (the files) and Copy Path, Download…, and on a host Copy scp Command; nothing opens the
+    /// terminal.
+    func testRowMenuCopiesDownloadsAndOffersScpOnAHost() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let session = await session(source)
+        let (controller, _, update) = outline(session, builder: FilesRowBuilder())
+        update()
+        let menu = NSMenu()
+        controller.menuNeedsUpdate(menu)
+        let titles = { menu.items.filter { !$0.isSeparatorItem }.map(\.title) }
+        XCTAssertEqual(titles(), ["Preview", "Open in Editor", "Copy", "Copy Path", "Download…", "Show Enclosing Folder", "Refresh"])
+        XCTAssertEqual(menu.items.first { $0.title == "Copy" }?.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(menu.items.first { $0.title == "Copy Path" }?.keyEquivalentModifierMask, [.command, .option])
+        session.availability = .available(FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab"))
+        controller.menuNeedsUpdate(menu)
+        XCTAssertEqual(titles(), ["Preview", "Open in Editor", "Copy", "Copy Path", "Copy scp Command", "Download…",
+                                  "Show Enclosing Folder", "Refresh"])
+        XCTAssertFalse(titles().contains { $0.localizedCaseInsensitiveContains("terminal") })
+    }
+
     func testCopyPathsCopiesTheSelectedRowsThatShow() async throws {
         let source = FakeFilesSource.mockupAPI()
         let session = await session(source)
@@ -687,27 +747,19 @@ final class FilesListTests: XCTestCase {
         ], loadedAt: now)
     }
 
-    func testSegmentsShowTheGitTabsInsideARepository() {
+    func testHeaderNamesTheTabAndTheRepository() {
         let session = FilesSession(id: System.uuid())
-        func ids() -> [FilesTab] { FilesHeader.segments(for: session).map(\.id) }
+        // The header leads with the tab's name; the strip's mode button and its menu switch the tabs.
+        XCTAssertEqual([FilesTab.files, .changes, .commits].map(FilesHeader.title), ["Files", "Review", "Commits"])
         session.git = .none
-        XCTAssertEqual(ids(), [.files], "outside a repository: Files alone")
-        let files = FilesHeader.segments(for: session)[0]
-        XCTAssertEqual(files.help, "Files · ⌃⌘1")
-        XCTAssertEqual(files.accessibilityID, "files-segment-files")
-        XCTAssertNil(files.count)
+        XCTAssertFalse(session.showsGitTabs, "outside a repository: Files alone")
+        XCTAssertFalse(session.canShow(.changes))
 
         session.git = .repository(GitRepository(root: root))
-        XCTAssertEqual(ids(), [.files, .changes, .commits], "Files · Review · the branch")
-        XCTAssertNil(FilesHeader.segments(for: session)[1].count, "no count until the status is in")
+        XCTAssertTrue(session.showsGitTabs)
+        XCTAssertNil(session.reviewCommentCount, "no count until the status is in")
         session.status = mockupStatus()
-        let segments = FilesHeader.segments(for: session)
-        // Fixed names: Review counts its comments (none yet), Commits is Commits whatever the branch.
-        XCTAssertEqual(segments.map(\.title), ["Files", "Review", "Commits"])
-        XCTAssertEqual(segments.map(\.count), [nil, nil, nil], "no comments, no pill: the changed files are not counted")
-        XCTAssertEqual(segments.map(\.help), ["Files · ⌃⌘1", "Review · ⌃⌘2", "Commits · ⌃⌘3"])
-        XCTAssertEqual(segments.map(\.accessibilityID),
-                       ["files-segment-files", "files-segment-changes", "files-segment-commits"])
+        XCTAssertNil(session.reviewCommentCount, "no comments, no count: the changed files are not counted")
         // The branch and its distance from the upstream are where you are, not a tab.
         XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: session.status), "api · main · up to date with origin/main")
         session.status?.ahead = 2
@@ -717,18 +769,18 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: session.status),
                        "api · detached at 4f1c2e9 · up to date with origin/main")
         XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: nil), "api", "no branch to name before the status")
-        XCTAssertEqual(FilesHeader.segments(for: session)[2].title, "Commits")
 
-        // Still resolving: Files alone on the Files tab; a git tab asked for keeps the segments while it waits.
+        // Still resolving: Files alone on the Files tab; a git tab asked for stays while it waits.
         session.git = .loading
-        XCTAssertEqual(ids(), [.files])
+        XCTAssertFalse(session.showsGitTabs)
         session.select(.changes)
-        XCTAssertEqual(ids(), [.files, .changes, .commits])
-        XCTAssertNil(FilesHeader.segments(for: session)[1].count)
+        XCTAssertEqual(session.tab, .changes)
+        XCTAssertTrue(session.showsGitTabs)
     }
 
-    /// The Review segment's pill is how many review comments the repository's review holds, and only while it holds any.
-    func testReviewSegmentCountsTheReviewsComments() throws {
+    /// Create review counts the repository's review comments (the header has no Review segment to), and only while it
+    /// holds any.
+    func testReviewCommentCountIsTheReviewsComments() throws {
         let repository = ReviewRepository(store: MemoryReviewStore())
         ReviewRepository.use(repository)
         defer { ReviewRepository.use(nil) }
@@ -737,20 +789,73 @@ final class FilesListTests: XCTestCase {
         session.availability = .available(source)
         session.git = .repository(GitRepository(root: root))
         session.status = mockupStatus()
-        func review() -> FilesSegments<FilesTab>.Segment { FilesHeader.segments(for: session)[1] }
-        XCTAssertNil(review().count)
-        XCTAssertEqual(review().help, "Review · ⌃⌘2")
+        XCTAssertNil(session.reviewCommentCount)
         let scope = try XCTUnwrap(session.reviewScope)
         let comment = ReviewComment(id: System.uuid(), path: "src/lib/db.ts", start: nil, end: nil, quote: [], text: "x",
                                     created: Date(timeIntervalSince1970: 1_760_700_000))
         repository.add(comment, to: scope)
         repository.add(ReviewComment(id: System.uuid(), path: "README.md", start: nil, end: nil, quote: [], text: "y",
                                      created: comment.created), to: scope)
-        XCTAssertEqual(review().count, 2, "every comment of the review, on changed files or not")
-        XCTAssertEqual(review().help, "Review · 2 comments · ⌃⌘2")
-        XCTAssertEqual(review().accessibilityLabel, "Review, 2 comments")
+        XCTAssertEqual(session.reviewCommentCount, 2, "every comment of the review, on changed files or not")
         repository.take(scope)
-        XCTAssertNil(review().count, "Create review took them")
+        XCTAssertNil(session.reviewCommentCount, "Create review took them")
+    }
+
+    /// On one column the header's ↑↓ step through the changes in the list's order (as its search leaves them) and the
+    /// log's commits, stopping at either end; the Files tab has nothing to step.
+    func testOneColumnStepsThroughTheChangesAndCommits() {
+        let session = FilesSession(id: System.uuid())
+        session.git = .repository(GitRepository(root: root))
+        session.status = mockupStatus()
+        session.tab = .changes
+        let ordered = session.orderedChanges.map(\.id)
+        XCTAssertGreaterThan(ordered.count, 2)
+        session.changesSelection = ordered[0]
+        XCTAssertFalse(session.step(by: -1), "nothing before the first")
+        XCTAssertTrue(session.step(by: 1))
+        XCTAssertEqual(session.changesSelection, ordered[1])
+        session.changesSelection = ordered.last
+        XCTAssertFalse(session.step(by: 1), "nothing after the last")
+        session.changesFilter = "db.ts"
+        XCTAssertEqual(session.orderedChanges.map(\.path), ["src/lib/db.ts"], "the search narrows what the steps reach")
+
+        session.tab = .commits
+        let first = GitCommit(hash: "a1", parents: ["b2"], subject: "One", body: "", author: "Alex Rivera",
+                              email: "alex@example.com", date: now, refs: [])
+        let second = GitCommit(hash: "b2", parents: [], subject: "Two", body: "", author: "Alex Rivera",
+                               email: "alex@example.com", date: now, refs: [])
+        session.log = GitLog(commits: [first, second], exhausted: true, scope: .branch, filter: "", loadedAt: now)
+        session.selectedCommit = "a1"
+        XCTAssertTrue(session.step(by: 1))
+        XCTAssertEqual(session.selectedCommit, "b2")
+        XCTAssertFalse(session.step(by: 1))
+        session.tab = .files
+        XCTAssertFalse(session.step(by: 1))
+    }
+
+    /// Double ⌃D anywhere in files mode: a second press within a second completes the pair; another key in between, or a
+    /// second after more than a second, starts again.
+    func testControlDPairsWithinASecond() {
+        let pair = FilesExitPair(), start = Date(timeIntervalSince1970: 1_760_700_000)
+        XCTAssertFalse(pair.press(at: start))
+        XCTAssertTrue(pair.press(at: start.addingTimeInterval(0.4)))
+        XCTAssertFalse(pair.press(at: start.addingTimeInterval(0.6)), "a completed pair disarms")
+        XCTAssertFalse(pair.press(at: start.addingTimeInterval(1.7)), "too late: it arms again")
+        pair.reset()
+        XCTAssertFalse(pair.press(at: start.addingTimeInterval(1.9)), "another key between them disarms")
+        XCTAssertTrue(pair.press(at: start.addingTimeInterval(2.5)))
+    }
+
+    /// Diffs wrap in a compact split until the wrap button says otherwise, and never by default in a wide one.
+    func testDiffsWrapByDefaultOnlyInACompactSplit() {
+        let session = FilesSession(id: System.uuid())
+        XCTAssertNil(session.diffWrap)
+        XCTAssertTrue(session.wraps(compact: true))
+        XCTAssertFalse(session.wraps(compact: false))
+        session.diffWrap = false
+        XCTAssertFalse(session.wraps(compact: true), "turned off, a narrow diff scrolls")
+        session.diffWrap = true
+        XCTAssertTrue(session.wraps(compact: false))
     }
 
     /// A narrow list keeps the names readable: Size goes first, then Modified (the outline and the column header share
@@ -767,20 +872,15 @@ final class FilesListTests: XCTestCase {
                       "larger text gives up a column sooner")
     }
 
-    /// On one column the pane toggle (⌥⌘P) shows the detail in the list's place and back, and says so.
-    func testThePaneToggleOnOneColumnShowsTheDetailInTheListsPlace() {
+    /// On one view the detail shows in the list's place once a row is chosen; another tab opens on its own list.
+    func testOneViewShowsTheDetailInTheListsPlace() {
         let session = FilesSession(id: System.uuid())
         session.tab = .commits
         XCTAssertTrue(session.paneShown, "beside the list, a git tab's detail shows from the start")
         session.splitNarrow = true
-        XCTAssertFalse(session.paneShown, "on one column the list shows")
-        session.togglePreview()
-        XCTAssertTrue(session.narrowDetail)
+        XCTAssertFalse(session.paneShown, "on one view the list shows")
+        session.narrowDetail = true
         XCTAssertTrue(session.paneShown)
-        session.togglePreview()
-        XCTAssertFalse(session.narrowDetail)
-        XCTAssertFalse(session.previewHidden, "the wide pane's choice is left alone")
-        session.togglePreview()
         session.tab = .files
         XCTAssertFalse(session.narrowDetail, "another tab opens on its own list")
     }
@@ -836,8 +936,9 @@ extension FilesListTests {
         runtime.preferences.filesPreviews = false
         let session = await session(FakeFilesSource.mockupAPI())
         let readme = try row("README.md", in: session.rows(root: root, settingHidden: true))
-        session.togglePreview()
+        session.toggleViews()
         XCTAssertTrue(session.previewOff, "⌥⌘P brings no preview")
+        XCTAssertNil(session.oneView)
         XCTAssertFalse(session.hasPane)
         session.open(readme)
         XCTAssertTrue(session.previewOff, "nor does opening a file")
@@ -849,6 +950,6 @@ extension FilesListTests {
         XCTAssertFalse(session.previewOff, "Review's diffs still show")
         runtime.preferences.filesPreviews = true
         session.tab = .files
-        XCTAssertFalse(session.previewOff, "the preview asked for comes back with the setting")
+        XCTAssertFalse(session.previewOff, "the preview comes back with the setting")
     }
 }

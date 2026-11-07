@@ -247,34 +247,22 @@ extension FilesSession {
         case .pin(let path): pin(path)
         case .preview(let path):
             showPreview(path, entry: row.entry)
-            // Asking for a file's preview is asking to see it: a hidden pane comes back, on one column in the list's
-            // place.
-            setPreviewHidden(false)
+            // Asking for a file's preview is asking to see it: on one view, in the list's place.
             if splitNarrow, hasPane { narrowDetail = true }
         case nil: break
         }
     }
 
-    /// ⌥⌘P and the header's button: on one column, the detail in the list's place instead.
-    func togglePreview() {
-        guard hasPane else { return }
-        if splitNarrow {
-            narrowDetail.toggle()
-            if narrowDetail { setPreviewHidden(false) }
-        } else {
-            setPreviewHidden(!previewOff)
-        }
-    }
-
-    /// Hiding keeps `previewWidth` for when the pane returns. A preview that had the keyboard is unmounted with it, so
-    /// the list takes the keyboard rather than leaving the window with no responder. Showing it counts as asking for it.
-    func setPreviewHidden(_ hidden: Bool) {
-        if !hidden, !previewRequested { previewRequested = true }
-        guard hidden != previewHidden else { return }
-        previewHidden = hidden
-        if hidden, previewFocused {
-            previewFocused = false
-            focusRequest = System.uuid()
+    /// ⌥⌘P and the header's views button: one view at a time, or the list with its detail, whichever is not shown, where
+    /// there is room for both. One view opens on the list. The detail keeps `previewWidth` for when it returns; a preview
+    /// that had the keyboard is unmounted with it, so the list takes the keyboard rather than leaving none.
+    func toggleViews() {
+        guard hasPane, !previewOff, canShowBoth else { return }
+        let one = !splitNarrow
+        oneView = one
+        if one {
+            narrowDetail = false
+            if previewFocused { previewFocused = false; focusRequest = System.uuid() }
         }
     }
 

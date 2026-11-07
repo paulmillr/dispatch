@@ -82,6 +82,13 @@ terminal and L5 the same session in Chat, its steps opened; L6 the theme creator
 into `App/` with the Themes sources it needs (`Shims.swift` stands in for Settings and the custom-scheme store). Shots
 are cropped 80 pixels on each side to the window.
 
+The `narrow` group (`Screens/NarrowPanes.swift`) draws Files, Review and Commits in a split's panes on a 13-inch
+MacBook Air's zoomed window (1470 × 920, sidebar shown: a half is 602 points wide, a quarter 602 × 459), as
+`FilesView.shape` lays them out: N1–N3 a half, the list over the detail; N4 a 4-split, one column (Review on a
+change's diff under "‹ Review", a commit in the log's place under "‹ Commits", the tree), N5 the change's name
+clicked; N6 the strip's mode button held, its menu switching the files tabs. Every Files screen's header leads with
+the tab's name (no Files | Review | Commits there) and the strip's mode button shows the tab's glyph.
+
 The `onboarding` group draws the first-launch setup sheet as it ships (LocalAgentsConsent, OnboardingPages.swift): O1
 Chat, O2 Tabs, O3 Prefs, over a fresh install's window.
 

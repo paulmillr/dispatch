@@ -26,8 +26,6 @@ final class FilesPresentationTests: XCTestCase {
         session.availability = .available(source)
         session.pinnedRoot = root
         session.showHidden = true
-        // The mockup shows the preview, which a tab otherwise opens on a double click.
-        session.previewRequested = true
         for path in [root, root + "/src", root + "/src/lib", root + "/src/routes"] { try await load(source, session, path) }
         session.expanded = [root + "/src", root + "/src/lib", root + "/src/routes"]
         session.selection = [root + "/src/routes/billing.ts"]
@@ -35,14 +33,15 @@ final class FilesPresentationTests: XCTestCase {
         return (session, source)
     }
 
-    /// `inset`: room the floating mode switch takes at the header's trailing end, as `TerminalContentView` leaves it.
-    private func window(_ session: FilesSession, width: CGFloat = 1180, inset: CGFloat = 0) -> NSWindow {
+    /// `inset`: the width of the pane's controls the header ends with, as `TerminalContentView` puts its mode switch there.
+    private func window(_ session: FilesSession, width: CGFloat = 1180, height: CGFloat = 740,
+                        inset: CGFloat = 0) -> NSWindow {
         AppFont.register()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 740), styleMask: [.titled],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: FilesView(session: session)
-            .environment(\.filesHeaderTrailingInset, inset)
+            .environment(\.filesHeaderAccessory, inset > 0 ? AnyView(Color.clear.frame(width: inset, height: 1)) : nil)
             .environment(\.appTypography, AppTypography())
             .preferredColorScheme(.dark))
         window.makeKeyAndOrderFront(nil)
@@ -51,6 +50,16 @@ final class FilesPresentationTests: XCTestCase {
             window.contentView = nil
         }
         return window
+    }
+
+    /// A capture's color at `point` in the window's coordinates.
+    private func color(at point: NSPoint, in snapshot: PresentationTestSupport.Snapshot, window: NSWindow) throws -> String {
+        let root = try XCTUnwrap(window.contentView)
+        let bitmap = snapshot.bitmap, scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
+        let local = root.convert(point, from: nil)
+        let y = root.isFlipped ? local.y : root.bounds.height - local.y
+        let color = try XCTUnwrap(bitmap.colorAt(x: Int(local.x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB))
+        return [color.redComponent, color.greenComponent, color.blueComponent].map { String(Int(($0 * 255).rounded())) }.joined(separator: ",")
     }
 
     /// Waits until OCR reads every text, then returns the snapshot that did.
@@ -127,8 +136,8 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertEqual(outline.selectedRowIndexes, IndexSet(integer: 2), "the selection follows its path through the filter")
     }
 
-    /// With Liquid Glass the bar is the app's other glass chrome: the tabs on a glass track with the shown one's pill,
-    /// the search and pane toggle on one glass pill; the same places as flat: where you are, the tools, the tabs last.
+    /// With Liquid Glass the bar is the app's other glass chrome: the search and pane toggle on one glass pill; the same
+    /// places as flat: the tab's name, where you are, the tools last.
     func testHeaderIsGlassOnEveryTab() async throws {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         let original = LiquidGlassStore.shared.enabled
@@ -141,15 +150,14 @@ final class FilesPresentationTests: XCTestCase {
         for tab in [FilesTab.files, .changes, .commits] {
             session.tab = tab
             try await TestSupport.eventually(diagnostic: "the glass header did not settle on \(tab)") {
-                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
-                let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
+                let title = PresentationTestSupport.accessibilityFrames("files-tab-title", in: window).first
                 let place = PresentationTestSupport.accessibilityFrames(tab == .files ? "files-crumbs" : "files-location",
                                                                         in: window).first
                 let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
-                let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                guard let files, let commits, let place, let search, let pane else { return false }
-                return place.maxX < search.minX && search.maxX <= pane.minX && pane.maxX <= files.minX
-                    && commits.maxX <= 1_180 - 12 + 0.5
+                let pane = PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first
+                guard let title, let place, let search, let pane else { return false }
+                return title.maxX < place.minX && place.maxX < search.minX && search.maxX <= pane.minX
+                    && pane.maxX <= 1_180 - 12 + 0.5
             }
             _ = try await PresentationTestSupport.capture(window, named: "files-header-glass-\(tab)", in: "files-audit")
         }
@@ -209,81 +217,67 @@ final class FilesPresentationTests: XCTestCase {
         ], loadedAt: now)
     }
 
-    func testGitSegmentsAndFooterInsideAndOutsideARepository() async throws {
+    func testHeaderNamesTheTabInsideAndOutsideARepository() async throws {
         let (session, _) = try await mockupSession()
         repository(session)
         let window = window(session)
-        // Files · Review (counting review comments, none here) · Commits; the Files tab's own line shows nothing of git,
-        // the branch included.
-        try await read(["Files", "Review", "Commits", "src"], in: window, named: "files-header-repository")
-        try await says("Commits", "files-segment-commits", in: window)
+        // The tab's name, then where you are; the Files tab's own line shows nothing of git, the branch included. The
+        // files tabs are the strip's mode button's (its menu), not the header's.
+        try await read(["Files", "src"], in: window, named: "files-header-repository")
+        try await says("Files", "files-tab-title", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty)
         try await says("10 items · 1 selected", "files-footer-summary", in: window)
-        // The segments sit right of the crumbs and the search, in the mockup's order.
-        let files = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
-        let review = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-changes", in: window).first)
-        let commits = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first)
+        let title = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-tab-title", in: window).first)
         let crumbs = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).first)
-        XCTAssertLessThan(files.maxX, review.minX)
-        XCTAssertLessThan(review.maxX, commits.minX)
-        XCTAssertLessThan(crumbs.maxX, files.minX)
+        XCTAssertLessThan(title.maxX, crumbs.minX, "the name leads the line")
         // The link follows the folder it belongs to: right after the crumbs, apart from the trailing controls.
         let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
         let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
         XCTAssertLessThan(crumbs.maxX, follow.minX)
         XCTAssertLessThan(follow.maxX, crumbs.maxX + 40, "the link sits beside the path")
         XCTAssertLessThan(follow.maxX, search.minX, "the link is not among the trailing controls")
-        XCTAssertLessThanOrEqual(search.maxX, files.minX)
-        // The same place on every tab: the search and the toggle before the tabs, the tabs at the trailing end.
-        for tab in [FilesTab.files, .changes, .commits] {
+        // The same place on every tab: the name first, the search and the toggle at the trailing end.
+        for (tab, name) in [(FilesTab.files, "Files"), (.changes, "Review"), (.commits, "Commits")] {
             session.tab = tab
+            try await says(name, "files-tab-title", in: window)
             try await TestSupport.eventually(diagnostic: "the header did not settle on \(tab)") {
                 let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
-                let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
-                let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
-                guard let search, let pane, let files, let commits else { return false }
-                return search.maxX <= pane.minX && pane.maxX <= files.minX && commits.maxX <= 1_180 - 12 + 0.5
+                let pane = PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first
+                let title = PresentationTestSupport.accessibilityFrames("files-tab-title", in: window).first
+                guard let search, let pane, let title else { return false }
+                return title.maxX < search.minX && search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5
             }
         }
         session.tab = .files
 
-        // A detached HEAD renames no tab.
-        session.status?.branch = nil
-        try await says("Commits", "files-segment-commits", in: window)
-
-        // git missing on the host: no git segments, and the Files tab says nothing of it.
+        // git missing on the host: the Files tab says nothing of it.
         session.git = .unavailable("git is not installed on homelab")
-        try await TestSupport.eventually(diagnostic: "the git segments still show") {
-            PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
-        }
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-footer-git", in: window).isEmpty)
         session.git = .repository(GitRepository(root: root))
 
-        // Outside a repository (the shell cd'd out of it): Files alone.
+        // Outside a repository (the shell cd'd out of it): Files, and nothing of git.
         session.git = .none
-        try await TestSupport.eventually(diagnostic: "the git segments still show") {
-            PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
-        }
-        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).isEmpty)
+        try await says("Files", "files-tab-title", in: window)
         let snapshot = try await read(["Files", "items"], in: window, named: "files-header-none")
-        XCTAssertFalse(try snapshot.reads(["main"]), "no git segment outside a repository")
+        XCTAssertFalse(try snapshot.reads(["main"]), "nothing of git outside a repository")
         XCTAssertFalse(try snapshot.reads(["not a repository"]), "the Files tab says nothing of git")
     }
 
-    /// Under 600 pt the preview has no column: opening a file (⏎, a double click) shows it in the list's place under a
-    /// bar back to the list, as the pane toggle does; the narrow list gives up Size, then Modified.
+    /// Narrow and short, the preview has no room beside or under the list: opening a file (⏎, a double click) shows it
+    /// in the list's place, the header's name turned into a button back to the list, as ⌥⌘P does (no pane toggle
+    /// shows there); the narrow list gives up Size, then Modified.
     func testANarrowViewShowsTheOpenedFileInTheListsPlace() async throws {
         let (session, _) = try await mockupSession()
-        session.previewRequested = false
-        let window = window(session, width: 360)
+        let window = window(session, width: 360, height: 480)
         let outline = try await outlineView(in: window)
         try await TestSupport.eventually { session.splitNarrow }
         func columns() -> [String] { outline.tableColumns.filter { !$0.isHidden }.map(\.title) }
-        try await TestSupport.eventually(diagnostic: "columns \(columns())") { columns() == ["Name", "Modified"] }
-        window.setContentSize(NSSize(width: 300, height: 740))
+        // Size goes first (FilesListTests has the widths; a scroller here takes some of them).
+        try await TestSupport.eventually(diagnostic: "columns \(columns())") { !columns().contains("Size") }
+        window.setContentSize(NSSize(width: 300, height: 480))
         try await TestSupport.eventually(diagnostic: "columns \(columns())") { columns() == ["Name"] }
-        window.setContentSize(NSSize(width: 360, height: 740))
+        window.setContentSize(NSSize(width: 360, height: 480))
 
         let path = root + "/src/routes/billing.ts"
         let entry = try XCTUnwrap(session.listings[root + "/src/routes"]?.entries.first { $0.name == "billing.ts" })
@@ -291,44 +285,112 @@ final class FilesPresentationTests: XCTestCase {
                               modified: "", size: ""))
         XCTAssertTrue(session.narrowDetail)
         let back = try await frame("files-split-back", in: window)
+        let header = try await frame("file-preview-header", in: window)
         let preview = try await frame("file-preview", in: window)
-        XCTAssertGreaterThan(back.minY, preview.maxY - 1, "the bar back sits over the preview")
+        // One row: the preview's header leads with the way back; the files header (its search and the pane's toggle)
+        // gives way to it.
+        XCTAssertTrue(header.contains(NSPoint(x: back.midX, y: back.midY)), "the way back leads the preview's header")
+        XCTAssertLessThan(back.minX, 20)
+        // The header's accessibility frame is its contents' (inside the row's padding), not the row: no room for
+        // another row above it.
+        XCTAssertLessThan(preview.maxY - header.maxY, header.height, "the header is the pane's top row")
         XCTAssertLessThan(preview.minX, 2, "the preview takes the list's place")
-        try await says("Hide preview", "files-preview-toggle", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-header", in: window).isEmpty, "no second row")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).isEmpty)
+        try await says("billing.ts", "file-preview-name", in: window)
+        let name = try await frame("file-preview-name", in: window)
+        let location = PresentationTestSupport.accessibilityFrames("file-preview-location", in: window).first
+        let drilled = try await PresentationTestSupport.capture(window, named: "files-one-column-preview", in: "files-audit")
         // The test VM's desktop sometimes drops a synthesized click; another is harmless.
-        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the bar back did not take the click") {
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the way back did not take the click") {
             if !session.narrowDetail { return true }
             try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: back.midX, y: back.midY))
             return !session.narrowDetail
         }
         try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty }
-        try await says("Show preview", "files-preview-toggle", in: window)
-        session.togglePreview()
-        _ = try await frame("files-split-back", in: window)
+        try await says("Files", "files-tab-title", in: window)
+        // The bar inside a file is the files header's: its color and its height.
+        let listed = try await PresentationTestSupport.capture(window, named: "files-one-column-list", in: "files-audit")
+        let barPoint = NSPoint(x: 355, y: 480 - 4)
+        XCTAssertEqual(try color(at: barPoint, in: drilled, window: window), try color(at: barPoint, in: listed, window: window),
+                       "the bar's color inside a file and on the list")
+        let bar = try await frame("files-header", in: window)
+        XCTAssertEqual(header.height, bar.height, accuracy: 6, "the bar's height inside a file and on the list")
+        // The mode's label is as wide drilled or not: the crumbs start where the bar's first word did (the file's
+        // folder while it has room, else its name).
+        let crumbs = try await frame("files-crumbs", in: window)
+        XCTAssertEqual(crumbs.minX, (location ?? name).minX, accuracy: 1, "what follows the tab's name starts at one place")
+        // 480 pt tall has room for both: the views button shows (unlit) and stacks the preview under the list.
+        try await says("Show list and preview", "files-views-toggle", in: window)
+        let views = try await frame("files-views-toggle", in: window)
+        try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: views.midX, y: views.midY))
+        try await TestSupport.eventually { session.oneView == false && !session.splitNarrow }
+        try await says("Show one view", "files-views-toggle", in: window)
+        _ = try await frame("file-preview", in: window)
+        _ = try await PresentationTestSupport.capture(window, named: "files-one-column-both", in: "files-audit")
     }
 
-    func testNarrowHeaderFitsTheGitSegments() async throws {
+    /// One column inside a file, where the list and its path are out of sight: the bar names the file's folder before
+    /// its name while there is room, and drops it first when there is not.
+    func testOneColumnFileBarNamesItsFolderWhileThereIsRoom() async throws {
+        let (session, _) = try await mockupSession()
+        let window = window(session, width: 700, height: 480)
+        _ = try await outlineView(in: window)
+        try await TestSupport.eventually { session.splitNarrow }
+        let path = root + "/src/routes/billing.ts"
+        let entry = try XCTUnwrap(session.listings[root + "/src/routes"]?.entries.first { $0.name == "billing.ts" })
+        session.open(FilesRow(id: path, parent: root + "/src/routes", depth: 2, kind: .entry, entry: entry, title: entry.name,
+                              modified: "", size: ""))
+        try await says("src/routes /", "file-preview-location", in: window)
+        let location = try await frame("file-preview-location", in: window)
+        let name = try await frame("file-preview-name", in: window)
+        XCTAssertLessThan(location.maxX, name.minX, "the folder leads the name")
+        _ = try await PresentationTestSupport.capture(window, named: "files-one-column-location", in: "files-audit")
+        window.setContentSize(NSSize(width: 300, height: 480))
+        // Drawn or not, `ViewThatFits` keeps the unchosen folder's element: what shows is read off the capture.
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the folder stayed at 300 pt") {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let text = try await PresentationTestSupport.capture(window, named: "files-one-column-location-300", in: "files-audit").text()
+            return text.contains("billing.ts") && !text.contains("routes")
+        }
+        try await says("billing.ts", "file-preview-name", in: window)
+    }
+
+    /// Narrow and tall (half a laptop's window), the preview goes under the list at the view's width.
+    func testANarrowTallViewStacksThePreviewUnderTheList() async throws {
+        let (session, _) = try await mockupSession()
+        let window = window(session, width: 602, height: 840)
+        let outline = try await outlineView(in: window)
+        try await TestSupport.eventually { !session.splitNarrow }
+        let preview = try await frame("file-preview", in: window)
+        let list = outline.enclosingScrollView.map { $0.convert($0.bounds, to: nil) } ?? .zero
+        XCTAssertLessThanOrEqual(preview.maxY, list.minY + 1, "the preview sits under the list")
+        XCTAssertLessThan(preview.minX, 2)
+        XCTAssertGreaterThan(preview.width, 600, "at the view's width")
+        XCTAssertNil(divider(in: window), "no divider to drag between rows")
+        _ = try await PresentationTestSupport.capture(window, named: "files-stacked", in: "files-audit")
+    }
+
+    func testNarrowHeaderKeepsItsControlsInside() async throws {
         let (session, _) = try await mockupSession()
         repository(session)
         let inset: CGFloat = 70
         let window = window(session, width: 1180, inset: inset)
-        try await says("Commits", "files-segment-commits", in: window)
+        try await says("Files", "files-tab-title", in: window)
         for width: CGFloat in [600, 480] {
             window.setContentSize(NSSize(width: width, height: 740))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
-                let toggle = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
-                return toggle.flatMap { toggle in files.map { toggle.maxX <= $0.minX } } ?? false
+                let toggle = PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first
+                return toggle.map { $0.maxX <= width - 12 - inset + 0.5 } ?? false
             }
-            // The crumbs fold, then clip to nothing (their element keeps its laid-out frame); the link after them never
-            // clips and leads the line.
+            // The crumbs fold, then clip to nothing (their element keeps its laid-out frame); the name and the link
+            // after the crumbs never clip.
+            let title = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-tab-title", in: window).first)
             let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
-            let commits = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first)
-            XCTAssertGreaterThanOrEqual(follow.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
-            XCTAssertLessThanOrEqual(commits.maxX, width - 12 - inset + 0.5, "the tabs stay out of the switch's room at \(width) pt")
-            // Narrowed to glyphs, the segments keep their names for VoiceOver.
-            try await says("Commits", "files-segment-commits", in: window)
+            XCTAssertGreaterThanOrEqual(title.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
+            XCTAssertLessThan(title.maxX, follow.minX, "at \(width) pt")
         }
         _ = try await PresentationTestSupport.capture(window, named: "files-header-repository-narrow", in: "files-audit")
     }
@@ -539,44 +601,46 @@ final class FilesPresentationTests: XCTestCase {
         try await dividerSits(at: 620.5, in: window)
     }
 
-    func testHiddenPreviewLeavesTheListTheViewAndLoadsNothing() async throws {
+    /// One view in a wide window: the list spans the view, the preview is not mounted and a selection loads nothing
+    /// until both show again.
+    func testOneViewLeavesTheListTheViewAndLoadsNothing() async throws {
         let (session, source) = try await mockupSession()
         let billing = root + "/src/routes/billing.ts", health = root + "/src/routes/health.ts"
         session.showPreview(billing, entry: nil)
         let window = window(session)
         let outline = try await outlineView(in: window)
         try await dividerSits(at: 620.5, in: window)
-        try await says("Hide preview", "files-preview-toggle", in: window)
+        try await says("Show one view", "files-views-toggle", in: window)
         try await TestSupport.eventually { source.calls.contains("read \(billing)") }
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty)
 
-        // The header's button hides the pane: no divider, no preview, the list spans the view.
-        let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
+        // The header's views button: one view, no divider, no preview, the list spans the view.
+        let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
         try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: toggle.midX, y: toggle.midY))
-        try await TestSupport.eventually { session.previewHidden }
-        try await says("Show preview", "files-preview-toggle", in: window)
+        try await TestSupport.eventually { session.oneView == true }
+        try await says("Show list and preview", "files-views-toggle", in: window)
         try await TestSupport.eventually(diagnostic: "the divider or the preview is still mounted") {
             self.divider(in: window) == nil && PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty
         }
         XCTAssertEqual(listWidth(outline), 1_180, accuracy: 1)
         // The header keeps the toggle clear of the search and inside the view.
-        let shown = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
+        let shown = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
         let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
         XCTAssertLessThanOrEqual(search.maxX, shown.minX)
         XCTAssertLessThanOrEqual(shown.maxX, 1_180 - 12 + 0.5)
 
-        // A selection while hidden sets the preview and reads nothing until the pane shows.
+        // A selection on one view sets the preview and reads nothing until both show.
         let rows = session.rows(root: root, settingHidden: true)
         let row = try XCTUnwrap(rows.first { $0.id == health })
         session.selectionChanged(to: [row], anchor: row)
         XCTAssertEqual(session.preview?.path, health)
         try await read(["billing.ts", "health.ts", "Size"], in: window, named: "files-preview-hidden")
-        XCTAssertFalse(source.calls.contains("read \(health)"), "a hidden preview loads nothing: \(source.calls)")
+        XCTAssertFalse(source.calls.contains("read \(health)"), "one view loads no preview: \(source.calls)")
 
-        let again = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
+        let again = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
         try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: again.midX, y: again.midY))
-        try await TestSupport.eventually { !session.previewHidden }
-        try await says("Hide preview", "files-preview-toggle", in: window)
+        try await TestSupport.eventually { session.oneView == false }
+        try await says("Show one view", "files-views-toggle", in: window)
         try await dividerSits(at: 620.5, in: window)
         try await TestSupport.eventually { source.calls.contains("read \(health)") }
         try await read(["health", "ok"], in: window, named: "files-preview-shown-again")
@@ -584,33 +648,30 @@ final class FilesPresentationTests: XCTestCase {
 
     func testNarrowHeaderKeepsThePreviewToggleClearOfTheSwitch() async throws {
         let (session, _) = try await mockupSession()
-        // 600 pt is the narrowest view with a preview; the switch's room is about what a floating switch takes.
+        // 900 pt is the narrowest view with a preview beside the list; the switch's room is about what a floating
+        // switch takes.
         let inset: CGFloat = 70
-        let window = window(session, width: 600, inset: inset)
-        try await dividerSits(at: 320.5, in: window)
-        try await says("Hide preview", "files-preview-toggle", in: window)
-        let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
+        let window = window(session, width: 900, inset: inset)
+        try await dividerSits(at: 450.5, in: window)
+        try await says("Show one view", "files-views-toggle", in: window)
+        let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
         let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
         let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
         XCTAssertLessThan(follow.maxX, search.minX)
-        let tabs = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
         XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
-        XCTAssertLessThanOrEqual(toggle.maxX, tabs.minX, "the tabs come last")
-        XCTAssertLessThanOrEqual(tabs.maxX, 600 - 12 - inset + 0.5, "the tabs stay out of the switch's room")
+        XCTAssertLessThanOrEqual(toggle.maxX, 900 - 12 - inset + 0.5, "the toggle stays out of the switch's room")
         try await read(["Files", "Name"], in: window, named: "files-header-narrow")
-        // Under 600 pt the preview gives way and the crumbs, then the filter, give the buttons their room.
+        // Narrower the preview goes under the list, and the crumbs, then the filter, give the buttons their room.
         for width: CGFloat in [560, 480] {
             window.setContentSize(NSSize(width: width, height: 740))
             try await TestSupport.eventually { self.divider(in: window) == nil }
-            let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
+            let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
             let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
-            let segment = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
             XCTAssertLessThanOrEqual(search.maxX, toggle.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(toggle.maxX, segment.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(segment.maxX, width - 12 - inset + 0.5, "at \(width) pt")
+            XCTAssertLessThanOrEqual(toggle.maxX, width - 12 - inset + 0.5, "at \(width) pt")
             XCTAssertGreaterThanOrEqual(search.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
         }
         try await read(["Files"], in: window, named: "files-header-narrowest")
-        XCTAssertFalse(session.previewHidden, "a collapsed preview is not a hidden one")
+        XCTAssertNil(session.oneView, "a stacked preview is the layout's, not a choice")
     }
 }

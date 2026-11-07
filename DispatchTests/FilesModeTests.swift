@@ -500,7 +500,14 @@ final class FilesModeTests: XCTestCase {
 
         let terminalFiles = State(mode: .terminal, chat: false, files: true, host: nil)
         XCTAssertEqual(terminalFiles.glyph, "folder"); XCTAssertFalse(terminalFiles.lit)
-        XCTAssertEqual(terminalFiles.label, "Show Files"); XCTAssertEqual(terminalFiles.help(chatHint: ""), "Show files · ⇧⌘F")
+        XCTAssertEqual(terminalFiles.label, "Show Files")
+        // No agent: a click opens the menu of the files tabs rather than guessing one.
+        XCTAssertTrue(terminalFiles.opensMenu)
+        XCTAssertEqual(terminalFiles.help(chatHint: ""), "Files, Review or Commits · ⇧⌘F")
+        let shellFiles = State(mode: .files, chat: false, files: true, host: nil, tab: .changes)
+        XCTAssertTrue(shellFiles.opensMenu, "the menu has the terminal too")
+        XCTAssertEqual(shellFiles.help(chatHint: ""), "Terminal, Files, Review or Commits · ⇧⌘F")
+        XCTAssertFalse(terminalChat.opensMenu, "an agent's tab clicks into chat")
 
         // Chat: the click returns to the terminal even where files could show (files is a hold, a right-click or ⇧⌘F).
         let chat = State(mode: .chat, chat: true, files: true, host: nil)
@@ -513,6 +520,22 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(files.glyph, "folder"); XCTAssertTrue(files.lit)
         XCTAssertEqual(files.label, "Show Terminal"); XCTAssertEqual(files.value, "Files selected")
         XCTAssertEqual(files.help(chatHint: ""), "Show terminal · ⇧⌘F")
+        // In files mode the button names the files tab shown (the header no longer does); in the terminal, where a
+        // click goes.
+        let review = State(mode: .files, chat: true, files: true, host: nil, tab: .changes)
+        XCTAssertEqual(review.glyph, "pencil.and.list.clipboard"); XCTAssertEqual(review.value, "Review selected")
+        let commits = State(mode: .files, chat: false, files: true, host: nil, tab: .commits)
+        XCTAssertEqual(commits.glyph, "clock.arrow.circlepath"); XCTAssertEqual(commits.value, "Commits selected")
+        XCTAssertEqual(State(mode: .terminal, chat: false, files: true, host: nil, tab: .commits).glyph, "folder")
+        // The button lays out every glyph it can show (one width, a cross-fade): each state's is among them.
+        for mode in [TabMode.terminal, .chat, .files] {
+            for tab in [FilesTab.files, .changes, .commits] {
+                for chat in [false, true] {
+                    let glyph = State(mode: mode, chat: chat, files: true, host: nil, tab: tab).glyph
+                    XCTAssertTrue(State.glyphs.contains(glyph), "\(glyph) is not laid out")
+                }
+            }
+        }
 
         // A plain SSH login with an agent: chat, then back to the terminal.
         let plainChat = State(mode: .chat, chat: true, files: false, host: "nightly")
@@ -559,19 +582,19 @@ final class FilesModeTests: XCTestCase {
 
         // A tab's own width wins over the last one chosen elsewhere.
         let second = files.session(for: System.uuid())
-        second.setPreviewHidden(true)
+        second.oneView = true
         files.choosePreviewWidth(300, for: second)
         XCTAssertEqual(files.previewPreference(for: first), 420, "other tabs keep theirs")
         XCTAssertEqual(files.previewPreference(for: earlier), 300)
-        XCTAssertTrue(second.previewHidden, "choosing a width does not show a hidden pane")
+        XCTAssertEqual(second.oneView, true, "choosing a width does not leave one view")
 
         // A double-click on the divider: the default again, for that tab and the tabs without a width.
         files.choosePreviewWidth(nil, for: second)
         XCTAssertNil(files.previewPreference(for: second))
         XCTAssertNil(files.previewPreference(for: earlier))
         XCTAssertEqual(files.previewPreference(for: first), 420)
-        XCTAssertFalse(files.session(for: System.uuid()).previewHidden, "hiding is per tab")
-        XCTAssertTrue(files.session(for: System.uuid()).previewOff, "and each tab's Files waits for a file to be opened")
+        XCTAssertNil(files.session(for: System.uuid()).oneView, "the views choice is per tab")
+        XCTAssertFalse(files.session(for: System.uuid()).previewOff, "and each tab's Files starts with its pane")
     }
 
     /// Restore of a detached tab brings back what it showed: Files on Commits with its commit and pinned folder, and the

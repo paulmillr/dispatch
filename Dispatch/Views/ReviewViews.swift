@@ -272,16 +272,25 @@ struct ReviewHeaderButton: View {
                 if let copied = reviews.copied[scope] {
                     note(copied, sentTo: reviews.sentTo[scope], scope: scope)
                 } else if !reviews.review(scope).isEmpty {
+                    // The comments' count rides on the button: no Review segment counts them any more.
+                    let count = reviews.review(scope).comments.count
                     Button { finishing = true } label: {
                         ViewThatFits(in: .horizontal) {
-                            Label("Create review", systemImage: "text.bubble.fill")
-                            Image(systemName: "text.bubble.fill")
+                            HStack(spacing: 6) {
+                                Label("Create review", systemImage: "text.bubble.fill")
+                                countPill(count)
+                            }
+                            HStack(spacing: 5) {
+                                Image(systemName: "text.bubble.fill")
+                                countPill(count)
+                            }
                         }
                     }
                     .buttonStyle(ReviewCreateButtonStyle())
                     .keyboardShortcut(focused ? KeyboardShortcut(.return, modifiers: [.command, .shift]) : nil)
                     .help("Send or copy the comments as one review for an agent · ⇧⌘⏎")
                     .accessibilityLabel("Create review")
+                    .accessibilityValue(ReviewText.count(count))
                     .accessibilityIdentifier("review-create")
                     .popover(isPresented: $finishing, arrowEdge: .bottom) {
                         ReviewFinish(session: session, scope: scope, status: status, repository: repository) {
@@ -304,6 +313,17 @@ struct ReviewHeaderButton: View {
                       + "They can be written once its connection is.")
                 .accessibilityIdentifier("review-unidentified")
         }
+    }
+
+    /// How many comments the review holds, in the button's blue on white.
+    private func countPill(_ count: Int) -> some View {
+        Text(verbatim: FilesFormatting.count(count))
+            .font(typography, .caption)
+            .foregroundStyle(theme.blue)
+            .monospacedDigit()
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Capsule().fill(Color.white.opacity(0.92)))
+            .accessibilityIdentifier("review-create-count")
     }
 
     private func note(_ copied: Review, sentTo agent: String?, scope: String) -> some View {

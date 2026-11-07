@@ -524,11 +524,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let files = TerminalRuntime.shared.files
         return files.isShowing(id) || files.canShowFiles(id)
     }
-    /// ⌥⌘P: the files preview beside the list, hidden or shown again.
+    /// ⌥⌘P: files one view at a time, or the list with its detail (`FilesSession.toggleViews`).
     @objc func togglePreview() {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID,
               let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
-        files.togglePreview()
+        files.toggleViews()
     }
     /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Review or Commits while files shows.
     @objc func showFilesTab(_ sender: NSMenuItem) {
@@ -666,8 +666,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
-            item.title = files?.paneShown == false ? "Show Preview" : "Hide Preview"
+            item.title = files?.splitNarrow == true ? "Show List and Detail" : "Show One View"
             return NSApp.keyWindow === window && files?.visible == true && files?.hasPane == true
+                && files?.previewOff == false && files?.canShowBoth == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1
         case #selector(moveTabToNextPane):

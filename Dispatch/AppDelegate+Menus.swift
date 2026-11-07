@@ -134,7 +134,7 @@ extension AppDelegate {
         add(view, "Commits Tab", #selector(showFilesTab(_:)), "3", [.control, .command], target: self, tag: 2, hidden: true)
         // Its title follows the pane (validateMenuItem); ⌥⌘P reaches it only while files shows. ⇧⌘P is left alone: the
         // space search's test holds the menu to ⌘P only.
-        add(view, "Hide Preview", #selector(togglePreview), "P", [.command, .option], target: self)
+        add(view, "Show One View", #selector(togglePreview), "P", [.command, .option], target: self)
         add(view, "Split Right", #selector(splitColumns), "d", target: self)
         add(view, "Split Down", #selector(splitRows), "D", [.command, .shift], target: self)
         add(view, "Move Tab to Next Pane", #selector(moveTabToNextPane), target: self)

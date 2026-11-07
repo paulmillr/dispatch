@@ -49,6 +49,9 @@ struct StripModel {
     var titleRow = false
     /// Other spaces to switch to (Workspace.lastingSpaceCount > 1): a local strip leading the window shows its mark.
     var otherSpaces = false
+    /// Proposed (Screens/NarrowPanes.swift): the mode button's glyph in place of ChatModeSwitch's, naming the files tab
+    /// that shows (Review, Commits).
+    var modeSymbol: String?
 
     var isSplit: Bool { split ?? (paneBadge != nil) }
     /// The host mark (TabBar.mark): only where the strip leads the window here.
@@ -209,7 +212,7 @@ struct TabStrip: View {
     private var modeButton: some View {
         let chat = model.mode == .chat || (model.mode == .terminal && model.agent)
         let lit = model.mode != .terminal
-        return Image(systemName: chat ? "text.bubble" : "folder").font(.system(size: 13.5))
+        return Image(systemName: model.modeSymbol ?? (chat ? "text.bubble" : "folder")).font(.system(size: 13.5))
             .foregroundStyle(lit ? ChatColors.current.accent : ChatColors.current.muted)
             .padding(.horizontal, 7).frame(minHeight: t.expanded(22))
     }
@@ -301,16 +304,21 @@ struct Split<First: View, Second: View>: View {
         GeometryReader { geometry in
             let divider = Color(white: 0.13)
             if axis == .horizontal {
+                // Each pane exactly its share: content taller than a pane is clipped, not pushed into its neighbour.
+                let first = ((geometry.size.width - 1) * fraction).rounded()
                 HStack(spacing: 0) {
-                    first.frame(width: (geometry.size.width - 1) * fraction)
+                    self.first.frame(width: first, height: geometry.size.height, alignment: .topLeading).clipped()
                     divider.frame(width: 1)
-                    second
+                    second.frame(width: geometry.size.width - 1 - first, height: geometry.size.height, alignment: .topLeading)
+                        .clipped()
                 }
             } else {
+                let first = ((geometry.size.height - 1) * fraction).rounded()
                 VStack(spacing: 0) {
-                    first.frame(height: (geometry.size.height - 1) * fraction)
+                    self.first.frame(width: geometry.size.width, height: first, alignment: .topLeading).clipped()
                     divider.frame(height: 1)
-                    second
+                    second.frame(width: geometry.size.width, height: geometry.size.height - 1 - first, alignment: .topLeading)
+                        .clipped()
                 }
             }
         }
