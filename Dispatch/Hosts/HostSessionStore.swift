@@ -42,6 +42,9 @@ struct HostSessionStore {
         var selectedSpace: UUID?
         var contexts: [UUID: TerminalHostContext]
         var connections: [Connection]
+        /// What each tab showed (Files with its tab, root, selection and commit; chat; the terminal): given back as the
+        /// tab comes back (`FilesCoordinator.retainLaunched`). Absent in files saved before it.
+        var views: [UUID: RetainedTabView]? = nil
     }
 
     /// `history`: also replace the saved output of plain local and SSH tabs (as the app quits).
@@ -126,9 +129,18 @@ struct HostSessionStore {
                 }
             }
         }
+        // Every tab's view, local multiplexers' too: their spaces come back from their servers with the same tab ids.
+        var views: [UUID: RetainedTabView] = [:]
+        for id in workspace.allTabIDs {
+            // A tab still offline since the last launch keeps the view that launch gave it.
+            let pending = runtime.files.launchedViews.contains(id) ? runtime.files.retainedViews[id] : nil
+            if let view = pending ?? runtime.files.currentView(id),
+               view.mode != .terminal || view.manualViewChoice || view.files != nil { views[id] = view }
+        }
         let snapshot = Snapshot(hosts: workspace.liveHosts.filter { $0.id != .local }, spaces: spaces,
                                 selectedSpace: workspace.selectedSpace,
-                                contexts: workspace.hosts.terminals.filter { surfaces.contains($0.key) }, connections: connections)
+                                contexts: workspace.hosts.terminals.filter { surfaces.contains($0.key) }, connections: connections,
+                                views: views.isEmpty ? nil : views)
         try PrivateFile.write(JSONEncoder().encode(snapshot), to: url)
         if includeHistory { try terminalHistory.save(history) }
     }
@@ -148,6 +160,7 @@ struct HostSessionStore {
               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return false }
         // Remote backend references stay parked until their authenticated helper reopens them.
         let spaces = snapshot.spaces.filter { !$0.tabs.isEmpty && !$0.panes.isEmpty }
+        runtime.files.retainLaunched(snapshot.views ?? [:])
         guard !spaces.isEmpty else { return false }
         workspace.hosts.restore(snapshot.hosts)
         workspace.updateLayout { $0.spaces += spaces }
@@ -162,6 +175,10 @@ struct HostSessionStore {
             runtime.hosts.restore(recipe)
         }
         workspace.updateLayout { $0.selectedSpace = spaces.first { $0.id == snapshot.selectedSpace }?.id ?? spaces.first?.id }
+        // Plain local tabs show their view now; a remote tab's waits for its host, a local multiplexer's for its server.
+        let local = workspace.spaces.filter { $0.remote == nil && !$0.structured }.flatMap(\.tabs)
+            .filter { $0.machine == .local && workspace.hosts.terminals[$0.id] == nil }.map(\.id)
+        runtime.files.restoreViews(present: Set(local))
         return true
     }
 }

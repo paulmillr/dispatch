@@ -625,7 +625,8 @@ export DISPATCH_TEST_SKIP_PREFLIGHT="$4"
 export DISPATCH_TEST_SHARD="$5"
 export DISPATCH_TEST_SHARD_PRIMARY="$6"
 export DISPATCH_TEST_PREBUILT="$7"
-shift 7
+export DISPATCH_TEST_SSH_PASSWORD="$8"
+shift 8
 cd /Users/admin/dispatch-tests/workspace
 exec caffeinate -di /bin/bash test/vm-guest.sh "$@"
 ''', "1" if linux else "0", "1" if recheck else "0",
@@ -633,6 +634,8 @@ exec caffeinate -di /bin/bash test/vm-guest.sh "$@"
                           # The primary shard runs the shared portable checks once.
                           os.environ.get("DISPATCH_TEST_SKIP_PREFLIGHT", "0") if primary else "1",
                           ",".join(shard_classes or []), "1" if primary else "0", "0" if guest_build else "1",
+                          # The guest account's password (docs/vm_testing.md: admin), for the password login test.
+                          os.environ.get("DISPATCH_VM_PASSWORD", "admin"),
                           *arguments, stdout=log, stderr=subprocess.STDOUT)
                 result = 0
             except subprocess.CalledProcessError as error:

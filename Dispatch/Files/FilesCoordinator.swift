@@ -20,6 +20,8 @@ enum TabMode: String, Hashable, Sendable {
     /// Closed tabs' views, oldest first, for Restore (FilesCoordinator+Restore.swift).
     @ObservationIgnored var retainedViews: [UUID: RetainedTabView] = [:]
     @ObservationIgnored var retainedOrder: [UUID] = []
+    /// Retained views a relaunch restored (`retainLaunched`): kept past `RetainedTabView.limit` until their tabs show.
+    @ObservationIgnored var launchedViews: Set<UUID> = []
 
     init(chat: @escaping @MainActor () -> ChatCoordinator?) {
         chatCoordinator = chat

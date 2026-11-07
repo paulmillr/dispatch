@@ -243,7 +243,9 @@ extension FilesCoordinator {
     }
 
     private func apply(_ state: GitState, _ session: FilesSession, _ watch: Watch) {
-        if session.git.repository != state.repository { reset(session, watch) }
+        // Another repository than the one shown (or none now) drops what was read from it. A first answer replaces
+        // nothing: a restored view's commit and change (`FilesCoordinator.restoreView`) are this repository's.
+        if let shown = session.git.repository, shown != state.repository { reset(session, watch) }
         if session.git != state { session.git = state }
     }
 

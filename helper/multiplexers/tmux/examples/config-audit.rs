@@ -299,6 +299,44 @@ fn main() {
                 println!("LATER_NODE={:?}|{}", node.kind, node.key.rsplit(':').next().unwrap_or(""));
             }
         }
+        // Space names (affinity.rs `display`): the session's own space takes a chosen session name, read live;
+        // another space of the session follows its folder, as does the own one under tmux's numeric default.
+        "names" => {
+            let tmux = |extra: &[&str]| {
+                let output = Command::new(&args[1])
+                    .args(["-S", &args[2]])
+                    .args(extra)
+                    .env_remove("TMUX")
+                    .output()
+                    .unwrap();
+                String::from_utf8_lossy(&output.stdout).trim().to_owned()
+            };
+            let session = tmux(&["display-message", "-p", "-t", "audit:", "#{session_id}"]);
+            let own = |nodes: &[Node]| {
+                nodes
+                    .iter()
+                    .find(|n| n.kind == Kind::Workspace && n.key.ends_with(&format!(":{session}")))
+                    .map(|n| n.name.clone())
+            };
+            println!("NAME_OPEN={:?}", own(&audit.ui.nodes));
+            tmux(&["rename-session", "-t", "audit", "renamed"]);
+            audit.settle(Duration::from_secs(3), |nodes| own(nodes).as_deref() == Some("renamed"));
+            println!("NAME_RENAMED={:?}", own(&audit.ui.nodes));
+            let window = tmux(&["new-window", "-d", "-t", "renamed:", "-P", "-F", "#{window_id}"]);
+            let value = r#"{"version":1,"group":"0F0F0F0F-0000-4000-8000-000000000001","name":"extra","order":0,"usesDirectoryName":true}"#;
+            tmux(&["set-option", "-w", "-t", &window, "@dispatch-window", value]);
+            let extra = |nodes: &[Node]| {
+                nodes
+                    .iter()
+                    .find(|n| n.kind == Kind::Workspace && n.key.contains(":group:"))
+                    .map(|n| n.name.clone())
+            };
+            audit.settle(Duration::from_secs(3), |nodes| extra(nodes).is_some());
+            println!("NAME_EXTRA={:?}", extra(&audit.ui.nodes));
+            tmux(&["rename-session", "-t", "renamed", "42"]);
+            audit.settle(Duration::from_secs(3), |nodes| own(nodes).as_deref() != Some("renamed"));
+            println!("NAME_NUMBERED={:?}", own(&audit.ui.nodes));
+        }
         "command" => println!(
             "COMMAND={:?}",
             audit.call(|mux, io, done| mux.command(io, terminal, &args[4], done))

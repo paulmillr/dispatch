@@ -200,11 +200,18 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
         XCTAssertEqual(app.workspace.hosts.state(host), .disconnected)
         XCTAssertEqual(app.workspace.activeTab?.id, tab.id)
+        let spaces = app.workspace.spaces.map(\.id), selected = app.workspace.selectedSpace
+        var added = false
         app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: tab.id)
         try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "Restored tmux reconnect") {
-            app.runtime.hosts.reconnect.state(for: tab.id) == nil && app.attached
+            // The login runs in a private terminal: no space shows for it, not even for a moment.
+            if app.workspace.spaces.contains(where: { !spaces.contains($0.id) }) { added = true }
+            return app.runtime.hosts.reconnect.state(for: tab.id) == nil && app.attached
         }
         try await app.ready()
+        XCTAssertFalse(added, "reconnect adds no space")
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
+        XCTAssertEqual(app.workspace.selectedSpace, selected)
         XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}"]), processes)
         XCTAssertEqual(app.workspace.activeTab?.id, tab.id)
     }
@@ -877,8 +884,8 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         }
     }
 
-    func testClosingSpaceAfterFailedRelaunchRestoreDetachesItWithoutHiddenView() async throws {
-        let (app, server, missing, retained) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+    func testClosingSpaceWithAGoneTabDetachesItWithoutHiddenView() async throws {
+        let (app, server, missing, retained) = try await relaunchWithMissingPane(); defer { app.close(); server.stop() }
         let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
         let space = try XCTUnwrap(app.workspace.spaces.first { $0.tabs.contains { $0.id == retained.id } })
         app.controller.closeSpace(space.id)
@@ -889,32 +896,24 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         try await newWindowAddsNoSpace(app)
     }
 
-    func testClosingMissingTabAfterFailedRelaunchRestoreKillsNothingAndRestoresTheRest() async throws {
-        let (app, server, missing, retained) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+    /// Closing a gone tab (its pane was closed on the server while the app was away) closes it here only: its old id
+    /// must not reach the server, where it could name a live pane now.
+    func testClosingAGoneTabKillsNothing() async throws {
+        let (app, server, missing, retained) = try await relaunchWithMissingPane(); defer { app.close(); server.stop() }
         let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
         app.controller.closeTab(missing.id)
-        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The missing pane's old id must not kill a live pane")
-        // Without the missing pane, a retry restores the rest.
-        let host = try XCTUnwrap(app.workspace.hosts.terminals[retained.id]?.host)
-        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: app.runtime.hosts.reconnect.state(for: retained.id)?.error ?? "Retry pending") {
-            app.runtime.hosts.reconnect.state(for: retained.id) == nil
-        }
-        try await app.wait {
-            app.workspace.spaces.contains { $0.structured && $0.tabs.contains { $0.id == retained.id } }
-                && app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
-                && app.runtime.helpers.values.allSatisfy { $0.error == nil }
-        }
-        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The missing pane's old id must not kill a live pane")
-        XCTAssertFalse(app.workspace.allSurfaceIDs.contains(missing.id))
+        try await app.wait { !app.workspace.allSurfaceIDs.contains(missing.id) }
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 } }
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The gone pane's old id must not kill a live pane")
+        XCTAssertTrue(app.workspace.spaces.contains { $0.structured && $0.tabs.contains { $0.id == retained.id } })
         XCTAssertEqual(app.visiblePanes.count, Set(app.visiblePanes).count)
         try await newWindowAddsNoSpace(app)
     }
 
-    /// The user's sequence: a relaunch restore fails on a missing pane, its tab is closed, the session is attached
+    /// The user's sequence: a relaunch restore finds a pane gone, its tab is closed, the session is attached
     /// again by typing in a new SSH tab, and a new tab there (Cmd+T) is a tab only: never also a space, not for a frame.
-    func testTypedAttachAfterFailedRelaunchRestoreNewTabAddsNoSpace() async throws {
-        let (app, server, missing, _) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+    func testTypedAttachAfterAGoneTabNewTabAddsNoSpace() async throws {
+        let (app, server, missing, _) = try await relaunchWithMissingPane(); defer { app.close(); server.stop() }
         let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
         app.controller.closeTab(missing.id)
         try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 && $0.error == nil } }
@@ -945,37 +944,39 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         XCTAssertEqual(seen.filter { $0 != spaces }, [], "No frame may show another space")
     }
 
-    /// Reconnect anyway: a relaunch restore stopped on a pane closed on the server, and the bar's next reconnect shows
-    /// the session as it is now. The missing pane's tab closes without the server being asked; the rest restores.
-    func testReconnectAnywayAfterFailedRelaunchRestoreShowsTheServerAsItIs() async throws {
-        let (app, server, missing, retained) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
-        let controller = app.runtime.hosts.reconnect
-        XCTAssertEqual(controller.state(for: retained.id)?.changed, true, controller.state(for: retained.id)?.error ?? "No state")
-        let presentation = SSHReconnectControl.Presentation(state: try XCTUnwrap(controller.state(for: retained.id)), hostName: "Fixture")
-        XCTAssertEqual(presentation.actionTitle, "Reconnect anyway")
+    /// A relaunch restore whose server closed a pane meanwhile: one reconnect brings back what the server has, and the
+    /// missing pane's tab stays where it was, gone: a window of its own with no server node, no terminal, read-only,
+    /// its strip saying so with Close tab and no Reconnect. Nothing on the server changes.
+    func testRelaunchReconnectKeepsAGoneTabReadOnly() async throws {
+        let (app, server, missing, retained) = try await relaunchWithMissingPane(); defer { app.close(); server.stop() }
         let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
-        let host = try XCTUnwrap(app.workspace.hosts.terminals[retained.id]?.host)
-        controller.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: retained.id)?.error ?? "Reconnect anyway pending") {
-            controller.state(for: retained.id) == nil
-        }
-        try await app.wait {
-            app.workspace.spaces.contains { $0.structured && $0.tabs.contains { $0.id == retained.id } }
-                && app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
-                && app.runtime.helpers.values.allSatisfy { $0.error == nil }
-        }
-        XCTAssertFalse(app.workspace.allSurfaceIDs.contains(missing.id))
-        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "Reconnect anyway must not close a live pane")
-        let shown = Set(app.workspace.spaces.filter(\.structured).flatMap(\.tabs).compactMap(app.target))
+        let controller = app.runtime.hosts.reconnect
+        let space = try XCTUnwrap(app.workspace.spaces.first { $0.tabs.contains { $0.id == missing.id } })
+        XCTAssertTrue(space.tabs.contains { $0.id == retained.id }, "The gone tab stays in its space")
+        let window = try XCTUnwrap(space.containers.first { $0.terminals.contains { $0.id == missing.id } })
+        XCTAssertTrue(window.gone)
+        XCTAssertNil(window.terminals.first { $0.id == missing.id }?.terminal)
+        XCTAssertNil(controller.state(for: missing.id))
+        let state = try XCTUnwrap(controller.presentationState(for: missing.id))
+        XCTAssertTrue(state.gone)
+        let presentation = SSHReconnectControl.Presentation(state: state, hostName: "Fixture")
+        XCTAssertEqual(presentation.label, "no longer on Fixture")
+        XCTAssertFalse(presentation.offersReconnect)
+        XCTAssertEqual(presentation.detailTitle, "Close tab")
+        let view = try XCTUnwrap(app.runtime.views[missing.id])
+        XCTAssertTrue(view.inputParked, "A gone tab takes no input")
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes)
+        let shown = Set(app.workspace.spaces.filter(\.structured).flatMap(\.tabs).filter { !$0.isGone }.compactMap(app.target))
         XCTAssertEqual(shown, Set(panes.split(separator: "\n").map(String.init)), "Every pane the server has is shown")
         XCTAssertEqual(app.visiblePanes.count, Set(app.visiblePanes).count)
         try await newWindowAddsNoSpace(app)
+        XCTAssertTrue(app.workspace.isGone(missing.id), "A later topology keeps the gone tab")
     }
 
-    /// Reconnect anyway after a dropped connection, while a pane of one space and every window of another were
-    /// closed on the server: the first reconnect stops and changes nothing; the next drops the gone tab and space
-    /// (not listed as detached) and restores the rest, killing nothing.
-    func testReconnectAnywayAfterLiveDropDropsGoneTabsAndSpaces() async throws {
+    /// A dropped connection while a pane of one space and every window of another were closed on the server: one
+    /// reconnect restores what the server has and keeps the rest, gone: the pane's tab in its space, the other space
+    /// whole, both showing what they showed, read-only. Closing them changes nothing on the server.
+    func testLiveDropReconnectKeepsGoneTabsAndSpaces() async throws {
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
         app.controller.settings.values.hideSingleSpace = false
@@ -986,6 +987,9 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         let kept = try XCTUnwrap(app.workspace.current)
         let missing = kept.tabs[0], retained = kept.tabs[1]
         let missingPane = try XCTUnwrap(app.target(missing))
+        let missingView = try XCTUnwrap(app.runtime.views[missing.id])
+        TerminalTestSupport.send("printf 'BEFORE_%s\\n' GONE", to: missingView)
+        try await app.wait { TerminalTestSupport.screen(terminal: missingView).contains("BEFORE_GONE") }
         app.workspace.newSpace()
         try await app.wait { app.workspace.current?.id != kept.id && app.workspace.activeTab?.isConnecting == false }
         let gone = try XCTUnwrap(app.workspace.current)
@@ -999,31 +1003,34 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
         let controller = app.runtime.hosts.reconnect
         controller.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "Changed server") {
-            controller.state(for: retained.id)?.reconnecting == false && controller.state(for: retained.id)?.changed == true
-        }
-        XCTAssertTrue(app.workspace.allSurfaceIDs.contains(missing.id), "Only Reconnect anyway changes the saved view")
-        XCTAssertTrue(app.workspace.spaces.contains { $0.id == gone.id })
-        controller.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: controller.state(for: retained.id)?.error ?? "Reconnect anyway pending") {
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: controller.state(for: retained.id)?.error ?? "Reconnect pending") {
             controller.state(for: retained.id) == nil
         }
         try await app.wait {
-            app.workspace.spaces.contains { $0.id == kept.id && $0.tabs.map(\.id) == [retained.id] }
-                && app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
-                && app.runtime.helpers.values.allSatisfy { $0.error == nil }
+            app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting } && app.runtime.helpers.values.allSatisfy { $0.error == nil }
         }
-        XCTAssertFalse(app.workspace.allSurfaceIDs.contains(missing.id))
-        XCTAssertFalse(app.workspace.spaces.contains { $0.id == gone.id })
-        XCTAssertFalse(app.workspace.detached.contains { $0.id == gone.id }, "A space gone from the server is not listed as detached")
-        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "Reconnect anyway must not close a live pane")
+        XCTAssertTrue(app.workspace.isGone(missing.id), "The pane's tab stays, gone")
+        XCTAssertTrue(app.workspace.spaces.contains { $0.id == kept.id && $0.tabs.contains { $0.id == retained.id } })
+        let goneSpace = try XCTUnwrap(app.workspace.spaces.first { $0.id == gone.id }, "The space whose windows all went stays")
+        XCTAssertTrue(goneSpace.tabs.allSatisfy(\.isGone))
+        XCTAssertNil(goneSpace.node)
+        XCTAssertTrue(TerminalTestSupport.screen(terminal: missingView).contains("BEFORE_GONE"), "The gone tab still shows its output")
+        XCTAssertTrue(missingView.inputParked)
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The reconnect must not close a live pane")
         let terminal = try XCTUnwrap(app.runtime.views[retained.id])
-        TerminalTestSupport.send("printf 'ACCEPTED_%s\\n' CHANGES", to: terminal)
-        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("ACCEPTED_CHANGES") }
+        TerminalTestSupport.send("printf 'KEPT_%s\\n' RUNNING", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("KEPT_RUNNING") }
+        // Closing them is local: nothing on the server changes.
+        app.controller.closeSpace(gone.id)
+        app.controller.closeTab(missing.id)
+        try await app.wait { !app.workspace.spaces.contains { $0.id == gone.id } && !app.workspace.allSurfaceIDs.contains(missing.id) }
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 } }
+        XCTAssertFalse(app.workspace.detached.contains { $0.id == gone.id }, "A space gone from the server is not listed as detached")
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes)
     }
 
     /// A dropped connection to a server that kept everything: the first Reconnect restores every space, window and pane,
-    /// including tabs made just before the drop, and never reports a changed server.
+    /// including tabs made just before the drop, and marks none gone.
     func testReconnectAfterLiveDropRestoresEverySpaceAtOnce() async throws {
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
@@ -1048,12 +1055,9 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         try await app.wait { app.runtime.hosts.reconnect.state(for: retained.id) != nil }
         let controller = app.runtime.hosts.reconnect
         controller.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        var changed = false
         try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: retained.id)?.error ?? "Reconnect pending") {
-            changed = changed || controller.state(for: retained.id)?.changed == true
-            return controller.state(for: retained.id) == nil || controller.state(for: retained.id)?.reconnecting == false
+            controller.state(for: retained.id) == nil || controller.state(for: retained.id)?.reconnecting == false
         }
-        XCTAssertFalse(changed, "Nothing changed on the server: \(controller.state(for: retained.id)?.error ?? "")")
         XCTAssertNil(controller.state(for: retained.id)?.error)
         try await app.wait {
             app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
@@ -1066,14 +1070,14 @@ final class SSHReconnectIntegrationTests: XCTestCase {
 
     /// A tmux space restored by a relaunch whose reconnect finds one of its panes gone: the session is attached
     /// again (its control client is live) and the space stays offline. Returns the missing pane's tab and a kept one.
-    private func failedRelaunchRestore() async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
+    private func relaunchWithMissingPane() async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
         let app = try TmuxWalkthrough()
         let server: SSHTestServer
         do { server = try await SSHTestServer() } catch { app.close(); throw error }
-        do { return try await failedRelaunchRestore(app, server) } catch { app.close(); server.stop(); throw error }
+        do { return try await relaunchWithMissingPane(app, server) } catch { app.close(); server.stop(); throw error }
     }
 
-    private func failedRelaunchRestore(_ app: TmuxWalkthrough, _ server: SSHTestServer) async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
+    private func relaunchWithMissingPane(_ app: TmuxWalkthrough, _ server: SSHTestServer) async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
         _ = try app.server(["split-window", "-h", "-t", "edge"])
         _ = try app.server(["new-window", "-d", "-t", "edge", "/bin/sh"])
         _ = try await connect(app, server: server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
@@ -1094,11 +1098,15 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         app.window.contentView = NSHostingView(rootView: MainView(workspace: app.workspace, settings: app.controller.settings, controller: app.controller))
         try await app.wait { app.runtime.views[retained.id]?.window != nil }
         app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: "Failed relaunch restore") {
-            let state = app.runtime.hosts.reconnect.state(for: retained.id)
-            return state?.reconnecting == false && state?.error != nil
+        // One reconnect: what the server still has comes back, the missing pane's tab stays, gone.
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: app.runtime.hosts.reconnect.state(for: retained.id)?.error ?? "Reconnect pending") {
+            app.runtime.hosts.reconnect.state(for: retained.id) == nil
+        }
+        try await app.wait {
+            app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting } && app.runtime.helpers.values.allSatisfy { $0.error == nil }
         }
         XCTAssertEqual(try app.controlClients(), 1, "The reconnect attaches the session again")
+        XCTAssertTrue(app.workspace.isGone(missing.id))
         return (app, server, missing, retained)
     }
 
@@ -1111,7 +1119,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "A window made on the server must not become a space")
     }
 
-    func testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands() async throws {
+    func testOfflineTmuxPaneClosureNeverRecreatesCommandsAndAClosedPaneStaysGone() async throws {
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
         _ = try app.server(["split-window", "-h", "-t", "edge"])
@@ -1143,26 +1151,15 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         try await app.wait { app.runtime.hosts.reconnect.state(for: retained.id) != nil }
         _ = try app.server(["kill-pane", "-t", retainedPane])
         app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
-        try await TestSupport.eventually(timeout: .seconds(30)) {
-            let state = app.runtime.hosts.reconnect.state(for: retained.id)
-            return state?.reconnecting == false && state?.error != nil
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: app.runtime.hosts.reconnect.state(for: retained.id)?.error ?? "Reconnect pending") {
+            app.runtime.hosts.reconnect.state(for: retained.id) == nil
         }
-        XCTAssertEqual(app.runtime.hosts.reconnect.state(for: retained.id)?.changed, true, "The bar offers Reconnect anyway")
+        // Its pane closed on the server: the tab stays, gone, with its view; nothing else on the server changes.
+        XCTAssertTrue(app.workspace.isGone(retained.id))
         XCTAssertTrue(app.runtime.views[retained.id] === view)
         XCTAssertFalse(app.workspace.allSurfaceIDs.contains(removed.id))
-        // A missing server stays an error, for Reconnect anyway (the first) as for a plain reconnect: the view stays.
-        _ = try app.server(["kill-server"])
-        for _ in 0..<2 {
-            app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
-            try await TestSupport.eventually(timeout: .seconds(30)) {
-                let state = app.runtime.hosts.reconnect.state(for: retained.id)
-                return state?.reconnecting == false && state?.error != nil
-            }
-            XCTAssertEqual(app.runtime.hosts.reconnect.state(for: retained.id)?.changed, false)
-            XCTAssertTrue(app.runtime.views[retained.id] === view)
-            XCTAssertEqual(app.workspace.hosts.terminals[retained.id]?.state, .disconnected)
-            XCTAssertFalse(app.workspace.allSurfaceIDs.contains(removed.id))
-        }
+        let left = serverPanes.split(separator: "\n").map(String.init).filter { $0 != retainedPane }
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]).split(separator: "\n").map(String.init), left)
     }
 
     func testBrokerOnlyFailureRetiresOldMasterBeforeResumingLauncher() async throws {
@@ -1184,6 +1181,316 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         TerminalTestSupport.send("printf 'RECOVERED_%s\\n' BROKER", to: terminal)
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("RECOVERED_BROKER") }
         XCTAssertNil(app.runtime.hosts.reconnect.state(for: surface))
+    }
+
+    /// A repository of two commits and an uncommitted change in `repo`, made live with the real git; returns how the
+    /// test writes another file there.
+    private static func makeRepository(_ repo: URL, home: URL) throws -> (String, String) throws -> Void {
+        func git(_ arguments: String...) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-c", "user.name=Alex Rivera", "-c", "user.email=alex@example.com", "-c", "init.defaultBranch=main",
+                                 "-c", "commit.gpgsign=false", "-C", repo.path] + arguments
+            process.environment = ["PATH": "/usr/bin:/bin", "HOME": home.path, "GIT_CONFIG_NOSYSTEM": "1",
+                                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_AUTHOR_DATE": "1760000000 +0000",
+                                   "GIT_COMMITTER_DATE": "1760000000 +0000"]
+            process.standardError = FileHandle.nullDevice
+            XCTAssertEqual(try TestSupport.live(process).status, 0, "git " + arguments.joined(separator: " "))
+        }
+        func write(_ path: String, _ text: String) throws {
+            _ = try AppReplay.live {
+                try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+                try Data(text.utf8).write(to: repo.appendingPathComponent(path), options: .atomic)
+            }
+        }
+        try write("billing.ts", "a\nb\n")
+        try git("init", "-q"); try git("add", "-A"); try git("commit", "-q", "-m", "Initial billing route")
+        try write("billing.ts", "a\nb\nc\n")
+        try git("commit", "-q", "-a", "-m", "Round once per invoice")
+        try write("billing.ts", "a\nB\nc\n")
+        return write
+    }
+
+    /// Files views come back after a quit and relaunch: a local tab's (Files on Commits, a commit open) at once, a
+    /// remote tmux tab's (Files on Review, a change open) once its host reconnected; offline it shows its terminal.
+    func testFilesViewsComeBackAfterRelaunch() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        let repo = server.root.appendingPathComponent("api")
+        _ = try Self.makeRepository(repo, home: server.root)
+        _ = try await connect(app, server: server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
+        try await app.attach(); try await app.ready()
+        let remote = try XCTUnwrap(app.workspace.activeTab).id
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[remote]).host
+        let files = app.runtime.files
+        files.switchMode(remote, to: .files)
+        var review = files.session(for: remote)
+        review.pinnedRoot = repo.path; review.tab = .changes
+        try await TestSupport.eventually(timeout: .seconds(20)) { review.status?.changes.isEmpty == false }
+        let change = try XCTUnwrap(review.status?.changes.first?.id)
+        review.changesSelection = change
+        app.workspace.newLocalSpace()
+        let local = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { app.runtime.views[local].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        files.switchMode(local, to: .files)
+        var commits = files.session(for: local)
+        commits.pinnedRoot = repo.path; commits.tab = .commits
+        try await TestSupport.eventually(timeout: .seconds(20)) { commits.log?.commits.count == 2 }
+        let commit = try XCTUnwrap(commits.log?.commits.last?.hash)
+        commits.selectedCommit = commit
+        try await TestSupport.eventually(timeout: .seconds(20)) { commits.commitDetail?.commit.hash == commit }
+
+        let store = HostSessionStore(url: server.root.appendingPathComponent("host-session.json"))
+        try store.save(runtime: app.runtime)
+        app.window.contentView = nil
+        await app.runtime.stop().value
+        app.workspace.spaces = []
+        app.runtime.start(preferences: app.controller.settings.values)
+        XCTAssertTrue(store.restore(runtime: app.runtime))
+        app.window.contentView = NSHostingView(rootView: MainView(workspace: app.workspace, settings: app.controller.settings, controller: app.controller))
+        app.workspace.selectTab(local)
+        commits = files.session(for: local)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "mode=\(files.mode(for: local)) tab=\(commits.tab) commit=\(commits.selectedCommit ?? "nil")") {
+            files.mode(for: local) == .files && commits.tab == .commits && commits.commitDetail?.commit.hash == commit
+        }
+        XCTAssertEqual(commits.pinnedRoot, repo.path)
+        XCTAssertEqual(files.mode(for: remote), .terminal, "Offline, the remote tab's view waits for its host")
+        app.workspace.selectTab(remote)
+        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: remote)
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: app.runtime.hosts.reconnect.state(for: remote)?.error ?? "Reconnect pending") {
+            app.runtime.hosts.reconnect.state(for: remote) == nil && app.attached
+        }
+        review = files.session(for: remote)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "mode=\(files.mode(for: remote)) tab=\(review.tab) change=\(review.changesSelection ?? "nil")") {
+            files.mode(for: remote) == .files && review.tab == .changes && review.changesSelection == change && review.changesDiff != nil
+        }
+    }
+
+    /// Remote tmux tabs showing Files on Commits (a commit open) and on Review (a change open) keep those views across
+    /// a dropped connection and its reconnect: the strip goes above them, they stay shown, and they load again from the
+    /// new helper with the same commit and change selected. No space or tab is added.
+    func testFilesCommitsAndReviewViewsSurviveReconnect() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        let repo = server.root.appendingPathComponent("api")
+        let write = try Self.makeRepository(repo, home: server.root)
+
+        _ = try await connect(app, server: server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
+        try await app.attach(); try await app.ready()
+        app.workspace.newTab()
+        try await app.wait { app.workspace.current?.tabs.count == 2 && app.workspace.current?.tabs.allSatisfy { !$0.isConnecting } == true }
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 } }
+        let tabs = try XCTUnwrap(app.workspace.current).tabs.map(\.id)
+        let files = app.runtime.files
+        for (id, tab) in zip(tabs, [FilesTab.commits, .changes]) {
+            files.switchMode(id, to: .files)
+            let session = files.session(for: id)
+            session.pinnedRoot = repo.path
+            session.tab = tab
+        }
+        let commits = files.session(for: tabs[0]), review = files.session(for: tabs[1])
+        func describe(_ session: FilesSession) -> String {
+            "tab=\(session.tab) git=\(session.git) availability=\(session.availability) log=\(session.log?.commits.count ?? -1) "
+                + "status=\(session.status?.changes.count ?? -1) root=\(session.pinnedRoot ?? "nil")"
+        }
+        // Files reads only what shows: each tab in turn.
+        app.workspace.selectTab(tabs[0])
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(commits)) { commits.log?.commits.count == 2 }
+        let commit = try XCTUnwrap(commits.log?.commits.last?.hash)
+        commits.selectedCommit = commit
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(commits)) { commits.commitDetail?.commit.hash == commit }
+        app.workspace.selectTab(tabs[1])
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(review)) { review.status?.changes.isEmpty == false }
+        let change = try XCTUnwrap(review.status?.changes.first?.id)
+        review.changesSelection = change
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(review)) { review.changesDiff != nil }
+        let spaces = app.workspace.spaces.map(\.id), selected = app.workspace.selectedSpace
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[tabs[0]]).host
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: tabs[0]) != nil }
+        // Offline the views stay as they were, under the strip.
+        XCTAssertEqual(files.mode(for: tabs[0]), .files)
+        XCTAssertEqual(files.mode(for: tabs[1]), .files)
+        XCTAssertEqual(commits.selectedCommit, commit)
+        XCTAssertEqual(review.changesSelection, change)
+        let controller = app.runtime.hosts.reconnect
+        controller.reconnect(hostID: host, sourceSurfaceID: tabs[0])
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: tabs[0])?.error ?? "Reconnect pending") {
+            controller.state(for: tabs[0]) == nil
+        }
+        try await app.wait {
+            app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting } && app.runtime.helpers.values.allSatisfy { $0.error == nil }
+        }
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
+        XCTAssertEqual(app.workspace.selectedSpace, selected)
+        XCTAssertEqual(files.mode(for: tabs[0]), .files)
+        XCTAssertEqual(files.mode(for: tabs[1]), .files)
+        XCTAssertEqual(commits.tab, .commits)
+        XCTAssertEqual(review.tab, .changes)
+        XCTAssertEqual(commits.selectedCommit, commit)
+        XCTAssertEqual(review.changesSelection, change)
+        // The new helper answers: Review reads the repository again over the new connection, and Commits its commit.
+        try write("notes.md", "follow-up\n")
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(review)) {
+            review.status?.changes.contains { $0.path == "notes.md" } == true
+        }
+        app.workspace.selectTab(tabs[0])
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: describe(commits)) {
+            commits.availability.isAvailable && commits.commitDetail?.commit.hash == commit
+        }
+    }
+
+    /// A key with a passphrase, no agent: real OpenSSH against the test sshd. The first login asks in its terminal; the
+    /// reconnect asks through askpass, in the strip, with no sheet, tab or space. A wrong passphrase brings OpenSSH's
+    /// retry prompt, the right one reconnects and the shell resumes.
+    func testPassphraseKeyAsksInTheStripOnReconnect() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        let passphrase = "fixture-passphrase"
+        // The server's own key (sshd authorizes its public half), locked with a passphrase.
+        let locked = server.root.appendingPathComponent("locked")
+        _ = try AppReplay.live {
+            try FileManager.default.copyItem(at: server.root.appendingPathComponent("key"), to: locked)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: locked.path)
+        }
+        let keygen = Process()
+        keygen.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+        keygen.arguments = ["-q", "-p", "-P", "", "-N", passphrase, "-f", locked.path]
+        keygen.standardError = FileHandle.nullDevice
+        XCTAssertEqual(try TestSupport.live(keygen).status, 0)
+        // As typed by someone whose key needs its passphrase: no BatchMode, no agent.
+        var options = server.options
+        if let batch = options.firstIndex(of: "BatchMode=yes") { options.removeSubrange((batch - 1)...batch) }
+        if let identity = options.firstIndex(of: "-i") { options[identity + 1] = locked.path }
+        options += ["-o", "IdentityAgent=none"]
+        try await SSHTestServer.authorize(arguments: options + [server.destination])
+
+        let surface = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { app.runtime.views[surface].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let terminal = try XCTUnwrap(app.runtime.views[surface])
+        TerminalTestSupport.send("ssh " + (options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
+            TerminalTestSupport.screen(terminal: terminal).contains("Enter passphrase for key")
+        }
+        TerminalTestSupport.send(passphrase, to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
+            app.runtime.ssh.links.values.contains { $0.launch.tabID == surface && $0.shellPID != nil }
+        }
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[surface]).host
+        let spaces = app.workspace.spaces.map(\.id), selected = app.workspace.selectedSpace
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: surface) != nil }
+
+        let controller = app.runtime.hosts.reconnect
+        controller.reconnect(hostID: host, sourceSurfaceID: surface)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "log: \(controller.logs[host]?.map(\.text) ?? [])") {
+            controller.prompts[host] != nil
+        }
+        let first = try XCTUnwrap(controller.prompts[host])
+        XCTAssertEqual(first.kind, .secret)
+        XCTAssertTrue(first.text.hasPrefix("Enter passphrase for key"), first.text)
+        XCTAssertTrue(first.text.contains(locked.lastPathComponent), first.text)
+        XCTAssertFalse(first.retry)
+        XCTAssertEqual(controller.sources[host], surface)
+        XCTAssertNil(app.window.attachedSheet, "the login asks in the strip, not a sheet")
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "the login adds no space")
+        XCTAssertEqual(app.workspace.selectedSpace, selected)
+        XCTAssertTrue(app.workspace.allSurfaceIDs.contains(surface))
+
+        controller.answer(host, "not-the-passphrase")
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "log: \(controller.logs[host]?.map(\.text) ?? [])") {
+            controller.prompts[host].map { $0.request.id != first.request.id } == true
+        }
+        let again = try XCTUnwrap(controller.prompts[host])
+        XCTAssertEqual(again.kind, .secret)
+        XCTAssertTrue(again.retry, "OpenSSH asking again after a wrong passphrase: \(again.text)")
+
+        controller.answer(host, passphrase)
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: surface)?.error ?? "Reconnect pending") {
+            controller.state(for: surface) == nil
+        }
+        XCTAssertNil(controller.prompts[host])
+        try await TestSupport.eventually(timeout: .seconds(20)) {
+            app.runtime.ssh.links.values.contains { $0.launch.tabID == surface && $0.shellPID != nil }
+        }
+        TerminalTestSupport.send("printf 'PASSPHRASE_%s\\n' RESUMED", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("PASSPHRASE_RESUMED") }
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
+        XCTAssertEqual(app.workspace.selectedSpace, selected)
+    }
+
+    /// The account's password, against an sshd that takes passwords (PAM): the first login uses a key; once that key is
+    /// no longer authorized, the reconnect falls back to the password, which OpenSSH asks through askpass, in the strip.
+    /// A wrong one is asked again as a retry, the right one reconnects and the shell resumes. The password is typed only
+    /// into the strip, whose answer no recording keeps. Live it needs the account's password (the test VM's, which
+    /// `vm.py` passes as DISPATCH_TEST_SSH_PASSWORD); without one it is skipped.
+    func testPasswordAsksInTheStripOnReconnect() async throws {
+        let password = AppReplay.replaying ? "replayed" : System.environment("DISPATCH_TEST_SSH_PASSWORD") ?? ""
+        if password.isEmpty { throw XCTSkip("No account password (DISPATCH_TEST_SSH_PASSWORD): run it in the test VM.") }
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let server = try await SSHTestServer(passwords: true); defer { server.stop() }
+        // A key of the client's own, authorized for the first login only.
+        let client = server.root.appendingPathComponent("client")
+        let keygen = Process()
+        keygen.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+        keygen.arguments = ["-q", "-t", "ed25519", "-N", "", "-f", client.path]
+        keygen.standardError = FileHandle.nullDevice
+        XCTAssertEqual(try TestSupport.live(keygen).status, 0)
+        _ = try AppReplay.live {
+            try FileManager.default.copyItem(at: client.appendingPathExtension("pub"), to: server.authorizedKeys)
+        }
+        var options = server.options
+        if let batch = options.firstIndex(of: "BatchMode=yes") { options.removeSubrange((batch - 1)...batch) }
+        if let identity = options.firstIndex(of: "-i") { options[identity + 1] = client.path }
+        options += ["-o", "IdentityAgent=none", "-o", "PreferredAuthentications=publickey,password"]
+        try await SSHTestServer.authorize(arguments: options + [server.destination])
+
+        let surface = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { app.runtime.views[surface].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let terminal = try XCTUnwrap(app.runtime.views[surface])
+        TerminalTestSupport.send("ssh " + (options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
+            app.runtime.ssh.links.values.contains { $0.launch.tabID == surface && $0.shellPID != nil }
+        }
+        // The key no longer opens the account: the reconnect has to log in with the password.
+        _ = try AppReplay.live { try Data().write(to: server.authorizedKeys) }
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[surface]).host
+        let spaces = app.workspace.spaces.map(\.id), selected = app.workspace.selectedSpace
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: surface) != nil }
+
+        let controller = app.runtime.hosts.reconnect
+        controller.reconnect(hostID: host, sourceSurfaceID: surface)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "log: \(controller.logs[host]?.map(\.text) ?? [])") {
+            controller.prompts[host] != nil
+        }
+        let first = try XCTUnwrap(controller.prompts[host])
+        XCTAssertEqual(first.kind, .secret)
+        XCTAssertTrue(first.text.lowercased().contains("password"), first.text)
+        XCTAssertFalse(first.retry)
+        XCTAssertEqual(controller.sources[host], surface)
+        XCTAssertNil(app.window.attachedSheet, "the login asks in the strip, not a sheet")
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "the login adds no space")
+
+        controller.answer(host, "not-the-password")
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "log: \(controller.logs[host]?.map(\.text) ?? [])") {
+            controller.prompts[host].map { $0.request.id != first.request.id } == true
+        }
+        let again = try XCTUnwrap(controller.prompts[host])
+        XCTAssertEqual(again.text, first.text)
+        XCTAssertTrue(again.retry, "OpenSSH asking the same password again")
+
+        controller.answer(host, password)
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: controller.state(for: surface)?.error ?? "Reconnect pending") {
+            controller.state(for: surface) == nil
+        }
+        try await TestSupport.eventually(timeout: .seconds(20)) {
+            app.runtime.ssh.links.values.contains { $0.launch.tabID == surface && $0.shellPID != nil }
+        }
+        TerminalTestSupport.send("printf 'PASSWORD_%s\\n' RESUMED", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("PASSWORD_RESUMED") }
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
+        XCTAssertEqual(app.workspace.selectedSpace, selected)
     }
 
     private func connect(_ app: TmuxWalkthrough, server: SSHTestServer, surface: UUID) async throws -> SSHCoordinator.Link {

@@ -6,44 +6,37 @@ import Observation
 
 @MainActor
 final class SSHReconnectTests: XCTestCase {
-    func testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus() async throws {
+    /// A reconnect logs in in a private terminal: no sheet, tab or space. ssh asks through askpass and the strip
+    /// answers (a wrong password, asked again as a retry, then the right one); its output goes to the host's log.
+    func testLoginAsksThroughTheStripWithoutSheetOrSpace() async throws {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
-        try DesktopTestSupport.requireUnlocked()
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
         let workspace = Workspace()
         runtime.workspace = workspace
         runtime.start(preferences: Preferences())
         runtime.chat.stop()
+        defer { runtime.stop(); runtime.workspace = previous }
         workspace.newLocalSpace()
-        let active = try XCTUnwrap(workspace.activeSurfaceID)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        window.contentView?.addSubview(editor)
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        XCTAssertTrue(window.makeFirstResponder(editor))
-        defer {
-            window.orderOut(nil); window.close(); runtime.stop(); runtime.workspace = previous
-        }
-
+        let surface = try XCTUnwrap(workspace.activeSurfaceID)
         let fixture = try AppReplay.query(kind: "fixture.ssh.login", input: .null) {
             let root = System.temporary.appendingPathComponent("reconnect-login-" + System.uuid().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let executable = root.appendingPathComponent("ssh-fixture"), control = root.appendingPathComponent("control")
-            // Exercise the production sheet and PTY with an echo-disabled password
-            // prompt; the control check succeeds only after correct keyboard input.
+            // As OpenSSH with SSH_ASKPASS_REQUIRE=force: every prompt through the askpass program, a refusal on stderr
+            // and the same prompt again; the master answers its check once the right password came.
             let script = """
             #!/bin/sh
             for argument do
-              if [ "$argument" = check ]; then exit 0; fi
+              if [ "$argument" = check ]; then [ -e \(HerdrLaunch.quote(control.path)) ]; exit; fi
             done
-            stty -echo
-            printf 'Password: '
-            IFS= read -r password
-            stty echo
+            [ "$SSH_ASKPASS_REQUIRE" = force ] || exit 2
+            printf 'Welcome to the fixture host\\n'
+            password=$("$SSH_ASKPASS" "dev@fixture's password: ") || exit 1
+            if [ "$password" != abC ]; then
+              printf 'Permission denied, please try again.\\n' >&2
+              password=$("$SSH_ASKPASS" "dev@fixture's password: ") || exit 1
+            fi
             [ "$password" = abC ] || exit 1
             touch \(HerdrLaunch.quote(control.path))
             exec /bin/sleep 30
@@ -55,34 +48,64 @@ final class SSHReconnectTests: XCTestCase {
         let root = URL(fileURLWithPath: try AppReplay.decode(String.self, fixture))
         defer { if !AppReplay.replaying { try? FileManager.default.removeItem(at: root) } }
         let executable = root.appendingPathComponent("ssh-fixture"), control = root.appendingPathComponent("control")
-        if AppReplay.replaying { XCTAssertFalse(FileManager.default.fileExists(atPath: executable.path)) }
-        let task = Task {
-            try await SSHReconnectLogin.authenticate(shell: .init(destination: "fixture", executable: executable.path),
-                master: .init(executable: executable.path, controlPath: control.path, destination: "fixture"), window: window)
+        let host = HostID.authenticated("fixture"), id = SSHConnectionID()
+        workspace.hosts.associate(surface, context: .init(host: host, generation: id.rawValue, state: .disconnected, authenticated: true))
+        let controller = runtime.hosts.reconnect
+        let previousAttempt = controller.attempt
+        defer { controller.attempt = previousAttempt; controller.close(surface) }
+        let shell = SSHShell(destination: "fixture", executable: executable.path)
+        controller.retain(.init(connection: id, host: host, shell: shell, scope: nil, origin: surface, launcher: nil, surfaces: [surface]))
+        controller.attempt = { recipe in
+            try await SSHReconnectLogin.authenticate(shell: shell, master: .init(executable: executable.path, controlPath: control.path,
+                                                                                destination: "fixture"), host: recipe.host)
         }
-        do {
-            try await TestSupport.eventually { window.attachedSheet != nil }
-            let sheet = try XCTUnwrap(window.attachedSheet)
-            let terminal = try XCTUnwrap(sheet.contentView?.subviews.compactMap { $0 as? TerminalView }.first)
-            try await TestSupport.eventually { TerminalTestSupport.screen(terminal: terminal).contains("Password:") }
-            XCTAssertFalse(workspace.isSurfacePresented(terminal.id))
-            XCTAssertTrue(sheet.firstResponder === terminal, "The login prompt must receive focus when the sheet opens")
-            XCTAssertTrue(terminal.acceptsFirstResponder)
-            for (code, text, modifiers): (UInt16, String, NSEvent.ModifierFlags) in [
-                (0, "a", []), (7, "x", []), (51, "\u{7f}", []), (11, "b", []), (8, "C", .shift), (36, "\r", [])
-            ] {
-                NSApp.sendEvent(TerminalTestSupport.keyEvent(code, text, in: sheet, modifiers: modifiers))
-            }
-            try await TestSupport.eventually { window.attachedSheet == nil }
-            try await task.value
-            XCTAssertNil(terminal.surface)
-            XCTAssertEqual(workspace.activeSurfaceID, active)
-            XCTAssertTrue(window.firstResponder === editor)
-        } catch {
-            task.cancel()
-            _ = await task.result
-            throw error
+        let spaces = workspace.spaces.map(\.id), selected = workspace.selectedSpace
+        controller.reconnect(hostID: host, sourceSurfaceID: surface)
+        try await TestSupport.eventually(diagnostic: "log: \(controller.logs[host] ?? [])") { controller.prompts[host] != nil }
+        let first = try XCTUnwrap(controller.prompts[host])
+        XCTAssertEqual(first.kind, .secret)
+        XCTAssertEqual(first.text, "dev@fixture's password: ")
+        XCTAssertFalse(first.retry)
+        XCTAssertEqual(controller.sources[host], surface, "the field takes the keyboard where Reconnect was asked")
+        XCTAssertTrue(controller.loginsRunning.contains(host))
+        controller.answer(host, "abX")
+        try await TestSupport.eventually { controller.prompts[host].map { $0.request.id != first.request.id } == true }
+        XCTAssertEqual(controller.prompts[host]?.retry, true, "the same question after an answer is a retry")
+        controller.answer(host, "abC")
+        try await TestSupport.eventually { controller.states.isEmpty }
+        XCTAssertNil(controller.prompts[host])
+        XCTAssertFalse(controller.loginsRunning.contains(host))
+        XCTAssertEqual(workspace.spaces.map(\.id), spaces, "a login adds no space")
+        XCTAssertEqual(workspace.selectedSpace, selected)
+        XCTAssertEqual(workspace.activeSurfaceID, surface)
+    }
+
+    func testAskpassPromptKinds() {
+        func request(_ prompt: String, _ hint: String? = nil) -> SSHAskpassRequest {
+            .init(id: System.uuid(), tabID: System.uuid(), token: "token", prompt: prompt, hint: hint)
         }
+        XCTAssertEqual(request("dev@fixture's password: ").kind, .secret)
+        XCTAssertEqual(request("Enter passphrase for key '/home/dev/.ssh/id_ed25519': ").kind, .secret)
+        XCTAssertEqual(request("Allow use of key id_ecdsa_sk?", "confirm").kind, .confirm)
+        XCTAssertEqual(request("Are you sure you want to continue connecting (yes/no/[fingerprint])? ").kind, .confirm)
+        XCTAssertEqual(request("Confirm user presence for key ED25519-SK SHA256:abc", "none").kind, .notice)
+    }
+
+    /// The login's terminal output becomes log lines: escape sequences dropped, a carriage return redrawing the line;
+    /// an unfinished line asking a question is ssh asking on its terminal (an ssh without SSH_ASKPASS_REQUIRE).
+    func testLoginOutputBecomesLogLinesAndTellsATerminalPrompt() {
+        let controller = SSHReconnectController(runtime: TerminalRuntime.shared)
+        let host = HostID.authenticated("fixture")
+        controller.loginOutput(host, Data("\u{1B}[1mWelcome\u{1B}[0m to fixture\r\nprogress 10%\rprogress 99%\n".utf8))
+        controller.loginOutput(host, Data("\u{1B}]0;title\u{07}dev@fixture's pass".utf8))
+        XCTAssertEqual(controller.logs[host]?.map(\.text), ["Welcome to fixture", "progress 99%"])
+        XCTAssertFalse(controller.awaitingTerminal.contains(host))
+        controller.loginOutput(host, Data("word: ".utf8))
+        XCTAssertTrue(controller.awaitingTerminal.contains(host))
+        controller.loginOutput(host, Data("\r\nPermission denied (publickey,password).\r\n".utf8))
+        XCTAssertFalse(controller.awaitingTerminal.contains(host))
+        XCTAssertEqual(controller.logs[host]?.suffix(2).map(\.text), ["dev@fixture's password: ", "Permission denied (publickey,password)."])
+        XCTAssertEqual(SSHReconnectController.plain("a\u{1B}[31mb\u{1B}[0m\u{1B}]8;;x\u{1B}\\c\u{08}"), "abc")
     }
 
     func testNormalSSHExitIsDistinctFromTransportLossAndLegacyNotices() throws {
@@ -380,6 +403,15 @@ final class SSHReconnectTests: XCTestCase {
         try XCTUnwrap(buttons.first { $0.title.hasPrefix("Reconnect") }).performClick(nil)
         try XCTUnwrap(buttons.first { $0.title == "Close tab" }).performClick(nil)
         XCTAssertEqual(connects, 1); XCTAssertEqual(closes, 1)
+        var logs = 0
+        control.update(state: .init(), reconnect: {}, cancel: {}, wheel: { _ in }, hostName: "homelab", logShown: false, toggleLog: { logs += 1 })
+        control.layoutSubtreeIfNeeded()
+        let log = try XCTUnwrap(buttons.first { $0.title.hasPrefix("Log") })
+        XCTAssertEqual(log.title, "Log ▾")
+        XCTAssertTrue(control.bounds.contains(log.frame))
+        XCTAssertFalse(log.frame.intersects(try XCTUnwrap(buttons.first { $0.title.hasPrefix("Reconnect") }).frame))
+        log.performClick(nil)
+        XCTAssertEqual(logs, 1)
         control.update(state: .init(reconnecting: true), reconnect: {}, cancel: { cancels += 1 }, wheel: { _ in }, reduceMotion: true)
         let arcs = control.subviews.flatMap { $0.layer?.sublayers ?? [] }.compactMap { $0 as? CAShapeLayer }
         XCTAssertEqual(arcs.count, 1)
@@ -405,6 +437,58 @@ final class SSHReconnectTests: XCTestCase {
             _ = try await PresentationTestSupport.capture(window, named: "host-bar-" + name)
             let buttons = control.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
             for button in buttons { XCTAssertTrue(control.bounds.contains(button.frame)) }
+        }
+    }
+
+    /// The strip while ssh asks, glass and flat: a password (and a retry), a confirmation, a security key's touch, an ssh
+    /// asking on its terminal; and the log under it.
+    func testPromptRowsAndLogPresentation() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let controller = TerminalRuntime.shared.hosts.reconnect
+        let host = HostID.authenticated("homelab")
+        defer { controller.stop() }
+        controller.log(host, "disconnected", kind: .step)
+        controller.log(host, "reconnecting", kind: .step)
+        controller.log(host, "checking the SSH configuration", kind: .step)
+        controller.log(host, "dev@homelab's password: ", kind: .prompt)
+        controller.log(host, "Permission denied, please try again.", kind: .output)
+        controller.log(host, "Dispatch cannot reconnect this connection.", kind: .problem)
+        func request(_ prompt: String, _ hint: String? = nil) -> SSHAskpassRequest {
+            .init(id: System.uuid(), tabID: System.uuid(), token: "token", prompt: prompt, hint: hint)
+        }
+        let logins: [SSHReconnectLoginPresentation] = [
+            .init(prompt: .init(request: request("dev@homelab's password: ")), focused: true),
+            .init(prompt: .init(request: request("dev@homelab's password: "), retry: true), focused: true),
+            .init(prompt: .init(request: request("Allow use of key /Users/dev/.ssh/id_ecdsa_sk?", "confirm"))),
+            .init(prompt: .init(request: request("Confirm user presence for key ED25519-SK SHA256:3kF9q2", "none"))),
+            .init(asking: true, logShown: true),
+        ]
+        let state = SSHReconnectController.State(reconnecting: true, attempted: true)
+        for glass in [true, false] {
+            let previous = LiquidGlassStore.shared.enabled
+            LiquidGlassStore.shared.enabled = glass
+            defer { LiquidGlassStore.shared.enabled = previous }
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 470), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            let rows = VStack(spacing: 8) {
+                ForEach(Array(logins.enumerated()), id: \.offset) { _, login in
+                    if glass {
+                        SSHReconnectGlassRow(state: state, hostName: "homelab", login: login, reconnect: {}, cancel: {}, close: {})
+                            .frame(height: StripTab.glassTrackHeight(AppTypography()))
+                    } else {
+                        SSHReconnectFlatPromptRow(state: state, login: login, cancel: {}).frame(height: 34)
+                    }
+                }
+                SSHReconnectLogPanel(host: host, hostName: "homelab")
+            }
+            .padding(12)
+            .frame(width: 860, height: 470, alignment: .top)
+            .background(ChatThemeStore.shared.current.terminal)
+            window.contentView = NSHostingView(rootView: rows)
+            window.makeKeyAndOrderFront(nil)
+            try await Task.sleep(for: .milliseconds(150))
+            _ = try await PresentationTestSupport.capture(window, named: "host-bar-prompts-" + (glass ? "glass" : "flat"))
         }
     }
 

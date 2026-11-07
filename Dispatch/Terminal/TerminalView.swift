@@ -146,7 +146,8 @@ final class TerminalView: NSView {
         guard !destroyed, surface == nil || previewing, let window, bounds.width > 0, bounds.height > 0,
               let engine = TerminalRuntime.shared.engine else { return }
         let renderer = rendererView ?? self
-        if TerminalRuntime.shared.hosts.reconnect.awaitingRestore(id) {
+        // A gone tab (`TerminalTab.gone`) keeps showing its saved output: no process starts for it again.
+        if TerminalRuntime.shared.hosts.reconnect.awaitingRestore(id) || TerminalRuntime.shared.workspace?.isGone(id) == true {
             // Until it reconnects, a restored tab shows its saved output where the engine can;
             // the text stays saved, for the next quit, until its process starts.
             guard surface == nil, let text = TerminalRuntime.shared.restoredHistory[id] else { return }

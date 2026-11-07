@@ -4,7 +4,11 @@ import AppKit
 import Term
 
 extension TerminalView {
-    var inputParked: Bool { inputSuspensions > 0 || TerminalRuntime.shared.hosts.reconnect.state(for: id) != nil }
+    /// Offline, or gone from its server (`TerminalTab.gone`, read-only for good).
+    var inputParked: Bool {
+        inputSuspensions > 0 || TerminalRuntime.shared.hosts.reconnect.state(for: id) != nil
+            || TerminalRuntime.shared.workspace?.isGone(id) == true
+    }
 
     var agentMenuScreen: String {
         guard let surface else { return "" }

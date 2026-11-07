@@ -166,6 +166,22 @@ final class Workspace {
         return committedLayout.spaces.lazy.flatMap(\.tabs).first { $0.id == id }?.directory
     }
     var allTabIDs: Set<UUID> { Set(spaces.flatMap { $0.tabs.map(\.id) }) }
+    /// Whether tab `id`'s terminal is gone from its server (`TerminalTab.gone`).
+    func isGone(_ id: UUID) -> Bool { spaces.contains { $0.tabs.contains { $0.id == id && $0.isGone } } }
+
+    /// Closes gone tabs (`TerminalTab.gone`): here only, never on a server (their old ids could name other nodes). A
+    /// window or space left with nothing goes too.
+    func removeGone(_ ids: Set<UUID>) {
+        let ids = ids.filter(isGone)
+        guard !ids.isEmpty else { return }
+        updateLayout { next in
+            for id in ids { _ = next.detachTab(id) }
+            next.spaces.removeAll { $0.tabs.isEmpty }
+            if !next.spaces.contains(where: { $0.id == next.selectedSpace }) { next.selectedSpace = next.spaces.first?.id }
+        }
+        onCloseTabs(Array(ids))
+        focusRequest = System.uuid()
+    }
     var allSurfaceIDs: Set<UUID> { allTabIDs }
 
     typealias TabLocation = (space: Int, pane: Int, tab: Int)
@@ -326,7 +342,8 @@ final class Workspace {
         selectedSpace = id
         focusRequest = System.uuid()
         let container = current?.containers.first { $0.id == current?.activeWindow?.id }
-        if let target = node ?? container?.node ?? activeTab?.terminal { helper(current)?.focus(target) }
+        // A gone tab's window, or one still being made, has no node on the server to focus.
+        if let target = node ?? container?.node ?? activeTab?.terminal, target != ContainerTab.goneNode { helper(current)?.focus(target) }
     }
 
     func selectTab(_ id: UUID) {
@@ -605,6 +622,7 @@ final class Workspace {
     /// A programmatic close never asks (the user's Close Tab passes `.prompt`, as only user actions
     /// confirmed before): an external multiplexer's session keeps its work (detach), the app's own ends.
     func closeTab(_ id: UUID, policy: HelperClient.Policy? = nil) {
+        if isGone(id) { return removeGone([id]) }
         if let space = spaces.first(where: { $0.tabs.contains { $0.id == id } }),
            let terminal = space.tabs.first(where: { $0.id == id })?.terminal, let helper = helper(space) {
             helper.close(terminal, policy: policy ?? (space.backend.map(helper.external) == true ? .prompt : .terminate))

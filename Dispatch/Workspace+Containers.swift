@@ -37,6 +37,9 @@ extension Workspace {
         $0.containers.contains { $0.id == target }
       }),
       id != target, spaces[source].backend == spaces[destination].backend,
+      // A gone tab's window has no node to move, nor to move another beside.
+      !spaces[source].containers.contains(where: { $0.id == id && $0.gone }),
+      !spaces[destination].containers.contains(where: { $0.id == target && $0.gone }),
       spaces[source].remote == spaces[destination].remote,
       spaces[source].hostID == spaces[destination].hostID
     else { return false }

@@ -69,10 +69,51 @@ final class SSHReconnectController {
         var attempts = 0
         /// When automatic reconnect tries this connection again.
         var retryAt: Date?
-        /// The last attempt stopped because the server no longer has some of the saved tabs (panes, windows or
-        /// sessions closed meanwhile): the bar offers Reconnect anyway, and your next reconnect accepts the change.
-        var changed = false
+        /// The tab's terminal no longer exists on its server (closed there while the app was away): the reconnect
+        /// kept the tab, read-only, with what it showed (`TerminalTab.gone`).
+        var gone = false
+        /// What the attempt is doing now, for the strip (checking the configuration, logging in, restoring spaces).
+        var step: String?
     }
+    /// A prompt ssh asks a host's login through `SSHAskpassCommand`, answered in the strip.
+    struct Prompt: Equatable {
+        let request: SSHAskpassRequest
+        /// The same question again after an answer: ssh refused it (a wrong password).
+        var retry = false
+        var kind: SSHAskpassRequest.Kind { request.kind }
+        var text: String { request.prompt }
+    }
+    /// One line of a host's reconnect log: a step of the attempt (with its time), ssh's own output, or a problem.
+    struct LogLine: Equatable, Identifiable {
+        enum Kind: Equatable { case step, output, prompt, problem }
+        let id: Int
+        let time: Date?
+        let text: String
+        let kind: Kind
+    }
+    /// What ssh asks each host's login now.
+    private(set) var prompts: [HostID: Prompt] = [:]
+    /// Each host's reconnect log, newest last (at most `logLimit` lines), kept until its connections recover.
+    private(set) var logs: [HostID: [LogLine]] = [:]
+    static let logLimit = 400
+    /// Hosts whose login ssh asks on its own terminal (one without SSH_ASKPASS_REQUIRE): the strip points at the log.
+    private(set) var awaitingTerminal: Set<HostID> = []
+    /// Surfaces whose strip shows its host's log.
+    var logShown: Set<UUID> = []
+    /// Where each host's current attempt was asked from: its prompt takes the keyboard there.
+    private(set) var sources: [HostID: UUID] = [:]
+    /// Hosts whose login terminal runs, so the log can type into it.
+    private(set) var loginsRunning: Set<HostID> = []
+    /// A login terminal's identity (what its ssh asks under) and the host it logs in to.
+    @ObservationIgnored private var logins: [UUID: HostID] = [:]
+    @ObservationIgnored private var loginInputs: [HostID: (Data) -> Void] = [:]
+    /// Ends a login terminal (Cancel), by its identity.
+    @ObservationIgnored private var loginClosers: [UUID: () -> Void] = [:]
+    /// The login output's unfinished last line: a prompt ssh asks on its terminal ends there.
+    @ObservationIgnored private var partial: [HostID: String] = [:]
+    /// The prompt last answered for a host, to tell ssh asking it again.
+    @ObservationIgnored private var answered: [HostID: String] = [:]
+    @ObservationIgnored private var logCount = 0
     private(set) var states: [SSHConnectionID: State] = [:]
     private(set) var completed: [UUID: UUID] = [:]
     @ObservationIgnored private(set) var recipes: [SSHConnectionID: Recipe] = [:]
@@ -80,11 +121,6 @@ final class SSHReconnectController {
     @ObservationIgnored private weak var runtime: TerminalRuntime?
     @ObservationIgnored private var operations: [HostID: Task<Void, Never>] = [:]
     @ObservationIgnored private var epochs: [HostID: UUID] = [:]
-    /// Hosts whose current attempt (its epoch) is a Reconnect anyway: their helpers show the server's spaces as they
-    /// are now, dropping saved tabs it no longer has (`HelperWorkspace.dropSaved`).
-    @ObservationIgnored private var accepting: [HostID: UUID] = [:]
-    /// Saved spaces such an attempt dropped whole: recovery no longer waits for them to restore.
-    @ObservationIgnored private(set) var droppedSpaces: Set<UUID> = []
     @ObservationIgnored private var loginBusy = false
     @ObservationIgnored private var launchingShells: [UUID: Recipe] = [:]
     /// Restored output a launching shell replays, kept until it logs in so a retry shows it again.
@@ -126,12 +162,19 @@ final class SSHReconnectController {
         return states[id]
     }
     func presentationState(for surface: UUID) -> State? {
-        state(for: surface) ?? (completed[surface] == nil ? nil : State(connected: true))
+        if let state = state(for: surface) { return state }
+        if runtime?.workspace?.isGone(surface) == true { return State(gone: true) }
+        // A restored shell logging in again in its own tab: the strip carries what its ssh asks.
+        if launchingShells[surface] != nil { return State(reconnecting: true, attempted: true, step: "logging in") }
+        return completed[surface] == nil ? nil : State(connected: true)
     }
     func retain(_ recipe: Recipe) {
         for surface in recipe.surfaces { completed[surface] = nil }
         recipes[recipe.connection] = recipe
-        if states[recipe.connection] == nil { states[recipe.connection] = State(disconnectedAt: Date()) }
+        if states[recipe.connection] == nil {
+            states[recipe.connection] = State(disconnectedAt: Date())
+            log(recipe.host, recipe.restored ? "saved connection, offline until you reconnect" : "disconnected", kind: .step)
+        }
         for surface in recipe.surfaces { runtime?.views[surface]?.updateFocus() }
     }
     func launchingRestoredShell(_ surface: UUID, recipe: Recipe) {
@@ -139,6 +182,8 @@ final class SSHReconnectController {
             scope: recipe.scope, origin: surface, surfaces: [surface], restored: true)
         launchingHistory[surface] = runtime?.restoredHistory[surface]
     }
+    /// A restored tab's shell logging in again (`launchingRestoredShell`): its ssh asks through the strip.
+    func launchingRestored(_ surface: UUID) -> Bool { launchingShells[surface] != nil }
     func shellAuthenticated(_ surface: UUID) { launchingShells[surface] = nil; launchingHistory[surface] = nil }
     func restoredShellExited(_ surface: UUID) -> Bool {
         guard let recipe = launchingShells.removeValue(forKey: surface), let runtime,
@@ -170,17 +215,7 @@ final class SSHReconnectController {
         guard states[id] != nil else { return }
         states[id]?.reconnecting = false
         states[id]?.error = error is CancellationError ? nil : error.localizedDescription
-        states[id]?.changed = Self.serverChanged(error)
     }
-    /// Whether a recovery failed only because the server no longer has some saved tabs (`HelperWorkspace.missingRetained`).
-    static func serverChanged(_ error: Error) -> Bool {
-        !(error is CancellationError) && error.localizedDescription.contains(HelperWorkspace.missingRetained)
-    }
-    /// Whether `host`'s current attempt accepts the server's changed spaces (Reconnect anyway).
-    func acceptsChanges(on host: HostID) -> Bool {
-        accepting[host].map { $0 == epochs[host] } == true
-    }
-    func dropped(_ spaces: Set<UUID>) { droppedSpaces.formUnion(spaces) }
     /// An automatic attempt never prompts and covers only lost connections; your own takes over from it.
     func reconnect(hostID: HostID, sourceSurfaceID: UUID, scope: SSHIntegrationScope? = nil, automatic: Bool = false) {
         guard operations[hostID] == nil,
@@ -188,21 +223,21 @@ final class SSHReconnectController {
         var ids = recipes.values.filter { $0.host == hostID && (scope == nil || $0.scope == scope) }.map(\.connection)
         if automatic { ids = ids.filter(losses.contains) } else { stopRetrying(hostID) }
         guard !ids.isEmpty else { return }
+        if !automatic { sources[hostID] = sourceSurfaceID }
+        log(hostID, automatic ? "reconnecting automatically" : "reconnecting", kind: .step)
         let epoch = System.uuid(); epochs[hostID] = epoch
-        // Your reconnect after one stopped on a changed server is Reconnect anyway; an automatic one never accepts.
-        let accepts = !automatic && ids.contains { states[$0]?.changed == true }
-        if accepts { accepting[hostID] = epoch }
         for id in ids {
             var state = states[id] ?? State(disconnectedAt: Date())
-            state.reconnecting = true; state.attempted = true; state.attempts += 1; state.retryAt = nil; state.changed = false
+            state.reconnecting = true; state.attempted = true; state.attempts += 1; state.retryAt = nil
             states[id] = state
         }
         operations[hostID] = Task { [weak self] in
             guard let self else { return }
             var unreachable = false
             defer {
-                if epochs[hostID] == epoch { operations[hostID] = nil; epochs[hostID] = nil }
-                if accepting[hostID] == epoch { accepting[hostID] = nil; droppedSpaces = [] }
+                if epochs[hostID] == epoch { operations[hostID] = nil; epochs[hostID] = nil; endLogin(hostID) }
+                // Every connection of the host recovered: its log has nothing left to explain.
+                if !recipes.values.contains(where: { $0.host == hostID }) { clearLog(hostID) }
             }
             // Serialize login sheets across hosts, as well as within one host.
             while loginBusy {
@@ -211,11 +246,6 @@ final class SSHReconnectController {
             guard !Task.isCancelled else { return }
             loginBusy = true
             defer { loginBusy = false }
-            // A helper still attached whose restore stopped on the change takes it now; a new one when its topology arrives.
-            if accepts {
-                droppedSpaces = []
-                for helper in runtime?.helpers.values.filter({ $0.host == hostID && !$0.stopped }) ?? [] { helper.acceptServerChanges() }
-            }
             for id in ids {
                 guard !Task.isCancelled, epochs[hostID] == epoch, let recipe = recipes[id],
                       !recipe.surfaces.isDisjoint(with: runtime?.workspace?.allSurfaceIDs ?? []) else { continue }
@@ -252,9 +282,9 @@ final class SSHReconnectController {
                         continue
                     }
                     var state = states[id] ?? State()
-                    state.reconnecting = false
+                    state.reconnecting = false; state.step = nil
                     state.error = error is CancellationError ? nil : error.localizedDescription
-                    state.changed = Self.serverChanged(error)
+                    log(hostID, error is CancellationError ? "cancelled" : error.localizedDescription, kind: error is CancellationError ? .step : .problem)
                     states[id] = state
                     if retry { unreachable = true } else { losses.remove(id) }
                 }
@@ -338,10 +368,13 @@ final class SSHReconnectController {
     func cancel(hostID: HostID) {
         stopRetrying(hostID)
         epochs[hostID] = nil
-        operations.removeValue(forKey: hostID)?.cancel()
+        if operations.removeValue(forKey: hostID).map({ $0.cancel() }) != nil { log(hostID, "cancelled", kind: .step) }
+        endLogin(hostID)
+        // A login no attempt of this controller runs (a detached space's restore) ends with its terminal.
+        for (identity, host) in logins where host == hostID { loginClosers[identity]?() }
         for recipe in recipes.values where recipe.host == hostID {
             var state = states[recipe.connection] ?? State()
-            state.reconnecting = false; state.attempted = true; state.error = nil
+            state.reconnecting = false; state.attempted = true; state.error = nil; state.step = nil
             states[recipe.connection] = state
             runtime?.workspace?.hostMoveMotion.connecting.subtract(recipe.surfaces)
         }
@@ -385,128 +418,289 @@ final class SSHReconnectController {
         for host in Array(operations.keys) { cancel(hostID: host) }
         automatic = false
         losses.removeAll(); failures.removeAll(); dropped.removeAll()
-        accepting.removeAll(); droppedSpaces.removeAll()
         recipes.removeAll(); replacements.removeAll(); states.removeAll(); completed.removeAll(); launchingShells.removeAll(); launchingHistory.removeAll()
+        logs.removeAll(); logShown.removeAll(); sources.removeAll(); partial.removeAll(); answered.removeAll()
+    }
+
+    // MARK: Login: prompts and log
+
+    /// The host a login terminal's ssh (`SSHAskpassRequest.tabID`) or a restored tab's (`terminal`) asks for, while it
+    /// logs in.
+    func host(asking request: SSHAskpassRequest) -> HostID? {
+        if let terminal = request.terminal {
+            guard launchingShells[terminal] != nil else { return nil }
+            return runtime?.workspace?.hosts.terminals[terminal]?.host
+        }
+        return logins[request.tabID]
+    }
+
+    /// ssh asks: the strip of every tab of the host shows it (`orphan` when none is open). An ssh that is no login of
+    /// this app's, or of a restored tab logging in again, is refused.
+    func ask(_ request: SSHAskpassRequest) {
+        guard let host = host(asking: request), let directory = runtime?.herdrLaunch.directory else {
+            if let directory = runtime?.herdrLaunch.directory { SSHAskpass.reply(request, directory: directory, answer: nil) }
+            return
+        }
+        if let previous = prompts[host], previous.request.id != request.id { SSHAskpass.reply(previous.request, directory: directory, answer: nil) }
+        // ssh asking again after an answer: the same question (a password), or a key's own retry wording.
+        let retry = request.kind == .secret && answered[host] != nil
+            && (answered[host] == request.prompt || request.prompt.lowercased().hasPrefix("bad passphrase"))
+        prompts[host] = Prompt(request: request, retry: retry)
+        awaitingTerminal.remove(host)
+        log(host, request.prompt, kind: .prompt)
+    }
+
+    /// The strip's answer to `host`'s prompt; nil refuses it (No to a confirmation that takes no word).
+    func answer(_ host: HostID, _ value: String?) {
+        guard let prompt = prompts.removeValue(forKey: host), let directory = runtime?.herdrLaunch.directory else { return }
+        SSHAskpass.reply(prompt.request, directory: directory, answer: value)
+        answered[host] = value == nil ? nil : prompt.text
+    }
+
+    /// Yes or No to a confirmation: the word for a question ssh reads as text (a host key's), nothing for No to one it
+    /// asks as a permission (`SSH_ASKPASS_PROMPT=confirm`, which reads any answer but yes as no).
+    func confirm(_ host: HostID, _ yes: Bool) {
+        guard let prompt = prompts[host] else { return }
+        answer(host, yes ? "yes" : prompt.request.hint == "confirm" ? nil : "no")
+    }
+
+    /// Shows or hides the log under `surface`'s strip.
+    func toggleLog(_ surface: UUID) {
+        if logShown.remove(surface) == nil { logShown.insert(surface) }
+    }
+
+    /// Types `text` and Return into `host`'s login terminal: for an ssh that asks there.
+    func type(_ host: HostID, _ text: String) {
+        loginInputs[host]?(Data((text + "\r").utf8))
+        partial[host] = nil
+        awaitingTerminal.remove(host)
+    }
+
+    func loginStarted(_ identity: UUID, host: HostID, input: @escaping (Data) -> Void, close: @escaping () -> Void) {
+        logins[identity] = host
+        loginInputs[host] = input
+        loginClosers[identity] = close
+        loginsRunning.insert(host)
+    }
+
+    func loginEnded(_ identity: UUID) {
+        loginClosers[identity] = nil
+        guard let host = logins.removeValue(forKey: identity) else { return }
+        if !logins.values.contains(host) {
+            loginInputs[host] = nil
+            loginsRunning.remove(host)
+            awaitingTerminal.remove(host)
+            if let rest = partial.removeValue(forKey: host), !rest.isEmpty { log(host, rest, kind: .output) }
+        }
+    }
+
+    /// A login's terminal output, as text lines (escape sequences dropped, a carriage return starting the line again).
+    /// An unfinished line ending as a question does (`:` or `?`) is ssh asking on its terminal.
+    func loginOutput(_ host: HostID, _ bytes: Data) {
+        var line = partial[host] ?? ""
+        for character in Self.plain(String(decoding: bytes, as: UTF8.self)) {
+            switch character {
+            case "\n", "\r\n": log(host, line, kind: .output); line = ""
+            case "\r": line = ""
+            default: line.append(character)
+            }
+        }
+        partial[host] = String(line.suffix(2048))
+        let asking = line.trimmingCharacters(in: .whitespaces).last.map { $0 == ":" || $0 == "?" } == true
+        if asking, prompts[host] == nil { awaitingTerminal.insert(host) } else { awaitingTerminal.remove(host) }
+    }
+
+    /// What the attempt does now: on the strip of each of the host's connections, and in its log.
+    func step(_ host: HostID, _ text: String) {
+        for id in states.keys where recipes[id]?.host == host && states[id]?.reconnecting == true { states[id]?.step = text }
+        log(host, text, kind: .step)
+    }
+
+    func log(_ host: HostID, _ text: String, kind: LogLine.Kind) {
+        let text = String(text.prefix(4096))
+        guard kind != .output || !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        logCount += 1
+        var lines = logs[host] ?? []
+        lines.append(LogLine(id: logCount, time: kind == .output ? nil : Date(), text: text, kind: kind))
+        if lines.count > Self.logLimit { lines.removeFirst(lines.count - Self.logLimit) }
+        logs[host] = lines
+    }
+
+    private func clearLog(_ host: HostID) {
+        logs[host] = nil; partial[host] = nil; answered[host] = nil
+        let surfaces = runtime?.workspace?.hosts.terminals.filter { $0.value.host == host }.map(\.key) ?? []
+        logShown.subtract(surfaces)
+    }
+
+    /// A host with a login asking while no tab of it is open (its spaces restored from the Detached list): the active
+    /// tab's strip carries the prompt, named for that host.
+    func orphan(for surface: UUID) -> HostID? {
+        guard let workspace = runtime?.workspace, workspace.activeSurfaceID == surface else { return nil }
+        let open = workspace.allSurfaceIDs
+        return Set(prompts.keys).union(awaitingTerminal).sorted { $0.rawValue < $1.rawValue }.first { host in
+            !workspace.hosts.terminals.contains { $0.value.host == host && open.contains($0.key) }
+        }
+    }
+
+    /// An attempt ended: a prompt still open is refused (its ssh has gone or goes now).
+    private func endLogin(_ host: HostID) {
+        if let prompt = prompts.removeValue(forKey: host), let directory = runtime?.herdrLaunch.directory {
+            SSHAskpass.reply(prompt.request, directory: directory, answer: nil)
+        }
+        sources[host] = nil
+        answered[host] = nil
+        awaitingTerminal.remove(host)
+    }
+
+    /// Text without terminal escape sequences (CSI, OSC and two-character ones) or other control characters.
+    nonisolated static func plain(_ text: String) -> String {
+        var result = "", escape = false, sequence: Character?
+        for character in text {
+            if let kind = sequence {
+                // CSI ends at a final byte (@ to ~); OSC at BEL or ST (ESC \\, whose ESC starts a new sequence).
+                if kind == "[" ? character.asciiValue.map({ (0x40...0x7E).contains($0) }) == true : character == "\u{07}" { sequence = nil }
+                else if character == "\u{1B}" { sequence = nil; escape = true }
+                continue
+            }
+            if escape {
+                escape = false
+                if character == "[" || character == "]" { sequence = character }
+                continue
+            }
+            if character == "\u{1B}" { escape = true; continue }
+            if character == "\n" || character == "\r" || character == "\r\n" || character == "\t" { result.append(character); continue }
+            if character.unicodeScalars.allSatisfy({ $0.properties.generalCategory == .control }) { continue }
+            result.append(character)
+        }
+        return result
     }
 }
 
-/// OpenSSH owns authentication in a real PTY. No password or key material is
-/// copied into a recipe, argv, or app field. The private master is fresh each time.
+/// A reconnect's login runs in a terminal of a private helper: never a workspace tab, a space or a sheet. OpenSSH asks
+/// its prompts through `SSH_ASKPASS` (`SSHAskpass`), which the strip answers; the terminal's output goes to the host's
+/// reconnect log, whose field types into it for an ssh that asks there. No password or key material is kept in a recipe,
+/// argv or app field: an answer goes once from the strip's field to the process ssh asked. The private master is fresh
+/// each time.
 @MainActor
 enum SSHReconnectLogin {
-    /// `configuration`: the connection's `ssh -G`, which decides the master's keepalive (`SSHKeepalive`).
-    static func authenticate(shell: SSHShell, master: SSHMaster, window: NSWindow?, configuration: String? = nil) async throws {
-        guard let window = window ?? NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow else {
-            throw HerdrFailure("Open a Dispatch window to authenticate this connection.")
+    /// A command in a terminal of a private helper (`--stdio`), its output in `host`'s reconnect log.
+    @MainActor final class Terminal {
+        /// The identity its processes ask under (`DISPATCH_HERDR_TAB`).
+        let identity: UUID
+        let host: HostID
+        private let session: HelperSession
+        private let client: HelperClient
+        private let node: UInt64
+        private(set) var exited = false
+        private(set) var status: Int32?
+        private(set) var failure: (any Error)?
+        private var sending: Task<Void, Never>?
+        /// Closed: by its owner when done, or by Cancel (`SSHReconnectController.cancel`).
+        private(set) var closed = false
+
+        private init(identity: UUID, host: HostID, session: HelperSession, client: HelperClient, node: UInt64) {
+            self.identity = identity; self.host = host; self.session = session; self.client = client; self.node = node
         }
-        let arguments = interactiveArguments(shell: shell, master: master, configuration: configuration)
-        let command = ([shell.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
-        // Authentication owns this short-lived helper, not a workspace terminal. Keeping its
-        // topology private avoids importing password prompts into the user's tabs; its existing
-        // recorded transport covers the PTY without skipping the live panel during replay.
-        let process = Process()
-        process.executableURL = HelperApp.executable
-        guard let executable = process.executableURL else { throw HerdrFailure("The bundled helper is missing.") }
-        process.arguments = ["--stdio"]
-        // Authentication starts from the account home, independently of the active workspace.
-        process.currentDirectoryURL = System.home
-        let session = try await HelperSession(process: process)
-        defer { session.close() }
-        let client = HelperClient(session.connection)
-        guard let backend = try await client.backends().first(where: { $0.key == "native" }) else {
-            throw HerdrFailure("The native terminal backend is unavailable.")
-        }
-        let (opened, ready) = AsyncThrowingStream<UInt64, any Error>.makeStream()
-        _ = try await client.open(backend.route) { result in
-            switch result {
-            case .success(.opened(let id)): ready.yield(id); ready.finish()
-            case .failure(let error): ready.finish(throwing: error)
-            default: break
-            }
-        }
-        var iterator = opened.makeAsyncIterator()
-        guard let parent = try await iterator.next() else { throw HerdrFailure("The native terminal backend closed.") }
-        let environment = System.testing ? ["HOME=" + System.home.path, "GHOSTTY_ZSH_ZDOTDIR=/var/empty", "DISPATCH_TESTING=1"] : []
-        // ssh runs where the connection was typed (`SSHShell.directory`): its relative paths resolve as they did.
-        let node = try await client.create(.init(parent: parent, beside: nil, cwd: shell.workingDirectory ?? System.home.path, launch: nil,
-                                                 command: command, environment: environment))
-        let id = try AppReplay.identity(kind: "ssh.authentication", value: UUID())
-        let directory = TerminalRuntime.shared.herdrLaunch.directory.appendingPathComponent("auth-" + id.uuidString.prefix(8))
-        let renderer = try HelperRenderer(directory: directory, executable: executable)
-        defer { renderer.stop() }
-        let cancellation = LoginCancellation()
-        defer { cancellation.closed = true; cancellation.sending?.cancel(); cancellation.attaching?.cancel() }
-        renderer.onConnect = { _, channel in
-            channel.onResize = { size in
-                guard cancellation.attached, !cancellation.closed else { return }
-                let previous = cancellation.sending
-                cancellation.sending = Task {
-                    await previous?.value
-                    guard !Task.isCancelled, !cancellation.closed else { return }
-                    do { try await client.resize(.init(terminal: node, size: size)) }
-                    catch { cancellation.error = error }
+
+        /// `logged`: its output goes to the log (a login's); a resumed login shell's does not.
+        static func start(command: String, directory: String?, host: HostID, logged: Bool = true) async throws -> Terminal {
+            let process = Process()
+            process.executableURL = HelperApp.executable
+            guard process.executableURL != nil else { throw HerdrFailure("The bundled helper is missing.") }
+            process.arguments = ["--stdio"]
+            // Authentication starts from the account home, independently of the active workspace.
+            process.currentDirectoryURL = System.home
+            let session = try await HelperSession(process: process)
+            do {
+                let client = HelperClient(session.connection)
+                guard let backend = try await client.backends().first(where: { $0.key == "native" }) else {
+                    throw HerdrFailure("The native terminal backend is unavailable.")
                 }
-            }
-            channel.onClose = { cancellation.finished = true; cancellation.sending?.cancel() }
-            cancellation.attaching = Task {
-                do {
-                    let size = channel.grid
-                    _ = try await client.attach(.init(terminal: node, size: size, takeover: false)) { result in
-                        DispatchQueue.main.async {
-                            MainActor.assumeIsolated {
-                                guard !cancellation.closed else { return }
-                                switch result {
-                                case .success(.attached):
-                                    cancellation.attached = true
-                                    channel.onInput = { bytes in
-                                        let previous = cancellation.sending
-                                        cancellation.sending = Task {
-                                            await previous?.value
-                                            guard !Task.isCancelled, !cancellation.closed else { return }
-                                            do { try await client.input(.init(terminal: node, bytes: bytes)) }
-                                            catch { cancellation.error = error }
-                                        }
-                                    }
-                                    if channel.grid != size { channel.onResize(channel.grid) }
-                                case .success(.output(let output)): channel.write(output.bytes)
-                                case .success(.exit): cancellation.finished = true; channel.finish()
-                                case .failure(let error): cancellation.error = error; channel.close()
-                                default: break
-                                }
+                let (opened, ready) = AsyncThrowingStream<UInt64, any Error>.makeStream()
+                _ = try await client.open(backend.route) { result in
+                    switch result {
+                    case .success(.opened(let id)): ready.yield(id); ready.finish()
+                    case .failure(let error): ready.finish(throwing: error)
+                    default: break
+                    }
+                }
+                var iterator = opened.makeAsyncIterator()
+                guard let parent = try await iterator.next() else { throw HerdrFailure("The native terminal backend closed.") }
+                let id = try AppReplay.identity(kind: "ssh.authentication", value: UUID())
+                let runtime = TerminalRuntime.shared
+                // Its own launch capability (the token askpass posts with) and the askpass program.
+                var variables = runtime.herdrLaunch.environment(for: id)
+                variables.merge(SSHAskpass.environment(directory: runtime.herdrLaunch.directory)) { _, new in new }
+                if System.testing {
+                    variables.merge(["HOME": System.home.path, "GHOSTTY_ZSH_ZDOTDIR": "/var/empty", "DISPATCH_TESTING": "1"]) { _, new in new }
+                }
+                let identity = variables["DISPATCH_HERDR_TAB"].flatMap(UUID.init(uuidString:)) ?? id
+                // ssh runs where the connection was typed (`SSHShell.directory`): its relative paths resolve as they did.
+                let node = try await client.create(.init(parent: parent, beside: nil, cwd: directory ?? System.home.path, launch: nil,
+                    command: command, environment: variables.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }))
+                let terminal = Terminal(identity: identity, host: host, session: session, client: client, node: node)
+                runtime.hosts.reconnect.loginStarted(identity, host: host, input: { [weak terminal] bytes in terminal?.type(bytes) },
+                                                     close: { [weak terminal] in terminal?.close() })
+                _ = try await client.attach(.init(terminal: node, size: .init(columns: 120, rows: 32), takeover: false)) { [weak terminal] result in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            guard let terminal, !terminal.closed else { return }
+                            switch result {
+                            case .success(.output(let output)): if logged { runtime.hosts.reconnect.loginOutput(host, output.bytes) }
+                            case .success(.exit(let exit)): terminal.status = exit.status; terminal.exited = true
+                            case .failure(let error): terminal.failure = error; terminal.exited = true
+                            default: break
                             }
                         }
                     }
-                } catch { cancellation.error = error }
+                }
+                return terminal
+            } catch {
+                session.close()
+                throw error
             }
         }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 620, height: 320),
-                            styleMask: [.titled], backing: .buffered, defer: false)
-        panel.title = "Reconnect to \(shell.destination)"
-        panel.isReleasedWhenClosed = false
-        // Authentication lives outside the workspace and must accept focus
-        // without selecting a tab or passing the workspace visibility check.
-        let terminal = TerminalView(id: id, directory: System.home.path,
-                                    presentation: .standalone, allowHostMedia: false, helper: renderer)
-        terminal.frame = NSRect(x: 12, y: 48, width: 596, height: 260)
-        panel.contentView?.addSubview(terminal)
-        terminal.onProcessExit = { cancellation.finished = true }
-        let button = NSButton(title: "Cancel", target: cancellation, action: #selector(LoginCancellation.cancel))
-        button.frame = NSRect(x: 520, y: 10, width: 88, height: 28)
-        panel.contentView?.addSubview(button)
-        let responder = window.firstResponder
-        window.beginSheet(panel, completionHandler: nil)
-        panel.makeFirstResponder(terminal)
-        defer {
-            window.endSheet(panel); panel.orderOut(nil); terminal.destroy()
-            TerminalRuntime.shared.chat.close(terminal.id)
-            TerminalRuntime.shared.herdrLaunch.close(terminal.id)
-            if let responder, (responder as? NSView)?.window === window { window.makeFirstResponder(responder) }
+
+        func type(_ bytes: Data) {
+            guard !closed else { return }
+            let previous = sending, client = client, node = node
+            sending = Task {
+                await previous?.value
+                guard !Task.isCancelled else { return }
+                do { try await client.input(.init(terminal: node, bytes: bytes)) } catch {}
+            }
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+
+        /// Ends the terminal's processes with the private helper.
+        func close() {
+            guard !closed else { return }
+            closed = true
+            sending?.cancel()
+            let runtime = TerminalRuntime.shared
+            runtime.hosts.reconnect.loginEnded(identity)
+            runtime.herdrLaunch.close(identity)
+            session.close()
+        }
+    }
+
+    /// `configuration`: the connection's `ssh -G`, which decides the master's keepalive (`SSHKeepalive`).
+    static func authenticate(shell: SSHShell, master: SSHMaster, host: HostID, configuration: String? = nil) async throws {
+        let arguments = interactiveArguments(shell: shell, master: master, configuration: configuration)
+        let command = ([shell.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
+        let terminal = try await Terminal.start(command: command, directory: shell.workingDirectory, host: host)
+        defer { terminal.close() }
+        let controller = TerminalRuntime.shared.hosts.reconnect
+        // A login waiting for an answer has as long as it needs; one waiting for nothing gives up after two minutes.
+        var deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        // `ssh -f` leaves once the master is in the background: its exit is a failure only while no master answers.
+        var exitedAt: ContinuousClock.Instant?
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
-            if cancellation.cancelled { throw CancellationError() }
-            if let error = cancellation.error { throw error }
+            if terminal.closed { throw CancellationError() }
+            if controller.prompts[host] != nil || controller.awaitingTerminal.contains(host) {
+                deadline = ContinuousClock.now.advanced(by: .seconds(120))
+            }
+            if let error = terminal.failure { throw error }
             let ready = try AppReplay.query(kind: "observe.ssh.master.ready", input: .string(master.controlPath)) {
                 .bool(FileManager.default.fileExists(atPath: master.controlPath))
             }
@@ -514,7 +708,14 @@ enum SSHReconnectLogin {
                 let result = try await SSHCommand.run(executable: master.executable, arguments: master.controlArguments("check"), timeout: 3)
                 if result.status == 0 { return }
             }
-            if cancellation.finished { throw HerdrFailure("SSH authentication failed. Retry to log in again.") }
+            if terminal.exited {
+                if terminal.status.map({ $0 != 0 }) ?? true { throw HerdrFailure("SSH authentication failed. Retry to log in again.") }
+                let now = ContinuousClock.now
+                if let exitedAt, exitedAt.duration(to: now) > .seconds(3) {
+                    throw HerdrFailure("SSH logged in, but its connection did not become ready.")
+                }
+                if exitedAt == nil { exitedAt = now }
+            }
             try await System.sleep(for: .milliseconds(100), "authentication")
         }
         throw HerdrFailure("SSH authentication timed out. Retry to authenticate again.")
@@ -546,7 +747,7 @@ enum SSHReconnectLogin {
         }
         throw SSHAutomaticFailure.unreachable("SSH logged in, but its connection did not become ready.")
     }
-    /// The login sheet's master: the connection's own options, which prompt as they did in its terminal.
+    /// The interactive login's master: the connection's own options, whose prompts reach the strip through askpass.
     nonisolated static func interactiveArguments(shell: SSHShell, master: SSHMaster, configuration: String?) -> [String] {
         ["-o", "ControlMaster=yes", "-o", "ControlPersist=yes", "-S", master.controlPath,
          "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration) + ["--", shell.destination]
@@ -557,15 +758,5 @@ enum SSHReconnectLogin {
         ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlMaster=yes", "-o", "ControlPersist=yes",
          "-S", master.controlPath, "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration)
             + ["--", shell.destination]
-    }
-    @MainActor private final class LoginCancellation: NSObject {
-        var cancelled = false
-        var finished = false
-        var attached = false
-        var closed = false
-        var error: (any Error)?
-        var sending: Task<Void, Never>?
-        var attaching: Task<Void, Never>?
-        @objc func cancel() { cancelled = true }
     }
 }

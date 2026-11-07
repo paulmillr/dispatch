@@ -28,6 +28,8 @@ final class HerdrLaunch {
     var sshConnecting: ((SSHLaunchRequest) -> Void)?
     var sshConsent: ((SSHConsentRequest, URL) -> Void)?
     var sshClosed: ((SSHConnectionID, SSHCloseNotice) -> Void)?
+    /// A reconnect login's ssh asking through `dispatch-askpass` (`SSHAskpassCommand`).
+    var sshAskpass: ((SSHAskpassRequest) -> Void)?
 
     func start() throws {
         stop()
@@ -102,6 +104,9 @@ final class HerdrLaunch {
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
             }
             try NativeSSHEnvironment.install(in: directory, functions: functions)
+            let askpass = bin.appendingPathComponent(SSHAskpass.program)
+            try SSHAskpass.script(executable: System.executable.path).write(to: askpass, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askpass.path)
             return .null
         }
     }
@@ -158,7 +163,7 @@ final class HerdrLaunch {
     private func consume() {
         guard !AppReplay.replaying else { return }
         for url in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        where ["sshconsent", "sshclosed", "sshrequest", "sshconnecting"].contains(url.pathExtension) {
+        where ["sshconsent", "sshclosed", "sshrequest", "sshconnecting", "sshaskpass"].contains(url.pathExtension) {
             defer { try? FileManager.default.removeItem(at: url) }
             let data = try? Data(contentsOf: url)
             // A launch request's session variables (SendEnv values) stay out of the journal: replay spawns nothing.
@@ -183,6 +188,18 @@ final class HerdrLaunch {
                 return
             }
             sshConsent?(request, url.deletingPathExtension().appendingPathExtension("sshchoice"))
+            return
+        }
+        if url.pathExtension == "sshaskpass" {
+            guard let data, data.count < 16_384,
+                  let request = try? JSONDecoder().decode(SSHAskpassRequest.self, from: data),
+                  request.id.uuidString == url.deletingPathExtension().lastPathComponent else { return }
+            guard tokens.values.contains(where: { $0 == (request.tabID, request.token) }) else {
+                print("SSH askpass rejected: inactive launcher scope=\(request.tabID)")
+                SSHAskpass.reply(request, directory: directory, answer: nil)
+                return
+            }
+            sshAskpass?(request)
             return
         }
         if url.pathExtension == "sshclosed" {

@@ -14,9 +14,10 @@ enum TerminalMachine: Equatable, Codable, Sendable {
     }
 
     /// What a new terminal on this machine runs; nil = this Mac's login shell.
-    func command(running remote: String? = nil) -> String? {
+    /// `askpass`: the restored tab logging in again, whose ssh asks through the reconnect strip (`SSHAskpass`).
+    func command(running remote: String? = nil, askpass: UUID? = nil) -> String? {
         guard case .ssh(let shell) = self else { return remote }
-        return shell.command(running: remote)
+        return shell.command(running: remote, askpass: askpass)
     }
     #endif
 }
@@ -67,8 +68,9 @@ struct SSHShell: Equatable, Codable, Sendable {
     /// through the app's ssh launcher, so it is attributed like ssh typed in a terminal, with this
     /// exact ssh executable. A clone runs from the original's folder (`directory`, `DISPATCH_SSH_DIRECTORY`; the launcher
     /// stays where it is when the folder is gone), so its relative paths resolve alike.
-    func command(running remote: String? = nil) -> String {
+    func command(running remote: String? = nil, askpass: UUID? = nil) -> String {
         (["/usr/bin/env", "DISPATCH_SSH_EXECUTABLE=" + executable] + (directory.map { ["DISPATCH_SSH_DIRECTORY=" + $0] } ?? [])
+            + (askpass.map { ["DISPATCH_SSH_ASKPASS=" + $0.uuidString] } ?? [])
             + [System.executable.path, "--ssh-launch"] + arguments + (remote.map { [$0] } ?? []))
             .map(HerdrLaunch.quote).joined(separator: " ")
     }

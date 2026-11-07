@@ -6,6 +6,9 @@ enum DispatchApp {
         if CommandLine.arguments.dropFirst().first == "--ssh-launch" {
             exit(SSHLauncherCommand.run(Array(CommandLine.arguments.dropFirst(2))))
         }
+        if CommandLine.arguments.dropFirst().first == "--ssh-askpass" {
+            exit(SSHAskpassCommand.run(Array(CommandLine.arguments.dropFirst(2))))
+        }
         Home.isolate()
         Home.protect()
         AppFont.register()

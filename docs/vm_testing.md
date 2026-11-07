@@ -24,7 +24,7 @@ python3 test/vm.py rust             # copy + verify host build/rust into the gue
 python3 test/vm.py test ChatTests   # first validation: no Claude, Pi, or Linux needed
 ```
 
-The guest must run commands as `admin` in a logged-in desktop, with passwordless sudo for the loopback sshd fixtures. In the guest, add `admin ALL=(ALL) NOPASSWD: ALL` via `visudo`; never do this on the host. Check:
+The guest must run commands as `admin` in a logged-in desktop, with passwordless sudo for the loopback sshd fixtures. In the guest, add `admin ALL=(ALL) NOPASSWD: ALL` via `visudo`; never do this on the host. The runner passes the guest account's password (`admin`, or `DISPATCH_VM_PASSWORD` on the host for an image with another) to the tests as `DISPATCH_TEST_SSH_PASSWORD`: `SSHReconnectIntegrationTests.testPasswordAsksInTheStripOnReconnect` logs in with it through the fixture's sshd (PAM) and skips where it is unset, as on a host, so no host password is ever asked for. Check:
 
 ```sh
 tart exec dispatch-tests /usr/bin/stat -f %Su /dev/console   # admin

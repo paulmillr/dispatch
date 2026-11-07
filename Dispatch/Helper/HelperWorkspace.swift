@@ -681,7 +681,7 @@
 
     func prepare(_ tab: TerminalTab) {
       // A connecting placeholder has no terminal of its own: the helper's reply brings it.
-      guard tab.terminal == nil, !tab.isConnecting, pending[tab.id] == nil,
+      guard tab.terminal == nil, !tab.isConnecting, !tab.isGone, pending[tab.id] == nil,
         !TerminalRuntime.shared.hosts.reconnect.awaitingRestore(tab.id) else { return }
       let surface = surfaceID()
       pending[tab.id] = Task {
@@ -715,7 +715,10 @@
           let terminal = try await client.create(
             .init(
               parent: parent, beside: nil, cwd: local ? (latest.machine == .local ? latest.directory : System.home.path) : nil, launch: nil,
-              command: latest.launchCommand ?? latest.machine.command() ?? prepared.command, environment: prepared.variables,
+              command: latest.launchCommand
+                ?? latest.machine.command(askpass: TerminalRuntime.shared.hosts.reconnect.launchingRestored(tab.id) ? tab.id : nil)
+                ?? prepared.command,
+              environment: prepared.variables,
               // Only a default shell has startup files to skip; a command keeps the recorded request.
               integration: prepared.integrated && latest.launchCommand == nil && latest.machine.command() == nil && shell == nil ? false : nil))
           guard !stopped, owned.flatMap(\.tabs).contains(where: { $0.id == tab.id }) else {
@@ -1184,10 +1187,10 @@
       }
     }
 
-    /// Restored tabs show what they showed when they were detached (Files on a commit, chat, the terminal).
+    /// Restored tabs show what they showed when they were detached or the app quit (Files on a commit, chat, the
+    /// terminal). Only this helper's: another host's tabs may still be offline, where a view cannot load yet.
     private func restoreViews() {
-      guard let workspace else { return }
-      TerminalRuntime.shared.files.restoreViews(present: workspace.allTabIDs)
+      TerminalRuntime.shared.files.restoreViews(present: Set(owned.flatMap(\.tabs).map(\.id)))
     }
 
     private func placeholder(_ route: HelperBackend.Route, name: String, host: HostID) {
@@ -1881,48 +1884,51 @@
       return server
     }
 
-    static let missingRetained = "A retained terminal no longer exists on the server. Its saved view remains offline."
-
-    /// Reconnect anyway (`SSHReconnectController.acceptsChanges`): the saved view's tabs whose terminals the server no
-    /// longer has leave it as if closed offline (the server is never asked: their old ids could name other nodes now),
-    /// and a space left without tabs leaves too, not listed as detached: nothing of it is left to restore. A route left
-    /// with nothing releases its server view, as `closeSaved` does.
-    private func dropSaved(_ missing: Set<UUID>, route: HelperBackend.Route) {
+    /// The saved view's tabs whose terminals the server no longer has (closed there while the app was away) stay where
+    /// they were, marked gone (`TerminalTab.gone`): read-only, with what they showed (their output, transcript, Files
+    /// view), until closed. The server is never asked about them: their old ids could name other nodes now, so a gone
+    /// tab has no terminal and gets a window of its own with no server node (`ContainerTab.goneNode`), and a space with
+    /// nothing left on the server keeps no session node. The topology's spaces then carry them (`apply`).
+    private func markGone(_ missing: Set<UUID>, route: HelperBackend.Route) {
       guard var entry = restoring[route], let workspace else { return }
-      let shown = Set(workspace.spaces.map(\.id))
-      let released = workspace.spaces.flatMap(\.tabs).filter { missing.contains($0.id) }.flatMap(\.surfaceIDs)
+      func mark(_ space: Space) -> Space {
+        var space = space
+        var containers: [ContainerTab] = []
+        for container in space.containers {
+          let gone = container.terminals.filter { missing.contains($0.id) }
+          guard !gone.isEmpty else { containers.append(container); continue }
+          var kept = container
+          for tab in gone { _ = kept.arrangement.detachTab(tab.id) }
+          let whole = kept.arrangement.panes.isEmpty
+          if !whole { containers.append(kept) }
+          for tab in gone {
+            var tab = tab
+            tab.terminal = nil; tab.gone = true; tab.isConnecting = false
+            // A window of its own, under a new id: the server may still have the old one (with panes closed here).
+            // A window all of whose panes are gone keeps its name.
+            let alone = whole && gone.count == 1
+            containers.append(ContainerTab(id: System.uuid(), node: ContainerTab.goneNode,
+                                           name: alone ? container.name : tab.label, renamed: container.renamed,
+                                           arrangement: PaneArrangement(tab: tab)))
+          }
+        }
+        space.containers = containers
+        if containers.allSatisfy(\.gone) { space.node = nil }
+        if !containers.contains(where: { $0.id == space.selectedContainer }) { space.selectedContainer = containers.first?.id }
+        if let selected = space.selectedContainer { space.presentation?.reconcile(containers.map(\.id), near: selected) }
+        return space
+      }
+      let ids = Set(entry.presentation.map(\.id))
+      entry.presentation = entry.presentation.map(mark)
+      restoring[route] = entry
       workspace.updateLayout { next in
-        for id in missing { _ = next.detachTab(id) }
+        for index in next.spaces.indices where ids.contains(next.spaces[index].id) { next.spaces[index] = mark(next.spaces[index]) }
       }
-      var saved = WorkspaceLayout(spaces: entry.presentation, selectedSpace: nil)
-      for id in missing { _ = saved.detachTab(id) }
-      let before = Set(entry.presentation.map(\.id))
-      entry.presentation = saved.spaces.compactMap { space in
-        shown.contains(space.id) ? workspace.spaces.first { $0.id == space.id } : space
+      let name = workspace.hosts.record(hosts[route] ?? host).name
+      for id in missing {
+        TerminalRuntime.shared.chat.sessions[id]?.status = "This tab no longer exists on \(name). Its transcript is read-only."
       }
-      let gone = before.subtracting(entry.presentation.map(\.id))
-      print("Helper saved view accepts server: route=\(route), missing=\(missing.count), spaces gone=\(gone)")
-      TerminalRuntime.shared.hosts.reconnect.dropped(gone)
-      if entry.presentation.isEmpty {
-        restoring.removeValue(forKey: route)
-        subscribing.removeValue(forKey: route)?.task.cancel()
-        if let request = observations.removeValue(forKey: route) { connection?.cancel(request) }
-        restored(route)
-      } else {
-        restoring[route] = entry
-      }
-      workspace.onCloseTabs(released)
-    }
-
-    /// Reconnect anyway on a helper whose restore already stopped on a changed server (its error is `missingRetained`):
-    /// the saved views still restoring are matched to the server's latest topologies again, accepting what is gone.
-    func acceptServerChanges() {
-      guard error == Self.missingRetained else { return }
-      error = nil
-      for route in Array(restoring.keys) {
-        guard let topology = snapshots[route] else { continue }
-        do { try apply(topology, route: route) } catch { fail(error); return }
-      }
+      print("Helper saved view keeps gone tabs: route=\(route), gone=\(missing.count)")
     }
 
     /// `close` for a node of a space still restoring (`route`'s saved view): the server is never asked. The whole space
@@ -1964,17 +1970,13 @@
       guard entry.presentation.isEmpty else {
         restoring[route] = entry
         guard let topology = snapshots[route] else { return }
-        do {
-          try apply(topology, route: route)
-          if error == Self.missingRetained { error = nil }
-        } catch { fail(error) }
+        do { try apply(topology, route: route) } catch { fail(error) }
         return
       }
       restoring.removeValue(forKey: route)
       subscribing.removeValue(forKey: route)?.task.cancel()
       if let request = observations.removeValue(forKey: route) { connection?.cancel(request) }
       restored(route)
-      if error == Self.missingRetained { error = nil }
     }
 
     /// Whether every pane of `node` sits at its shell with nothing running, as the helper's close check finds it
@@ -2913,12 +2915,9 @@
         let terminals = topology.nodes.filter { $0.kind == .terminal }
         let available = Set(terminals.compactMap { restored.nodes[$0.key] })
         if !requested.isSubset(of: available) {
-          guard TerminalRuntime.shared.hosts.reconnect.acceptsChanges(on: hosts[route] ?? host) else {
-            throw HerdrFailure(Self.missingRetained)
-          }
-          dropSaved(requested.subtracting(available), route: route)
-          // Matched again without what is gone; a route left with nothing to restore has released its view.
-          if restoring[route] != nil { try apply(topology, route: route) }
+          // What the server still has comes back; tabs whose terminals are gone stay, read-only (`markGone`).
+          markGone(requested.subtracting(available), route: route)
+          try apply(topology, route: route)
           return
         }
         let roots = Set(restored.presentation.map(\.id))
@@ -3141,10 +3140,11 @@
               numbered: herdr && source.renamed == false, arrangement: arrangement))
           _ = first
         }
-        // Pending windows keep their presentation groups even when a topology predates their creation.
+        // Pending windows keep their presentation groups even when a topology predates their creation; gone tabs'
+        // windows (`markGone`) keep their place after the server's.
         let kept = Set(tabs.map(\.id))
         tabs += (previous.first { $0.id == identifier }?.containers ?? [])
-          .filter { placeholders.contains($0.id) && !kept.contains($0.id) }
+          .filter { (placeholders.contains($0.id) || $0.gone) && !kept.contains($0.id) }
         guard let first = tabs.first else { continue }
         var space =
           previous.first { $0.id == identifier }
@@ -3174,6 +3174,16 @@
         } else {
           space.presentation?.reconcile(tabs.map(\.id), near: space.selectedContainer)
         }
+        spaces.append(space)
+      }
+      // A space with nothing left on the server but gone tabs (`markGone`) stays as it is.
+      // A saved one still names the last connection's backend: it is this route's by its saved view.
+      let saved = Set(restoring[route]?.presentation.map(\.id) ?? [])
+      for space in previous where (space.backend == topology.backend || saved.contains(space.id)) && space.node == nil
+        && !space.containers.isEmpty && space.containers.allSatisfy(\.gone) && !spaces.contains(where: { $0.id == space.id }) {
+        var space = space
+        space.backend = topology.backend
+        space.remote = endpoint.connection
         spaces.append(space)
       }
       // Pending placements stay in their optimistic space, including across an older move's confirmation.
@@ -3241,6 +3251,10 @@
       }
       workspace.onCloseTabs(removed)
       retire()
+      // A local multiplexer's spaces come back from their server after a relaunch: their saved views with them.
+      if restoring[route] == nil, !TerminalRuntime.shared.files.launchedViews.isEmpty {
+        TerminalRuntime.shared.files.restoreViews(present: Set(spaces.flatMap(\.tabs).map(\.id)))
+      }
       for (id, pending) in renaming where pending.node == nil {
         if Self.target(id, in: owned) != nil { rename(id, name: pending.name) }
       }

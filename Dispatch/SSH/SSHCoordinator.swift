@@ -583,32 +583,44 @@ final class SSHCoordinator {
         workspace.focusRequest = System.uuid()
     }
 
-    /// Detached server work keeps a recipe, not an SSH master. A fresh launcher authenticates
-    /// before the helper reopens the saved backend identity (old TmuxCoordinator.restoreDetached).
+    /// The login shell a restore runs in place of a launcher, once it starts; `done` once the restore settled.
+    @MainActor private final class RestoreLogin {
+        var terminal: SSHReconnectLogin.Terminal?
+        var done = false
+    }
+
+    /// Detached server work keeps a recipe, not an SSH master. With no launcher left (a launch restore, or its tab
+    /// closed), the reconnect logs in as a live one does (`SSHReconnectLogin`, prompts in the strip), starts the helper
+    /// over that master and runs the login's remote command itself, as a launcher resumes it
+    /// (`SSHLauncherCommand.awaitRecovery`), in a terminal of a private helper: no tab or space is added and the
+    /// selection stays. Once the saved spaces are back, that login's shell ends; the spaces keep the connection.
     func restore(_ saved: SSHReconnectController.Recipe, entries: [HelperWorkspace.Detached]) async throws {
         let runtime = TerminalRuntime.shared
         guard let workspace = runtime.workspace else { throw CancellationError() }
-        var previous = runtime.hosts.reconnect.recipes[saved.connection]
+        let controller = runtime.hosts.reconnect
+        var previous = controller.recipes[saved.connection]
         previous?.backends = entries
-        var tab = TerminalTab(directory: System.home.path); tab.machine = .ssh(saved.shell)
-        var login = Space(name: "Reconnect", tab: tab); login.hostID = saved.host
+        // The login's own id: what the helper's login terminal is observed as. No workspace tab has it.
+        let origin = System.uuid()
         let recipe = SSHReconnectController.Recipe(connection: saved.connection, host: saved.host, shell: saved.shell, scope: saved.scope,
-            accountUID: saved.accountUID, boot: saved.boot, origin: tab.id,
-            surfaces: previous?.surfaces ?? Set(entries.flatMap(\.presentation).flatMap { $0.tabs.flatMap(\.surfaceIDs) }).union([tab.id]),
+            accountUID: saved.accountUID, boot: saved.boot, origin: origin,
+            surfaces: (previous?.surfaces ?? Set(entries.flatMap(\.presentation).flatMap { $0.tabs.flatMap(\.surfaceIDs) })).union([origin]),
             restored: true, backends: entries)
-        workspace.addSpace(login)
-        runtime.hosts.restore(recipe)
+        let old = activeRequest(saved.connection)
+        controller.retain(recipe)
+        let login = RestoreLogin()
         var completed = false
         defer {
-            let attempts = Array(requests.values.filter { $0.tabID == tab.id })
-            // A temporary launcher is retired now, not when its eventual process-exit
-            // callback arrives. Its external consumers own the surviving connection.
+            login.done = true
+            login.terminal?.close()
+            let attempts = Array(requests.values.filter { $0.tabID == origin })
+            // The login is retired now: its shell has ended, and the spaces it restored own the connection.
             for request in attempts {
                 if completed { closed(request.connectionID, credential: request.credential) }
                 else { finish(request.connectionID) }
             }
-            workspace.closeTab(tab.id, policy: .terminate)
-            runtime.hosts.reconnect.forget(recipe.connection)
+            runtime.chat.close(origin)
+            controller.forget(recipe.connection)
             if !completed, var previous {
                 previous.surfaces.formIntersection(workspace.allSurfaceIDs)
                 if !previous.surfaces.isEmpty {
@@ -623,17 +635,112 @@ final class SSHCoordinator {
                     for index in workspace.spaces.indices where workspace.spaces[index].remote.map({ generations.contains($0.rawValue) }) == true {
                         workspace.spaces[index].remote = previous.connection
                     }
-                    runtime.hosts.reconnect.retain(previous)
+                    controller.retain(previous)
                 }
             }
             print("SSH consumer restore settled: connection=\(recipe.connection), completed=\(completed), retained=\(previous?.surfaces.count ?? 0)")
         }
-        try await recover(recipe)
+        controller.step(recipe.host, "checking the SSH configuration")
+        let (configuration, scope) = try await Self.verifyReconnect(recipe.shell, scope: recipe.scope, automatic: false)
+        let window = recipe.surfaces.compactMap { runtime.views[$0]?.window }.first
+            ?? runtime.workspace?.activeSurfaceID.flatMap { runtime.views[$0]?.window }
+        let grant = await permissions.choose(scope, present: { [weak self] in await self?.newHostSelection($0, window: window) })
+        guard let grant, grant.profile != .ordinary else { throw CancellationError() }
+        try Task.checkCancellation()
+        let id = SSHConnectionID(try AppReplay.identity(kind: "ssh.connection", value: UUID()))
+        let folder = runtime.herdrLaunch.directory.appendingPathComponent("s-" + id.rawValue.uuidString.prefix(12))
+        _ = try AppReplay.query(kind: "ssh.folder", input: .string(folder.path)) {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            return .null
+        }
+        // A connection whose launcher closed keeps its login's session variables; one restored at launch has none.
+        let master = SSHMaster(executable: recipe.shell.executable, controlPath: folder.appendingPathComponent("master").path,
+                               destination: recipe.shell.destination, environment: old?.master.environment)
+        var launched = false
+        defer {
+            if !launched {
+                Task {
+                    await master.exit().value
+                    try? FileManager.default.removeItem(at: folder)
+                }
+            }
+        }
+        controller.step(recipe.host, "logging in: ssh " + recipe.shell.destination)
+        try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, host: recipe.host, configuration: configuration)
+        try Task.checkCancellation()
+        controller.step(recipe.host, "logged in; starting the Dispatch helper")
+        let request = SSHLaunchRequest(tabID: origin, token: "", connectionID: id, credential: System.uuid().uuidString,
+            master: master, shell: recipe.shell, integrationScope: scope, integrationGrant: grant, origin: nil)
+        let forwardAgent = SSHMaster.forwardsAgent(configuration)
+        launched = true
+        launch(request, recovering: true) { [self] path, info in
+            try Task.checkCancellation()
+            // Its spaces may all be detached (restored from the Detached list): no tab of them is in the workspace yet.
+            guard let identity = info.identity, let account = info.account,
+                  HostID.authenticated(identity.host) == recipe.host,
+                  recipe.accountUID == nil || recipe.accountUID == account.uid,
+                  runtime.hosts.reconnect.contains(recipe.connection.rawValue) else {
+                throw HerdrFailure("The authenticated host or account changed. Open a new connection.")
+            }
+            guard permissions.remembered(scope) == grant else { throw CancellationError() }
+            connections[id]?.helperPath = SSHBootstrap.hostPath(path, home: account.home)
+            // The login's remote command over the new master, as a resumed launcher runs it: the helper's login, whose
+            // session the restored spaces open through.
+            let arguments = master.shellArguments(command: SSHLauncherCommand.remoteCommand(sessionID: request.sessionID, grant: grant, command: nil),
+                                                  forwardAgent: forwardAgent)
+            let command = ([master.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
+            Task { @MainActor in
+                do {
+                    let terminal = try await SSHReconnectLogin.Terminal.start(command: command, directory: recipe.shell.workingDirectory,
+                                                                              host: recipe.host, logged: false)
+                    if login.done || connections[id] == nil { terminal.close() } else { login.terminal = terminal }
+                } catch { connections[id]?.launchFailure = error }
+            }
+        }
+        // The restored spaces wait for the helper's login, as they did for a launcher's (`recover`).
+        controller.step(recipe.host, "restoring spaces")
+        try await awaitRestored(recipe)
         completed = true
-        if let space = entries.first?.presentation.first { workspace.selectSpace(space.id) }
     }
 
-    /// An automatic attempt shows nothing: no consent sheet, no login sheet or tab, keys and the agent only.
+    /// Waits for a restored recipe's saved spaces to come back over the helper its login started, then lets its tabs go on.
+    private func awaitRestored(_ recipe: SSHReconnectController.Recipe) async throws {
+        let runtime = TerminalRuntime.shared
+        let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
+        for _ in 0... {
+            let consumers = runtime.hosts.reconnect.recipes[recipe.connection]?.surfaces ?? []
+            let saved = Set(recipe.backends.flatMap(\.presentation).filter { space in
+                recipe.surfaces.contains(recipe.origin) || space.tabs.flatMap(\.surfaceIDs).contains(where: consumers.contains)
+            }.map(\.id))
+            if !recipe.surfaces.contains(recipe.origin), saved.isEmpty { throw CancellationError() }
+            let retained = saved
+            if retained.isEmpty { break }
+            try Task.checkCancellation()
+            if let state = connections.values.first(where: { $0.request.tabID == recipe.origin }) {
+                if let failure = state.launchFailure { throw failure }
+                if let failure = runtime.helpers[.remote(state.id)]?.error { throw HerdrFailure(failure) }
+            }
+            let restored = Set(runtime.workspace?.spaces.compactMap { space -> UUID? in
+                guard retained.contains(space.id), let connection = space.remote,
+                      connection != recipe.connection, let helper = runtime.helpers[.remote(connection)] else { return nil }
+                if helper.error != nil { return nil }
+                return space.backend.flatMap { helper.multiplexer(of: $0) } != nil
+                    && !helper.isRestoring(space.id) ? space.id : nil
+            } ?? [])
+            if retained.isSubset(of: restored) { break }
+            guard ContinuousClock.now < deadline else {
+                throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        runtime.hosts.reconnect.forget(recipe.connection)
+        print("SSH restored consumers ready: connection=\(recipe.connection), surfaces=\(recipe.surfaces.count)")
+        for surface in recipe.surfaces { runtime.views[surface]?.resumeRestoredSession() }
+        // A restored SSH tab's saved view (Files, chat) loads over the connection that is back now.
+        runtime.files.restoreViews(present: recipe.surfaces.intersection(runtime.workspace?.allTabIDs ?? []))
+    }
+
+    /// An automatic attempt shows nothing: no consent sheet, no login prompt, keys and the agent only.
     func recover(_ recipe: SSHReconnectController.Recipe, automatic: Bool = false) async throws {
         let runtime = TerminalRuntime.shared
         let spaces = Set(runtime.workspace?.spaces.filter {
@@ -641,12 +748,13 @@ final class SSHCoordinator {
         }.map(\.id) ?? [])
         let old = activeRequest(recipe.connection)
         guard old != nil || recipe.restored else { throw HerdrFailure("The original connection is no longer available.") }
-        // Without its launcher, recovery logs in through a new tab, which an automatic attempt never opens.
+        // Without its launcher, recovery logs in through the strip and runs the login itself, which an automatic attempt
+        // never does.
         if automatic, recipe.restored || connections[recipe.connection]?.originClosed == true || recipe.launcher == nil {
             throw SSHAutomaticFailure.refused("Its SSH login tab is closed. Reconnect to log in again.")
         }
-        // A saved connection may outlive its launching tab. Authenticate through a temporary
-        // shell instead of waiting for an absent origin to restart itself.
+        // A saved connection may outlive its launching tab: it logs in without one (`restore`) instead of waiting for an
+        // absent origin to restart itself.
         if recipe.restored, runtime.workspace?.allSurfaceIDs.contains(recipe.origin) != true, !recipe.backends.isEmpty {
             try await restore(recipe, entries: recipe.backends)
             return
@@ -655,37 +763,7 @@ final class SSHCoordinator {
         if recipe.restored {
             if recipe.backends.isEmpty { runtime.hosts.reconnect.forget(recipe.connection) }
             resumeRestoredShells(recipe)
-            let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
-            for _ in 0... {
-                let consumers = runtime.hosts.reconnect.recipes[recipe.connection]?.surfaces ?? []
-                let saved = Set(recipe.backends.flatMap(\.presentation).filter { space in
-                    recipe.surfaces.contains(recipe.origin) || space.tabs.flatMap(\.surfaceIDs).contains(where: consumers.contains)
-                }.map(\.id))
-                if !recipe.surfaces.contains(recipe.origin), saved.isEmpty { throw CancellationError() }
-                // Spaces a Reconnect anyway found gone on the server are not waited for.
-                let retained = saved.subtracting(runtime.hosts.reconnect.droppedSpaces)
-                if retained.isEmpty { break }
-                try Task.checkCancellation()
-                if let state = connections.values.first(where: { $0.request.tabID == recipe.origin }) {
-                    if let failure = state.launchFailure { throw failure }
-                    if let failure = runtime.helpers[.remote(state.id)]?.error { throw HerdrFailure(failure) }
-                }
-                let restored = Set(runtime.workspace?.spaces.compactMap { space -> UUID? in
-                    guard retained.contains(space.id), let connection = space.remote,
-                          connection != recipe.connection, let helper = runtime.helpers[.remote(connection)] else { return nil }
-                    if helper.error != nil { return nil }
-                    return space.backend.flatMap { helper.multiplexer(of: $0) } != nil
-                        && !helper.isRestoring(space.id) ? space.id : nil
-                } ?? [])
-                if retained.isSubset(of: restored) { break }
-                guard ContinuousClock.now < deadline else {
-                    throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")
-                }
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            runtime.hosts.reconnect.forget(recipe.connection)
-            print("SSH restored consumers ready: connection=\(recipe.connection), surfaces=\(recipe.surfaces.count)")
-            for surface in recipe.surfaces { runtime.views[surface]?.resumeRestoredSession() }
+            try await awaitRestored(recipe)
             return
         }
         if connections[recipe.connection]?.originClosed == true || recipe.launcher == nil {
@@ -698,6 +776,8 @@ final class SSHCoordinator {
             return
         }
         guard HostProcessWatcher.alive(recipe.launcher) else { throw HerdrFailure("The SSH launcher has closed. Open a new terminal to connect.") }
+        let controller = runtime.hosts.reconnect
+        controller.step(recipe.host, "checking the SSH configuration")
         let (configuration, scope) = try await Self.verifyReconnect(recipe.shell, scope: recipe.scope, automatic: automatic)
         let window = recipe.surfaces.compactMap { runtime.views[$0]?.window }.first
             ?? runtime.workspace?.activeSurfaceID.flatMap { runtime.views[$0]?.window }
@@ -737,9 +817,11 @@ final class SSHCoordinator {
                 }
             }
         }
+        controller.step(recipe.host, (automatic ? "logging in with keys: ssh " : "logging in: ssh ") + recipe.shell.destination)
         if automatic { try await SSHReconnectLogin.authenticateSilently(shell: recipe.shell, master: master, configuration: configuration) }
-        else { try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, window: window, configuration: configuration) }
+        else { try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, host: recipe.host, configuration: configuration) }
         try Task.checkCancellation()
+        controller.step(recipe.host, "logged in; starting the Dispatch helper")
         let request = SSHLaunchRequest(tabID: recipe.origin, token: old?.token ?? "", connectionID: id, credential: System.uuid().uuidString,
             master: master, shell: recipe.shell, integrationScope: scope, integrationGrant: grant, origin: recipe.launcher)
         launch(request, recovering: true) { [self] path, info in
@@ -778,6 +860,7 @@ final class SSHCoordinator {
             }
             // Authentication does not make retained renderers writable: their original
             // spaces must be published and rebound by the replacement helper first.
+            if !spaces.isEmpty { controller.step(recipe.host, "restoring spaces") }
             let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
             for _ in 0... {
                 try Task.checkCancellation()
@@ -786,7 +869,7 @@ final class SSHCoordinator {
                     space.remote == id && space.backend.flatMap { helper?.multiplexer(of: $0) } != nil
                         && helper?.isRestoring(space.id) == false
                 }.map(\.id) ?? [])
-                if spaces.subtracting(runtime.hosts.reconnect.droppedSpaces).isSubset(of: restored) { break }
+                if spaces.isSubset(of: restored) { break }
                 if let error = helper?.error { throw HerdrFailure(error) }
                 guard ContinuousClock.now < deadline else {
                     throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")

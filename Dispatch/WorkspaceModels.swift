@@ -12,10 +12,15 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     /// The agent the helper found running here (its topology binding), named by `agent(named:)`: what a launcher-named
     /// tab shows until Chat binds the agent and gives its own key. Not saved; the next topology sets it again.
     var agent: String?
+    /// Its terminal no longer exists on its server (closed there while the app was away): the tab stays, read-only,
+    /// with what it showed, until closed. It has no terminal, and in a multiplexer's space a window of its own with no
+    /// server node (`ContainerTab.gone`): its old ids could name other nodes now, so nothing of it reaches the server.
+    var gone: Bool?
+    var isGone: Bool { gone == true }
     var label: String { customTitle ?? title }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, customTitle, directory, launchCommand, isConnecting, terminal, machine
+        case id, title, customTitle, directory, launchCommand, isConnecting, terminal, machine, gone
     }
     var surfaceIDs: [UUID] { [id] }
     var focusedSurfaceID: UUID { id }
@@ -531,6 +536,10 @@ struct ContainerTab: Identifiable, Equatable, Codable {
     /// The node that moves this window: its only terminal (every multiplexer moves a lone pane with its
     /// window; herdr places panes only), else the window itself.
     var placeable: UInt64 { terminals.count == 1 ? terminals[0].terminal ?? node : node }
+    /// The node a window of gone tabs has (`TerminalTab.gone`): none on any server. A window still being made has it
+    /// too, with tabs that are not gone.
+    static let goneNode: UInt64 = 0
+    var gone: Bool { node == Self.goneNode && !terminals.isEmpty && terminals.allSatisfy(\.isGone) }
 }
 
 /// A workspace command edits this value, then publishes the complete result.

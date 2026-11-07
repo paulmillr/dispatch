@@ -405,6 +405,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Window tabs of any structured space; helper containers close through the helper's policy.
     func closeWindow(_ id: UUID) {
         if workspace.helpers.values.contains(where: { $0.dismiss(id) }) { return }
+        if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id && $0.gone }) {
+            return workspace.removeGone(Set(container.terminals.map(\.id)))
+        }
         if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id }) {
             workspace.helper(containing: id)?.close(container.node, policy: .prompt)
         }
@@ -412,12 +415,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     /// Explicit Detach keeps the window running on its server and lists it as detached.
     func detachWindow(_ id: UUID) {
+        if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id && $0.gone }) {
+            return workspace.removeGone(Set(container.terminals.map(\.id)))
+        }
         if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id }) {
             workspace.helper(containing: id)?.close(container.node, policy: .detach)
         }
     }
 
     func terminateWindow(_ id: UUID) {
+        if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id && $0.gone }) {
+            return workspace.removeGone(Set(container.terminals.map(\.id)))
+        }
         if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id }) {
             if confirmTermination("tab “\(container.name)”") { workspace.helper(containing: id)?.close(container.node, policy: .terminate) }
         }

@@ -134,9 +134,16 @@ impl Tmux {
             .find(|state| state.id == window)
             .unwrap();
         let pane = state.layout.ids()[0];
+        let snapshot = client.snapshot.as_ref().unwrap();
+        let group = &self.affinity(loc, window).group;
+        let own = self.groups.roots.iter().any(|(root, value)| {
+            *value == (loc.backend, snapshot.session, group.clone())
+                && self.groups.keys.get(root) == Some(&format!("${}", snapshot.session))
+        });
         display(
             self.affinity(loc, window),
             client.cwd.get(&pane).map(|path| path.as_path()),
+            own.then_some(snapshot.name.as_str()),
         )
     }
     pub(crate) fn affinity(&self, loc: Location, window: u64) -> &Affinity {
@@ -364,10 +371,17 @@ pub(crate) fn label(name: &str) -> String {
         name.into()
     }
 }
-pub(crate) fn display(value: &Affinity, directory: Option<&Path>) -> String {
-    if value.directory == Some(true)
-        && let Some(path) = directory.filter(|path| path.is_absolute())
-    {
+/// A space's name. One given in Dispatch (`usesDirectoryName` false, or a value without it) stays. A space that
+/// follows its folder takes its session's name when it is the session's own space (`session`, read live) and someone
+/// chose that name, else its first pane's folder, else the stored name (the session's when it was first grouped).
+pub(crate) fn display(value: &Affinity, directory: Option<&Path>, session: Option<&str>) -> String {
+    if value.directory != Some(true) {
+        return value.name.clone();
+    }
+    if let Some(name) = session.filter(|name| chosen(name)) {
+        return name.into();
+    }
+    if let Some(path) = directory.filter(|path| path.is_absolute()) {
         return path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -375,3 +389,11 @@ pub(crate) fn display(value: &Affinity, directory: Option<&Path>) -> String {
     }
     value.name.clone()
 }
+/// Whether a session's name was chosen (`new-session -s`, `rename-session`, a restore plugin): tmux names a session
+/// it was not given a name for by a number, as Dispatch's own `new-session -d` and a bare `tmux` leave it.
+pub(crate) fn chosen(name: &str) -> bool {
+    !name.is_empty() && !name.bytes().all(|byte| byte.is_ascii_digit())
+}
+#[cfg(test)]
+#[path = "affinity.test.rs"]
+mod tests;

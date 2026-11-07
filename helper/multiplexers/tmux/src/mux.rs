@@ -469,11 +469,6 @@ impl Tmux {
                             window.id,
                         )
                     });
-                    let pane = windows[0].layout.ids()[0];
-                    let name = crate::affinity::display(
-                        &self.groups.windows[&(id, snapshot.session, windows[0].id)],
-                        client.cwd.get(&pane).map(|path| path.as_path()),
-                    );
                     let key = if let Some((&root, _)) =
                         self.groups.roots.iter().find(|(_, value)| {
                             value.0 == id && value.1 == snapshot.session && value.2 == group
@@ -489,6 +484,14 @@ impl Tmux {
                     } else {
                         format!("${}:group:{group}", snapshot.session)
                     };
+                    let pane = windows[0].layout.ids()[0];
+                    // The session's own space (keyed by the session) may take the session's name.
+                    let own = key == format!("${}", snapshot.session);
+                    let name = crate::affinity::display(
+                        &self.groups.windows[&(id, snapshot.session, windows[0].id)],
+                        client.cwd.get(&pane).map(|path| path.as_path()),
+                        own.then_some(snapshot.name.as_str()),
+                    );
                     let root = node(key.clone(), Some((None, Kind::Workspace, name, None, None, None)));
                     self.groups.keys.insert(root, key);
                     self.groups

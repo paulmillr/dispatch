@@ -83,6 +83,13 @@ enum SSHLauncherCommand {
             unsetenv("DISPATCH_SSH_DIRECTORY")
             _ = FileManager.default.changeCurrentDirectoryPath(directory)
         }
+        // A restored tab logging in again: its ssh asks through the reconnect strip, not on this terminal.
+        if let terminal = environment.removeValue(forKey: "DISPATCH_SSH_ASKPASS") {
+            unsetenv("DISPATCH_SSH_ASKPASS")
+            if let mailbox = environment["DISPATCH_HERDR_DIRECTORY"], let tab = UUID(uuidString: terminal) {
+                environment.merge(SSHAskpass.environment(directory: URL(fileURLWithPath: mailbox), terminal: tab)) { _, new in new }
+            }
+        }
         guard let executable = environment["DISPATCH_SSH_EXECUTABLE"] ?? ShellCommandWrapper.ssh.executable(in: environment) else {
             try? FileHandle.standardError.write(contentsOf: Data("ssh is not installed or is missing from PATH.\n".utf8)); return 127
         }

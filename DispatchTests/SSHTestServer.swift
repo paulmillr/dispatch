@@ -43,6 +43,8 @@ final class SSHTestServer {
     let daemon: Process
     let options: [String]
     let destination = System.machine.name + "@127.0.0.1"
+    /// Keys sshd also takes when it takes passwords (`init(passwords:)`).
+    var authorizedKeys: URL { root.appendingPathComponent("authorized_keys") }
     /// Where agents of this server's sessions keep their configuration (and the remote helper installs its
     /// integrations): inside the server's root, never the account's own (as the local helper's test home).
     var agents: URL { root.appendingPathComponent("agents") }
@@ -52,8 +54,11 @@ final class SSHTestServer {
     private let privileged: Bool
     private static var permissionsByRoot: [String: Set<SSHIntegrationScope>] = [:]
 
-    /// `accepting`: variables sshd takes from a client's `SendEnv` (`AcceptEnv`); none by default.
-    init(grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), transportOnly: Bool = false, accepting: [String] = []) async throws {
+    /// `accepting`: variables sshd takes from a client's `SendEnv` (`AcceptEnv`); none by default. `passwords`: sshd also
+    /// takes the account's password (through PAM) and the keys in `authorizedKeys`, which a test can empty to make a later
+    /// login fall back to the password.
+    init(grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), transportOnly: Bool = false, accepting: [String] = [],
+         passwords: Bool = false) async throws {
         self.transportOnly = transportOnly
         privileged = !transportOnly && System.environment("DISPATCH_UNPRIVILEGED_SSHD") != "1"
         struct Created: Codable { let root: URL; let port: UInt16; let options: [String] }
@@ -67,6 +72,7 @@ final class SSHTestServer {
         }
         var input = ["privileged": String(privileged), "tools": TestSupport.tools, "environment": environment.joined(separator: "\n")]
         if !accepting.isEmpty { input["accept"] = accepting.joined(separator: " ") }
+        if passwords { input["passwords"] = "true" }
         let created = try AppReplay.decode(Created.self, await AppReplay.run(kind: "fixture.ssh.start", input: AppReplay.value(input)) {
             let root = URL(fileURLWithPath: "/tmp/hs-\(System.uuid().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
@@ -88,11 +94,11 @@ final class SSHTestServer {
             ListenAddress 127.0.0.1
             Port \(port)
             HostKey \(key)
-            AuthorizedKeysFile \(key).pub
+            AuthorizedKeysFile \(key).pub\(passwords ? " " + root.path + "/authorized_keys" : "")
             PidFile \(root.path)/pid
             StrictModes no
-            UsePAM no
-            PasswordAuthentication no
+            UsePAM \(passwords ? "yes" : "no")
+            PasswordAuthentication \(passwords ? "yes" : "no")
             KbdInteractiveAuthentication no
             PubkeyAuthentication yes
             SetEnv \(([path, "TZ=UTC"] + homes + environment).map(HerdrLaunch.quote).joined(separator: " "))

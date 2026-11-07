@@ -675,6 +675,7 @@
 		8232F6B6C3273B616AEA608B /* ReviewDiffModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2DE62254A27276DF0E1EB07 /* ReviewDiffModel.swift */; };
 		825081332976927176413E7E /* ChatQuestionForm.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECBE3E0B752EE416DC2250AC /* ChatQuestionForm.swift */; };
 		8285243417C1A9A8789DC633 /* ChatTranscriptScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28C5B1C37323FA2EFABFF6FD /* ChatTranscriptScrollView.swift */; };
+		82D579A50DDD02E6405E057F /* SSHAskpass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4318AB3856FEF51C0944E130 /* SSHAskpass.swift */; };
 		83090D237053BDE66E6741B2 /* ChatPendingReply.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C485BF7CD8D202AFF4FB82A /* ChatPendingReply.swift */; };
 		83114A21F9A0EA2C574427E3 /* SpacesRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774B061BF0F2F1DED148B1A6 /* SpacesRoot.swift */; };
 		8316872283391EA32E641BD8 /* ChatThinkingSweepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 952AD868C6CF9F0B4BA15879 /* ChatThinkingSweepTests.swift */; };
@@ -1793,6 +1794,7 @@
 		4268F4D5A12175A9E43249FD /* ChatTypingRevealTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTypingRevealTests.swift; sourceTree = "<group>"; };
 		429376321C7265121AC41516 /* huf_decompress.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = huf_decompress.c; sourceTree = "<group>"; };
 		42A1964B57BC3523AFDBA5E3 /* TerminalRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalRuntime.swift; sourceTree = "<group>"; };
+		4318AB3856FEF51C0944E130 /* SSHAskpass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHAskpass.swift; sourceTree = "<group>"; };
 		4326660448ADEA90B0925686 /* SpaceBranch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceBranch.swift; sourceTree = "<group>"; };
 		43269D9DC0361D948EA41305 /* MobileFilesSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileFilesSource.swift; sourceTree = "<group>"; };
 		433567549572C6A8E9049BD0 /* SSHTestServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHTestServer.swift; sourceTree = "<group>"; };
@@ -3560,6 +3562,7 @@
 			isa = PBXGroup;
 			children = (
 				68041906CC261C3AA18D6F60 /* GzipMember.swift */,
+				4318AB3856FEF51C0944E130 /* SSHAskpass.swift */,
 				0CCD4FE05F5A44D519CC29B4 /* SSHBootstrap.swift */,
 				49F13449507B1FF238482996 /* SSHBootstrapScript.swift */,
 				923A47A83875CE701AA91103 /* SSHConnectionState.swift */,
@@ -5287,6 +5290,7 @@
 				073127D312A4F4B41962391A /* ReviewRefresh.swift in Sources */,
 				94BBC49153CC7744F622E69D /* ReviewRepository.swift in Sources */,
 				D60E7776556445BC883F6290 /* ReviewViews.swift in Sources */,
+				82D579A50DDD02E6405E057F /* SSHAskpass.swift in Sources */,
 				D9774542737AB1E2F7E4A329 /* SSHBootstrap.swift in Sources */,
 				10E547DF050C9BB636FA9D15 /* SSHBootstrapScript.swift in Sources */,
 				EB0BC5217531BD9F28AD4A7C /* SSHConnectionState.swift in Sources */,

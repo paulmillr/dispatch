@@ -144,6 +144,7 @@ final class TerminalRuntime {
             herdrLaunch.sshConnecting = { [weak self] request in self?.hosts.accept(request, connectingOnly: true) }
             herdrLaunch.sshConsent = { [weak self] request, reply in self?.hosts.consent(request, reply: reply) }
             herdrLaunch.sshClosed = { [weak self] id, notice in self?.hosts.closed(id, notice: notice) }
+            herdrLaunch.sshAskpass = { [weak self] request in self?.hosts.reconnect.ask(request) }
         } catch { self.error = error.localizedDescription; return }
         do {
             let text = try makeConfig(preferences), dark = isDark(preferences)

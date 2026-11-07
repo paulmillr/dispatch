@@ -118,6 +118,16 @@ class TmuxConfigAudit(unittest.TestCase):
                 later = native('display-message', '-p', '-t', 'later:', '#{session_id}').strip()
                 self.assertEqual(f'LATER_NODE=Workspace|{later}' in result.splitlines(), not relay, result)
 
+    def test_a_chosen_session_name_names_its_own_space_and_a_number_leaves_the_folder(self):
+        # docs/integrations.md (Sessions and space names): read live (rename-session); another space of the session
+        # follows its folder, as the session's own does under a numeric name.
+        for relay in [False, True]:
+            with self.subTest(relay=relay), self.server() as (_, driver):
+                result = driver('names', relay=relay).splitlines()
+                for line in ['NAME_OPEN=Some("audit")', 'NAME_RENAMED=Some("renamed")', 'NAME_EXTRA=Some("home")',
+                             'NAME_NUMBERED=Some("home")']:
+                    self.assertIn(line, result, result)
+
     def test_global_prefix_helper_control(self):
         with self.server('set -g prefix C-a\nset -g repeat-time 1234\nbind c split-window -h\n') as (_, driver):
             result = driver('prefix')

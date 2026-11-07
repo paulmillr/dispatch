@@ -4,15 +4,15 @@ import Observation
 /// What a closed tab showed (files, and in files its tab, root, selection and Commits' commit; chat or the terminal),
 /// kept from its close until a tab with the same id comes back: Restore of a detached tab or space gives the restored
 /// tab its view again. `TerminalRuntime.close` keeps it before the sessions go; the helper's restore gives it back
-/// (`restoreViews`) once the tabs are in the layout, before they draw. In memory only, like `FilesSession` and
-/// `ChatSession`.
-struct RetainedTabView {
+/// (`restoreViews`) once the tabs are in the layout, before they draw. Quit saves every tab's (`HostSessionStore`), so
+/// a relaunch gives them back too: a local tab's at once, a remote tab's once its helper is back.
+struct RetainedTabView: Codable {
     var mode: TabMode
     /// The user left chat on purpose (`ChatSession.manualViewChoice`): discovery must not bring it back.
     var manualViewChoice: Bool
     var files: Files?
 
-    struct Files {
+    struct Files: Codable {
         var tab: FilesTab
         var pinnedRoot: String?
         var expanded: Set<String>
@@ -61,19 +61,45 @@ struct RetainedTabView {
     static let limit = 64
 }
 
+extension TabMode: Codable {}
+extension FilesTab: Codable {}
+extension FilesSort: Codable {}
+extension GitDiffMode: Codable {}
+extension GitLogScope: Codable {}
+
 extension FilesCoordinator {
-    /// A tab is closing (detached or ended): its view is kept for a Restore that brings the same tab back.
-    func retainView(_ id: UUID) {
+    /// What tab `id` shows now, as a Restore gives it back; nil for a tab with neither files nor chat.
+    func currentView(_ id: UUID) -> RetainedTabView? {
         let files = existing(id), chat = chatSession(id)
-        guard files != nil || chat != nil else { return }
+        guard files != nil || chat != nil else { return nil }
         // A manual choice of chat itself is no reason to keep discovery away: only leaving it for the terminal is.
         let mode = mode(for: id)
-        let view = RetainedTabView(mode: mode, manualViewChoice: chat?.manualViewChoice == true && mode == .terminal,
-                                   files: files.map(RetainedTabView.Files.init))
+        return RetainedTabView(mode: mode, manualViewChoice: chat?.manualViewChoice == true && mode == .terminal,
+                               files: files.map(RetainedTabView.Files.init))
+    }
+
+    /// The views a relaunch restored (`HostSessionStore.restore`), given back as each tab's helper shows it.
+    func retainLaunched(_ views: [UUID: RetainedTabView]) {
+        for (id, view) in views {
+            retainedViews[id] = view
+            launchedViews.insert(id)
+            retainedOrder.removeAll { $0 == id }
+            retainedOrder.append(id)
+        }
+    }
+
+    /// A tab is closing (detached or ended): its view is kept for a Restore that brings the same tab back.
+    func retainView(_ id: UUID) {
+        guard let view = currentView(id) else { return }
         retainedViews[id] = view
         retainedOrder.removeAll { $0 == id }
         retainedOrder.append(id)
-        while retainedOrder.count > RetainedTabView.limit { retainedViews[retainedOrder.removeFirst()] = nil }
+        // A relaunch's views wait for their hosts however many tabs close meanwhile.
+        while retainedOrder.count - launchedViews.count > RetainedTabView.limit,
+              let oldest = retainedOrder.first(where: { !launchedViews.contains($0) }) {
+            retainedOrder.removeAll { $0 == oldest }
+            retainedViews[oldest] = nil
+        }
     }
 
     /// A restore put tabs back in the layout (`present`): those that closed with a view get it again.
@@ -88,6 +114,7 @@ extension FilesCoordinator {
     func restoreView(_ id: UUID) {
         guard let saved = retainedViews.removeValue(forKey: id) else { return }
         retainedOrder.removeAll { $0 == id }
+        launchedViews.remove(id)
         if saved.manualViewChoice || saved.mode == .files, let chat = chatSession(id, create: true) {
             chat.manualViewChoice = true
         }
