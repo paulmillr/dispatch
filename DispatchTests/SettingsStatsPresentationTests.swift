@@ -74,22 +74,22 @@ final class SettingsStatsPresentationTests: XCTestCase {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         let initial = try await capture(window, "stats-popover-unselected").text()
-        XCTAssertFalse(initial.contains("top processes"), initial)
+        XCTAssertFalse(initial.contains("TOP PROCESSES"), initial)
         XCTAssertFalse(initial.contains("rust-analyzer"), initial)
-        XCTAssertTrue(initial.contains("15-min history"), initial)
+        XCTAssertTrue(initial.contains("15-MIN HISTORY"), initial)
         try await selectCPU(in: window)
         let compact = try await capture(window, "stats-popover").text()
         XCTAssertTrue(compact.contains("rust-analyzer"), compact)
         XCTAssertFalse(compact.contains("postgres"), "The popover shows only the top three processes: \(compact)")
         XCTAssertFalse(compact.contains("fixture-helper"), compact)
-        XCTAssertTrue(compact.contains("15-min history"), compact)
+        XCTAssertTrue(compact.contains("15-MIN HISTORY"), compact)
         XCTAssertFalse(compact.contains("peak"), compact)
         XCTAssertFalse(compact.contains("48211"), "The compact process table omits PIDs: \(compact)")
         XCTAssertFalse(compact.contains("Terminal view"), compact)
         let root = try XCTUnwrap(window.contentView)
         let memoryRows = try await PresentationTestSupport.capture(window).recognizedText()
         let memoryLabel = try XCTUnwrap(memoryRows
-            .first { $0.topCandidates(1).first?.string == "mem" })
+            .first { $0.topCandidates(1).first?.string == "MEM" })
         let box = memoryLabel.boundingBox
         let point = root.convert(NSPoint(x: box.midX * root.bounds.width,
             y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil)
@@ -102,7 +102,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertFalse(memory.contains("peak"), memory)
         try PresentationTestSupport.click(window, at: point)
         let deselected = try await capture(window, "stats-popover-deselected").text()
-        XCTAssertFalse(deselected.contains("top processes"), deselected)
+        XCTAssertFalse(deselected.contains("TOP PROCESSES"), deselected)
         XCTAssertFalse(deselected.contains("fixture-helper"), deselected)
         let large = AppTypography(contentSize: 22)
         window.setContentSize(NSSize(width: large.expanded(356), height: large.popoverHeight(420)))
@@ -111,7 +111,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let enlarged = try await capture(window, "stats-popover-large-font").text()
         // Vision sometimes recognizes the short CPU label as Cyrillic; the
         // load detail verifies that column remains visible at larger sizes.
-        for label in ["2.71 load", "mem", "disk"] {
+        for label in ["2.71 load", "MEM", "DISK"] {
             XCTAssertTrue(enlarged.contains(label), "Missing \(label) with larger text: \(enlarged)")
         }
     }
@@ -147,7 +147,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 popover = nil
                 for candidate in NSApp.windows {
                     guard !existing.contains(candidate.windowNumber), candidate !== window, candidate.isVisible else { continue }
-                    if try await PresentationTestSupport.capture(candidate).text().contains("15-min history") { popover = candidate; break }
+                    if try await PresentationTestSupport.capture(candidate).text().contains("15-MIN HISTORY") { popover = candidate; break }
                 }
                 return popover != nil
             }
@@ -163,7 +163,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             }
             try await TestSupport.eventually(diagnostic: "Popover did not resize from \(collapsedHeight): \(popup.frame)") {
                 guard popup.frame.height > collapsedHeight + 20 else { return false }
-                return try await PresentationTestSupport.capture(popup).text().contains("top processes")
+                return try await PresentationTestSupport.capture(popup).text().contains("TOP PROCESSES")
             }
             try await Task.sleep(for: .milliseconds(350))
             if anchorY > visible.midY - 30 {
@@ -217,7 +217,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             popover = nil
             for candidate in NSApp.windows {
                 guard !existing.contains(candidate.windowNumber), candidate !== window, candidate.isVisible else { continue }
-                if try await PresentationTestSupport.capture(candidate).text().contains("15-min history") { popover = candidate; break }
+                if try await PresentationTestSupport.capture(candidate).text().contains("15-MIN HISTORY") { popover = candidate; break }
             }
             return popover != nil
         }
@@ -225,7 +225,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await selectCPU(in: popup)
         try await TestSupport.eventually(diagnostic: "Remote popover did not resize from \(collapsedHeight): \(popup.frame)") {
             guard popup.frame.height > collapsedHeight + 20 else { return false }
-            return try await PresentationTestSupport.capture(popup).text().contains("top processes")
+            return try await PresentationTestSupport.capture(popup).text().contains("TOP PROCESSES")
         }
         XCTAssertTrue(visible.insetBy(dx: -2, dy: -2).contains(popup.frame),
                       "Expanded remote popover escaped the visible screen: \(popup.frame), screen: \(visible)")
@@ -246,11 +246,11 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let card = try await capture(window, "host-information")
         let text = try card.text()
-        for label in ["homelab", "Ubuntu", "connected", "ssh", "ops@homelab.test", "backends", "helper", "unavailable", "color", "Disconnect"] {
+        for label in ["homelab", "Ubuntu", "connected", "SSH", "ops@homelab.test", "BACKENDS", "HELPER", "unavailable", "COLOR", "Disconnect"] {
             XCTAssertTrue(text.replacingOccurrences(of: " ", with: "").contains(label.replacingOccurrences(of: " ", with: "")),
                           "Missing \(label): \(text)")
         }
-        XCTAssertFalse(text.contains("cpu"), text)
+        XCTAssertFalse(text.contains("CPU"), text)
         XCTAssertFalse(text.contains("Reconnect"), text)
         // The color label closes the label column, under helper, with every swatch on its own row.
         func label(_ title: String) throws -> CGRect {
@@ -481,7 +481,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await TestSupport.eventually { latency.state == .ready }
         let ready = try await capture(window, "host-latency-ready").text()
         XCTAssertTrue(ready.contains("ms"), ready)
-        XCTAssertTrue(ready.contains("helper") && ready.contains("unavailable"), ready)
+        XCTAssertTrue(ready.contains("HELPER") && ready.contains("unavailable"), ready)
         XCTAssertFalse(ready.contains("Available backends"), ready)
         XCTAssertEqual(root.fittingSize, loadingSize)
         XCTAssertTrue(latency.help.contains("Last measured"))
@@ -1149,7 +1149,7 @@ extension SettingsStatsPresentationTests {
         let first = try await PresentationTestSupport.capture(window, named: "remote-partial-unknown-cpu", in: "stats-validation")
         XCTAssertTrue(try first.text().contains("partial")); XCTAssertTrue(try first.text().contains("Measuring process CPU"))
         let root = try XCTUnwrap(window.contentView)
-        let label = try XCTUnwrap(try first.recognizedText().first { $0.topCandidates(1).first?.string == "mem" })
+        let label = try XCTUnwrap(try first.recognizedText().first { $0.topCandidates(1).first?.string == "MEM" })
         let box = label.boundingBox
         try PresentationTestSupport.click(window, at: root.convert(NSPoint(x: box.midX * root.bounds.width,
             y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil))

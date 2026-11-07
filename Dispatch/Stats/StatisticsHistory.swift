@@ -1,7 +1,7 @@
 import Foundation
 
 /// Fixed wall-clock buckets, oldest first. A bucket keeps its own peak; only empty buckets can take the next
-/// sample's interval average. Callers choose how long a sampling gap may be held (Mac 20 s, phone 35 s).
+/// sample's interval average. Callers choose how long a sampling gap may be held (Mac 65 s, phone 35 s).
 enum StatisticsHistory {
     static func bars<Point>(_ history: [Point], at now: Date, window: TimeInterval, count: Int,
                             hold: TimeInterval, date: (Point) -> Date, value: (Point) -> Double?) -> [Double?] {

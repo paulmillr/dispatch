@@ -204,7 +204,7 @@ private struct HostStatsPresentation: View {
             }
             statusAndAccount
             if showsIdentity { HStack {
-                Text("host").foregroundStyle(StatsStyle.muted)
+                StatsFieldName("host").foregroundStyle(StatsStyle.muted)
                 Spacer()
                 Text(sample.host).textSelection(.enabled)
             }.font(typography, .label).padding(.vertical, 8)
@@ -234,9 +234,9 @@ private struct HostStatsPresentation: View {
                 metricButton(memory: false, title: "cpu", value: sample.cpu,
                     detail: sample.load?.first.map { String(format: "%.2f load", $0) } ?? "load unavailable")
                 metricButton(memory: true, title: "mem", value: sample.memoryPercent,
-                    detail: "\(gib(sample.memoryUsed)) / \(gib(sample.memoryTotal)) G")
+                    detail: "\(gib(sample.memoryUsed)) / \(gib(sample.memoryTotal)) GB")
                 HostMetricSummary(title: "disk", value: sample.diskPercent,
-                    detail: "\(gib(sample.diskFree)) G free", warning: (sample.diskPercent ?? 0) > 80)
+                    detail: "\(gib(sample.diskFree)) GB free", warning: (sample.diskPercent ?? 0) > 80)
             }
             if selectedMetric != nil {
                 topProcesses
@@ -249,10 +249,12 @@ private struct HostStatsPresentation: View {
     private var topProcesses: some View {
         VStack(alignment: .leading, spacing: 4) {
             let rows = Array((memorySelected ? sample.topMemory : sample.topCPU).prefix(3))
-            HStack(spacing: 6) {
-                Text("top processes")
-                if sample.processesPartial { Text("· partial").accessibilityIdentifier("stats-processes-partial") }
-            }.font(typography, .body).foregroundStyle(StatsStyle.muted)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                StatsFieldName("top processes")
+                if sample.processesPartial {
+                    Text("· partial").font(typography, .body).accessibilityIdentifier("stats-processes-partial")
+                }
+            }.foregroundStyle(StatsStyle.muted)
             processes(rows).overlay(alignment: .topLeading) {
                 if rows.isEmpty {
                     Text(sample.processes?.isEmpty == false ? "Measuring process CPU…" : "Process data unavailable")
@@ -293,7 +295,7 @@ private struct HostStatsPresentation: View {
                         let process = rows[index]
                         Text(process.name).lineLimit(1).truncationMode(.middle).help(process.name)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(memorySelected ? "\(gib(process.memory)) G" : process.cpu.map { String(format: "%.1f%%", $0) } ?? "—")
+                        Text(memorySelected ? "\(gib(process.memory)) GB" : process.cpu.map { String(format: "%.1f%%", $0) } ?? "—")
                             .foregroundStyle(StatsStyle.secondary)
                             .fixedSize()
                     } else {
@@ -330,8 +332,7 @@ private struct HostStatsPresentation: View {
         TimelineView(.periodic(from: .distantPast, by: 2)) { timeline in
             let bars = sample.historyBars(memory: memorySelected, at: timeline.date)
             VStack(alignment: .leading, spacing: 5) {
-                Text("15-min history")
-                    .foregroundStyle(StatsStyle.muted).font(typography, .body)
+                StatsFieldName("15-min history").foregroundStyle(StatsStyle.muted)
                 Canvas { context, size in
                     // One bar per 15-second bucket; missing samples stay empty.
                     let count = bars.count
@@ -363,7 +364,7 @@ private struct HostMetricSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(typography, .body).foregroundStyle(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.muted)
+            StatsFieldName(title).foregroundStyle(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.muted)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(value.map { String(format: "%.0f", $0) } ?? "—").font(typography, offset: 13.5, weight: .medium)
                     .tracking(-0.52).foregroundStyle(valueColor)
@@ -390,6 +391,17 @@ private struct HostMetricSummary: View {
             .foregroundStyle(StatsStyle.muted)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A stats field's name (HOST, CPU, TOP PROCESSES): caps at the caption size, tracked as Settings' section headings
+/// ("OTHER LOGINS"), so the names step back from the values they head.
+struct StatsFieldName: View {
+    @Environment(\.appTypography) private var typography
+    let name: String
+    init(_ name: String) { self.name = name }
+    var body: some View {
+        Text(name.uppercased()).font(typography, .caption, weight: .medium).tracking(1)
     }
 }
 

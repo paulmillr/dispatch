@@ -79,7 +79,7 @@ final class SharedStatsVoiceTests: XCTestCase {
         XCTAssertEqual(bars([Point(1, 40), Point(31, 90)], now: 60, hold: 35), [90, 90, nil, nil])
         XCTAssertEqual(bars([Point(1, 40), Point(31, 90), Point(20, 10)], hold: 35), [40, 10, 90, nil],
                        "an own sample takes precedence over a held higher value")
-        XCTAssertEqual(bars([Point(1, 40), Point(31, 90)], hold: 20), [40, nil, 90, nil], "Mac's shorter hold")
+        XCTAssertEqual(bars([Point(1, 40), Point(31, 90)], hold: 20), [40, nil, 90, nil], "a shorter hold")
     }
 
     func testBucketHoldIncludesBoundaryAndMissingValuesStillAdvanceTime() {

@@ -132,14 +132,15 @@ final class HostStatisticsStoreTests: XCTestCase {
         // The clock moving inside the newest bar changes no bar; crossing into the next shifts them all by one.
         XCTAssertEqual(snapshot.historyBars(memory: false, at: now.addingTimeInterval(6)), bars)
         XCTAssertEqual(Array(snapshot.historyBars(memory: false, at: now.addingTimeInterval(8)).suffix(6)), [0, 15, 30, 45, 55, nil])
-        // A 15 s cadence drifting past a bar: the missed bar takes the next sample. A longer gap, a failed sample
-        // between them or a non-finite value leaves bars empty.
+        // A 15 s cadence drifting past a bar, or the 60 s cadence while Dispatch is not shown: the missed bars take
+        // the next sample. A gap past 65 s, a failed sample between them or a non-finite value leaves bars empty.
         func last(_ count: Int, _ points: [(TimeInterval, Double?)]) -> [Double?] {
             snapshot.history = points.map { .init(date: base.addingTimeInterval($0.0), cpu: $0.1) }
             return Array(snapshot.historyBars(memory: false, at: now).suffix(count))
         }
         XCTAssertEqual(last(4, [(-31, 60), (-14, 70)]), [60, 70, 70, nil])
-        XCTAssertEqual(last(5, [(-46, 60), (-14, 70)]), [60, nil, nil, 70, nil])
+        XCTAssertEqual(last(7, [(-76, 60), (-14, 70)]), [60, 70, 70, 70, 70, 70, nil])
+        XCTAssertEqual(last(7, [(-81, 60), (-14, 70)]), [60, nil, nil, nil, nil, 70, nil])
         XCTAssertEqual(last(4, [(-31, 60), (-22, nil), (-14, 70), (1, .infinity)]), [60, nil, 70, nil])
     }
 

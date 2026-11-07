@@ -304,10 +304,11 @@ struct HostConnectionDetails: View {
     private func row<Value: View>(_ label: String?, alignment: VerticalAlignment = .firstTextBaseline,
                                   @ViewBuilder value: () -> Value) -> some View {
         HStack(alignment: alignment, spacing: typography.expanded(10)) {
+            // The stats' field names (StatsFieldName): caps, so the facts and the metrics under them read as one table.
             ZStack(alignment: .leading) {
-                Text("backends").hidden()
-                if let label { Text(label) }
-            }.font(typography, .body).foregroundStyle(StatsStyle.muted)
+                StatsFieldName("backends").hidden()
+                if let label { StatsFieldName(label) }
+            }.foregroundStyle(StatsStyle.muted)
             value().frame(maxWidth: .infinity, alignment: .leading)
         }.frame(minHeight: typography.expanded(22))
     }

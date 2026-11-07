@@ -87,9 +87,10 @@ struct HostStatisticsSnapshot: Codable, Sendable {
     /// The chart's bars, oldest first: one per 15 s on a fixed wall-clock grid, so only the newest bar changes as
     /// samples land and the chart steps one bar left every 15 s (bars measured back from `now` slid under their
     /// samples, each changing at its own moment). A bar is the peak of its own samples. One with none, between two
-    /// samples at most `hold` apart, takes the later one, as its CPU is that interval's average: the background
-    /// 15 s cadence drifts past a bar now and then.
-    func historyBars(memory: Bool, at now: Date, count: Int = 60, hold: TimeInterval = 20) -> [Double?] {
+    /// samples at most `hold` apart, takes the later one, as its CPU is that interval's average. The hold covers the
+    /// slowest background cadence (StatisticsCadence.background, 60 s while Dispatch is not shown or in Low Power
+    /// Mode) plus some drift, so a minute's sampling fills its four bars instead of leaving three of them empty.
+    func historyBars(memory: Bool, at now: Date, count: Int = 60, hold: TimeInterval = 65) -> [Double?] {
         StatisticsHistory.bars(history, at: now, window: Self.historyWindow, count: count, hold: hold,
                                date: { $0.date }, value: { memory ? $0.memoryPercent : $0.cpu })
     }

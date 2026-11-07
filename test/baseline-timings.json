@@ -976,16 +976,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testLateItemScrollCannotUndoAPrependedPixelAnchor",
-      "seconds": 0.013628005981445312,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testLivePrependRetainsPixelsWhenFirstVisibleMarkerIsRecycled",
-      "seconds": 0.010711073875427246,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/ChatScrollStabilityTests/testLiveScrollingCancelsStalePreservationAndFollowIntent",
       "seconds": 0.0733720064163208,
       "outcome": "Passed"
@@ -1023,11 +1013,6 @@
     {
       "identifier": "DispatchTests/ChatScrollStabilityTests/testPrependRetainsTheNextVisibleMessageWhenTheFirstRowBecomesAGroup",
       "seconds": 0.07470405101776123,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testReusedMarkerTracksItsCurrentMessageAndChat",
-      "seconds": 0.008826017379760742,
       "outcome": "Passed"
     },
     {
@@ -3186,11 +3171,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
-      "seconds": 6.532986044883728,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/SSHReconnectIntegrationTests/testPermissionRevocationDuringReplacementShellStartupCanRetry",
       "seconds": 5.671750068664551,
       "outcome": "Passed"
@@ -3243,11 +3223,6 @@
     {
       "identifier": "DispatchTests/SSHReconnectTests/testHostRetryCoalescesClicksAndKeepsHealthyConnectionsUntouched",
       "seconds": 0.11562395095825195,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
-      "seconds": 0.8150119781494141,
       "outcome": "Passed"
     },
     {
@@ -4405,6 +4380,31 @@
     {
       "identifier": "DispatchTests/TerminalMachineTests/testIntegrationPreferencesMigrateAndRoundTrip",
       "seconds": 0.0009520053863525391,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testLateItemScrollCannotUndoAPrependedPixelAnchor",
+      "seconds": 0.013628005981445312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testLivePrependRetainsPixelsWhenFirstVisibleMarkerIsRecycled",
+      "seconds": 0.010711073875427246,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testReusedMarkerTracksItsCurrentMessageAndChat",
+      "seconds": 0.008826017379760742,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
+      "seconds": 6.532986044883728,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
+      "seconds": 0.8150119781494141,
       "outcome": "Passed"
     }
   ]
