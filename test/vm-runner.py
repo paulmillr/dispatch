@@ -533,12 +533,9 @@ final class UIBenchmarkTests: XCTestCase {
                 patch.object(vm, 'sync_helper'), patch.object(vm, 'sync_products', return_value='') as products:
             vm.prepare_test_inputs('desktop', profile, needs_codex=False)
             products.assert_called_once_with('desktop')
-            # The sources, then the iPhone engine and its staged Rust source: no agent tools.
+            # The sources alone (the Mac project needs no iPhone engine): no agent tools.
             self.assertIn('Dispatch', source.call_args_list[0].args[1])
-            engine = [str(vm.ROOT / path) for path in (vm.MOBILE_ENGINE, vm.MOBILE_RUSSH)
-                      if (vm.ROOT / path).is_dir()]
-            self.assertEqual([call.args[1] for call in source.call_args_list[1:]],
-                             [engine] if engine else [])
+            self.assertEqual(len(source.call_args_list), 1)
             cli.assert_not_called()
 
     def testFailedAndIncompleteResultsStillExportTimingsAndNeverPass(self):

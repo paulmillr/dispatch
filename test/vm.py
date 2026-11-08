@@ -35,14 +35,10 @@ CODEX = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/"
 # OpenAI's quick start uses this image registry. Pin the image for reproducibility.
 IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
          "e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863")
-# Every directory project.yml names: XcodeGen refuses the spec when a target's sources or a local package are missing,
-# though the guest builds only the Mac app.
-SOURCES = ["Dispatch", "DispatchTests", "Mobile", "Watch", "Packages", "helper", "Vendor", "ThirdPartyLicenses", "scripts",
-           "test", "extras", "project.yml", "run.sh"]
-# The iPhone app's prebuilt SSH engine (scripts/setup_mobile.py): Xcode resolves its package for every scheme of the
-# project, the Mac's included, so the guest needs the binary target even though it never builds the iPhone app.
-MOBILE_ENGINE = "build/mobile-ssh/DispatchMobileSSHCore.xcframework"
-MOBILE_RUSSH = "build/mobile-ssh/russh"
+# Every directory project.yml (the Mac app's project, all the guest builds) names: XcodeGen refuses the spec when a
+# target's sources or a local package are missing. The iPhone and Watch apps (project-mobile.yml) stay on the host.
+SOURCES = ["Dispatch", "DispatchTests", "Packages", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
+           "project.yml", "project-shared.yml", "run.sh"]
 # The replay corpus (its own repository at replays/, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"
@@ -474,8 +470,8 @@ def sync_products(vm):
     shell(vm, 'cd "$1/workspace" && mkdir -p build/Build/Products/Debug build/test-tools && '
               'rm -rf build/Build/Products/*.xctestrun build/Build/Products/Debug/DispatchTests.xctest', GUEST)
     paths = [path for path in xcode.PREBUILT_PRODUCTS if (ROOT / path).exists()] + [manifest["plan"], xcode.PREBUILT]
-    # Each into its own parent: a --relative sync of these would --delete the rest of the guest's build/ (as for
-    # MOBILE_ENGINE above: Rust, XcodeGen, the helper).
+    # Each into its own parent: a --relative sync of these would --delete the rest of the guest's build/ (Rust,
+    # XcodeGen, the helper).
     return "".join(synchronize(vm, [str(ROOT / path)], GUEST + "/workspace/" + str(Path(path).parent) + "/") for path in paths)
 
 
@@ -484,13 +480,6 @@ def prepare_test_inputs(vm, profile, needs_codex=True, prebuilt=True):
         with profile.stage("source_sync") as stage:
             corpus = (ROOT / CORPUS).is_dir()
             stage["statistics"] = synchronize(vm, SOURCES + [CORPUS] * corpus, GUEST + "/workspace/", relative=True)
-            engine = [path for path in (MOBILE_ENGINE, MOBILE_RUSSH) if (ROOT / path).is_dir()]
-            if engine:
-                # On its own: inside the relative sync above, --delete would empty the guest's build/ (Rust, XcodeGen).
-                # Named without a trailing slash, rsync makes the folders in build/mobile-ssh/ (which it creates too).
-                # The staged russh goes with the framework: the guest's offline setup checks for both.
-                synchronize(vm, [str(ROOT / path) for path in engine],
-                            GUEST + "/workspace/" + str(Path(MOBILE_ENGINE).parent) + "/")
             if not corpus:
                 # A corpus left from an earlier run would replay recordings this checkout does not have.
                 shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)

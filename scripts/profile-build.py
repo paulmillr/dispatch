@@ -44,7 +44,7 @@ def main():
         command.append('OTHER_SWIFT_FLAGS=$(inherited) -Xfrontend -debug-time-function-bodies '
                        '-Xfrontend -warn-long-expression-type-checking=100')
     sources = list(ROOT.glob('Dispatch/**/*.swift')) + list(ROOT.glob('DispatchTests/**/*.swift'))
-    sources += [ROOT / name for name in ['project.yml', 'Dispatch.xcodeproj/project.pbxproj',
+    sources += [ROOT / name for name in ['project.yml', 'project-shared.yml', 'Dispatch.xcodeproj/project.pbxproj',
                                        'scripts/build-ssh-helper.sh']]
     record = {'command': command, 'started_at': datetime.datetime.now().astimezone().isoformat(),
               'xcode': subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),

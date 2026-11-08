@@ -79,7 +79,8 @@ final class FilePreviewVideoTests: XCTestCase {
 
     /// The preview's player is SwiftUI's `VideoPlayer`, from `_AVKit_SwiftUI`, whose view subclasses AVKit's player
     /// view. Nothing else in the app names AVKit, so the linker dropped it, and the first player shown aborted
-    /// (superclass metadata not found). The app links AVKit explicitly (project.yml); so must the iPhone app.
+    /// (superclass metadata not found). The app links AVKit explicitly (project.yml); so must the iPhone app
+    /// (project-mobile.yml).
     func testThePlayerViewIsMade() {
         let host = NSHostingView(rootView: VideoPlayer(player: AVPlayer()).frame(width: 320, height: 180))
         host.frame = NSRect(x: 0, y: 0, width: 320, height: 180)

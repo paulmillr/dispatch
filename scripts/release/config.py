@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-# project.yml (XcodeGen): `MARKETING_VERSION: "0.1.3"`; project.pbxproj: `MARKETING_VERSION = 0.1.3;`.
+# project.yml, project-mobile.yml (XcodeGen): `MARKETING_VERSION: "0.1.3"`; project.pbxproj: `MARKETING_VERSION = 0.1.3;`.
 VERSION = re.compile(r'(MARKETING_VERSION(?::\s*"|\s*=\s*))([0-9]+(?:\.[0-9]+)*)("|;)')
 
 
@@ -40,13 +40,15 @@ def version_key(version):
 
 
 def version_at(commit, files):
-    """The one version the files set at commit, or None (missing, unreadable or disagreeing)."""
+    """The one version the files set at commit, or None (none of them there, unreadable or disagreeing). A file the
+    commit does not have is skipped: a version file added later (project-mobile.yml, from the projects' split) must
+    not make its first commit look like a version change."""
     found = set()
     for path in files:
         try:
             found |= {match.group(2) for match in VERSION.finditer(git('show', f'{commit}:{path}'))}
         except subprocess.CalledProcessError:
-            return None
+            continue
     return found.pop() if len(found) == 1 else None
 
 

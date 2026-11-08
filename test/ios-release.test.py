@@ -85,10 +85,10 @@ class SigningConfigTests(unittest.TestCase):
         tracked = (ROOT / 'Mobile/Config/Signing.xcconfig').read_text()
         self.assertIn('#include? "../../build/signing.xcconfig"', tracked)
         self.assertEqual(signing.parse(tracked)[0], {'DISPATCH_BUNDLE_ID_SUFFIX': ''})
-        project = (ROOT / 'project.yml').read_text()
+        project = (ROOT / 'project-mobile.yml').read_text()
         self.assertIn('PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)', project)
-        # The prefix ios-signing.py reports is the project's default.
-        self.assertIn(f'    DISPATCH_BUNDLE_ID_PREFIX: {signing.PREFIX}\n', project)
+        # The prefix ios-signing.py reports is the projects' default.
+        self.assertIn(f'    DISPATCH_BUNDLE_ID_PREFIX: {signing.PREFIX}\n', (ROOT / 'project-shared.yml').read_text())
 
 
 class SigningTeamTests(unittest.TestCase):
@@ -365,8 +365,8 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertEqual(release.info_problems(self.info(UIDeviceFamily=[2, 1], UIRequiresFullScreen=False)), [])
 
     def test_the_apps_info_plist_and_project_pass(self):
-        # The built plist gets UIDeviceFamily from TARGETED_DEVICE_FAMILY (project.yml), the rest from the source.
-        project = (ROOT / 'project.yml').read_text()
+        # The built plist gets UIDeviceFamily from TARGETED_DEVICE_FAMILY (project-mobile.yml), the rest from the source.
+        project = (ROOT / 'project-mobile.yml').read_text()
         self.assertIn('TARGETED_DEVICE_FAMILY: "1,2"', project)
         source = plistlib.loads((ROOT / 'Mobile/App/Info.plist').read_bytes())
         source['CFBundleIdentifier'] = 'yachts.dispatch.pilot.mobile'

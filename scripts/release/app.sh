@@ -11,8 +11,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 # setup.sh asks once before its downloads, all pinned and SHA-256-checked (scripts/build.lock.json); after it, run.sh
-# finds nothing missing and asks nothing.
-echo y | bash scripts/setup.sh
+# finds nothing missing and asks nothing. The Mac app's project needs no iPhone SSH engine: only the iPhone build
+# prepares it (--mobile).
+if [[ "${RELEASE_PLATFORM:-mac}" == mac ]]; then echo y | bash scripts/setup.sh; else echo y | bash scripts/setup.sh --mobile; fi
 [[ "$RELEASE_VARIANT" == pilot ]] || { echo "error: no variant $RELEASE_VARIANT (scripts/release/app.json)" >&2; exit 1; }
 flags=(--build-number "$RELEASE_BUILD_NUMBER")
 

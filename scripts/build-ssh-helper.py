@@ -35,14 +35,17 @@ INPUTS = ("Vendor/Zstd", "scripts/build-ssh-helper.py", "scripts/setup-ssh-rust.
 # The apps' shared version (scripts/release.sh keeps every MARKETING_VERSION in step), stamped into the helper: on a
 # host, the stable hook command never moves from a newer version's build to an older one's (helper/core/src/system/
 # executable.rs), whichever app, Mac or iPhone, and whichever device set the host up.
-VERSION_FILE = "project.yml"
+VERSION_FILES = ("project.yml", "project-mobile.yml")
 
 
 def release():
-    versions = set(re.findall(r'(?m)^\s*MARKETING_VERSION:\s*"([0-9]+(?:\.[0-9]+){0,3})"\s*$',
-                              (ROOT / VERSION_FILE).read_text()))
+    versions = set()
+    for name in VERSION_FILES:
+        versions |= set(re.findall(r'(?m)^\s*MARKETING_VERSION:\s*"([0-9]+(?:\.[0-9]+){0,3})"\s*$',
+                                   (ROOT / name).read_text()))
     if len(versions) != 1:
-        raise SystemExit(f"{VERSION_FILE}: expected one MARKETING_VERSION for every app, found {sorted(versions) or 'none'}")
+        raise SystemExit(f"{', '.join(VERSION_FILES)}: expected one MARKETING_VERSION for every app, "
+                         f"found {sorted(versions) or 'none'}")
     return versions.pop()
 # The wire registry: the build appends to it (helper/core/build/schema.rs `registered`), so it may differ after a build.
 REGISTRY = "helper/core/src/wire/registry.txt"

@@ -1,0 +1,61 @@
+# What both Xcode projects share, included by project.yml (the Mac app, Dispatch.xcodeproj) and
+# project-mobile.yml (the iPhone and Watch apps, DispatchMobile.xcodeproj): scripts/generate-project.py generates
+# both. Separate projects, so the Mac app never resolves the iPhone package (Mobile/Transport) or needs its Rust
+# SSH engine built.
+options:
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "26.0"
+    watchOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: YES
+    OTHER_LDFLAGS: ["-lc++"]
+    OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
+    # CZstd: the app journal's capture files (target Zstd).
+    SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Zstd"]
+    # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
+    # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
+    DISPATCH_STRIP_APP: NO
+    # Every app's bundle id starts with this: the Pilot account's apps (docs/ios.md, Bundle ids).
+    DISPATCH_BUNDLE_ID_PREFIX: yachts.dispatch.pilot
+  configs:
+    # Xcode otherwise injects get-task-allow, which notarization rejects.
+    Release:
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+settingGroups:
+  # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
+  # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
+  # output 3-80x slower and blocks the programs writing to it.
+  term:
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_OPTIMIZATION_LEVEL: -O
+    SWIFT_COMPILATION_MODE: wholemodule
+    ENABLE_TESTABILITY: NO
+packages:
+  # Chat dictation (Packages/Dictation): the engine (Apple's recognizer and Whisper through Packages/WhisperEngine,
+  # whisper.cpp in Swift with the ggml Metal kernels, which Dictation depends on by path), shared by the Mac and the
+  # iPhone apps. The settings and buttons stay in the apps.
+  Dictation:
+    path: Packages/Dictation
+aggregateTargets:
+  # The Rust helper depends on nothing in Xcode, so this target builds alongside Term/TermApple
+  # instead of serially inside the app target.
+  SSHHelpers:
+    # In both projects: the iPhone app uploads every helper too. A simulator or device destination needs every target
+    # in the build to list its platform; the script builds for macOS and Linux whatever the destination
+    # (scripts/build-ssh-helper.py).
+    settings:
+      SUPPORTED_PLATFORMS: macosx iphonesimulator iphoneos
+    buildScripts:
+      - name: Build portable SSH helpers
+        script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
+        basedOnDependencyAnalysis: false
+        inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/Vendor/Zstd", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
+        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]

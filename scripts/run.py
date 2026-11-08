@@ -449,7 +449,8 @@ def main():
         print(f'  Log  {display_path}\n', flush=True)
         log.write(f'Dispatch {configuration} — {datetime.now().isoformat()}\n')
         try:
-            ui.step('Preparing dependencies', ['bash', 'scripts/setup.sh'], env, interactive=True)
+            ui.step('Preparing dependencies', ['bash', 'scripts/setup.sh', *(['--mobile'] if args.ios else [])], env,
+                    interactive=True)
             ui.step('Generating Xcode project',
                     ['python3', 'scripts/generate-project.py'], env)
             if args.ios:
@@ -464,7 +465,7 @@ def main():
                     simulator = find_simulator(args.simulator) if args.ios_device is None else None
                 destination, platform = (('generic/platform=iOS', 'iphoneos') if args.archive else
                                          ios_target(args, phone, simulator))
-                command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile',
+                command = ['xcodebuild', '-project', 'DispatchMobile.xcodeproj', '-scheme', 'DispatchMobile',
                            '-configuration', configuration, '-destination', destination,
                            '-derivedDataPath', IOS_DERIVED_DATA, 'build']
                 if args.archive:

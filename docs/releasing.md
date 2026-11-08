@@ -52,9 +52,9 @@ accepts only signed commits); GitHub's checks on HEAD green, a rehearsal of the 
 and shows the key's fingerprint: the one the signing machine pins. Then it shows the plan and asks `push X.Y.Z?`. On
 yes:
 
-1. `MARKETING_VERSION` of all four apps (the iPhone, watch and widget ones keep in step) set to X.Y.Z in `project.yml`
-   and `Dispatch.xcodeproj/project.pbxproj`;
-2. the version commit: a signed commit `X.Y.Z` of those two files only (other uncommitted changes stay out, and are
+1. `MARKETING_VERSION` of all four apps (the iPhone, watch and widget ones keep in step) set to X.Y.Z in the version
+   files `release/app.json` lists: `project.yml`, `project-mobile.yml` and their projects' `project.pbxproj`;
+2. the version commit: a signed commit `X.Y.Z` of those files only (other uncommitted changes stay out, and are
    listed), dated in UTC; `-m NOTES` is its body, signed with it: the summary at the top of the release notes
    (`-m "Stability improvements"`);
 3. `git push origin HEAD:refs/heads/main`, which starts the release build, and its link;
@@ -78,20 +78,19 @@ builders. It insists on a fresh tree (`git archive` of the commit, no `build/`) 
 because source paths end up in the binaries, and it restarts itself in a fixed environment: only `DEVELOPER_DIR` and
 `RELEASE_BUILDER` kept, `PATH` the system's folders alone (so `python3` is Xcode's), `LANG=en_US.UTF-8` and a fresh
 `HOME`, `/private/tmp/release-build-home`. GitHub's runner otherwise brings Homebrew's tools, rustup and its own
-settings, which the signing machine's build lacks. Then `scripts/release/app.sh`, the app's own part, builds: for Dispatch
-`./run.sh --prod --just-build`, the Mac app. Its setup still builds the iPhone app's SSH engine (russh, into
-`build/mobile-ssh`): `Mobile/Transport` is a package of the whole project, and Xcode resolves it, binary target and
-all, for every scheme, the Mac app's too, which does not link it. Then `scripts/release/normalize.py` removes the one
-thing the app takes from the machine that built it: Xcode writes that machine's macOS build, `BuildMachineOSBuild`,
-into every `Info.plist`, which the ad hoc signature seals, so it removes the key and signs those bundles again, ad
-hoc, keeping their identifiers, entitlements and flags (the release's Developer ID signature replaces it anyway).
-`scripts/release/zip.py` packs the app byte-reproducibly: entries sorted, every date the build number's time, the
-files' permissions and nothing else of the file system, stored rather than compressed. `OUT` gets
-`Dispatch-<variant>-unsigned.zip`, `Dispatch.app.dSYM.zip` and `build.json`: variant, version, build number, commit,
-builder, the Xcode and macOS builds, the app's bundle id and minimum macOS, and the zips' SHA-256. The same commit
-with the same Xcode build makes the same app zip on any Mac: its SHA-256 is the comparison. The dSYM is not: its debug
-map records offsets in the intermediate object files, which vary between builds whose linked app is the same; it is
-never shipped or signed.
+settings, which the signing machine's build lacks. Then `scripts/release/app.sh`, the app's own part, builds: for
+Dispatch `./run.sh --prod --just-build`, the Mac app, from `Dispatch.xcodeproj` alone: the iPhone app's package and
+its Rust SSH engine are `DispatchMobile.xcodeproj`'s, so the Mac build neither fetches nor builds them. Then
+`scripts/release/normalize.py` removes the one thing the app takes from the machine that built it: Xcode writes that
+machine's macOS build, `BuildMachineOSBuild`, into every `Info.plist`, which the ad hoc signature seals, so it removes
+the key and signs those bundles again, ad hoc, keeping their identifiers, entitlements and flags (the release's
+Developer ID signature replaces it anyway). `scripts/release/zip.py` packs the app byte-reproducibly: entries sorted,
+every date the build number's time, the files' permissions and nothing else of the file system, stored rather than
+compressed. `OUT` gets `Dispatch-<variant>-unsigned.zip`, `Dispatch.app.dSYM.zip` and `build.json`: variant, version,
+build number, commit, builder, the Xcode and macOS builds, the app's bundle id and minimum macOS, and the zips'
+SHA-256. The same commit with the same Xcode build makes the same app zip on any Mac: its SHA-256 is the comparison.
+The dSYM is not: its debug map records offsets in the intermediate object files, which vary between builds whose
+linked app is the same; it is never shipped or signed.
 
 - **GitHub.** `.github/workflows/release.yml` runs on every push to `main`. A first job on a small Linux runner
   checks whether the pushed commit is a version commit (`release/config.py changes-version`); other pushes build

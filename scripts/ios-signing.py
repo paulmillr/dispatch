@@ -21,7 +21,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / 'build/signing.xcconfig'
-# project.yml's DISPATCH_BUNDLE_ID_PREFIX.
+# project-shared.yml's DISPATCH_BUNDLE_ID_PREFIX.
 PREFIX = 'yachts.dispatch.pilot'
 KNOWN = ('DEVELOPMENT_TEAM', 'DISPATCH_BUNDLE_ID_SUFFIX')
 TEAM = re.compile(r'[A-Z0-9]{10}')
@@ -131,7 +131,7 @@ def known_teams():
 
 def resolved(sdk='iphoneos', overrides=()):
     """The signing settings xcodebuild resolves for the app with this file in place (and `overrides`)."""
-    output = subprocess.run(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-target', 'DispatchMobile', '-configuration',
+    output = subprocess.run(['xcodebuild', '-project', 'DispatchMobile.xcodeproj', '-target', 'DispatchMobile', '-configuration',
                              'Release', '-sdk', sdk, '-showBuildSettings', *overrides], cwd=ROOT, capture_output=True,
                             text=True)
     wanted = ('DEVELOPMENT_TEAM', 'PRODUCT_BUNDLE_IDENTIFIER', 'CODE_SIGN_STYLE', 'CODE_SIGN_IDENTITY')

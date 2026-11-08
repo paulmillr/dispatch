@@ -143,15 +143,15 @@ def main():
     if (args.tests or suite == 'fast') and not xctest:
         return finish(ran, selectors, allowed, cases, suite, 0, None, '', name=name)
 
-    if platform == 'ios':
-        # The Rust toolchain's iOS targets and the SSH engine's XCFramework (SwiftPM needs it before any build script).
-        subprocess.run(['python3', 'scripts/setup_mobile.py'], cwd=ROOT, check=True)
+    # XcodeGen, the Rust toolchain's iOS targets and the SSH engine's XCFramework, which SwiftPM resolves for every
+    # scheme of DispatchMobile.xcodeproj (the watch's too) before any build script. Asks once before any download.
+    subprocess.run(['bash', 'scripts/setup.sh', '--mobile'], cwd=ROOT, check=True)
     subprocess.run(['python3', 'scripts/generate-project.py'], cwd=ROOT, check=True)
     udid, description = find_simulator(args.simulator, platform=simulator_platform)
     print(f'Simulator: {description} {udid}', flush=True)
     log = ROOT / 'build/logs' / f'{platform}-test-{time.strftime("%Y%m%d-%H%M%S")}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
-    command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', scheme, '-configuration', 'Debug',
+    command = ['xcodebuild', '-project', 'DispatchMobile.xcodeproj', '-scheme', scheme, '-configuration', 'Debug',
                '-destination', f'platform={simulator_platform} Simulator,id={udid}',
                # ./run.sh --ios's DerivedData: not the Mac's build/, whose build database one build at a time holds.
                '-derivedDataPath', args.derived_data,

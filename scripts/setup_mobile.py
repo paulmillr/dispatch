@@ -2,9 +2,9 @@
 """What a fresh checkout needs before Xcode resolves the iPhone app's SSH package (docs/ios.md, Building and running):
 the pinned Rust with its iOS targets (scripts/setup-ssh-rust.py), the patched russh the engine's Cargo.toml names by
 path (scripts/vendor-russh.py, build/mobile-ssh/russh) and the engine's XCFramework (scripts/build-mobile-ssh.py, which
-fetches the locked crates once). SwiftPM resolves the binary target before any
-pre-build script runs, and for every scheme of the project (the Mac's too), so scripts/setup.sh calls this, as does
-`test/run.sh --platform ios`.
+fetches the locked crates once). SwiftPM resolves the binary target before any pre-build script runs, for every scheme
+of DispatchMobile.xcodeproj (the Mac's project has no such package), so `scripts/setup.sh --mobile` calls this, as do
+`test/run.sh --platform ios` and test/ios-release.py.
 
 Offline-aware like the Mac's setup: with DISPATCH_SETUP_OFFLINE=1 nothing is downloaded; a missing toolchain or
 crate cache then fails with the command to run online once."""

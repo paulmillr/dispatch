@@ -306,14 +306,15 @@ the thread's route: Queue and Steer now on a working one; `stop` is Stop's confi
   scheme in `build/ios`. Cases are classified in `test/suites.json` as `DispatchWatchTests/<Class>/<test>`; a fast run
   fails on an unclassified case. The watch needs no paired phone; xcodebuild boots it. New tests go in
   `Watch/Tests/<Area>Tests.swift`; after adding files, run `python3 scripts/generate-project.py` and commit
-  `project.pbxproj` and the `DispatchWatch*.xcscheme` files.
+  `DispatchMobile.xcodeproj` (`project.pbxproj` and the `DispatchWatch*.xcscheme` files).
 - The phone's side runs in the iPhone suite: `WatchSnapshotTests`, `WatchThreadBuilderTests`,
   `WatchRequestServerTests`, `WatchBridgeTests`, `WatchHostStatsFeedTests`; the pair logic's tests in
   `test/ios-release.test.py`.
 - **UI tests** (`DispatchWatchUITests`, own scheme, not in `test/suites.json` or `test/run.sh`):
 
   ```sh
-  xcodebuild -scheme DispatchWatchUITests -destination 'platform=watchOS Simulator,name=Apple Watch Series 12 (46mm)' \
+  xcodebuild -project DispatchMobile.xcodeproj -scheme DispatchWatchUITests \
+    -destination 'platform=watchOS Simulator,name=Apple Watch Series 12 (46mm)' \
     -derivedDataPath build/ios test [-only-testing:DispatchWatchUITests/WatchLiveTests/<test>]
   ```
 

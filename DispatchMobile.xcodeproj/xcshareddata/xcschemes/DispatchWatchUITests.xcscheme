@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D5D28631A740D8752537DCF4"
-               BuildableName = "DispatchMobile.app"
-               BlueprintName = "DispatchMobile"
-               ReferencedContainer = "container:Dispatch.xcodeproj">
+               BlueprintIdentifier = "BC60CB1CE397C34E13B87313"
+               BuildableName = "DispatchWatch.app"
+               BlueprintName = "DispatchWatch"
+               ReferencedContainer = "container:DispatchMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -29,10 +29,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "3CA0F543140B2125D00BAD78"
-               BuildableName = "DispatchMobileUITests.xctest"
-               BlueprintName = "DispatchMobileUITests"
-               ReferencedContainer = "container:Dispatch.xcodeproj">
+               BlueprintIdentifier = "83B55C705F5EED70D8D4005B"
+               BuildableName = "DispatchWatchUITests.xctest"
+               BlueprintName = "DispatchWatchUITests"
+               ReferencedContainer = "container:DispatchMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,10 +46,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5D28631A740D8752537DCF4"
-            BuildableName = "DispatchMobile.app"
-            BlueprintName = "DispatchMobile"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "BC60CB1CE397C34E13B87313"
+            BuildableName = "DispatchWatch.app"
+            BlueprintName = "DispatchWatch"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -58,10 +58,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "3CA0F543140B2125D00BAD78"
-               BuildableName = "DispatchMobileUITests.xctest"
-               BlueprintName = "DispatchMobileUITests"
-               ReferencedContainer = "container:Dispatch.xcodeproj">
+               BlueprintIdentifier = "83B55C705F5EED70D8D4005B"
+               BuildableName = "DispatchWatchUITests.xctest"
+               BlueprintName = "DispatchWatchUITests"
+               ReferencedContainer = "container:DispatchMobile.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -82,10 +82,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5D28631A740D8752537DCF4"
-            BuildableName = "DispatchMobile.app"
-            BlueprintName = "DispatchMobile"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "BC60CB1CE397C34E13B87313"
+            BuildableName = "DispatchWatch.app"
+            BlueprintName = "DispatchWatch"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -99,10 +99,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "D5D28631A740D8752537DCF4"
-            BuildableName = "DispatchMobile.app"
-            BlueprintName = "DispatchMobile"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "BC60CB1CE397C34E13B87313"
+            BuildableName = "DispatchWatch.app"
+            BlueprintName = "DispatchWatch"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

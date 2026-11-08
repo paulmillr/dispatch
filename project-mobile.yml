@@ -1,0 +1,435 @@
+# Dispatch for iPhone and Apple Watch (DispatchMobile.xcodeproj; docs/ios.md, docs/watch.md). The Mac app is
+# project.yml's; what both share is project-shared.yml.
+name: DispatchMobile
+include: [project-shared.yml]
+settingGroups:
+  # Every iOS target. The project's ARCHS (the Mac's native architecture, arm64e on Apple silicon) matches no
+  # simulator or iPhone run destination.
+  ios:
+    ARCHS: "$(ARCHS_STANDARD)"
+    ENABLE_HARDENED_RUNTIME: NO
+  # The iPhone and iPad app and its test bundles, signed automatically for a device (the team comes from
+  # build/signing.xcconfig through Mobile/Config/Signing.xcconfig), ad hoc in the simulator.
+  mobileApp:
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+    # The project's Release turns this off for the notarized Mac app; without it an iPhone Release build (--prod)
+    # has no application-identifier, and every Keychain write (a new key, a saved password) fails with "A required
+    # entitlement is not present" (errSecMissingEntitlement).
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+  # Dispatch for Apple Watch and its tests (docs/watch.md): Apple Watch only, signed as mobileApp signs the phone's
+  # (the same team and suffix, so the watch app's id stays under the phone app's).
+  watchApp:
+    TARGETED_DEVICE_FAMILY: "4"
+    # The project's ARCHS (the Mac's arm64e) matches no watch simulator or device (arm64_32 and arm64).
+    ARCHS: "$(ARCHS_STANDARD)"
+    ENABLE_HARDENED_RUNTIME: NO
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    "CODE_SIGN_IDENTITY[sdk=watchsimulator*]": "-"
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+    # The watch app and its widget extension share the complications' entry (docs/watch.md, Complications). A device
+    # build needs this group on the team (automatic signing registers it); the simulator signs ad hoc with it.
+    DISPATCH_APP_GROUP: group.$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
+# The iPhone app's SSH transport (Mobile/Transport, docs/ios.md, Transport): a local package over the Rust engine that
+# scripts/build-mobile-ssh.py builds into build/mobile-ssh (run it with --fetch once before the first Xcode build).
+packages:
+  MobileTransport:
+    path: Mobile/Transport
+targets:
+  # The terminal for Dispatch for iPhone (docs/ios.md): the same sources as Term and TermApple, built for iOS.
+  # Their products keep the module names Term and TermApple, so shared sources import them unchanged.
+  TermMobile:
+    type: framework.static
+    platform: iOS
+    sources: [Vendor/Term/Sources/Term]
+    settings:
+      groups: [term, ios]
+      base:
+        PRODUCT_NAME: Term
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.term
+  # Process launching, the pty, the AppKit view and its display link stay on the Mac (docs/ios.md).
+  TermAppleMobile:
+    type: framework.static
+    platform: iOS
+    sources:
+      - path: Vendor/Term/Sources/TermApple
+        excludes: [Resources, Launch.swift, Pty.swift, Frames.swift, Session.swift, TerminalView.swift]
+    dependencies:
+      - target: TermMobile
+    settings:
+      groups: [term, ios]
+      base:
+        PRODUCT_NAME: TermApple
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.termapple
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+  # Dispatch for iPhone (docs/ios.md). iOS-only sources live in Mobile/; the Foundation and SwiftUI sources it
+  # shares with the Mac app are listed below by path and stay in Dispatch/.
+  DispatchMobile:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    postBuildScripts:
+      # The licences: the shared folder (the helpers, fonts and themes the phone ships too) and the SSH engine's
+      # crates, which only the phone links (Mobile/ThirdPartyLicenses: kept out of the Mac app's bundle).
+      - name: Bundle licences
+        script: |
+          set -euo pipefail
+          destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ThirdPartyLicenses"
+          mkdir -p "$destination"
+          rsync -a --delete "$SRCROOT/ThirdPartyLicenses/" "$SRCROOT/Mobile/ThirdPartyLicenses/" "$destination/"
+        basedOnDependencyAnalysis: false
+      # The terminal's fonts, where TermApple's FontCollection looks for them on iOS (TermFonts: an iOS bundle
+      # cannot have a top-level Resources folder).
+      - name: Bundle terminal fonts
+        script: |
+          set -euo pipefail
+          destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TermFonts"
+          mkdir -p "$destination"
+          cp "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.ttf "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.txt "$destination/"
+          # Every terminal font the Mac's Settings offers (TerminalFont.all), and chat's Latin Modern Roman (MobileChatFont).
+          for font in SourceCodePro-Regular.ttf SourceCodePro-Bold.ttf SourceCodePro-Italic.ttf SourceCodePro-BoldItalic.ttf FiraCode-Regular.ttf FiraCode-Bold.ttf 0xProto-Regular.otf 0xProto-Bold.otf 0xProto-Italic.otf DepartureMono-Regular.otf lmroman10-regular.otf lmroman10-italic.otf lmroman10-bold.otf lmroman10-bolditalic.otf CascadiaCode-Variable.ttf CascadiaCode-Italic-Variable.ttf CommitMono-400-Regular.otf CommitMono-400-Italic.otf CommitMono-700-Regular.otf CommitMono-700-Italic.otf GeistMono-Variable.ttf GeistMono-Italic-Variable.ttf Hack-Regular.ttf Hack-Bold.ttf Hack-Italic.ttf Hack-BoldItalic.ttf Hasklig-Regular.otf Hasklig-Bold.otf Hasklig-It.otf Hasklig-BoldIt.otf IBMPlexMono-Regular.ttf IBMPlexMono-Bold.ttf IBMPlexMono-Italic.ttf IBMPlexMono-BoldItalic.ttf Inconsolata-Variable.ttf IntelOneMono-Regular.ttf IntelOneMono-Bold.ttf IntelOneMono-Italic.ttf IntelOneMono-BoldItalic.ttf IoskeleyMonoTerm-Regular.ttf IoskeleyMonoTerm-Bold.ttf IoskeleyMonoTerm-Italic.ttf IoskeleyMonoTerm-BoldItalic.ttf lmmono10-regular.otf lmmono10-italic.otf MapleMono-Variable.ttf MapleMono-Italic-Variable.ttf RecMonoCasual-Regular.ttf RecMonoCasual-Bold.ttf RecMonoCasual-Italic.ttf RecMonoCasual-BoldItalic.ttf VictorMono-Variable.ttf VictorMono-Italic-Variable.ttf; do cp "$SRCROOT/Dispatch/Resources/Fonts/$font" "$destination/"; done
+        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/DepartureMono-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-bolditalic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/CascadiaCode-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/CascadiaCode-Italic-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/CommitMono-400-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/CommitMono-400-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/CommitMono-700-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/CommitMono-700-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/GeistMono-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/GeistMono-Italic-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hack-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hack-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hack-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hack-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hasklig-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hasklig-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hasklig-It.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/Hasklig-BoldIt.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/IBMPlexMono-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IBMPlexMono-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IBMPlexMono-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IBMPlexMono-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/Inconsolata-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IntelOneMono-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IntelOneMono-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IntelOneMono-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IntelOneMono-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IoskeleyMonoTerm-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IoskeleyMonoTerm-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IoskeleyMonoTerm-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/IoskeleyMonoTerm-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmmono10-regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmmono10-italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/MapleMono-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/MapleMono-Italic-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/RecMonoCasual-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/RecMonoCasual-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/RecMonoCasual-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/RecMonoCasual-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/VictorMono-Variable.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/VictorMono-Italic-Variable.ttf"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/DepartureMono-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-bolditalic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CascadiaCode-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CascadiaCode-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CommitMono-400-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CommitMono-400-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CommitMono-700-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/CommitMono-700-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/GeistMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/GeistMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hack-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hack-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hack-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hack-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hasklig-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hasklig-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hasklig-It.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Hasklig-BoldIt.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IBMPlexMono-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IBMPlexMono-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IBMPlexMono-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IBMPlexMono-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/Inconsolata-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IntelOneMono-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IntelOneMono-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IntelOneMono-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IntelOneMono-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IoskeleyMonoTerm-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IoskeleyMonoTerm-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IoskeleyMonoTerm-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/IoskeleyMonoTerm-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmmono10-regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmmono10-italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/MapleMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/MapleMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/RecMonoCasual-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/RecMonoCasual-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/RecMonoCasual-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/RecMonoCasual-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/VictorMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/VictorMono-Italic-Variable.ttf"]
+    preBuildScripts:
+      - name: Build SSH engine
+        script: python3 "$SRCROOT/scripts/build-mobile-ssh.py" --platform "$PLATFORM_NAME"
+        basedOnDependencyAnalysis: false
+      - name: Install SSH helpers
+        # The phone uploads every helper (the Mac one too) to hosts: all three are gzipped resources in helper/
+        # (App Store Connect refuses a Mach-O file that is not a bundle's executable; HelperBootstrap expands them).
+        script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-arm64.gz", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64.gz", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64.gz", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+    sources:
+      - path: Mobile
+        # Tests: DispatchMobileTests. Transport: its own Swift package; its Integration folder (the app's SSH driver)
+        # is app code.
+        # Demo/Fixtures: the simulator demo reads them from the source tree (Debug only, never bundled).
+        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses, Demo/Fixtures]
+      - path: Mobile/Transport/Integration
+      # Ghostty's bundled themes, Settings' terminal colour schemes (TerminalSchemes reads the app's themes folder).
+      - path: Vendor/Term/Resources/ghostty/themes
+        type: folder
+        buildPhase: resources
+      # The Dispatch themes (TerminalConfiguration reads them from the app's ghostty folder).
+      - path: extras/ghostty
+        type: folder
+        buildPhase: resources
+      # Shared with the Mac app (docs/ios.md, Shared sources).
+      - Dispatch/Attention.swift
+      - Dispatch/Chat/AgentModelMenu.swift
+      - Dispatch/Chat/ChatAttachments.swift
+      - Dispatch/Chat/ChatCommands.swift
+      - Dispatch/Chat/ChatDrafts.swift
+      - Dispatch/Chat/ChatFontChoice.swift
+      - Dispatch/Chat/HelperChatTransport.swift
+      - Dispatch/Chat/ChatMarkdownPolicy.swift
+      - Dispatch/Chat/ChatQuestionPolicy.swift
+      - Dispatch/Chat/ChatMarkdownBlock.swift
+      - Dispatch/Chat/ChatModelChoicesCache.swift
+      - Dispatch/Chat/ChatModels.swift
+      - Dispatch/Chat/ChatOperations.swift
+      - Dispatch/Chat/ChatPatch.swift
+      - Dispatch/Chat/ChatSideConversation.swift
+      - Dispatch/Chat/ChatSideQuestion.swift
+      - Dispatch/Chat/ChatTranscript.swift
+      - Dispatch/Chat/ChatTurnSteps.swift
+      - Dispatch/Chat/ChatTypingReveal.swift
+      - Dispatch/Chat/ClaudeQuestions.swift
+      - Dispatch/Chat/DictationModels.swift
+      - Dispatch/Chat/HelperChat.swift
+      - Dispatch/Chat/SpokenMarkdown.swift
+      - Dispatch/Chat/SyntaxScanner.swift
+      - Dispatch/Chat/ToolCommandPresentation.swift
+      - Dispatch/Chat/ToolCommandWords.swift
+      - Dispatch/Chat/ToolDocument.swift
+      - Dispatch/Chat/ToolOrchestration.swift
+      - Dispatch/Chat/ToolOutput.swift
+      - Dispatch/Chat/ToolPresentation.swift
+      - Dispatch/Chat/ToolPresentationCache.swift
+      - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Files/FileFormat.swift
+      - Dispatch/Files/FilePreviewContent.swift
+      - Dispatch/Files/FilePreviewImage.swift
+      - Dispatch/Files/FilesFormatting.swift
+      - Dispatch/Files/FilesModels.swift
+      - Dispatch/Files/FilesSourceFailure.swift
+      - Dispatch/Files/FilesWire.swift
+      - Dispatch/Files/GitReadCore.swift
+      - Dispatch/Files/GitDiffPresentation.swift
+      - Dispatch/Files/GitGraph.swift
+      - Dispatch/Files/GitLog.swift
+      - Dispatch/Files/GitModels.swift
+      - Dispatch/Files/GitParsers.swift
+      - Dispatch/Files/GitSignatureExplanation.swift
+      - Dispatch/Files/Review.swift
+      - Dispatch/Files/ReviewRefresh.swift
+      - Dispatch/Files/ReviewRepository.swift
+      - Dispatch/Files/TextOccurrences.swift
+      - Dispatch/Helper/AppReplay.swift
+      - Dispatch/Helper/HelperBackend.swift
+      - Dispatch/Helper/HelperBinary.swift
+      - Dispatch/Helper/HelperClient.swift
+      - Dispatch/Helper/HelperCapabilities.swift
+      - Dispatch/Helper/HelperHello.swift
+      - Dispatch/Helper/HelperMultiplexer.swift
+      - Dispatch/Helper/HelperConnection.swift
+      - Dispatch/Helper/HelperDescriptors.swift
+      - Dispatch/Helper/HelperSession.swift
+      - Dispatch/Helper/HelperTopology.swift
+      - Dispatch/Helper/HelperTransport.swift
+      - Dispatch/Helper/HelperWire.swift
+      - Dispatch/Herdr/HerdrModels.swift
+      - Dispatch/Hosts/HostRegistry.swift
+      - Dispatch/Hosts/TerminalHistoryStore.swift
+      - Dispatch/SSH/SSHInvocation.swift
+      - Dispatch/Stats/HostStatsWire.swift
+      - Dispatch/Stats/StatisticsHistory.swift
+      - Dispatch/Terminal/LineSpacing.swift
+      - Dispatch/Terminal/ProgramStatusStore.swift
+      - Dispatch/Terminal/TerminalFontCatalog.swift
+      - Dispatch/Terminal/TerminalFontScale.swift
+      - Dispatch/Terminal/TerminalMachine.swift
+      - Dispatch/Terminal/TerminalScrollState.swift
+      - Dispatch/Terminal/TextContrast.swift
+      - Dispatch/Themes/ColorVision.swift
+      - Dispatch/Themes/SchemeAudit.swift
+      - Dispatch/Themes/SchemeGroup.swift
+      - Dispatch/Themes/TerminalTheme.swift
+      - Dispatch/Themes/ThemeColorMath.swift
+      - Dispatch/Views/Chrome.swift
+      - Dispatch/Views/ComposerFences.swift
+      - Dispatch/Views/HostGlyph.swift
+      - Dispatch/Views/HostTint.swift
+      - Dispatch/WorkspaceModels.swift
+      # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
+      - path: Watch/Shared
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_NAME: DispatchMobile
+        PRODUCT_MODULE_NAME: DispatchMobile
+        # No CZstd: only the Mac's Debug journals (AppReplay) compress captures (docs/ios.md).
+        SWIFT_INCLUDE_PATHS: ""
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
+        INFOPLIST_FILE: Mobile/App/Info.plist
+        MARKETING_VERSION: "0.1.6"
+        CURRENT_PROJECT_VERSION: "1"
+        # iPhone and iPad (TARGETED_DEVICE_FAMILY in mobileApp); never Catalyst or a Mac running the iPad build.
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+      configs:
+        # Release is what goes on a phone (docs/ios.md, Release): the executable is stripped once
+        # its dSYM is made (half of it is symbols). The iPhone tests never run against Release: they need @testable and
+        # the Debug demos.
+        Release:
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+    dependencies:
+      - package: MobileTransport
+      - package: Dictation
+      - target: SSHHelpers
+      # Embedded in Watch/ ("Embed Watch Content"): installing the phone app offers it on a paired watch.
+      - target: DispatchWatch
+      - target: TermMobile
+        embed: false
+      - target: TermAppleMobile
+        embed: false
+      # VideoPlayer's superclass (see project.yml's Dispatch target).
+      - sdk: AVKit.framework
+      - sdk: Accelerate.framework
+      - sdk: CoreText.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+  DispatchMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Mobile/Tests
+      # The Mac's Foundation-only tests, shared by path (docs/ios.md). HelperClient's fixtures load from the checkout.
+      - DispatchTests/HelperClient/HelperClientTests.swift
+      - DispatchTests/ProgramStatusTests.swift
+      - DispatchTests/TerminalCoreTests.swift
+      - DispatchTests/TerminalFastPathTests.swift
+      - DispatchTests/TermUnicode18Tests.swift
+      - DispatchTests/TerminalPageMemoryTests.swift
+      - DispatchTests/TerminalChecksumTests.swift
+      - DispatchTests/ChatDraftTests.swift
+      - DispatchTests/ChatSideQuestionTests.swift
+      - DispatchTests/ChatOperationsTests.swift
+      - DispatchTests/ChatTypingRevealTests.swift
+      - DispatchTests/GitGraphTests.swift
+      - DispatchTests/GitParsersTests.swift
+      - DispatchTests/PortableTestSupport.swift
+      - DispatchTests/SharedStatsVoiceTests.swift
+      - DispatchTests/FilesSharedTests.swift
+      - DispatchTests/SyntaxScannerTests.swift
+      - DispatchTests/TerminalCatalogTests.swift
+      - DispatchTests/GitReadCoreTests.swift
+      - DispatchTests/HelperChatTransportTests.swift
+      - DispatchTests/SurfaceSessionCoreTests.swift
+      - DispatchTests/HelperPolicyTests.swift
+      - DispatchTests/ChatPresentationPolicyTests.swift
+    dependencies:
+      - target: DispatchMobile
+      - target: TermMobile
+        link: false
+        embed: false
+      - target: TermAppleMobile
+        link: false
+        embed: false
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchMobile.app/DispatchMobile"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps the running app (docs/ios.md, Testing): its own scheme, so the unit test runs never start it.
+  DispatchMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Mobile/UITests
+    dependencies:
+      - target: DispatchMobile
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DispatchMobile
+  # Dispatch for Apple Watch (docs/watch.md): a single-target SwiftUI app, a WatchConnectivity companion of the
+  # phone app, which embeds it. Its version follows the phone's: Apple requires a watch app and its companion to match
+  # (the simulator build's embedded-binary validation does not check it).
+  DispatchWatch:
+    type: application
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/App
+        excludes: [Info.plist, "*.entitlements"]
+      # Foundation-only, compiled into both apps.
+      - path: Watch/Shared
+      # The complication's entry, store and views, shared with the widget extension.
+      - path: Watch/Complication
+    dependencies:
+      - target: DispatchWatchWidgets
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatch
+        PRODUCT_MODULE_NAME: DispatchWatch
+        SWIFT_INCLUDE_PATHS: ""
+        # Must extend the phone app's id, suffix included, as WKCompanionAppBundleIdentifier names it.
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
+        INFOPLIST_FILE: Watch/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/App/DispatchWatch.entitlements
+        MARKETING_VERSION: "0.1.6"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+  # The watch's complications (docs/watch.md, Complications): a WidgetKit extension embedded in the watch app, signed as
+  # it is, reading the entry the app writes to their App Group.
+  DispatchWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Widgets
+        excludes: [Info.plist, "*.entitlements"]
+      - path: Watch/Complication
+      - path: Watch/Shared
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatchWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
+        INFOPLIST_FILE: Watch/Widgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/Widgets/DispatchWatchWidgets.entitlements
+        MARKETING_VERSION: "0.1.6"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_INCLUDE_PATHS: ""
+        SKIP_INSTALL: YES
+  DispatchWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Tests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchWatch.app/DispatchWatch"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps the watch app (docs/watch.md, Testing): its own scheme, so the unit test runs never start it.
+  DispatchWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/UITests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DispatchWatch
+schemes:
+  DispatchMobile:
+    build:
+      targets:
+        DispatchMobile: all
+    test:
+      targets: [DispatchMobileTests]
+  DispatchWatch:
+    build:
+      targets:
+        DispatchWatch: all
+    test:
+      targets: [DispatchWatchTests]
+  DispatchMobileUITests:
+    build:
+      targets:
+        DispatchMobile: all
+        DispatchMobileUITests: [test]
+    test:
+      targets: [DispatchMobileUITests]
+  DispatchWatchUITests:
+    build:
+      targets:
+        DispatchWatch: all
+        DispatchWatchUITests: [test]
+    test:
+      targets: [DispatchWatchUITests]

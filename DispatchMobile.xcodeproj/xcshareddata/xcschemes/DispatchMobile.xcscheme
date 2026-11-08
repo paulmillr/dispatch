@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6E2707EA380DE3C806F684F0"
-               BuildableName = "DispatchWatch.app"
-               BlueprintName = "DispatchWatch"
-               ReferencedContainer = "container:Dispatch.xcodeproj">
+               BlueprintIdentifier = "6776066FDC8FF956747A98CC"
+               BuildableName = "DispatchMobile.app"
+               BlueprintName = "DispatchMobile"
+               ReferencedContainer = "container:DispatchMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6E2707EA380DE3C806F684F0"
-            BuildableName = "DispatchWatch.app"
-            BlueprintName = "DispatchWatch"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "6776066FDC8FF956747A98CC"
+            BuildableName = "DispatchMobile.app"
+            BlueprintName = "DispatchMobile"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +44,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "50BC03046E5D5B7D731D0175"
-               BuildableName = "DispatchWatchTests.xctest"
-               BlueprintName = "DispatchWatchTests"
-               ReferencedContainer = "container:Dispatch.xcodeproj">
+               BlueprintIdentifier = "DA8EA684DAF58BFBACFEC243"
+               BuildableName = "DispatchMobileTests.xctest"
+               BlueprintName = "DispatchMobileTests"
+               ReferencedContainer = "container:DispatchMobile.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -68,10 +68,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6E2707EA380DE3C806F684F0"
-            BuildableName = "DispatchWatch.app"
-            BlueprintName = "DispatchWatch"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "6776066FDC8FF956747A98CC"
+            BuildableName = "DispatchMobile.app"
+            BlueprintName = "DispatchMobile"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -85,10 +85,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6E2707EA380DE3C806F684F0"
-            BuildableName = "DispatchWatch.app"
-            BlueprintName = "DispatchWatch"
-            ReferencedContainer = "container:Dispatch.xcodeproj">
+            BlueprintIdentifier = "6776066FDC8FF956747A98CC"
+            BuildableName = "DispatchMobile.app"
+            BlueprintName = "DispatchMobile"
+            ReferencedContainer = "container:DispatchMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

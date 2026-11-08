@@ -308,7 +308,7 @@ def selectors(executable):
 
 
 def build(destination, log, env, extra=()):
-    command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile', '-configuration', 'Release',
+    command = ['xcodebuild', '-project', 'DispatchMobile.xcodeproj', '-scheme', 'DispatchMobile', '-configuration', 'Release',
                '-destination', destination, '-derivedDataPath', 'build/dd', *extra, 'build']
     started = time.monotonic()
     run(command, log, env)

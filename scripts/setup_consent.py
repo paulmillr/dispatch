@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Offline setup preflight and one consent shared by its child downloaders."""
+"""Offline setup preflight and one consent shared by its child downloaders.
+
+`--setup` prepares what the Mac app builds with; `--setup --mobile` also the iPhone app's SSH engine
+(scripts/setup_mobile.py), which only DispatchMobile.xcodeproj resolves."""
 import importlib.util
 from contextlib import contextmanager
 import json
@@ -36,7 +39,7 @@ def describe(component):
         'rust': f'Rust       {LOCK["rust"]["version"]}\n'
                 '      SSH helper compiler and tools; macOS + Linux targets · build/rust',
         'ssh-engine': 'iPhone SSH engine crates  Mobile/Transport/Core/Cargo.lock\n'
-                      '      Xcode resolves the iPhone package for the Mac app too · build/cargo, build/mobile-ssh',
+                      '      The iPhone app\'s SSH transport · build/cargo, build/mobile-ssh',
     }[component]
 
 
@@ -90,7 +93,7 @@ def succeeds(command):
     return subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-def plan():
+def plan(mobile=False):
     tools = load_script('setup-build-tools')
     rust = load_script('setup-ssh-rust')
     missing = []
@@ -102,13 +105,14 @@ def plan():
         missing.append('xcodegen')
     if not rust.available():
         missing.append('rust')
-    if load_script('setup_mobile').downloads():
+    if mobile and load_script('setup_mobile').downloads():
         missing.append('ssh-engine')
     return missing
 
 
 def main():
-    if sys.argv[1:] == ['--setup']:
+    if sys.argv[1:] in (['--setup'], ['--setup', '--mobile']):
+        wants_mobile = sys.argv[2:] == ['--mobile']
         os.environ.update(environment())
         for key in ('TMPDIR', 'CFFIXED_USER_HOME'):
             Path(os.environ[key]).mkdir(parents=True, exist_ok=True)
@@ -118,7 +122,7 @@ def main():
         if not succeeds(['xcodebuild', '-checkFirstLaunchStatus']):
             raise RuntimeError('Complete Xcode first-launch setup, then rerun ./run.sh.')
         os.environ.pop(APPROVAL, None)
-        components = plan()
+        components = plan(wants_mobile)
         confirm(components)
         os.environ[APPROVAL] = ','.join(components)
         tools = load_script('setup-build-tools')
@@ -127,8 +131,8 @@ def main():
         with progress(f'Rust {LOCK["rust"]["version"]} · preparing SSH helper toolchain'):
             subprocess.run([sys.executable, str(ROOT / 'scripts/setup-ssh-rust.py')], check=True)
         mobile = load_script('setup_mobile')
-        if not mobile.current():
-            # SwiftPM resolves the iPhone package's binary target for every scheme, the Mac app's included.
+        if wants_mobile and not mobile.current():
+            # SwiftPM resolves the iPhone package's binary target before any build script runs.
             with progress('iPhone SSH engine · building build/mobile-ssh'):
                 mobile.ensure()
         return

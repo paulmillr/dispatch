@@ -453,11 +453,11 @@ class BuildEntryPointTests(unittest.TestCase):
             expected = ['tests --list ' + option] + (['tests ' + option] if status == 0 else [])
             self.assertEqual((code, calls, (self.root / 'build').exists()), (status, expected, False))
         code, calls = self.invoke('root', '--test', 'ChatTests')
-        self.assertEqual((code, calls), (0, ['tests --list ChatTests', 'setup unset', 'tools', 'generate', 'tests ChatTests']))
+        self.assertEqual((code, calls), (0, ['tests --list ChatTests', 'setup unset', 'tools', 'generate', 'generate', 'tests ChatTests']))
         code, calls = self.invoke('root', '--test', 'ChatTests', TOOLS_EXIT='9')
         self.assertEqual((code, calls), (9, ['tests --list ChatTests', 'setup unset', 'tools']))
         code, calls = self.invoke('root', '--test', 'ChatTests', DISPATCH_SETUP_OFFLINE='1')
-        self.assertEqual((code, calls), (0, ['tests --list ChatTests', 'setup 1', 'tools', 'generate', 'tests ChatTests']))
+        self.assertEqual((code, calls), (0, ['tests --list ChatTests', 'setup 1', 'tools', 'generate', 'generate', 'tests ChatTests']))
 
     def testOfflineOverrideIsPreservedInBothModes(self):
         for args in ((), ('--prod',)):
@@ -871,8 +871,12 @@ class ConsentTests(unittest.TestCase):
         rust, mobile = Mock(), Mock()
         rust.available.return_value = False
         mobile.downloads.return_value = True
+        # The Mac app's project has no iPhone package: only --mobile prepares its SSH engine.
         with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
-            self.assertEqual(consent.plan(), ['xcodegen', 'rust', 'ssh-engine'])
+            self.assertEqual(consent.plan(), ['xcodegen', 'rust'])
+            mobile.downloads.assert_not_called()
+        with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
+            self.assertEqual(consent.plan(mobile=True), ['xcodegen', 'rust', 'ssh-engine'])
             for call in tools.resolve.call_args_list:
                 self.assertTrue(call.kwargs['offline'])
 
@@ -881,11 +885,11 @@ class ConsentTests(unittest.TestCase):
         rust.available.return_value = True
         mobile.downloads.return_value = False
         with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
-            self.assertEqual(consent.plan(), [])
+            self.assertEqual(consent.plan(mobile=True), [])
             self.assertEqual(tools.resolve.call_args_list, [call('xcodegen', offline=True)])
 
     def testStaleEngineWithCachedCratesBuildsWithoutConsent(self):
-        # Xcode resolves the iPhone package for the Mac app's scheme too: setup always prepares it, offline when it can.
+        # `setup.sh --mobile` prepares it before Xcode resolves the iPhone package, offline when it can.
         mobile = consent.load_script('setup_mobile')
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(mobile, 'current', return_value=False), \

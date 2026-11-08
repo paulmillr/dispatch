@@ -21,7 +21,7 @@ before changing it, and change it along with the behaviour.
 
 ```sh
 ./run.sh --just-build                      # Debug build (also replays the helper corpus, below)
-python3 scripts/generate-project.py        # after adding/moving source files; commit project.pbxproj
+python3 scripts/generate-project.py        # after adding/moving source files; commit both project.pbxproj
 bash test/run.sh [Class[/testCase] ...]    # XCTest; no selector = fast suite
 python3 test/xcode.py --capture DispatchTests/Class/testX   # record one test; then --replay it
 python3 test/vm.py test Class              # desktop tests in the macOS VM (preferred over the host)
@@ -44,7 +44,7 @@ cd helper && cargo test --offline --features dispatch-helper/capture
   bare `tmux kill-server`, and never `pkill` tmux, herdr, ssh or sshd.
 - **Test data is fictional**: no real names, emails, hosts or keys.
 - **Chat composers stay `ChatCaretTextView`/`ChatEditorTextView`**, never a SwiftUI `TextField` (120 Hz performance).
-- **Shared sources from `Dispatch/` also compile into the iPhone app**: `project.yml` lists them explicitly
+- **Shared sources from `Dispatch/` also compile into the iPhone app**: `project-mobile.yml` lists them explicitly
   ([shared sources](ios.md#shared-sources)); guard Mac-only code with `#if canImport(AppKit)` and check with
   `python3 test/ios.py`.
 - `build/` holds every tool and artifact, `tmp/` is scratch; setup never needs sudo or Homebrew.

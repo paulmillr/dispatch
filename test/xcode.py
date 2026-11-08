@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 import codex_fixture
 INPUTS = ("Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses", "extras", "scripts", "test",
-          "project.yml",
+          "project.yml", "project-shared.yml",
           "Dispatch.xcodeproj/project.pbxproj", "Dispatch.xcodeproj/xcshareddata")
 IGNORED = {"target", "__pycache__", "LocalToolAudit", ".git", "xcuserdata", ".DS_Store"}
 # The tests' private root: short (macOS sun_path), and fixed, since journals record its paths.

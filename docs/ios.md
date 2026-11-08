@@ -32,14 +32,19 @@ python3 test/ios-release.py [--simulator NAME]              # Release check, bel
 - **Two iOS 27.2 runtimes**: `iOS-27-2` has every iPhone and iPad but the Duo, and `iOS-27-2-iPhone19-4` has only the
   iPhone Duo. Name the runtime when creating one: `xcrun simctl create my-ipad "iPad Pro 11-inch (M5)"
   com.apple.CoreSimulator.SimRuntime.iOS-27-2`.
+- **Two projects.** The iPhone and Watch apps are `DispatchMobile.xcodeproj` (`project-mobile.yml`), the Mac app
+  `Dispatch.xcodeproj` (`project.yml`); both include `project-shared.yml` (the base settings, the `Dictation` package
+  and the `SSHHelpers` target), and `scripts/generate-project.py` generates both. Only the iPhone project has the
+  `MobileTransport` package, so building the Mac app never needs the SSH engine below.
 - **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, for every
-  scheme (the Mac app's too), so the pinned Rust with its iOS targets and
-  `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh` does it through
-  `scripts/setup_mobile.py` (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step: the
-  locked crates and russh's crate, which it stages patched into `build/mobile-ssh/russh`);
-  `DISPATCH_SETUP_OFFLINE=1` fails with the command instead. Setup rebuilds the XCFramework whenever its headers
-  differ from `Mobile/Transport/Core/include`, and stages russh whenever `build/mobile-ssh/russh` is missing or stale
-  (offline from the cached crate). Existing checkouts run `python3 scripts/setup-ssh-rust.py` once.
+  scheme of `DispatchMobile.xcodeproj`, so the pinned Rust with its iOS targets and
+  `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh --mobile` (which
+  `./run.sh --ios` and `test/run.sh --platform ios` run) does it through `scripts/setup_mobile.py`
+  (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step: the locked crates and russh's
+  crate, which it stages patched into `build/mobile-ssh/russh`); `DISPATCH_SETUP_OFFLINE=1` fails with the command
+  instead. Setup rebuilds the XCFramework whenever its headers differ from `Mobile/Transport/Core/include`, and stages
+  russh whenever `build/mobile-ssh/russh` is missing or stale (offline from the cached crate). Existing checkouts run
+  `python3 scripts/setup-ssh-rust.py` once.
 
 ### Signing and a device
 
@@ -56,8 +61,8 @@ installs and launches through `devicectl`.
 
 ### Bundle ids
 
-Every bundle id starts with `DISPATCH_BUNDLE_ID_PREFIX` (`project.yml`), `yachts.dispatch.pilot`: the Pilot account's
-apps (`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`,
+Every bundle id starts with `DISPATCH_BUNDLE_ID_PREFIX` (`project-shared.yml`), `yachts.dispatch.pilot`: the Pilot
+account's apps (`yachts.dispatch.pilot.app`, `yachts.dispatch.pilot.mobile`, `….mobile.watchkitapp`,
 `….mobile.watchkitapp.widgets`, `group.yachts.dispatch.pilot.mobile`), the ones the GitHub release and Homebrew
 publish. `build/signing.xcconfig` holds the team that signs them for a device.
 
@@ -94,9 +99,9 @@ linked: `AppReplay` compiles for its types, but no journal ever starts.
 
 ### Shared sources
 
-Mac sources the phone uses stay in `Dispatch/` and are listed by path in `project.yml` ("Shared with the Mac app").
-They change only by `#if canImport(AppKit)` guards or additive, behaviour-preserving helpers; `test/ios.py` is the
-build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` stands in for the Mac's AppKit-only
+Mac sources the phone uses stay in `Dispatch/` and are listed by path in `project-mobile.yml` ("Shared with the Mac
+app"). They change only by `#if canImport(AppKit)` guards or additive, behaviour-preserving helpers; `test/ios.py` is
+the build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` stands in for the Mac's AppKit-only
 `System` (a `SystemProvider` seam replacing it is deferred). Shared cores include:
 
 - Chat transcript merge rules (`ChatTranscript`), displayed items and prompt confirmation; helper notification
@@ -685,15 +690,16 @@ Found while building the thread and its animations; each cost a debugging sessio
   `DispatchMobileScripts/<Class>/<test>` (Python tests of the release tooling); a fast run fails on an unclassified
   case. `--derived-data PATH` builds elsewhere than `build/ios`, so two runs do not wait on one build database. New
   tests go in `Mobile/Tests/<Area>…Tests.swift`; after adding files, run `python3 scripts/generate-project.py` and
-  commit `project.pbxproj`.
-- **UI tests.** `xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=iPhone Air'
-  -derivedDataPath build/ios test`, against the scripted hosts; `test/run.sh` skips them. The scheme can hang after
-  its result line: wrap it in `perl -e 'alarm 595; exec @ARGV' --`. Known simulator limits: XCUITest's `typeKey` never
-  delivers Return, Esc, Delete, Home, End or Page keys and shifts F-keys down by one (those rules are unit tested
-  through the commands); a synthesized ⌘ hold shows no overlay; pointer events and window resizing (Split View, Slide
-  Over, Stage Manager sizes) cannot be synthesized, except through SpringBoard's window controls
-  (`IPadLayoutUITests`); iPadOS keeps a floating software keyboard across launches, so cases dock it first and in
-  teardown (`KeyboardDocking.swift`). `TEST_RUNNER_DISPATCH_UI_SHOTS=<folder>` keeps screenshots.
+  commit `DispatchMobile.xcodeproj/project.pbxproj`.
+- **UI tests.** `xcodebuild -project DispatchMobile.xcodeproj -scheme DispatchMobileUITests
+  -destination 'platform=iOS Simulator,name=iPhone Air' -derivedDataPath build/ios test`, against the scripted hosts;
+  `test/run.sh` skips them. The scheme can hang after its result line: wrap it in
+  `perl -e 'alarm 595; exec @ARGV' --`. Known simulator limits: XCUITest's `typeKey` never delivers Return, Esc,
+  Delete, Home, End or Page keys and shifts F-keys down by one (those rules are unit tested through the commands); a
+  synthesized ⌘ hold shows no overlay; pointer events and window resizing (Split View, Slide Over, Stage Manager
+  sizes) cannot be synthesized, except through SpringBoard's window controls (`IPadLayoutUITests`); iPadOS keeps a
+  floating software keyboard across launches, so cases dock it first and in teardown (`KeyboardDocking.swift`).
+  `TEST_RUNNER_DISPATCH_UI_SHOTS=<folder>` keeps screenshots.
 - **Live fixture.** Makes this Mac a host: a loopback sshd with private HOME and sockets, a private tmux server, and
   Claude Code from `build/test-tools` against a local Messages API. The simulator cannot start processes, so `serve`
   restarts sshd when a test asks.
@@ -703,7 +709,8 @@ Found while building the thread and its animations; each cost a debugging sessio
   python3 scripts/mobile-live-fixture.py serve /tmp/sim-int &
   TEST_RUNNER_DISPATCH_LIVE_FIXTURE=/tmp/sim-int/live.json test/run.sh --platform ios SSHDriverLiveTests
   TEST_RUNNER_DISPATCH_LIVE_FIXTURE=/tmp/sim-int/live.json TEST_RUNNER_DISPATCH_LIVE_LINUX='{"name":…,"host":…,"port":…,"user":…,"key":…,"root":"/tmp/dt-int"}' \
-    xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=<device>' -derivedDataPath build/ios \
+    xcodebuild -project DispatchMobile.xcodeproj -scheme DispatchMobileUITests \
+    -destination 'platform=iOS Simulator,name=<device>' -derivedDataPath build/ios \
     -collect-test-diagnostics never test -only-testing:DispatchMobileUITests/MobileLiveTests
   python3 scripts/mobile-live-fixture.py stop /tmp/sim-int
   ```

@@ -547,12 +547,12 @@ Replay rules (I/O through `System`, waits, ids, teardown) are in
 
 ## Worktrees
 
-A second checkout (`git worktree add`) builds and tests like the main one once it has the main tree's tools.
-Link or `cp -cR` `build/{rust,rust-downloads,cargo,tools,test-tools,downloads}` from the main tree, and copy
-`build/mobile-ssh` (the XCFramework *and* its `target`; `Mobile/Transport/Frameworks` links there, and without
-`target` the next simulator build recreates the framework with one slice). Keep worktrees outside `/tmp`: a
-`/tmp` vs `/private/tmp` executable path fails SSH consent's origin check in every SSH-login test. A worktree has
-no `replays/`, so it runs everything live and the build's corpus check only warns.
+A second checkout (`git worktree add`) builds and tests like the main one once it has the main tree's tools. Link or
+`cp -cR` `build/{rust,rust-downloads,cargo,tools,test-tools,downloads}` from the main tree; for the iPhone and Watch
+apps also copy `build/mobile-ssh` (the XCFramework *and* its `target`; `Mobile/Transport/Frameworks` links there, and
+without `target` the next simulator build recreates the framework with one slice). Keep worktrees outside `/tmp`: a
+`/tmp` vs `/private/tmp` executable path fails SSH consent's origin check in every SSH-login test. A worktree has no
+`replays/`, so it runs everything live and the build's corpus check only warns.
 
 `test/xcode.py` always uses `/tmp/dt-journal` and points its `checkout` link at the tree that ran last, so two
 checkouts running tests at once break each other ("…/dt-journal/checkout/… couldn't be opened"). Run one at a
@@ -568,8 +568,9 @@ scratch tree, `cd <tree> || exit 1` on its own line and use absolute paths for `
 
 `git worktree remove` deletes the worktree's ignored `build/` too: copy screenshots and reports out first. Agents in parallel trees share the simulators' recording service, so `pkill -f recordVideo` from one cuts another's recording; stop only the pid you started.
 
-Merging branches made in parallel worktrees: `Dispatch.xcodeproj/project.pbxproj` conflicts every time (take either
-side, then `python3 scripts/generate-project.py`); `test/suites.json` conflicts on neighbouring additions (union the
+Merging branches made in parallel worktrees: `Dispatch.xcodeproj/project.pbxproj` (and
+`DispatchMobile.xcodeproj/project.pbxproj`) conflicts every time (take either side, then
+`python3 scripts/generate-project.py`); `test/suites.json` conflicts on neighbouring additions (union the
 `cases`, keeping the base order); two branches that each added the next replay migration need one renumbered (the
 ledger keeps the first). A patch carried from a tree whose build appended to `helper/core/src/wire/registry.txt` must
 include the regenerated `Dispatch/Helper/HelperBinary.swift`, or the other tree's build stops with "HelperBinary.swift

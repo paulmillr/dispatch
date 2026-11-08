@@ -3,7 +3,8 @@
   "repository": "paulmillr/dispatch",
   "tap": "paulmillr/homebrew-tap",
   "cask": "dispatch",
-  "version_files": ["project.yml", "Dispatch.xcodeproj/project.pbxproj"],
+  "version_files": ["project.yml", "Dispatch.xcodeproj/project.pbxproj", "project-mobile.yml",
+                    "DispatchMobile.xcodeproj/project.pbxproj"],
   "build_log": "build/logs/latest.log",
   "variants": {
     "pilot": {"bundle_id": "yachts.dispatch.pilot.app", "ios_bundle_id": "yachts.dispatch.pilot.mobile"}
