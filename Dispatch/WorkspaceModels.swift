@@ -10,7 +10,8 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     var terminal: UInt64?
     var machine: TerminalMachine = .local
     /// The agent the helper found running here (its topology binding), named by `agent(named:)`: what a launcher-named
-    /// tab shows until Chat binds the agent and gives its own key. Not saved; the next topology sets it again.
+    /// tab shows until Chat binds the agent and gives its own key. Saved, so a relaunch shows it while the host is
+    /// still disconnected; the next topology sets it again.
     var agent: String?
     /// Its terminal no longer exists on its server (closed there while the app was away): the tab stays, read-only,
     /// with what it showed, until closed. It has no terminal, and in a multiplexer's space a window of its own with no
@@ -20,7 +21,7 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     var label: String { customTitle ?? title }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, customTitle, directory, launchCommand, isConnecting, terminal, machine, gone
+        case id, title, customTitle, directory, launchCommand, isConnecting, terminal, machine, agent, gone
     }
     var surfaceIDs: [UUID] { [id] }
     var focusedSurfaceID: UUID { id }
@@ -59,8 +60,13 @@ struct TerminalTab: Identifiable, Equatable, Codable {
 
     /// A name as shown: the agent's in place of the launcher's.
     static func shown(_ name: String, agent: String?) -> String {
-        guard let agent, (name.trimmingCharacters(in: .whitespaces) as NSString).lastPathComponent == launcher else { return name }
+        guard let agent, isLauncher(name) else { return name }
         return agent
+    }
+
+    /// Whether a name is the launcher's (its path's last part, as a helper terminal's title has it).
+    static func isLauncher(_ name: String) -> Bool {
+        (name.trimmingCharacters(in: .whitespaces) as NSString).lastPathComponent == launcher
     }
 
     /// Whether a window's name is the user's: renamed, but not to its agent's own name (`agent`), which a launch from
@@ -452,6 +458,10 @@ struct Space: Identifiable, Equatable, Codable {
     var usesDirectoryName = false
     var name: String {
         get {
+            // A multiplexer's space named after the typed launcher (a window split off while tmux named it after
+            // `dispatch-helper launch claude`, kept as the space's stored name) says nothing: its first pane's folder,
+            // as the helper names a space whose stored name is all it has.
+            if TerminalTab.isLauncher(storedName), let folder = tabs.first?.folder { return folder }
             guard usesDirectoryName, let directory = tabs.first?.directory,
                   directory.hasPrefix("/") else { return storedName }
             if directory == "/" { return "/" }

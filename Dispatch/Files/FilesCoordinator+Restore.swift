@@ -104,6 +104,7 @@ extension FilesCoordinator {
 
     /// A restore put tabs back in the layout (`present`): those that closed with a view get it again.
     func restoreViews(present: Set<UUID>) {
+        chat?.restoreSaved(present: present)
         for id in retainedOrder where present.contains(id) { restoreView(id) }
     }
 

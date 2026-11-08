@@ -14,6 +14,10 @@ struct HostSessionStore {
     var terminalHistory: TerminalHistoryStore {
         .init(url: url.deletingLastPathComponent().appendingPathComponent("terminal-history.json"))
     }
+    /// Chats saved with the terminal output, on the same terms (`SavedChatStore`).
+    var savedChats: SavedChatStore {
+        .init(url: url.deletingLastPathComponent().appendingPathComponent("saved-chats.json"))
+    }
 
     struct Connection: Codable {
         let id: SSHConnectionID
@@ -142,11 +146,25 @@ struct HostSessionStore {
                                 contexts: workspace.hosts.terminals.filter { surfaces.contains($0.key) }, connections: connections,
                                 views: views.isEmpty ? nil : views)
         try PrivateFile.write(JSONEncoder().encode(snapshot), to: url)
-        if includeHistory { try terminalHistory.save(history) }
+        if includeHistory {
+            try terminalHistory.save(history)
+            try savedChats.save(Self.chats(runtime: runtime, workspace: workspace))
+        }
+    }
+
+    /// Every tab's chat with something to show, in tab order: what it has loaded (nothing is fetched), or for a tab
+    /// not back since the last launch, what that launch restored.
+    static func chats(runtime: TerminalRuntime, workspace: Workspace) -> [(id: UUID, chat: SavedChat)] {
+        let chat = runtime.chat
+        return workspace.spaces.flatMap { space in space.tabs.map { (space, $0.id) } }.compactMap { space, id in
+            let saved = chat.sessions[id].flatMap { $0.saved(multiplexed: space.structured) } ?? chat.savedChats[id]
+            return saved.map { (id, $0) }
+        }
     }
 
     func clear() throws {
         try terminalHistory.remove()
+        try savedChats.remove()
         PrivateFile.removeStale(for: url)
         do { try FileManager.default.removeItem(at: url) }
         catch CocoaError.fileNoSuchFile { }

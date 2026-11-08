@@ -24,6 +24,7 @@ struct TerminalHistoryStore {
     struct Limits {
         let tab: Int, total: Int
         init(memory: UInt64) { (tab, total) = (TerminalRuntime.scrollbackLimit(memory), Int(clamping: memory / 32)) }
+        init(tab: Int, total: Int) { (self.tab, self.total) = (tab, total) }
     }
     static var limits: Limits { Limits(memory: System.machine.memory) }
 

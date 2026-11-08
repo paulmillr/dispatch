@@ -58,8 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @discardableResult
     func restoreHostSession() -> Bool {
-        // Saved output is for this launch only: off the disk before anything can fail.
+        // Saved output and chats are for this launch only: off the disk before anything can fail.
         let history = hostSessionStore?.terminalHistory.take() ?? [:]
+        let chats = hostSessionStore?.savedChats.take() ?? [:]
         guard settings.values.rememberHosts else {
             persistHostSession()
             return false
@@ -68,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if settings.values.restoreTerminalOutput {
             let surfaces = workspace.allSurfaceIDs
             TerminalRuntime.shared.restoredHistory = history.filter { surfaces.contains($0.key) }
+            // A local multiplexer's tabs are not back yet: their chats wait for them (`FilesCoordinator.restoreViews`).
+            TerminalRuntime.shared.chat.savedChats = chats
+            TerminalRuntime.shared.chat.restoreSaved(present: surfaces)
         }
         return true
     }
@@ -86,8 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             if !preferences.rememberHosts { self?.persistHostSession() }
             if !preferences.restoreTerminalOutput {
                 TerminalRuntime.shared.restoredHistory = [:]
-                do { try self?.hostSessionStore?.terminalHistory.remove() }
-                catch { self?.settings.error = "Could not delete saved terminal output: \(error.localizedDescription)" }
+                TerminalRuntime.shared.chat.savedChats = [:]
+                do {
+                    try self?.hostSessionStore?.terminalHistory.remove()
+                    try self?.hostSessionStore?.savedChats.remove()
+                } catch { self?.settings.error = "Could not delete saved terminal output: \(error.localizedDescription)" }
             }
         }
         HostColorStore.shared.persist = { [weak self] choices in

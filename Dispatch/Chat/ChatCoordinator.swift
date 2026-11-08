@@ -94,14 +94,31 @@ final class ChatCoordinator {
         queueTipShown = defaults?.bool(forKey: "chatQueueSteerTipShown") ?? false
     }
 
-    func session(for id: UUID) -> ChatSession {
+    /// Chats saved as the app last quit (`SavedChatStore`), by tab, until the tab is back (`restoreSaved`). This
+    /// launch only: a quit saves those still waiting again; turning history off drops them.
+    var savedChats: [UUID: SavedChat] = [:]
+
+    /// Tabs back in the layout (at launch, or as their server or host returns them) get their saved chats.
+    func restoreSaved(present: Set<UUID>) {
+        for id in present {
+            guard let saved = savedChats.removeValue(forKey: id) else { continue }
+            // Filled before its helper connects, so what the agent's live read brings merges into it.
+            session(for: id) { $0.restore(saved) }
+        }
+    }
+
+    func session(for id: UUID) -> ChatSession { session(for: id) { _ in } }
+
+    private func session(for id: UUID, prepare: (ChatSession) -> Void) -> ChatSession {
         if let session = sessions[id] {
+            prepare(session)
             connectHelper(session)
             return session
         }
         let session = ChatSession(id: id, draftRepository: draftRepository)
         session.toolSteps = toolSteps
         sessions[id] = session
+        prepare(session)
         connectHelper(session)
         return session
     }

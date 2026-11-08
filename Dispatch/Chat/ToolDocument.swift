@@ -1,6 +1,6 @@
 import Foundation
 
-struct ToolDocument: Identifiable, Hashable, Sendable {
+struct ToolDocument: Identifiable, Hashable, Codable, Sendable {
     var id: String { path }
     let path: String
     var diff: String

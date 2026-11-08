@@ -290,15 +290,25 @@ final class HerdrTests: XCTestCase {
     /// An agent started through the typed launcher (`dispatch-helper launch claude`) gets the launcher's name from tmux
     /// (a window) or the helper (a terminal, by its path): the bound agent's shows instead, as on the phone, until the
     /// conversation has a title. Without an agent, or for any other name, nothing changes. The agent is Chat's key once
-    /// it binds, before that the one the topology found; a numbered tab whose pane only repeats its name shows the folder.
+    /// it binds, before that the one the topology found (saved with the tab); a numbered tab whose pane only repeats its
+    /// name shows the folder. A space named after the launcher shows its first pane's folder.
     func testTheLaunchersNameShowsAsItsAgent() throws {
         var found = TerminalTab(directory: "/work/api")
         found.title = "dispatch-helper"
         found.agent = TerminalTab.agent(named: ["claude", "dispatch-helper", nil])
         XCTAssertEqual(TerminalRuntime.agent(of: found, session: nil), "claude", "the topology's, before Chat binds")
         XCTAssertEqual(found.displayLabel(automatic: true, conversation: nil, agent: TerminalRuntime.agent(of: found, session: nil)), "claude")
-        let saved = String(decoding: try JSONEncoder().encode(found), as: UTF8.self)
-        XCTAssertFalse(saved.contains("\"agent\""), "never saved: \(saved)")
+        // Saved: a relaunch shows the agent while its host is still disconnected (no topology to find it again yet).
+        let restored = try JSONDecoder().decode(TerminalTab.self, from: try JSONEncoder().encode(found))
+        XCTAssertEqual(restored.displayLabel(automatic: true, conversation: nil, agent: TerminalRuntime.agent(of: restored, session: nil)),
+                       "claude")
+        // A space the helper named after the launcher (a window split off while tmux named it so) shows its folder.
+        var space = Space(name: "dispatch-helper", tab: found)
+        XCTAssertEqual(space.name, "api")
+        space.name = "/opt/dispatch/bin/dispatch-helper"
+        XCTAssertEqual(space.name, "api")
+        space.name = "billing"
+        XCTAssertEqual(space.name, "billing", "any other name stays")
         var repeated = TerminalTab(directory: "/work/api")
         repeated.title = "2"
         XCTAssertEqual(ContainerTab(id: System.uuid(), node: 1, name: "2", renamed: false, numbered: true,

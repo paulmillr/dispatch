@@ -21,7 +21,7 @@ enum ChatPromptBoundary: Sendable {
 }
 
 struct ChatItem: Identifiable, Equatable, Sendable {
-    enum Kind: String, Sendable { case user, assistant, reasoning, tool, notice }
+    enum Kind: String, Codable, Sendable { case user, assistant, reasoning, tool, notice }
     var id: String
     var kind: Kind
     var rowID: String?
@@ -119,6 +119,14 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     }
 }
 
+/// Saved at quit with history on (`SavedChats`): what the item shows and merges by, not its view revision.
+extension ChatItem: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, rowID, text, title, output, completed, exitCode, patch, processID, shellCommand, commandSource, source
+        case directory, hiddenPatchRequests, attachments
+    }
+}
+
 extension ChatItem {
     /// The transcript merge rules (`matches`, `merging`) for a transcript kept outside `ChatSession`: the iPhone's
     /// (Mobile/Chat/MobileTranscript.swift) until the `ChatSession` split lands (docs/ios.md).
@@ -136,6 +144,11 @@ struct ChatTurn: Identifiable, Sendable {
     private(set) var presentationRevision = System.uuid()
 
     mutating func invalidatePresentation() { presentationRevision = System.uuid() }
+}
+
+/// Saved at quit with history on (`SavedChats`): the turn and its items, not their view revisions.
+extension ChatTurn: Codable {
+    private enum CodingKeys: String, CodingKey { case id, started, ended, fileOffset, items }
 }
 
 @MainActor @Observable

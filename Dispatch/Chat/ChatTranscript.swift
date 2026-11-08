@@ -5,13 +5,13 @@ import Foundation
 /// iPhone's `MobileTranscript`. A session that keeps `turns` itself (observed, as the Mac's does) passes it in with its
 /// `Index`; the value type holds both.
 struct ChatTranscript {
-    struct ItemIdentity: Hashable {
+    struct ItemIdentity: Hashable, Codable {
         let turn: String
         let item: String
     }
 
-    /// The ordering keys and delivery state beside the turns.
-    struct Index {
+    /// The ordering keys and delivery state beside the turns. Saved with them at quit (`SavedChats`).
+    struct Index: Codable {
         var itemDates: [ItemIdentity: Date] = [:]
         var itemOffsets: [ItemIdentity: UInt64] = [:]
         /// Record content keys already applied: a repeated record is a no-op.

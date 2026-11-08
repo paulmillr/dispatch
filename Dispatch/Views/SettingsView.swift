@@ -928,7 +928,7 @@ struct SettingsView: View {
                 draft.restoreTerminalOutput = choice == history
             }), choices: [fresh, spaces, history])
                 .accessibilityIdentifier("settings-on-launch")
-                .help("Local shells restart in their last folder; remote hosts reopen disconnected. History saves the text of local and plain SSH tabs when Dispatch quits normally, for the next launch only, excluded from backups and ignored after a week. Start fresh deletes the saved session; leaving history deletes the saved output. Open tabs stay available.")
+                .help("Local shells restart in their last folder; remote hosts reopen disconnected. History saves the text of local and plain SSH tabs, and every tab's chat as far as it was loaded, when Dispatch quits normally (never after a crash), for the next launch only, excluded from backups and ignored after a week. Start fresh deletes the saved session; leaving history deletes the saved output and chats. Open tabs stay available.")
         }
     }
 

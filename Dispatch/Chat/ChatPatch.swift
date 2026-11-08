@@ -2,8 +2,8 @@ import Foundation
 
 /// A complete snapshot of one patch, including snapshots received before execution.
 /// Item identity is shared with hooks and durable Codex history.
-struct ChatPatch: Equatable, Sendable {
-    enum State: String, Sendable { case generating, applying, completed, failed, declined, interrupted }
+struct ChatPatch: Equatable, Codable, Sendable {
+    enum State: String, Codable, Sendable { case generating, applying, completed, failed, declined, interrupted }
     var documents: [ToolDocument]
     var state: State
 
