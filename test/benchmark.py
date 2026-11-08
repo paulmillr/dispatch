@@ -18,7 +18,7 @@ with patch.dict(sys.modules, benchmark=bench):
 
 
 def report(samples=None):
-    return {'schema': 1, 'workload_version': 1, 'suite': 'core', 'environment': {'kind': 'hardware'},
+    return {'schema': bench.VERSION, 'workload_version': bench.VERSION, 'suite': 'quick', 'environment': {'kind': 'hardware'},
             'configuration': 'Release', 'duration_seconds': 5, 'repeats': 3, 'status': 'complete',
             'runs': [[bench.metric('parse/latency', 'ms', samples or list(range(1, 11)))] for _ in range(3)]}
 
@@ -34,7 +34,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_rejects_incompatible_conditions(self):
         for key, value in [('environment', {'kind': 'vm'}), ('suite', 'full'),
-                           ('workload_version', 2), ('configuration', 'Debug'), ('duration_seconds', 60)]:
+                           ('workload_version', bench.VERSION + 1), ('configuration', 'Debug'), ('duration_seconds', 60)]:
             with self.subTest(key=key):
                 after = report()
                 after[key] = value
@@ -87,6 +87,11 @@ class BenchmarkTests(unittest.TestCase):
         target = {'TestBundlePath': 'tests'}
         self.assertEqual(bench.test_targets({'DispatchTests': target, '__xctestrun_metadata__': {}}), [target])
         self.assertEqual(bench.test_targets({'TestConfigurations': [{'TestTargets': [target]}]}), [target])
+
+    def test_test_root_keeps_hook_sockets_within_sun_path(self):
+        # The helper's longest hook socket: <root, resolved>/.dispatch/run/<32-hex run>/<route 1–128>.s (hooks.rs).
+        socket = str(bench.TEST_ROOT.resolve()) + '/.dispatch/run/' + '0' * 32 + '/128.s'
+        self.assertLess(len(socket.encode()), 104)
 
     def test_ui_adapter_retains_memory_and_latency(self):
         with tempfile.TemporaryDirectory() as directory:

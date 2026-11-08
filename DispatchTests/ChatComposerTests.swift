@@ -659,4 +659,55 @@ extension ChatComposerTests {
         session.busy = false
         try await TestSupport.eventually { layers.allSatisfy { $0.animation(forKey: key) == nil } }
     }
+
+    // Low Power Mode stills the decoration (the shimmer, the rule's sweep, the composer's lap) and keeps what says the
+    // agent works (the ◆'s breath, its orbit, the label's breath) at 30 frames a second; leaving it starts them again.
+    func testLowPowerModeStillsDecorativeLoops() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        MotionRate.pin(lowPower: true)
+        defer { MotionRate.pin(lowPower: nil) }
+        let session = ChatSession(id: System.uuid())
+        session.active = true; session.busy = true; session.showChat = true
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        let host = NSHostingView(rootView: AnyView(AgentWorkingIndicator(session: session).padding(12).background(Chrome.terminal)
+            .preferredColorScheme(.dark)))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        let key = CompositorView.animationKey
+        var found: (ChatComposerOrbit.OrbitView, ChatComposerShimmer.ShimmerView, AgentWorkingSweep.SweepView)?
+        try await TestSupport.eventually {
+            guard let orbit = PresentationTestSupport.views(of: ChatComposerOrbit.OrbitView.self, in: host).first,
+                  let shimmer = PresentationTestSupport.views(of: ChatComposerShimmer.ShimmerView.self, in: host).first,
+                  let sweep = PresentationTestSupport.views(of: AgentWorkingSweep.SweepView.self, in: host).first,
+                  [orbit.diamond, orbit.orbit, shimmer.base].allSatisfy({ $0.animation(forKey: key) != nil })
+            else { return false }
+            found = (orbit, shimmer, sweep)
+            return true
+        }
+        let (orbit, shimmer, sweep) = try XCTUnwrap(found)
+        let fps = window.screen?.maximumFramesPerSecond ?? 60
+        XCTAssertEqual([orbit.diamond, orbit.orbit, shimmer.base].map { $0.animation(forKey: key)?.preferredFrameRateRange.preferred },
+                       Array(repeating: Float(min(fps, 30)), count: 3))
+        XCTAssertTrue([shimmer.ink, shimmer.band, sweep.band].allSatisfy { $0.animation(forKey: key) == nil },
+                      "The shimmer and the sweep stay off")
+        XCTAssertEqual(shimmer.ink.opacity, 0, "No ink copy shows without its band")
+        XCTAssertFalse(shimmer.base.isHidden, "The breathing label stands in for the hidden one")
+
+        let border = ChatComposerAnimatedBorder.BorderView(accent: .white)
+        border.frame = NSRect(x: 0, y: 0, width: 240, height: 60)
+        border.moving = true
+        window.contentView?.addSubview(border)
+        defer { border.stop(); border.removeFromSuperview() }
+        border.layout()
+        XCTAssertEqual(border.layer?.isHidden, true, "The composer's lap is off, its steady accent edge under it")
+        XCTAssertTrue(border.bands.allSatisfy { $0.animation(forKey: ChatComposerAnimatedBorder.BorderView.animationKey) == nil })
+
+        MotionRate.pin(lowPower: nil)
+        try await TestSupport.eventually {
+            [shimmer.band, sweep.band].allSatisfy { $0.animation(forKey: key) != nil } && border.layer?.isHidden == false
+        }
+    }
 }

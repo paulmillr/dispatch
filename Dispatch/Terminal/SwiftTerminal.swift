@@ -74,6 +74,8 @@ final class SwiftBackend: TerminalBackend {
     private var started = false, exited = false
     /// The display the view was last on (setDisplayID).
     private var display: UInt32?
+    /// Follows `MotionRate.terminalOutput` (its `changed`).
+    private var paceObserver: NSObjectProtocol?
 
     /// A terminal showing `history` until `start` runs its process.
     init?(config: Config, view: TerminalView, renderer: NSView, scale: Double, allowHostMedia: Bool, history: [UInt8]? = nil) {
@@ -101,6 +103,15 @@ final class SwiftBackend: TerminalBackend {
         }
         // Before the process: its first output follows the history, which reflows with the grid.
         if let history { session.locked { history.withUnsafeBufferPointer { session.surface.feed($0) } } }
+        // Output alone draws at the motion policy's terminal pace; input at the display's.
+        session.outputFramesPerSecond = MotionRate.terminalOutput
+        paceObserver = NotificationCenter.default.addObserver(forName: MotionRate.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.session.outputFramesPerSecond = MotionRate.terminalOutput }
+        }
+    }
+
+    isolated deinit {
+        if let paceObserver { NotificationCenter.default.removeObserver(paceObserver) }
     }
 
     /// Starts the process, once; false: it could not start.

@@ -113,6 +113,36 @@ final class SurfaceSessionCoreTests: XCTestCase {
         XCTAssertTrue(demand.frame())
     }
 
+    /// Output alone draws at its pace and keeps its change for a later refresh; input, and output for a quarter
+    /// second after it, draws at the next refresh.
+    func testFrameDemandPacesOutputButNotInput() {
+        let demand = FrameDemand()
+        demand.pace(60)
+        let start = 100.0, refresh = 1.0 / 120
+        XCTAssertEqual(demand.frame(at: start), .draw, "The first refresh draws")
+        XCTAssertFalse(demand.fast(at: start), "Output alone asks for its pace")
+        _ = demand.request(urgent: false, at: start + refresh / 2)
+        XCTAssertEqual(demand.frame(at: start + refresh), .wait, "Output drawn a 120 Hz refresh ago waits")
+        XCTAssertEqual(demand.frame(at: start + 2 * refresh), .draw, "and draws a 60 Hz frame later")
+        XCTAssertEqual(demand.frame(at: start + 3 * refresh), .pause, "Nothing new: the link pauses")
+        let key = start + 3.5 * refresh
+        XCTAssertEqual(demand.request(urgent: true, at: key).hurry, true, "Input speeds a paced link up")
+        XCTAssertEqual(demand.frame(at: start + 4 * refresh), .draw)
+        XCTAssertTrue(demand.fast(at: start + 4 * refresh))
+        _ = demand.request(urgent: false, at: start + 4.5 * refresh)
+        XCTAssertEqual(demand.frame(at: start + 5 * refresh), .draw, "The echo after a key draws at once")
+        XCTAssertFalse(demand.request(urgent: true, at: key + 0.1).hurry, "Already fast: no second hurry")
+        let later = key + 0.1 + FrameDemand.inputWindow + refresh
+        XCTAssertFalse(demand.fast(at: later), "After the window, output goes back to its pace")
+        _ = demand.request(urgent: false, at: later)
+        XCTAssertEqual(demand.frame(at: later), .draw)
+        _ = demand.request(urgent: false, at: later)
+        XCTAssertEqual(demand.frame(at: later + refresh), .wait)
+        demand.pace(0)
+        XCTAssertEqual(demand.frame(at: later + refresh), .draw, "No pace: every refresh with a change draws")
+        XCTAssertTrue(demand.fast(at: later + refresh))
+    }
+
     func testFrameDemandRelinksAfterADisplayFallsSilent() {
         let demand = FrameDemand()
         XCTAssertTrue(demand.frame())

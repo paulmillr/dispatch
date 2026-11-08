@@ -291,6 +291,8 @@ struct ChatTranscriptView: View {
             // During bottom bounce, positionChanged still reports the bottom;
             // forcing false here would invalidate SwiftUI twice per wheel event.
             session?.followRevision = nil
+            // The reader moves toward what records held back: present it now.
+            session?.releaseTranscript(.reading)
         }
         session.scrollPosition.positionChanged = { [weak session] anchor in
             guard let session else { return }

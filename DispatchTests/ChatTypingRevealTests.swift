@@ -504,6 +504,23 @@ import XCTest
         XCTAssertEqual(again.current.shown, again.layout.total)
     }
 
+    /// Typing and fading follow the motion policy (on the Mac the screen's rate on the adapter, 60 on battery), 30 in
+    /// Low Power Mode; the blink keeps its ten.
+    func testLinkPacesByThePolicyAndAtThirtyInLowPowerMode() {
+        MotionRate.pin(lowPower: true)
+        defer { MotionRate.pin(lowPower: nil) }
+        func rates(_ range: CAFrameRateRange) -> [Float] { [range.minimum, range.maximum, range.preferred ?? 0] }
+        XCTAssertEqual(rates(ChatTypingLink.range(.frames)), [30, 30, 30])
+        XCTAssertEqual(rates(ChatTypingLink.range(.blink)), [8, 15, 10])
+        MotionRate.pin(lowPower: false)
+        #if canImport(AppKit)
+        let fps = Float(min(NSScreen.main?.maximumFramesPerSecond ?? 60, MotionRate.limit))
+        XCTAssertEqual(rates(ChatTypingLink.range(.frames)), [fps, fps, fps])
+        #else
+        XCTAssertEqual(rates(ChatTypingLink.range(.frames)), rates(.default))
+        #endif
+    }
+
     /// The display link of a store that goes (a typing tab closed) stops with it.
     func testLinkStopsWhenItsStoreGoes() throws {
         let previous = ChatTypingReveals.enabled

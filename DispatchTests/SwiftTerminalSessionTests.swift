@@ -805,6 +805,47 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertTrue(drew, "The remounted view's frames draw again")
     }
 
+    /// A program printing on its own draws at the session's output pace, not at every refresh; without a pace it
+    /// draws at the display's rate.
+    func testOutputAloneDrawsAtItsPace() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        window.contentView = view
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let fps = window.screen?.maximumFramesPerSecond ?? 60
+        guard fps >= 50 else { throw XCTSkip("A display slower than 50 Hz shows no pace below it") }
+        func rate(pace: Int) async throws -> Double? {
+            let scale = window.backingScaleFactor
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: scale, machine: System.machine.launch)
+            defer { session.close() }
+            session.outputFramesPerSecond = pace
+            session.host(in: view)
+            session.setSize(width: Int(400 * scale), height: Int(200 * scale))
+            // About 200 lines a second for 3 s: a change at every refresh.
+            try session.start(Launch(command: "/bin/sh -c 'i=0; while [ $i -lt 600 ]; do echo line $i; i=$((i+1)); sleep 0.005; done'",
+                                     directory: System.home.path, overrides: [], config: Config(),
+                                     environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1))
+            // Past the input window of the host's own setup (FrameDemand.inputWindow).
+            try await Task.sleep(for: .milliseconds(600))
+            let before = session.drawnFrames, start = ContinuousClock.now
+            try await Task.sleep(for: .seconds(1))
+            let frames = session.drawnFrames - before
+            guard frames > 0 else { return nil }
+            return Double(frames) / Self.seconds(start.duration(to: .now))
+        }
+        guard let paced = try await rate(pace: 30), let free = try await rate(pace: 0) else {
+            throw XCTSkip("No display link fires here (no awake display)")
+        }
+        XCTAssertLessThanOrEqual(paced, 36, "Output alone draws at most its pace (\(paced) frames a second)")
+        XCTAssertGreaterThan(free, paced * 1.4, "Unpaced output draws at the display's rate (\(free) against \(paced))")
+    }
+
+    private static func seconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    }
+
     /// A display link that fell silent while its frames believed it ran (its display went away)
     /// draws nothing for later changes, so the tab freezes until a resize; relink() draws again.
     func testRelinkRevivesASilentDisplayLink() async throws {

@@ -5,7 +5,8 @@ import UIKit
 /// the Mac's `MotionRate` (Dispatch/Views/MotionRate.swift) for the phone. The screen's own rate (120 Hz on ProMotion,
 /// `CADisableMinimumFrameDurationOnPhone`), 30 in Low Power Mode; in the background nothing runs at all
 /// (`CompositorView`). A loop asks for less (`glow`, `orbit`, `sweep`): what a frame moves it by decides what its rate
-/// buys. A change posts `changed`, so a running loop restarts at the new rate.
+/// buys. Low Power Mode also stills the loops that only decorate (`decorates`). A change posts `changed`, so a running
+/// loop restarts at the new rate, or stops.
 @MainActor
 enum MotionRate {
     static let changed = Notification.Name("yachts.dispatch.mobile.motion-rate-changed")
@@ -27,28 +28,44 @@ enum MotionRate {
     }
 
     /// The policy's ceiling now, before the screen's own and a loop's cap.
-    static var limit: Int {
+    static var limit: Int { lowPower ? 30 : .max }
+
+    /// Low Power Mode now, watched from the first ask.
+    static var lowPower: Bool {
         observe()
-        return lowPower ? 30 : .max
+        return lowPowerNow
+    }
+
+    /// Whether loops that only decorate run: the hairline's glint and the light on the label. Low Power Mode stills
+    /// them, as the Mac's `MotionRate.decorates`, and keeps the ◆'s pulse, its satellite and the waiting dots, at 30
+    /// frames a second.
+    static var decorates: Bool { !lowPower }
+
+    /// Tests: Low Power Mode as given, nil for the phone's own.
+    static func pin(lowPower: Bool?) {
+        observe()
+        pinned = lowPower
+        update()
     }
 
     private static var observing = false
-    private static var lowPower = false
+    private static var lowPowerNow = false
+    private static var pinned: Bool?
 
     /// Starts watching Low Power Mode once.
     private static func observe() {
         guard !observing else { return }
         observing = true
-        lowPower = System.lowPowerMode
+        lowPowerNow = System.lowPowerMode
         NotificationCenter.default.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { update() }
         }
     }
 
     private static func update() {
-        let now = System.lowPowerMode
-        guard now != lowPower else { return }
-        lowPower = now
+        let now = pinned ?? System.lowPowerMode
+        guard now != lowPowerNow else { return }
+        lowPowerNow = now
         NotificationCenter.default.post(name: changed, object: nil)
     }
 }
@@ -116,8 +133,10 @@ class CompositorView: UIView {
     func start() {}
 
     /// Repeats `animation` (linear between its values) at MotionRate's rate, at most `cap` frames a second, phase-aligned
-    /// to the media clock; `lag` delays it within its period (the waiting dots rise in turn).
-    func loop(_ animation: CAAnimation, on layer: CALayer, upTo cap: Int, lag: TimeInterval = 0) {
+    /// to the media clock; `lag` delays it within its period (the waiting dots rise in turn). A `decorative` loop stays
+    /// off while MotionRate stills decoration (Low Power Mode): its layer keeps the still artwork.
+    func loop(_ animation: CAAnimation, on layer: CALayer, upTo cap: Int, lag: TimeInterval = 0, decorative: Bool = false) {
+        guard !decorative || MotionRate.decorates else { return }
         let period = animation.duration
         animation.repeatCount = .infinity
         if !(animation is CAKeyframeAnimation), !(animation is CAAnimationGroup) {
@@ -340,7 +359,7 @@ struct ChatScanLoop: UIViewRepresentable {
             let width = bounds.width
             loop(Self.keyframes("position.x", period: ChatThinkingSweep.period) {
                 Double(ChatSweepTrack.glint(lineWidth: width, progress: ChatThinkingSweep.progress(phase: $0)).center)
-            }, on: band, upTo: MotionRate.sweep)
+            }, on: band, upTo: MotionRate.sweep, decorative: true)
         }
     }
 }
@@ -441,7 +460,7 @@ struct ChatShimmerLoop: UIViewRepresentable {
             guard light(progress: 0) != nil else { return }
             loop(Self.keyframes("position.x", period: ChatThinkingSweep.period) {
                 Double(light(progress: ChatThinkingSweep.progress(phase: $0))?.center ?? 0)
-            }, on: band, upTo: MotionRate.sweep)
+            }, on: band, upTo: MotionRate.sweep, decorative: true)
         }
     }
 }

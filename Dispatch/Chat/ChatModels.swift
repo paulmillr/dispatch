@@ -746,7 +746,7 @@ final class ChatSession: Identifiable {
     }
     var optimisticPrompt: ChatItem? {
         didSet {
-            cachedRows = nil; cachedVisibleRows = nil
+            cachedRows = nil; cachedVisibleRows = nil; releaseTranscript(.reading)
             if let optimisticPrompt, oldValue?.id != optimisticPrompt.id, showChat, atBottom {
                 transcriptArrivals.noteMotion()
                 transcriptArrivals.record(optimisticPrompt.id)
@@ -763,9 +763,10 @@ final class ChatSession: Identifiable {
     var turns: [ChatTurn] = [] {
         didSet {
             cachedRows = nil; cachedVisibleRows = nil
+            holdWhileReading(oldValue)
         }
     }
-    var approvals: [PendingApproval] = [] { didSet { cachedRows = nil; cachedVisibleRows = nil } }
+    var approvals: [PendingApproval] = [] { didSet { cachedRows = nil; cachedVisibleRows = nil; releaseTranscript(.reading) } }
     private struct PatchPair: Hashable { let wrapper: UUID; let patch: UUID }
     @ObservationIgnored private var patchPairs: [PatchPair: (collapse: Bool, hidden: Set<String>)] = [:]
     private struct TurnRows {
@@ -828,7 +829,7 @@ final class ChatSession: Identifiable {
     @ObservationIgnored private var cachedRows: [ChatTranscriptRow]?
     /// The reply placeholder (ChatPendingReply.swift): the empty reply bubble shown once the agent acknowledged a prompt,
     /// until its first content takes over its row.
-    var pendingReply: ChatPendingReply? { didSet { cachedRows = nil; cachedVisibleRows = nil } }
+    var pendingReply: ChatPendingReply? { didSet { cachedRows = nil; cachedVisibleRows = nil; releaseTranscript(.reading) } }
     /// The reply that took over the placeholder's row, while its halo settles; the composer has the activity back after.
     var landedReply: ChatLandedReply?
     /// Whether the placeholder's bubble is in the transcript's view (the transcript document reports it while the
@@ -848,12 +849,12 @@ final class ChatSession: Identifiable {
     @ObservationIgnored var flownQueuedIDs: Set<UUID> = []
     var expandedToolGroups: Set<String> = [] {
         didSet {
-            cachedVisibleRows = nil
+            cachedVisibleRows = nil; releaseTranscript(.reading)
         }
     }
-    var collapsedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil } }
+    var collapsedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil; releaseTranscript(.reading) } }
     /// Settings › Chat mode's Tool steps (`ChatCoordinator.toolSteps`): how groups show until opened or closed.
-    var toolSteps = ChatToolGroupDisclosure.current { didSet { if toolSteps != oldValue { cachedVisibleRows = nil } } }
+    var toolSteps = ChatToolGroupDisclosure.current { didSet { if toolSteps != oldValue { cachedVisibleRows = nil; releaseTranscript(.reading) } } }
     var collapsedLiveTools: Set<String> = []
 
     /// The turn the agent is working on. A prompt shows the agent busy before its turn starts, while `activeTurnID`
@@ -940,17 +941,48 @@ final class ChatSession: Identifiable {
     }
     /// The rows and revision the transcript view shows. While its window is off screen (`holdTranscript`), the ones it
     /// showed when it left: records, unread state and notifications go on in the model, and no row is laid out or
-    /// mounted for them until `releaseTranscript`, just before the window is back on screen.
+    /// mounted for them until `releaseTranscript`, just before the window is back on screen. While the reader reads
+    /// earlier rows and a reply streams below them, out of view, at most four times a second (`TranscriptHold.reading`).
     var presentedTranscriptRows: [ChatTranscriptRow] { transcriptHeld ? heldTranscript.rows : visibleTranscriptRows }
     var presentedRevision: Int { transcriptHeld ? heldTranscript.revision : revision }
     /// Reading only this while held, the transcript's views depend on nothing that records change.
     private(set) var transcriptHeld = false
     @ObservationIgnored private var heldTranscript: (rows: [ChatTranscriptRow], revision: Int) = ([], 0)
-    func holdTranscript() {
-        guard !transcriptHeld else { return }
+    /// Why the transcript is held: its window is off screen, or a reply streams out of the reader's view.
+    enum TranscriptHold: Hashable { case offScreen, reading }
+    @ObservationIgnored private var holds: Set<TranscriptHold> = []
+    func holdTranscript(_ reason: TranscriptHold = .offScreen) {
+        guard holds.insert(reason).inserted, !transcriptHeld else { return }
         heldTranscript = (visibleTranscriptRows, revision)
         heldTyping = typingTurn
         transcriptHeld = true
+    }
+
+    /// Whether records out of view hold the transcript between presentations (off while testing, as the typed
+    /// reveal: recorded tests read rows as records land; its own test turns it on).
+    static var readingHoldEnabled = !System.testing && System.environment("XCTestConfigurationFilePath") == nil
+    /// The longest a record out of view waits to be presented while the reader reads earlier rows.
+    static let readingHold: TimeInterval = 0.25
+    @ObservationIgnored private var readingRelease: DispatchWorkItem?
+
+    /// A record changed the conversation's end while the reader reads earlier rows (not following), with the end
+    /// more than two viewports below (`ChatScrollPosition.endOutOfView`): the transcript's views present it with the next records, at most `readingHold` later,
+    /// instead of rebuilding every row's list and revision for each record (docs/benchmarks.md). Any other change
+    /// (earlier history, a row on screen, a disclosure, an approval, following again, a scroll) presents at once.
+    private func holdWhileReading(_ old: [ChatTurn]) {
+        guard Self.readingHoldEnabled, showChat, !(atBottom && followRevision != nil),
+              old.first?.id == turns.first?.id, turns.count >= old.count,
+              old.indices.dropLast().allSatisfy({ old[$0].id == turns[$0].id }),
+              scrollPosition.endOutOfView()
+        else { releaseTranscript(.reading); return }
+        holdTranscript(.reading)
+        guard readingRelease == nil else { return }
+        let release = DispatchWorkItem { [weak self] in
+            self?.readingRelease = nil
+            self?.releaseTranscript(.reading)
+        }
+        readingRelease = release
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.readingHold, execute: release)
     }
 
     /// The live turn and its newest item (a reply there may still be streaming: the typed reveal,
@@ -961,9 +993,13 @@ final class ChatSession: Identifiable {
     private var typingTurn: (turn: String, newest: String?)? {
         liveTurnID.map { id in (id, turns.last { $0.id == id }?.items.last?.id) }
     }
-    /// Shows what arrived while held in one native layout transaction before the window becomes visible.
-    func releaseTranscript() {
-        guard transcriptHeld else { return }
+    /// Shows what arrived while held in one native layout transaction before the window becomes visible (a window
+    /// back on screen ends a reading hold too: it shows what is there now).
+    func releaseTranscript(_ reason: TranscriptHold = .offScreen) {
+        guard holds.remove(reason) != nil else { return }
+        if reason == .offScreen { holds.remove(.reading) }
+        if !holds.contains(.reading) { readingRelease?.cancel(); readingRelease = nil }
+        guard holds.isEmpty, transcriptHeld else { return }
         heldTranscript = ([], 0)
         transcriptHeld = false
     }
@@ -1126,7 +1162,7 @@ final class ChatSession: Identifiable {
         return TurnRows(revision: turn.presentationRevision, itemsRevision: turn.itemsRevision, displayedItems: items,
                         rows: rows, groupIDs: groupIDs, toolRevisions: toolRevisions)
     }
-    var showChat = false { didSet { acknowledgeVisibleOutput() } }
+    var showChat = false { didSet { acknowledgeVisibleOutput(); if !showChat { releaseTranscript(.reading) } } }
     // A moved pane may mount its new view before the outgoing view disappears.
     // Removing the old presentation must not hide the new one.
     private var presentations: Set<UUID> = []
@@ -1170,7 +1206,7 @@ final class ChatSession: Identifiable {
     /// again: its transcript stays readable, but the tab is a terminal again (`ChatCoordinator.chatLeads`).
     var agentExited = false
     var busy = false { didSet {
-        cachedVisibleRows = nil
+        cachedVisibleRows = nil; releaseTranscript(.reading)
         if !busy { submittedThinkingAt = nil; endPendingReply() }
         updateWorkingSince()
     } }
@@ -1194,7 +1230,7 @@ final class ChatSession: Identifiable {
     var activityCheck: UUID?
     var activityNeedsRefresh = false
     var activityRetryAfter: Date?
-    var activeTurnID: String? { didSet { cachedVisibleRows = nil } }
+    var activeTurnID: String? { didSet { cachedVisibleRows = nil; releaseTranscript(.reading) } }
     /// An unresolved interaction from a disconnected helper cannot regain authority as a native card.
     var retiredInteraction = false
     var awaitingPromptAck = false { didSet { if !awaitingPromptAck { showPendingReplyIfDue() } } }
@@ -1356,7 +1392,7 @@ final class ChatSession: Identifiable {
     var version: String?
     var expanded: Set<String> = []
     var scrollAnchor: String?
-    var atBottom = true { didSet { acknowledgeVisibleOutput() } }
+    var atBottom = true { didSet { acknowledgeVisibleOutput(); if atBottom { releaseTranscript(.reading) } } }
     var scrollToLatestRequest = System.uuid()
     var focusRequest = System.uuid()
     var revision = 0

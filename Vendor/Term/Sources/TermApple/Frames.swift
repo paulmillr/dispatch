@@ -1,7 +1,9 @@
 // A session's frames, paced by the display its view is on (Ghostty's renderer thread + CVDisplayLink):
 // the view's display link calls the session's own render thread at each refresh. A refresh draws
 // only after a change (`request`, any thread); one with nothing to draw pauses the link until the
-// next change. No frame runs on the main queue, except the synchronous one a resize asks for.
+// next change. Output alone may be paced below the display (`pace`): the link then asks for that
+// rate, and goes back to the display's own for input (FrameDemand). No frame runs on the main
+// queue, except the synchronous one a resize asks for.
 #if canImport(AppKit)
 import AppKit
 import QuartzCore
@@ -40,9 +42,34 @@ final class Frames: NSObject {
         CFRunLoopWakeUp(loop)
     }
 
-    /// Something changed: the next refresh draws it (the render thread is woken only from a pause).
-    func request() {
-        if demand.request() { perform { self.link?.isPaused = false } }
+    /// The link's current rate: the display's (true) or the output pace (false); render thread only.
+    private var fast = true
+
+    /// Something changed: output, or input (`urgent`). The next refresh draws it, or a later one for output
+    /// within its pace (the render thread is woken only from a pause, or to run at the display's rate again).
+    func request(urgent: Bool = false) {
+        let (wake, hurry) = demand.request(urgent: urgent, at: CACurrentMediaTime())
+        if wake || hurry {
+            perform { [self] in
+                link?.isPaused = false
+                if let link { rate(link, at: CACurrentMediaTime()) }
+            }
+        }
+    }
+
+    /// Output-only frames at most `perSecond` a second (0: every refresh), from any thread.
+    func pace(_ perSecond: Int) {
+        demand.pace(perSecond)
+        perform { [self] in if let link { rate(link, at: CACurrentMediaTime()) } }
+    }
+
+    /// The pace the link asks the display for: its own rate after input, the output's otherwise.
+    private func rate(_ link: CADisplayLink, at now: CFTimeInterval) {
+        let fast = demand.fast(at: now)
+        guard fast != self.fast else { return }
+        self.fast = fast
+        let paced = Float(demand.paced)
+        link.preferredFrameRateRange = fast ? .default : CAFrameRateRange(minimum: paced, maximum: paced, preferred: paced)
     }
 
     /// Hidden: no frames (the link pauses at its next refresh); shown: a frame at the next refresh.
@@ -62,6 +89,8 @@ final class Frames: NSObject {
             link?.invalidate()
             link = next
             demand.relink()
+            fast = true
+            rate(next, at: CACurrentMediaTime())
         }
     }
 
@@ -82,7 +111,12 @@ final class Frames: NSObject {
     }
 
     @objc func refresh(_ link: CADisplayLink) {
-        if demand.frame() { draw() } else { link.isPaused = true }
+        switch demand.frame(at: link.timestamp) {
+        case .draw: draw()
+        case .wait: break
+        case .pause: link.isPaused = true
+        }
+        rate(link, at: link.timestamp)
     }
 }
 

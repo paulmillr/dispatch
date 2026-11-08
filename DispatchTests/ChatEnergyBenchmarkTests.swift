@@ -24,6 +24,9 @@ final class ChatEnergyBenchmarkTests: XCTestCase {
         let typing = ChatTypingReveals.enabled
         ChatTypingReveals.enabled = true
         defer { ChatTypingReveals.enabled = typing }
+        let readingHold = ChatSession.readingHoldEnabled
+        ChatSession.readingHoldEnabled = true
+        defer { ChatSession.readingHoldEnabled = readingHold }
         try await streamWithoutView()
         try await runPhases(pass: "plain")
         try await runPhases(pass: "plain-2")
@@ -42,6 +45,9 @@ final class ChatEnergyBenchmarkTests: XCTestCase {
         let typing = ChatTypingReveals.enabled
         ChatTypingReveals.enabled = true
         defer { ChatTypingReveals.enabled = typing }
+        let readingHold = ChatSession.readingHoldEnabled
+        ChatSession.readingHoldEnabled = true
+        defer { ChatSession.readingHoldEnabled = readingHold }
         let app = try TmuxWalkthrough(); defer { app.close() }
         var tabs: [UUID] = []
         for index in 0..<3 {

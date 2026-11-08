@@ -63,6 +63,29 @@ final class ChatMotionTests: XCTestCase {
         XCTAssertEqual([MotionRate.glow, MotionRate.orbit, MotionRate.sweep], [30, 60, 60])
     }
 
+    /// Low Power Mode stills the glint and the label's light (`MotionRate.decorates`) and keeps the ◆, its satellite and
+    /// the dots, at 30; leaving it lights them again.
+    func testLowPowerModeStillsTheGlintAndTheLight() async throws {
+        MotionRate.pin(lowPower: true)
+        defer { MotionRate.pin(lowPower: nil) }
+        let window = try show(Self.all, size: CGSize(width: 402, height: 300))
+        var found: [CompositorView] = []
+        try await TestSupport.eventually {
+            found = self.loops(in: window)
+            return found.count == 4 && found.contains { ($0 as? ChatOrbitLoop.OrbitView)?.running == true }
+                && found.contains { ($0 as? ChatDotsLoop.DotsView)?.running == true }
+        }
+        let screen = window.windowScene?.screen.maximumFramesPerSecond ?? 60
+        let orbit = try XCTUnwrap(found.lazy.compactMap { $0 as? ChatOrbitLoop.OrbitView }.first)
+        XCTAssertEqual([orbit.diamond, orbit.orbit].map(Self.rate), Array(repeating: Float(min(screen, 30)), count: 2))
+        let scan = try XCTUnwrap(found.lazy.compactMap { $0 as? ChatScanLoop.ScanView }.first)
+        let shimmer = try XCTUnwrap(found.lazy.compactMap { $0 as? ChatShimmerLoop.ShimmerView }.first)
+        XCTAssertNil(Self.rate(scan.band), "The glint stays off the line")
+        XCTAssertNil(Self.rate(shimmer.band), "The light stays off the label")
+        MotionRate.pin(lowPower: nil)
+        try await TestSupport.eventually { scan.running && shimmer.running }
+    }
+
     /// Nothing runs in the background, out of a window or scrolled out of sight; back, the loops run again.
     func testTheLoopsStopWhereNothingShowsThem() async throws {
         let window = try show(Self.all, size: CGSize(width: 402, height: 300))

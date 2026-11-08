@@ -764,8 +764,9 @@ final class ChatTypingReveal {
     }
 }
 
-/// The display link that steps the reveals: every frame while one types or fades, about ten a second while one only
-/// blinks. It follows the main screen's refresh. A Mac without a screen to sync to steps on a timer at the same paces.
+/// The display link that steps the reveals: while one types or fades, every frame the motion policy allows (`range`,
+/// followed while it runs: 60 on a Mac's battery, 30 in Low Power Mode), about ten a second while one only blinks. It follows the main
+/// screen's refresh. A Mac without a screen to sync to steps on a timer at the same paces.
 @MainActor final class ChatTypingLink: NSObject {
     /// Steps to the given time; false once there is nothing left to step (its store is gone): the link stops.
     private let action: (TimeInterval) -> Bool
@@ -785,14 +786,32 @@ final class ChatTypingReveal {
         #else
         let link = CADisplayLink(target: self, selector: #selector(fire(_:)))
         #endif
+        link.preferredFrameRateRange = Self.range(paced)
         link.add(to: .main, forMode: .common)
         self.link = link
+        NotificationCenter.default.addObserver(self, selector: #selector(rateChanged), name: MotionRate.changed, object: nil)
+    }
+
+    /// While one types or fades: on the Mac the motion policy's rate (the screen's own on the adapter with Dispatch in
+    /// front, 60 on battery or behind another app, 30 in Low Power Mode), on the phone every frame (30 in Low Power
+    /// Mode); the blink's ten either way.
+    static func range(_ needs: ChatTypingClock.Needs) -> CAFrameRateRange {
+        if needs == .blink { return CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) }
+        #if canImport(AppKit)
+        return MotionRate.range(on: NSScreen.main ?? NSScreen.screens.first)
+        #else
+        return MotionRate.lowPower ? CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30) : .default
+        #endif
+    }
+
+    @objc private func rateChanged() {
+        if let link { link.preferredFrameRateRange = Self.range(paced) } else if timer != nil { startTimer() }
     }
 
     private func startTimer() {
         timer?.invalidate()
-        let timer = Timer(timeInterval: paced == .blink ? 0.1 : 1.0 / 60, target: self, selector: #selector(tick(_:)),
-                          userInfo: nil, repeats: true)
+        let interval = paced == .blink ? 0.1 : MotionRate.lowPower ? 1.0 / 30 : 1.0 / 60
+        let timer = Timer(timeInterval: interval, target: self, selector: #selector(tick(_:)), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
@@ -804,7 +823,7 @@ final class ChatTypingReveal {
         guard needs != paced, link != nil || timer != nil else { return }
         paced = needs
         if let link {
-            link.preferredFrameRateRange = needs == .blink ? CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) : .default
+            link.preferredFrameRateRange = Self.range(needs)
         } else { startTimer() }
     }
 

@@ -489,7 +489,13 @@ final class UIBenchmarkTests: XCTestCase {
         let window = try await mount(SettingsView(store: store, workspace: Workspace()), size: .init(width: 560, height: 550))
         defer { close(window) }
         await display(window)
+        // Extra: General folds its rarely changed rows and fits this window (402 of 409 pt, 2026-11-09); Extra's
+        // troubleshooting rows overflow it by about 200 pt.
+        try await PresentationTestSupport.selectSettingsTab("Extra", in: window)
+        await display(window)
         let scroll = try scrollView(window)
+        XCTAssertGreaterThan((scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.height, 100,
+                             "The scrolled page must overflow the window")
         let start = scroll.contentView.bounds.minY
         try await measure("settings-scroll", count: 48, window: window) { index in
             try self.wheel(scroll, pixels: index < 24 ? -50 : 50)

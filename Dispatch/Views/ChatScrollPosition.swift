@@ -268,6 +268,13 @@ final class ChatScrollPosition {
         max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
     }
 
+    /// Whether the end of the transcript, where records land, is out of the reader's view and its lookahead: the
+    /// clip is more than two of its heights above the bottom. False without a viewport.
+    func endOutOfView() -> Bool {
+        guard let scroll, let document = scroll.documentView else { return false }
+        return bottomOffset(scroll, document) - scroll.contentView.bounds.minY > 2 * scroll.contentView.bounds.height
+    }
+
     /// Whether the viewport shows rows, not a sliver of one: visible rows cover a tenth of the clip, or one row lies
     /// wholly inside it (a short transcript).
     func showsRows() -> Bool {
@@ -420,8 +427,10 @@ final class ChatScrollPosition {
         guard glide == nil, let scroll else { return }
         arrivalExpectedAt = -.infinity
         // One step per displayed frame, in the display cycle the arrival fade updates in: a timer out of phase with
-        // it, or faster than the display, scrolls and lays out the transcript again.
+        // it, or faster than the display, scrolls and lays out the transcript again. At the motion policy's rate: the
+        // screen's own on the adapter, 60 on battery or behind another app, 30 in Low Power Mode.
         let link = scroll.displayLink(target: GlideStep { [weak self] in self?.glideFrame() }, selector: #selector(GlideStep.step))
+        link.preferredFrameRateRange = MotionRate.range(on: scroll.window?.screen)
         link.add(to: .main, forMode: .common)
         glide = (scroll.contentView.bounds.minY, ProcessInfo.processInfo.systemUptime, link)
     }

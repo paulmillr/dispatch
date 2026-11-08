@@ -32,6 +32,11 @@ public final class Session {
     public var onExit: (@MainActor (Int32) -> Void)?
     /// Parsed output is available even when the terminal is hidden or unfocused.
     public var onUpdate: (() -> Void)?
+    /// Frames of output alone (a program printing, a spinner) at most this many a second; 0: the display's rate.
+    /// Input and what follows it within `FrameDemand.inputWindow` always draw at the next refresh (main queue).
+    public var outputFramesPerSecond = 0 {
+        didSet { if outputFramesPerSecond != oldValue { frames?.pace(outputFramesPerSecond) } }
+    }
     var pty: Pty?
     var cells: CellRenderer
     let metal: MetalRenderer
@@ -114,6 +119,7 @@ public final class Session {
         view.clipsToBounds = true
         frames?.stop()
         frames = Frames(view) { [weak self] in self?.present(sync: false) }
+        if outputFramesPerSecond > 0 { frames?.pace(outputFramesPerSecond) }
         hosted = view
     }
 
@@ -184,7 +190,7 @@ public final class Session {
             }
             self.frames?.request()
             self.onUpdate?()
-            if post { DispatchQueue.main.async { [weak self] in self?.pump() } }
+            if post { DispatchQueue.main.async { [weak self] in self?.pump(urgent: false) } }
             self.yieldToDemand()
         }, onExit: { [weak self] status in self?.onExit?(status) })
         if surface.focused { runBlink() }
@@ -207,8 +213,9 @@ public final class Session {
     public var foregroundPID: pid_t { pty.map { max(0, $0.foregroundPID) } ?? 0 }
 
     /// The surface's queued work: pty writes, its messages and scrollbar for the host, the pty size,
-    /// a frame (callers may have changed the screen).
-    public func pump() {
+    /// a frame (callers may have changed the screen). `urgent`: the host's own action (a key, a scroll, a
+    /// resize, a selection), drawn at the next refresh; false for the work output brought (FrameDemand).
+    public func pump(urgent: Bool = true) {
         let restart = locked {
             defer { blink.restart = false }
             return blink.restart
@@ -222,7 +229,7 @@ public final class Session {
                 pty?.resize(winsize())
             }
         }
-        frames?.request()
+        frames?.request(urgent: urgent)
     }
 
     func winsize() -> Darwin.winsize {
@@ -334,7 +341,7 @@ public final class Session {
         }
         if bar != scrollbar {
             scrollbar = bar
-            DispatchQueue.main.async { [weak self] in self?.pump() }
+            DispatchQueue.main.async { [weak self] in self?.pump(urgent: false) }
         }
         let c = cells.contents(preedit: preedit, state: &state)
         state.dirty = .false
@@ -394,7 +401,7 @@ public final class Session {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             self.locked { self.blink.visible.toggle() }
-            self.pump()
+            self.pump(urgent: false)
         }
         timer.resume()
         blinkTimer = timer

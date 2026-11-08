@@ -479,7 +479,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   over it (`ChatThinkingSweep`, `ChatSweepTrack`). The thread's loops (the ◆'s breathing and satellite, the glint and
   the light, the reconnect banner's dots) run in Core Animation (`CompositorView`, Mobile/Chat/ChatMotion.swift): SwiftUI
   draws their still artwork once, the compositor moves it at the phone's `MotionRate` (the ◆'s breathing and the dots
-  30 fps, the satellite and the sweep 60, everything 30 in Low Power Mode), and nothing runs in the background, while
+  30 fps, the satellite and the sweep 60, everything 30 in Low Power Mode, where the glint and the light stay off: `MotionRate.decorates`), and nothing runs in the background, while
   the row is scrolled out of sight or while a sheet covers it (`coversLoops`: the thread's own sheets and preview, the
   shell's sheets, a host's stats sheet). The background is followed from its notifications (`applicationState` still
   reads background when `willEnterForeground` arrives). A row scrolled under the translucent composer counts as shown. As `TimelineView(.animation)` loops they cost about 12% of a core in the app and as

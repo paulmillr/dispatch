@@ -94,7 +94,10 @@ final class ChatReplyHaloView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         for band in bands { band.contentsScale = scale }
         ring.contentsScale = scale
-        if window == nil { stop() } else { restartMotion() }
+        NotificationCenter.default.removeObserver(self)
+        if window == nil { stop(); return }
+        NotificationCenter.default.addObserver(self, selector: #selector(restartMotion), name: MotionRate.changed, object: nil)
+        restartMotion()
     }
 
     func apply(_ next: ChatReplyHalo.Phase) {
@@ -129,9 +132,16 @@ final class ChatReplyHaloView: NSView {
         layer.add(animation, forKey: "fade")
     }
 
-    private func restartMotion() {
+    @objc private func restartMotion() {
         stop()
-        guard let window, perimeter > 0, phase != nil else { return }
+        // Low Power Mode: the light stays off (the lap fades on, hidden); the accent edge shows and settles alone.
+        let still = !MotionRate.decorates
+        if lap.isHidden != still {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            lap.isHidden = still
+            CATransaction.commit()
+        }
+        guard let window, perimeter > 0, phase != nil, !still else { return }
         let rate = MotionRate.range(for: window)
         let now = CACurrentMediaTime()
         // The lap keeps running through a settle's fade; it stops with the next phase or the view.

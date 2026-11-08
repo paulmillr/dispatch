@@ -19,8 +19,12 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / 'build/benchmarks'
-VERSION = 1
+VERSION = 2
 UI = 'DispatchTests/UIBenchmarkTests/'
+# One short private root per test run, as test/xcode.py makes: the helper's hook sockets (in DISPATCH_TEST_ROOT,
+# else a test HOME under /var/folders/…/T/) must fit macOS's 104-byte sun_path, or the local helper exits and no
+# terminal runs a command. Its own path, so a benchmark never clears a test run's journal.
+TEST_ROOT = Path('/tmp/dt-bench')
 QUICK = ['testChatHistoryAndCodePreviews']
 FULL = QUICK + ['testDesktopNavigationAndResize', 'testLiveTerminalInputAndScroll',
                 'testSidebarScrollingAndFiltering', 'testSettings',
@@ -198,6 +202,10 @@ def test_targets(plan):
 
 def run_ui(plan, selection, folder, seconds, ssh=None, ssh_profile=None):
     folder.mkdir()
+    shutil.rmtree(TEST_ROOT, ignore_errors=True)
+    TEST_ROOT.mkdir(mode=0o700)
+    (TEST_ROOT / 'tmp').mkdir(mode=0o700)
+    (TEST_ROOT / 'checkout').symlink_to(ROOT)
     data = plistlib.loads(plan.read_bytes())
     for target in test_targets(data):
         for key in ['EnvironmentVariables', 'TestingEnvironmentVariables']:
@@ -208,7 +216,8 @@ def run_ui(plan, selection, folder, seconds, ssh=None, ssh_profile=None):
                 if name.startswith('PERFC_'):
                     del env[name]
             env.update(DISPATCH_TESTING='1', DISPATCH_BENCHMARK_OUTPUT=str(folder),
-                       DISPATCH_BENCHMARK_SECONDS=str(seconds))
+                       DISPATCH_BENCHMARK_SECONDS=str(seconds), DISPATCH_TEST_ROOT=str(TEST_ROOT),
+                       TMPDIR=str(TEST_ROOT / 'tmp') + '/')
             if ssh:
                 env['DISPATCH_BENCHMARK_SSH'] = ssh['mode']
                 if ssh_profile:
@@ -241,7 +250,7 @@ def run_ui(plan, selection, folder, seconds, ssh=None, ssh_profile=None):
 
 
 def run(args):
-    if args.suite != 'core' and not args.desktop:
+    if not args.desktop:
         raise ValueError('UI suites require --desktop and an idle unlocked desktop. Run inside your test VM or on a dedicated Mac.')
     OUTPUT.mkdir(parents=True, exist_ok=True)
     with (OUTPUT / '.lock').open('a') as lock:
@@ -255,53 +264,37 @@ def run(args):
         write_json(folder / 'report.json', report)
         try:
             report.update(environment=environment(args.environment), source=source_identity())
-            if args.suite != 'core':
-                report['environment']['desktop'] = desktop_environment()
+            report['environment']['desktop'] = desktop_environment()
             ssh, ssh_profile = ssh_backend(folder) if args.suite in ('full', 'soak') else (None, None)
             report['ssh_backend'] = ssh
             if ssh:
                 print('ssh workload: ' + {'lima': 'Lima VM ' + ssh.get('server', ''), 'loopback': 'loopback sshd through sudo',
                                           'skipped': 'skipped (' + ssh.get('reason', '') + ')'}[ssh['mode']], flush=True)
             write_json(folder / 'report.json', report)
-            binary = folder / 'core-benchmark'
-            if args.suite != 'transcript':
-                command(['xcrun', 'swiftc', '-O', '-swift-version', '6', '-module-cache-path', str(folder / 'modules'),
-                         'Dispatch/Herdr/HerdrLineBuffer.swift', 'Dispatch/Tmux/TmuxProtocol.swift',
-                         'Dispatch/Tmux/TmuxOutputFilter.swift', 'scripts/benchmarks/CoreBenchmark.swift',
-                         '-o', str(binary)], folder / 'core-build.log')
-            plan = None
-            if args.suite != 'core':
-                products = OUTPUT / 'products'
-                command(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'Dispatch',
-                         '-configuration', 'Release', '-derivedDataPath', str(products),
-                         '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
-                         'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DISPATCH_BENCHMARK',
-                         'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                         'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.benchmark.$(PRODUCT_NAME:rfc1034identifier)',
-                         'build-for-testing'], folder / 'ui-build.log')
-                plans = list((products / 'Build/Products').glob('Dispatch_*.xctestrun'))
-                if len(plans) != 1:
-                    raise ValueError('Expected exactly one built XCTest plan')
-                plan = plans[0]
+            products = OUTPUT / 'products'
+            command(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'Dispatch',
+                     '-configuration', 'Release', '-derivedDataPath', str(products),
+                     '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
+                     'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DISPATCH_BENCHMARK',
+                     'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
+                     'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.benchmark.$(PRODUCT_NAME:rfc1034identifier)',
+                     'build-for-testing'], folder / 'ui-build.log')
+            plans = list((products / 'Build/Products').glob('Dispatch_*.xctestrun'))
+            if len(plans) != 1:
+                raise ValueError('Expected exactly one built XCTest plan')
+            plan = plans[0]
             for index in range(args.runs):
                 repetition = folder / f'run-{index + 1}'
                 repetition.mkdir()
-                values = [] if args.suite == 'transcript' else json.loads(subprocess.check_output([str(binary)], cwd=ROOT, text=True))
-                write_json(repetition / 'core.json', values)
                 metrics = []
-                for value in values:
-                    metrics.append(metric(value['name'] + '/latency', 'ms', [x * 1000 for x in value['seconds']]))
-                    metrics.append(metric(value['name'] + '/throughput', 'MiB/s',
-                                          [value['bytesPerSample'] / 2**20 / x for x in value['seconds']], 'higher'))
-                if plan:
-                    workloads = ['testChatTranscriptContainerWorkloads'] if args.suite == 'transcript' else (QUICK if args.suite == 'quick' else FULL)
-                    selections = [UI + name for name in workloads]
-                    if args.suite in ('full', 'soak'):
-                        selections += ['DispatchTests/UISettingsBenchmarkTests/testRepeatedSettingsLifecycle',
-                                       'DispatchTests/ChatScrollBenchmarkTests/testDenseAgenticHistoryPaging']
-                    for selection in selections:
-                        metrics += run_ui(plan, selection, repetition / selection.split('/')[-1], report['duration_seconds'],
-                                          ssh, ssh_profile)
+                workloads = ['testChatTranscriptContainerWorkloads'] if args.suite == 'transcript' else (QUICK if args.suite == 'quick' else FULL)
+                selections = [UI + name for name in workloads]
+                if args.suite in ('full', 'soak'):
+                    selections += ['DispatchTests/UISettingsBenchmarkTests/testRepeatedSettingsLifecycle',
+                                   'DispatchTests/ChatScrollBenchmarkTests/testDenseAgenticHistoryPaging']
+                for selection in selections:
+                    metrics += run_ui(plan, selection, repetition / selection.split('/')[-1], report['duration_seconds'],
+                                      ssh, ssh_profile)
                 names = [m['name'] for m in metrics]
                 if len(names) != len(set(names)):
                     raise ValueError('Duplicate workload metrics')
@@ -386,7 +379,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     execute = sub.add_parser('run', help='Run serially; requires prepared offline build dependencies')
-    execute.add_argument('--suite', choices=['core', 'quick', 'full', 'soak', 'transcript'], default='core')
+    execute.add_argument('--suite', choices=['quick', 'full', 'soak', 'transcript'], default='quick')
     execute.add_argument('--label', required=True)
     execute.add_argument('--runs', type=int, default=3)
     execute.add_argument('--desktop', action='store_true', help='Use the current unlocked desktop for UI suites')

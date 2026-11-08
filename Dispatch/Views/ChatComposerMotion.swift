@@ -210,7 +210,10 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
 
         @objc private func updateAnimations() {
             stop()
-            guard moving, let window, window.occlusionState.contains(.visible), perimeter > 0 else { return }
+            // Low Power Mode: no light, the steady accent edge under it (ChatComposerBorder) says the agent works.
+            let still = !MotionRate.decorates
+            if layer?.isHidden != still { layer?.isHidden = still }
+            guard moving, !still, let window, window.occlusionState.contains(.visible), perimeter > 0 else { return }
             #if DISPATCH_BENCHMARK
             guard !HostScalingAnimationProbe.paused else { return }
             #endif
@@ -391,10 +394,10 @@ struct ChatComposerShimmer: NSViewRepresentable {
             guard bounds.width > 0 else { return }
             let show = CABasicAnimation(keyPath: "opacity")
             show.fromValue = 1; show.toValue = 1; show.duration = 2.4
-            loop(show, on: ink, upTo: MotionRate.shimmer)
+            loop(show, on: ink, upTo: MotionRate.shimmer, decorative: true)
             let sweep = CABasicAnimation(keyPath: "position.x")
             sweep.fromValue = -Self.width / 2; sweep.toValue = bounds.width + Self.width / 2; sweep.duration = 2.4
-            loop(sweep, on: band, upTo: MotionRate.shimmer)
+            loop(sweep, on: band, upTo: MotionRate.shimmer, decorative: true)
             if style.breathing != nil { loop(ChatComposerOrbit.OrbitView.breath("opacity", from: 0.65, to: 1), on: base, upTo: MotionRate.glow) }
         }
     }
@@ -454,9 +457,10 @@ class CompositorView: NSView {
     func redraw() {}
 
     /// Repeats `animation` at MotionRate's rate, at most `cap` frames a second, phase-aligned to the media clock so
-    /// every indicator with the same period moves together.
-    func loop(_ animation: CAAnimation, on layer: CALayer, upTo cap: Int = .max) {
-        guard let window else { return }
+    /// every indicator with the same period moves together. A `decorative` loop stays off while MotionRate stills
+    /// decoration (Low Power Mode): its layer keeps the still artwork.
+    func loop(_ animation: CAAnimation, on layer: CALayer, upTo cap: Int = .max, decorative: Bool = false) {
+        guard let window, !decorative || MotionRate.decorates else { return }
         let rate = MotionRate.range(for: window, upTo: cap)
         let now = CACurrentMediaTime()
         animation.repeatCount = .infinity

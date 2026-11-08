@@ -285,6 +285,55 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertEqual(session.draft, "Keep my unfinished reply")
     }
 
+    /// A reply streaming far below the reader reaches the transcript's views at most every `readingHold`, not per
+    /// record; anything else (a disclosure, following again) presents at once, and following never holds.
+    func testRecordsOutOfTheReadersViewArePresentedTogether() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let enabled = ChatSession.readingHoldEnabled
+        ChatSession.readingHoldEnabled = true
+        defer { ChatSession.readingHoldEnabled = enabled }
+        let coordinator = ChatCoordinator(enabled: false)
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = "reading-hold"; session.showChat = true; session.active = true; session.busy = true
+        session.turns = (0..<60).map { index in
+            ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
+                text: "Answer \(index)\n\n" + String(repeating: "Earlier transcript content.\n\n", count: 3))])
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { session.scrollPosition.disconnect(); window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await TestSupport.eventually { session.scrollPosition.showsRows() }
+        let anchor = session.visibleTranscriptRows[10].id
+        session.scrollPosition.userWillScroll(deltaY: 1)
+        session.atBottom = false; session.followRevision = nil
+        session.scrollPosition.restore(.init(id: anchor, offset: 0))
+        try await TestSupport.eventually {
+            !session.scrollPosition.isRestoring && session.scrollPosition.visibleAnchor(retaining: [anchor]) != nil
+        }
+        XCTAssertTrue(session.scrollPosition.endOutOfView(), "The reader is far above the end")
+
+        session.insert(.init(id: "live-reply", kind: .assistant, text: "Streaming"), turnID: "turn-59")
+        XCTAssertTrue(session.transcriptHeld, "A record far below the reader waits for the next presentation")
+        XCTAssertFalse(session.presentedTranscriptRows.contains { $0.id == "live-reply" })
+        session.insert(.init(id: "live-reply", kind: .assistant, text: "Streaming more"), turnID: "turn-59")
+        try await TestSupport.eventually(timeout: .seconds(2)) { !session.transcriptHeld }
+        XCTAssertEqual(session.presentedTranscriptRows.last?.item?.text, "Streaming more", "Presented together, with the latest text")
+
+        session.insert(.init(id: "live-reply", kind: .assistant, text: "Streaming even more"), turnID: "turn-59")
+        XCTAssertTrue(session.transcriptHeld)
+        session.expandedToolGroups.insert("any-group")
+        XCTAssertFalse(session.transcriptHeld, "A disclosure presents at once")
+
+        session.atBottom = true; session.followRevision = session.revision
+        session.scrollPosition.jumpToLatest()
+        try await TestSupport.eventually { session.scrollPosition.isAtBottom(tolerance: 40) == true }
+        session.insert(.init(id: "live-reply", kind: .assistant, text: "Streaming at the bottom"), turnID: "turn-59")
+        XCTAssertFalse(session.transcriptHeld, "Following presents every record")
+    }
+
     func testDefaultSystemFontKeepsBottomFollowingAndExpandedToolScrollingStable() async throws {
         let previous = ChatThemeStore.shared.current
         defer { ChatThemeStore.shared.current = previous }

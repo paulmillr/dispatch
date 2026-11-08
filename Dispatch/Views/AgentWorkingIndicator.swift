@@ -289,7 +289,7 @@ struct AgentWorkingAnimation: View {
 }
 
 /// The Thinking row's rule: a soft accent band eases across it every 2.2 s, in the compositor. It crosses the rule
-/// at up to about 650 pt/s, so it takes every frame MotionRate allows.
+/// at up to about 650 pt/s, so it takes every frame MotionRate allows; in Low Power Mode the rule stays plain.
 struct AgentWorkingSweep: NSViewRepresentable {
     func makeNSView(context: Context) -> SweepView { SweepView() }
 
@@ -340,7 +340,7 @@ struct AgentWorkingSweep: NSViewRepresentable {
             sweep.values = times.map { bounds.width * ((1 - cos($0 * .pi)) / 2 * 1.3 - 0.15) }
             sweep.keyTimes = times.map { NSNumber(value: $0) }
             sweep.duration = Self.period
-            loop(sweep, on: band)
+            loop(sweep, on: band, decorative: true)
         }
     }
 }
