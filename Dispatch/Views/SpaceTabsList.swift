@@ -119,7 +119,7 @@ struct SpaceTabsList: View {
         return Button { workspace.selectPane(at: index) } label: {
             HStack(spacing: 7) {
                 SidebarPaneGlyph(cells: cells, cell: index, lit: pane.focused, size: metrics.detailSize + 1).frame(width: 14)
-                Text(Self.place(pane.cell)).interfaceFont(size: metrics.detailSize, weight: .semibold)
+                Text(Self.place(cells[index], among: cells, index: index)).interfaceFont(size: metrics.detailSize, weight: .semibold)
                     .foregroundStyle(Chrome.palette.secondary).lineLimit(1)
                 Spacer(minLength: 4)
                 if !key.isEmpty {
@@ -133,6 +133,13 @@ struct SpaceTabsList: View {
         .buttonStyle(.plain)
         .help("Focus this pane" + (key.isEmpty ? "" : " · \(key)"))
         .accessibilityIdentifier("sidebar-pane-\(index + 1)")
+    }
+
+    /// A pane's place among its split's `cells` (`place`), or "Pane 3" by its digit when another cell shares the name,
+    /// as the two inner columns of four do: every heading then numbers, so none reads as a place and another as a count.
+    static func place(_ frame: CGRect, among cells: [CGRect], index: Int) -> String {
+        let names = cells.map(place)
+        return Set(names).count == names.count ? place(frame) : "Pane \(index + 1)"
     }
 
     /// Where a pane sits in its space's frame: Left or Right, Top or Bottom, or both ("Top left").

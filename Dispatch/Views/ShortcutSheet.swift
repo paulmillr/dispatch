@@ -11,7 +11,7 @@ struct ShortcutRow: Identifiable {
     /// What each digit group does; Settings › Keyboard describes its recorders the same way.
     static let tabDigits = "switch to tab (or pane when split)"
     static let spaceDigits = "switch to space"
-    static let splitDigits = "single · 2 columns · 2 above · 2×2"
+    static let splitDigits = "single · 2 columns · 2 above · 2×2 · 3×2 · 4×2"
 
     /// The digit chords lead, in Settings › Keyboard' order and following it; then stepping through tabs and spaces, and
     /// the prefix keys last.
@@ -25,7 +25,7 @@ struct ShortcutRow: Identifiable {
             // An unbound group has no shortcut, so no row.
             keys.shortcut(\.tabs, "1…9").map { .init($0, tabDigits) },
             keys.shortcut(\.spaces, "1…9").map { .init($0, spaceDigits) },
-            keys.shortcut(\.splits, "1…4").map { .init($0, splitDigits) },
+            keys.shortcut(\.splits, "1…4, 6, 8").map { .init($0, splitDigits) },
             steps.tabs.map { .init(brackets($0), "tab scroll: previous / next") },
             steps.spaces.map { .init(brackets($0), "space scroll: previous / next") },
             .init("⌘\\", "show or hide the sidebar · also ⌃⌘S"),

@@ -121,7 +121,7 @@ extension Workspace {
   func selectPane(at index: Int) {
     guard let space = current else { return }
     let targets = space.numberedPaneIDs
-    guard targets.indices.contains(index), index < 4 else { return }
+    guard targets.indices.contains(index), index < 9 else { return }
     let paneID = targets[index]
     if !space.containers.isEmpty {
       guard
@@ -151,7 +151,14 @@ extension Workspace {
   func canApplyLayout(_ preset: LayoutPreset, in space: Space? = nil) -> Bool {
     if (space ?? current)?.tabs.contains(where: \.isConnecting) == true { return false }
     guard let space = space ?? current else { return false }
-    return space.layoutTabCount >= preset.count
+    return space.layoutTabCount >= preset.count && hasRoom(for: preset)
+  }
+
+  /// Whether the window's panes have room for `preset`: as the window is, or (`screen`) once it fills its screen.
+  /// Only layouts of more than four panes ask (`LayoutPreset.fits`).
+  func hasRoom(for preset: LayoutPreset, screen: Bool = false) -> Bool {
+    guard let room = layoutRoom else { return true }
+    return preset.fits(screen ? room.screen : room.window, cell: room.cell)
   }
 }
 

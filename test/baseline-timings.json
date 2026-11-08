@@ -2171,11 +2171,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/NewSpacePresentationTests/testEachHostOffersNewSpaceInItsHeader",
-      "seconds": 3.7718729972839355,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/NewSpacePresentationTests/testFailedBackendProbeStaysUnknownAndRetriesSoon",
       "seconds": 0.002377033233642578,
       "outcome": "Passed"
@@ -4405,6 +4400,11 @@
     {
       "identifier": "DispatchTests/SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
       "seconds": 0.8150119781494141,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testEachHostOffersNewSpaceInItsHeader",
+      "seconds": 3.7718729972839355,
       "outcome": "Passed"
     }
   ]

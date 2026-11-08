@@ -41,6 +41,23 @@ enum TerminalFontScale {
         return value
     }
 
+    /// A terminal cell of `family` at Settings' `size`, in points: an "M"'s advance by the line's height (ascent, descent
+    /// and leading), within a point of the engine's own; Source Code Pro without the family. It budgets panes
+    /// (`LayoutRoom`) before any terminal has measured a grid.
+    static func cell(_ size: Double, family: String) -> CGSize {
+        func font(_ family: String) -> CTFont? {
+            let descriptor = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: family] as CFDictionary)
+            let font = CTFontCreateWithFontDescriptor(descriptor, CGFloat(self.size(size, family: family)), nil)
+            return CTFontCopyFamilyName(font) as String == family ? font : nil
+        }
+        guard let font = font(family) ?? font(reference) else { return CGSize(width: size * 0.6, height: size * 1.26) }
+        var character = UniChar(("M" as Character).asciiValue!), glyph = CGGlyph(0), advance = CGSize.zero
+        CTFontGetGlyphsForCharacters(font, &character, &glyph, 1)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, &advance, 1)
+        let height = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
+        return CGSize(width: advance.width, height: height.rounded(.up))
+    }
+
     /// The median lowercase outline height of `family`'s regular face at 1000 points; nil without the family.
     static func lowercaseHeight(_ family: String) -> Double? {
         let attributes: [CFString: Any] = [kCTFontFamilyNameAttribute: family]

@@ -42,6 +42,10 @@ final class Workspace {
     /// Vertical tabs' sidebar is back at the spaces (its Back button) instead of inside the shown space. Showing a
     /// space goes into it again (`selectSpace`). View state, never saved.
     var sidebarListsSpaces = false
+    /// The main window's room for panes (`MainView` measures it, on resizes and screen changes). Layouts of more than
+    /// four panes need it (`hasRoom`); nil, as before a window shows and in tests that set none, leaves them all open.
+    /// A layout already applied never changes when the room shrinks: its panes only get smaller. View state, never saved.
+    var layoutRoom: LayoutRoom?
     @ObservationIgnored var hostPlacements: [UUID: HostPlacement] = [:]
     @ObservationIgnored var owningMachineForTab: ((TerminalTab) -> TerminalMachine)?
     @ObservationIgnored var onForgetHost: () -> Void = {}
@@ -518,14 +522,15 @@ final class Workspace {
 
     @discardableResult
     func applyLayout(_ preset: LayoutPreset) -> Bool {
-        guard let current else { return false }
+        guard let current, hasRoom(for: preset) else { return false }
         guard let s = spaces.firstIndex(where: { $0.id == selectedSpace }) else { return false }
         if !current.containers.isEmpty {
             let windows = current.presentation?.orderedWindows ?? current.containers.map(\.id)
             guard windows.count >= preset.count, let selected = current.selectedContainer else { return false }
             var presentation = current.presentation ?? TabPresentation(windows: windows, selected: selected, preset: .single)
             let groups = presentation.groups.map { LayoutPreset.TabGroup(id: $0.id, tabs: $0.windows, selected: $0.selected) }
-            let arranged = preset.arrange(groups, in: presentation.layout, selected: selected)
+            let arranged = preset.arrange(groups, in: presentation.layout, fractions: current.splitRatios.mapValues { CGFloat($0) },
+                                          selected: selected)
             // Merged groups append their windows; each strip keeps the server's order, as its ⌘ digits number them.
             let order = Dictionary(uniqueKeysWithValues: current.containers.enumerated().map { ($1.id, $0) })
             presentation.groups = arranged.map { group in
@@ -535,7 +540,7 @@ final class Workspace {
             presentation.layout = preset.layout(arranged.map(\.id)); presentation.preset = preset
             updateLayout { next in
                 next.spaces[s].presentation = presentation
-                next.spaces[s].splitRatios = [:]
+                next.spaces[s].splitRatios = presentation.layout.evenFractions
             }
             focusRequest = System.uuid()
             return true
@@ -544,14 +549,14 @@ final class Workspace {
         guard tabs.count >= preset.count, let selected = activeTab?.id else { return false }
         let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         let groups = current.panes.map { LayoutPreset.TabGroup(id: $0.id, tabs: $0.tabs.map(\.id), selected: $0.selected) }
-        let panes = preset.arrange(groups, in: current.layout, selected: selected).map { group in
+        let panes = preset.arrange(groups, in: current.layout, fractions: current.paneFractions, selected: selected).map { group in
             Pane(id: group.id, tabs: group.tabs.compactMap { byID[$0] }, selected: group.selected)
         }
-        let ids = panes.map(\.id)
+        let layout = preset.layout(panes.map(\.id))
         updateLayout { next in
-            next.spaces[s].layout = preset.layout(ids)
+            next.spaces[s].layout = layout
             next.spaces[s].panes = panes; next.spaces[s].preset = preset
-            next.spaces[s].splitRatios = [:]
+            next.spaces[s].splitRatios = layout.evenFractions
             next.selectTab(selected)
         }
         selectSpace(spaces[s].id)

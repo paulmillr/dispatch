@@ -140,6 +140,7 @@ enum SplitAxis: Codable { case columns, rows }
 
 enum LayoutPreset: String, CaseIterable, Codable {
     case single = "single", columns = "2 columns", rows = "2 rows", twoAbove = "2 above", grid = "2 × 2 grid"
+    case six = "3 × 2 grid", eight = "4 × 2 grid"
     var shortcutKey: String? {
         switch self {
         case .single: "1"
@@ -147,10 +148,12 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .rows: nil
         case .twoAbove: "3"
         case .grid: "4"
+        case .six: "6"
+        case .eight: "8"
         }
     }
     #if canImport(AppKit)
-    /// The preset the Splits number keys (⌃1…4 by default) choose, by physical key.
+    /// The preset the Splits number keys (⌃1…4, 6, 8 by default) choose, by physical key.
     static func shortcut(keyCode: UInt16) -> LayoutPreset? {
         ApplicationMenu.digitKeyCodes.firstIndex(of: keyCode).flatMap { index in allCases.first { $0.shortcutKey == String(index + 1) } }
     }
@@ -161,7 +164,35 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .columns, .rows: 2
         case .twoAbove: 3
         case .grid: 4
+        case .six: 6
+        case .eight: 8
         }
+    }
+
+    /// Panes across and down where the layout is densest.
+    var grid: (columns: Int, rows: Int) {
+        switch self {
+        case .single: (1, 1)
+        case .columns: (2, 1)
+        case .rows: (1, 2)
+        case .twoAbove, .grid: (2, 2)
+        case .six: (3, 2)
+        case .eight: (4, 2)
+        }
+    }
+
+    /// The smallest pane, in terminal cells, a layout of more than four panes may leave.
+    static let roomyPane = (columns: 60.0, rows: 24.0)
+    /// A terminal's padding around its cells, on each axis (`TerminalView`'s 10 points a side).
+    static let panePadding = 20.0
+
+    /// Whether panes `area` points large leave every pane `roomyPane` cells of `cell`. Layouts of up to four panes
+    /// always fit: they were there before the gate and keep working in any window.
+    func fits(_ area: CGSize, cell: CGSize) -> Bool {
+        guard count > 4, cell.width > 0, cell.height > 0 else { return true }
+        let width = area.width / CGFloat(grid.columns) - Self.panePadding
+        let height = area.height / CGFloat(grid.rows) - Self.panePadding
+        return width / cell.width >= Self.roomyPane.columns && height / cell.height >= Self.roomyPane.rows
     }
 
     init(from decoder: Decoder) throws {
@@ -196,6 +227,8 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .rows: "Stacked"
         case .twoAbove: "Two Above One"
         case .grid: "Grid"
+        case .six: "Grid of Six"
+        case .eight: "Grid of Eight"
         }
     }
 
@@ -204,9 +237,17 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .columns: "columns"
         case .rows: "rows"
         case .grid: "grid"
-        case .single, .twoAbove: rawValue
+        case .single, .twoAbove, .six, .eight: rawValue
         }
     }
+}
+
+/// Room for a window's panes: their area now, the area once the window fills its screen, and a terminal cell at the
+/// current font, all in points. View state (`MainView` measures it), never saved.
+struct LayoutRoom: Equatable {
+    var window: CGSize
+    var screen: CGSize
+    var cell: CGSize
 }
 
 extension LayoutPreset {
@@ -217,20 +258,16 @@ extension LayoutPreset {
         let selected: UUID
     }
 
-    func arrange(_ groups: [TabGroup], in oldLayout: PaneLayout, selected: UUID) -> [TabGroup] {
+    /// `fractions`: the old layout's divider positions, so each pane is matched where it shows.
+    func arrange(_ groups: [TabGroup], in oldLayout: PaneLayout, fractions: [UUID: CGFloat] = [:], selected: UUID) -> [TabGroup] {
         precondition(groups.reduce(0) { $0 + $1.tabs.count } >= count)
-        func frames(_ layout: PaneLayout, in rect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)) -> [UUID: CGRect] {
-            switch layout {
-            case .pane(let id): return [id: rect]
-            case .split(_, let axis, let first, let second):
-                let parts = rect.divided(atDistance: (axis == .columns ? rect.width : rect.height) / 2,
-                                         from: axis == .columns ? .minXEdge : .minYEdge)
-                return frames(first, in: parts.slice).merging(frames(second, in: parts.remainder)) { first, _ in first }
-            }
+        func frames(_ layout: PaneLayout, _ fractions: [UUID: CGFloat]) -> [UUID: CGRect] {
+            Dictionary(layout.paneFrames(fractions: fractions).map { ($0.id, $0.frame) }) { first, _ in first }
         }
-        let oldFrames = frames(oldLayout)
+        let oldFrames = frames(oldLayout, fractions)
         let slots = (0..<count).map { _ in System.uuid() }
-        let newFrames = frames(layout(slots))
+        let newLayout = layout(slots)
+        let newFrames = frames(newLayout, newLayout.evenFractions.mapValues { CGFloat($0) })
         func overlap(_ group: TabGroup, _ index: Int) -> CGFloat {
             let intersection = oldFrames[group.id]!.intersection(newFrames[slots[index]]!)
             return intersection.isNull ? 0 : intersection.width * intersection.height
@@ -289,6 +326,26 @@ indirect enum PaneLayout: Equatable, Codable {
             return axis == .columns
                 ? CGSize(width: firstSize.width + secondSize.width + 1, height: max(firstSize.height, secondSize.height))
                 : CGSize(width: max(firstSize.width, secondSize.width), height: firstSize.height + secondSize.height + 1)
+        }
+    }
+
+    /// The divider positions that give panes along each axis equal shares (a third, then a half, for three across),
+    /// for the dividers not at the middle; the others default there.
+    var evenFractions: [UUID: Double] {
+        func span(_ node: PaneLayout, _ axis: SplitAxis) -> Int {
+            switch node {
+            case .pane: 1
+            case .split(_, let along, let first, let second):
+                along == axis ? span(first, axis) + span(second, axis) : max(span(first, axis), span(second, axis))
+            }
+        }
+        switch self {
+        case .pane: return [:]
+        case .split(let id, let axis, let first, let second):
+            var fractions = first.evenFractions.merging(second.evenFractions) { first, _ in first }
+            let fraction = Double(span(first, axis)) / Double(span(self, axis))
+            if abs(fraction - 0.5) > 0.0001 { fractions[id] = fraction }
+            return fractions
         }
     }
 
@@ -461,7 +518,7 @@ struct Space: Identifiable, Equatable, Codable {
     var activeTab: TerminalTab? { activePane?.activeTab }
     var usesPaneShortcuts: Bool { numberedPaneIDs.count > 1 }
     var numberedTabIDs: [UUID] { !containers.isEmpty ? containers.map(\.id) : (activePane?.tabs.map(\.id) ?? []) }
-    var numberedShortcutCount: Int { usesPaneShortcuts ? min(4, numberedPaneIDs.count) : min(9, numberedTabIDs.count) }
+    var numberedShortcutCount: Int { min(9, usesPaneShortcuts ? numberedPaneIDs.count : numberedTabIDs.count) }
 
     func tabShortcutNumber(for id: UUID) -> Int? {
         guard !usesPaneShortcuts, let index = numberedTabIDs.firstIndex(of: id), index < 9 else { return nil }
@@ -502,7 +559,7 @@ struct Space: Identifiable, Equatable, Codable {
     }
 
     func paneShortcutNumber(for id: UUID) -> Int? {
-        guard let index = numberedPaneIDs.firstIndex(of: id), index < 4 else { return nil }
+        guard let index = numberedPaneIDs.firstIndex(of: id), index < 9 else { return nil }
         return index + 1
     }
 
@@ -755,6 +812,17 @@ extension LayoutPreset {
         case .grid: .split(System.uuid(), .rows,
             .split(System.uuid(), .columns, .pane(ids[0]), .pane(ids[1])),
             .split(System.uuid(), .columns, .pane(ids[2]), .pane(ids[3])))
+        // Each row a column split in reading order; `evenFractions` puts the three's first divider at a third.
+        case .six: .split(System.uuid(), .rows,
+            .split(System.uuid(), .columns, .pane(ids[0]), .split(System.uuid(), .columns, .pane(ids[1]), .pane(ids[2]))),
+            .split(System.uuid(), .columns, .pane(ids[3]), .split(System.uuid(), .columns, .pane(ids[4]), .pane(ids[5]))))
+        case .eight: .split(System.uuid(), .rows,
+            .split(System.uuid(), .columns,
+                .split(System.uuid(), .columns, .pane(ids[0]), .pane(ids[1])),
+                .split(System.uuid(), .columns, .pane(ids[2]), .pane(ids[3]))),
+            .split(System.uuid(), .columns,
+                .split(System.uuid(), .columns, .pane(ids[4]), .pane(ids[5])),
+                .split(System.uuid(), .columns, .pane(ids[6]), .pane(ids[7]))))
         }
     }
 }

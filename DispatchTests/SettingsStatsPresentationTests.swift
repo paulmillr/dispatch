@@ -849,7 +849,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             if tab == "Keyboard" {
                 // OCR misreads ⌃ and ⌘; the recorders report their shortcuts to accessibility.
                 let recorders = PresentationTestSupport.views(of: KeyGroupRecorder.RecorderView.self, in: root)
-                XCTAssertEqual(recorders.map { $0.accessibilityValue() as? String }, ["⇧⌘1…9", "⌘1…9", "⌃1…4"])
+                XCTAssertEqual(recorders.map { $0.accessibilityValue() as? String }, ["⇧⌘1…9", "⌘1…9", "⌃1…4, 6, 8"])
             }
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("settings.json").path), "Opening Settings must not save or change preferences")

@@ -3,7 +3,7 @@ import AppKit
 // UI model stand-ins only. PrefixKeys.swift, HelperClient.Prefix and the extracted AppDelegate methods
 // (prefixTable(for:) with its neighbours, the selectWindow case) are production code; the runner copies them
 // verbatim at build time. The server table is what the real helper read from a real tmux server.
-enum LayoutPreset { case single, columns, rows, twoAbove, grid }
+enum LayoutPreset { case single, columns, rows, twoAbove, grid, six, eight }
 struct AuditTab { var id = UUID(); var surfaceIDs: [UUID]; var terminal: UInt64? = 7 }
 struct AuditSpace {
     var tabs: [AuditTab]

@@ -1025,8 +1025,8 @@ struct SettingsView: View {
                 screenshotWarning(\.spaces, digits: 9)
                 row("Tabs", detail: ShortcutRow.tabDigits) { keyRecorder("Tabs", \.tabs, digits: "1…9") }
                 screenshotWarning(\.tabs, digits: 9)
-                row("Splits", detail: ShortcutRow.splitDigits) { keyRecorder("Splits", \.splits, digits: "1…4") }
-                screenshotWarning(\.splits, digits: 4)
+                row("Splits", detail: ShortcutRow.splitDigits) { keyRecorder("Splits", \.splits, digits: "1…4, 6, 8") }
+                screenshotWarning(\.splits, digits: 4) // 6 and 8 are no screenshot keys
                 if let keyError {
                     Text(keyError).font(typography, .body).foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)

@@ -13,6 +13,9 @@ struct MainView: View {
     /// The full-screen edge reveal is showing its host mark, or the mark's picker is open.
     @State private var revealShown = false
     @State private var revealPicker = false
+    /// The panes' area and a terminal cell at the current font, for `Workspace.layoutRoom`.
+    @State private var paneArea: CGSize?
+    @State private var terminalCell: CGSize?
     private var sidebarVisible: Bool { controller.sidebarVisible }
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
@@ -167,6 +170,33 @@ struct MainView: View {
         // The runtime mirrors a saved choice as it applies it; this covers a value set without saving (tests).
         .onChange(of: settings.values.verticalTabs, initial: true) { _, vertical in workspace.verticalTabs = vertical }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }
+        .onChange(of: "\(settings.values.fontFamily) \(settings.values.fontSize)", initial: true) { _, _ in
+            terminalCell = TerminalFontScale.cell(settings.values.fontSize, family: settings.values.fontFamily)
+            measureLayoutRoom()
+        }
+        // A display connected, disconnected or rearranged moves and resizes the window, which the content's size
+        // follows; these cover a move to a screen of another size, and a screen's own resolution changing.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { note in
+            if note.object as? NSWindow === controller.window { measureLayoutRoom() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            measureLayoutRoom()
+        }
+    }
+
+    /// The window's room for layouts of more than four panes (`Workspace.layoutRoom`): the panes' area, and that area
+    /// grown by what the window could still grow on its screen. Nothing it measures changes a layout already applied.
+    private func measureLayoutRoom() {
+        guard let area = paneArea, area.width > 0, area.height > 0, let cell = terminalCell else { return }
+        var screen = area
+        if let window = controller.window, let visible = window.screen?.visibleFrame {
+            screen.width += max(0, visible.width - window.frame.width)
+            screen.height += max(0, visible.height - window.frame.height)
+        }
+        // Whole points: a live resize writes only when the room changes by one.
+        func whole(_ size: CGSize) -> CGSize { CGSize(width: size.width.rounded(.down), height: size.height.rounded(.down)) }
+        let room = LayoutRoom(window: whole(area), screen: whole(screen), cell: cell)
+        if workspace.layoutRoom != room { workspace.layoutRoom = room }
     }
 
     private var spaceSidebar: SpaceSidebar {
@@ -268,6 +298,7 @@ struct MainView: View {
         .background(settings.values.terminalOpacity < 1 && workspace.current != nil && TerminalRuntime.shared.error == nil
                     ? Color.clear : Chrome.palette.terminal)
         .anchorPreference(key: MainBackdrop.ContentFrame.self, value: .bounds) { $0 }
+        .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in paneArea = size; measureLayoutRoom() }
         .overlay(alignment: .bottom) {
             // Over the panes' bottom edge, so the title row keeps the top edge.
             if let helper = workspace.helpers.values.first(where: { $0.error != nil }), let error = helper.error {

@@ -663,6 +663,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             guard LayoutPreset.allCases.indices.contains(item.tag) else { return false }
             let preset = LayoutPreset.allCases[item.tag]
             item.title = preset.title.capitalized
+            // As the layout picker offers them (`LayoutOptions.shown`): hidden with no room on this screen at all.
+            item.isHidden = !LayoutOptions.shown(space: workspace.current, workspace: workspace).contains(preset)
+            guard workspace.hasRoom(for: preset) else { return false }
             return workspace.current?.structured == true || (workspace.current?.tabs.count ?? 0) >= preset.count
         case #selector(toggleChat):
             guard NSApp.keyWindow === window, let tab = workspace.activeTab else { return false }

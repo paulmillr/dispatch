@@ -42,7 +42,7 @@ struct LayoutOptions: View {
     var chosen: () -> Void = {}
     var body: some View {
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(LayoutPreset.allCases, id: \.self) { preset in
+                ForEach(Self.shown(space: space, workspace: workspace), id: \.self) { preset in
                     Button {
                         workspace.selectSpace(space.id)
                         workspace.applyLayout(preset); chosen()
@@ -62,11 +62,20 @@ struct LayoutOptions: View {
                     .disabled(!workspace.canApplyLayout(preset, in: space))
                 }
                 Divider()
-                Text("Layouts move existing tabs. Add tabs first for more panes.")
+                Text("Layouts move existing tabs. Add tabs first for more panes."
+                     + (Self.shown(space: space, workspace: workspace).contains { !workspace.hasRoom(for: $0) }
+                        ? " Six and eight panes need a larger window." : ""))
                     .font(typography, .caption).foregroundStyle(Chrome.muted).padding(5)
+                    .fixedSize(horizontal: false, vertical: true)
             }.font(typography.font(.label)).padding(6).frame(width: typography.expanded(290))
                 // On glass the popover's own system glass shows through instead of the sidebar fill.
                 .background(LiquidGlassStore.shared.active ? Color.clear : Chrome.sidebar).preferredColorScheme(Chrome.colorScheme)
+    }
+
+    /// The layouts offered: all but those with no room even with the window filling its screen (a laptop never lists
+    /// six or eight panes), and always the space's own, so its checkmark has a row. The View menu offers the same.
+    static func shown(space: Space?, workspace: Workspace) -> [LayoutPreset] {
+        LayoutPreset.allCases.filter { workspace.hasRoom(for: $0, screen: true) || space?.preset == $0 }
     }
 }
 
@@ -97,6 +106,9 @@ private struct LayoutIcon: View {
         case .single: "rectangle"
         case .rows: "rectangle.split.1x2"
         case .grid: "square.split.2x2"
+        // No symbol draws three or four panes across: their counts.
+        case .six: "6.square"
+        case .eight: "8.square"
         default: "rectangle.split.2x1"
         }
     }

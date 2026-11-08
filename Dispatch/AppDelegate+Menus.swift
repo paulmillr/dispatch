@@ -4,7 +4,7 @@ import AppKit
 /// layouts keep selecting the expected tab, pane, or space.
 final class ApplicationMenu: NSMenu {
     static let digitKeyCodes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
-    /// The digit chords of Settings › Keyboard (⇧⌘1…9 spaces, ⌘1…9 tabs, ⌃1…4 layouts by default) and
+    /// The digit chords of Settings › Keyboard (⇧⌘1…9 spaces, ⌘1…9 tabs, ⌃1…4, ⌃6 and ⌃8 layouts by default) and
     /// ⌃⇥ / ⌃⇧⇥ cycling tabs; a focused terminal yields these to the app instead of sending them to the shell.
     @MainActor static func claimsShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
                                           groups: KeyGroups = KeyGroupsStore.shared.current) -> Bool {
@@ -265,7 +265,7 @@ extension AppDelegate {
             workspace.selectSpace(at: index)
             return true
         }
-        // Layouts (⌃1…4 by default) always apply here, even when they do not fit.
+        // Layouts (⌃1…4, 6, 8 by default) always apply here, even when they do not fit (no tabs or no room for them).
         if !groups.splits.isEmpty, modifiers == groups.splits, let preset = LayoutPreset.shortcut(keyCode: keyCode) {
             guard NSApp.keyWindow === window else { return nil }
             workspace.applyLayout(preset)

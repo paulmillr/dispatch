@@ -419,7 +419,7 @@ extension LayoutPreset {
         case .columns: "even-horizontal"
         case .rows: "even-vertical"
         case .grid: "tiled"
-        case .single, .twoAbove: nil
+        case .single, .twoAbove, .six, .eight: nil
         }
     }
 }

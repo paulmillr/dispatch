@@ -59,6 +59,8 @@ final class PlanOneTests: XCTestCase {
     func testLayoutShortcutsNameLayoutsByPhysicalKey() {
         XCTAssertEqual([18, 19, 20, 21].map { LayoutPreset.shortcut(keyCode: $0) }, [.single, .columns, .twoAbove, .grid])
         XCTAssertNil(LayoutPreset.shortcut(keyCode: 23), "⌃5 is not a layout")
+        XCTAssertEqual([22, 28].map { LayoutPreset.shortcut(keyCode: $0) }, [.six, .eight], "⌃6 and ⌃8 name their pane counts")
+        XCTAssertNil(LayoutPreset.shortcut(keyCode: 26), "⌃7 is not a layout")
         XCTAssertNil(LayoutPreset.shortcut(keyCode: 0))
     }
 
@@ -89,7 +91,7 @@ final class PlanOneTests: XCTestCase {
         XCTAssertEqual(workspace.allTabIDs, Set(tabs))
         XCTAssertTrue(workspace.applyLayout(.single))
         XCTAssertEqual(workspace.currentTabs.map(\.id), [tabs[0], tabs[4], tabs[1], tabs[2], tabs[3]])
-        for preset in LayoutPreset.allCases {
+        for preset in LayoutPreset.allCases where preset.count <= tabs.count {
             XCTAssertTrue(workspace.applyLayout(preset))
             XCTAssertEqual(workspace.current?.panes.count, preset.count)
             XCTAssertEqual(workspace.allTabIDs, Set(tabs))
@@ -119,6 +121,83 @@ final class PlanOneTests: XCTestCase {
         XCTAssertEqual(try decoder.decode(LayoutPreset.self, from: Data(#""main + side""#.utf8)), .columns)
         XCTAssertEqual(LayoutPreset.twoAbove.count, 3)
         XCTAssertEqual(LayoutPreset.allCases[3], .twoAbove, "Keep the layout picker ordering")
+    }
+
+    /// Six and eight panes split the window evenly (a third across for three), in reading order, each with its ⌘ digit;
+    /// a smaller layout afterwards needs no saved ratios.
+    func testSixAndEightPaneGridsShareTheWindowEvenly() throws {
+        let workspace = Workspace(); workspace.newSpace()
+        for _ in 0..<7 { workspace.newTab() }
+        let tabs = workspace.currentTabs.map(\.id)
+        workspace.onCloseTabs = { _ in XCTFail("A layout must never terminate a shell") }
+        for (preset, columns) in [(LayoutPreset.six, 3), (.eight, 4)] {
+            XCTAssertTrue(workspace.canApplyLayout(preset))
+            XCTAssertTrue(workspace.applyLayout(preset))
+            let space = try XCTUnwrap(workspace.current)
+            XCTAssertEqual(space.panes.count, preset.count)
+            XCTAssertEqual(space.preset, preset)
+            XCTAssertEqual(workspace.allTabIDs, Set(tabs))
+            let frames = space.layout.paneFrames(fractions: space.paneFractions)
+            for frame in frames.map(\.frame) {
+                XCTAssertEqual(frame.width, 1 / CGFloat(columns), accuracy: 0.0001)
+                XCTAssertEqual(frame.height, 0.5, accuracy: 0.0001)
+            }
+            XCTAssertEqual(space.numberedPaneIDs, space.layout.paneIDs, "Tree order is reading order")
+            XCTAssertEqual(space.numberedShortcutCount, preset.count)
+            XCTAssertEqual(space.paneShortcutNumber(for: space.layout.paneIDs.last!), preset.count)
+            workspace.selectPane(at: preset.count - 1)
+            XCTAssertEqual(workspace.current?.focusedPane, space.layout.paneIDs.last)
+            let cells = frames.map(\.frame)
+            let places = cells.indices.map { SpaceTabsList.place(cells[$0], among: cells, index: $0) }
+            XCTAssertEqual(places, columns == 3
+                ? ["Top left", "Top middle", "Top right", "Bottom left", "Bottom middle", "Bottom right"]
+                : (1...8).map { "Pane \($0)" }, "Four across has two middles: every heading numbers")
+        }
+        XCTAssertTrue(workspace.applyLayout(.grid))
+        XCTAssertEqual(workspace.current?.splitRatios, [:])
+        XCTAssertEqual(workspace.current?.panes.count, 4)
+        XCTAssertEqual(workspace.allTabIDs, Set(tabs))
+        XCTAssertEqual(try JSONDecoder().decode(LayoutPreset.self, from: JSONEncoder().encode(LayoutPreset.eight)), .eight)
+    }
+
+    /// Six and eight panes are offered only with room for them; a layout already applied stays when the room
+    /// shrinks (a display disconnected), and up to four panes ignore the room.
+    func testLargeLayoutsNeedRoomAndKeepWhenTheWindowShrinks() throws {
+        let workspace = Workspace(); workspace.newSpace()
+        for _ in 0..<7 { workspace.newTab() }
+        let cell = CGSize(width: 8.4, height: 18)
+        // A 5K display's points with the sidebar shown, then a 14-inch laptop's.
+        let large = LayoutRoom(window: CGSize(width: 2300, height: 1380), screen: CGSize(width: 2300, height: 1380), cell: cell)
+        let laptop = LayoutRoom(window: CGSize(width: 1250, height: 900), screen: CGSize(width: 1250, height: 900), cell: cell)
+        workspace.layoutRoom = large
+        XCTAssertTrue(workspace.canApplyLayout(.eight))
+        XCTAssertEqual(LayoutOptions.shown(space: workspace.current, workspace: workspace), LayoutPreset.allCases)
+        XCTAssertTrue(workspace.applyLayout(.eight))
+        workspace.layoutRoom = laptop
+        XCTAssertEqual(workspace.current?.preset, .eight, "Less room never rearranges the panes")
+        XCTAssertEqual(workspace.current?.panes.count, 8)
+        XCTAssertFalse(workspace.canApplyLayout(.six))
+        XCTAssertFalse(workspace.applyLayout(.six))
+        XCTAssertEqual(LayoutOptions.shown(space: workspace.current, workspace: workspace),
+                       [.single, .columns, .rows, .twoAbove, .grid, .eight], "The space's own layout keeps its row")
+        XCTAssertTrue(workspace.canApplyLayout(.grid))
+        XCTAssertTrue(workspace.applyLayout(.grid))
+        XCTAssertEqual(LayoutOptions.shown(space: workspace.current, workspace: workspace), [.single, .columns, .rows, .twoAbove, .grid])
+        // A small window on a large screen: offered, but disabled until the window grows.
+        workspace.layoutRoom = LayoutRoom(window: laptop.window, screen: large.screen, cell: cell)
+        XCTAssertTrue(LayoutOptions.shown(space: workspace.current, workspace: workspace).contains(.eight))
+        XCTAssertFalse(workspace.canApplyLayout(.eight))
+        XCTAssertTrue(workspace.hasRoom(for: .eight, screen: true))
+        // Sixty columns and 24 rows a pane, inside the terminal's padding (whole cells, for exact sums).
+        let whole = CGSize(width: 8, height: 16)
+        XCTAssertTrue(LayoutPreset.six.fits(CGSize(width: 3 * (60 * 8 + 20), height: 2 * (24 * 16 + 20)), cell: whole))
+        XCTAssertFalse(LayoutPreset.six.fits(CGSize(width: 3 * (60 * 8 + 20) - 3, height: 2 * (24 * 16 + 20)), cell: whole))
+        XCTAssertTrue(LayoutPreset.eight.fits(CGSize(width: 4 * (60 * 8 + 20), height: 2 * (24 * 16 + 20)), cell: whole))
+        XCTAssertFalse(LayoutPreset.eight.fits(CGSize(width: 4 * (60 * 8 + 20), height: 2 * (24 * 16 + 20) - 2), cell: whole))
+        XCTAssertTrue(LayoutPreset.grid.fits(.zero, cell: whole), "Up to four panes ignore the room")
+        let measured = TerminalFontScale.cell(14, family: TerminalFontCatalog.defaultFamily)
+        XCTAssertEqual(measured.width, 8.4, accuracy: 0.05, "Source Code Pro advances 0.6 em")
+        XCTAssertGreaterThan(measured.height, 14)
     }
     func testMovingAcrossSpacesAndToNewSpaceKeepsEveryTab() {
         let workspace = Workspace(); workspace.newSpace(); workspace.newTab()
