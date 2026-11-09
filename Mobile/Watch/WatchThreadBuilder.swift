@@ -39,13 +39,14 @@ enum WatchThreadBuilder {
     }
 
     /// Per turn, its displayed items (`ChatTurnSummary.displayed`) as the thread's rows (`MobileTranscript.rows`): the
-    /// user's and the agent's messages, Claude's thinking, notices; no tools. The turn's caption under its last agent
-    /// message once it ended; the prompt being sent last.
+    /// user's and the agent's messages, Claude's thinking until its turn ends on a reply (`ChatThinkingFold`), notices; no
+    /// tools. The turn's caption under its last agent message once it ended; the prompt being sent last.
     static func items(_ session: MobileChatSession, directory: String?) -> [WatchItem] {
         var result: [WatchItem] = []
         for turn in session.transcript.turns {
             let displayed = ChatTurnSummary.displayed(turn.items, turnID: turn.id)
             let lastAgent = displayed.lastIndex { $0.kind == .assistant }
+            let folded = ChatThinkingFold.folds(displayed, ended: turn.ended)
             for (index, item) in displayed.enumerated() {
                 // `MobileTranscript.rows`' id, so a row is the same item on the phone and in every page.
                 let id = item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)"
@@ -66,7 +67,8 @@ enum WatchThreadBuilder {
                         result.append(text(.agent))
                     }
                 case .notice: result.append(text(.notice))
-                case .reasoning where item.isNarration && !item.text.isEmpty: result.append(text(.thinking))
+                case .reasoning where item.isNarration && !item.text.isEmpty:
+                    if !folded { result.append(text(.thinking)) }
                 case .tool, .reasoning: break
                 }
             }
@@ -74,7 +76,21 @@ enum WatchThreadBuilder {
         if let prompt = session.optimisticPrompt {
             result.append(WatchItem(id: prompt.id, kind: .user, text: Self.userText(prompt)))
         }
-        return result
+        return folded(result)
+    }
+
+    /// Repeated notices as the phone's rows fold them (`ChatNoticeFold`), the count in the text. The row takes its newest
+    /// report's time: a thread is seen through its newest item's (`WatchModel.markSeen`).
+    private static func folded(_ items: [WatchItem]) -> [WatchItem] {
+        struct Counted { var item: WatchItem; var repeats = 1 }
+        return ChatNoticeFold.fold(items.map { Counted(item: $0) }, text: { $0.item.kind == .notice ? $0.item.text : nil }) { first, later in
+            first.repeats += 1
+            first.item.time = later.item.time ?? first.item.time
+        }.map { row in
+            var item = row.item
+            item.text += ChatNoticeFold.count(row.repeats)
+            return item
+        }
     }
 
     /// An ended turn's summary for the card's footnote: its steps and time, and across its patches that applied, the

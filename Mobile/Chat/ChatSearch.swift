@@ -173,8 +173,10 @@ struct ChatSearchMarker {
     /// The runs of text `row` draws, in order (Markdown's marks gone for the agent's text and thinking).
     @MainActor static func runs(of row: ChatThreadRow) -> [String] {
         switch row.kind {
-        case .user, .notice:
+        case .user:
             return [row.item.text]
+        case .notice:
+            return [row.noticeText]
         case .agent, .thinking:
             var none = ChatSearchMarker(query: "", current: nil)
             return MobileChatMarkdownView.contents(row.item.text, marker: &none).blocks.flatMap { block -> [String] in

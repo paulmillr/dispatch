@@ -181,8 +181,9 @@ naming its mockup) follow it.
   pushed over it): behind Agents it keeps what it showed when it was left and reads the model afresh when it comes back,
   so the snapshots working agents bring cost it nothing. The phone sends the same snapshots either way (the Host widget
   needs them).
-- **Thread.** A page holds the phone's thread rows: the messages, Claude's thinking as an agent bubble of its own,
-  notices; no tools (an ended turn's caption counts its steps), and the watch hides those an older phone still sends.
+- **Thread.** A page holds the phone's thread rows: the messages, Claude's thinking as an agent bubble of its own until
+  its turn ends on a reply (`ChatThinkingFold`), notices (repeats folded with a count as on the phone, the item timed by
+  the newest); no tools (an ended turn's caption counts its steps), and the watch hides those an older phone still sends.
   It opens at the newest turn (the one the user's newest message started, by its turn id: the summary card and what
   waits); the page's earlier turns wait behind an "Earlier · N" row that expands in place, and "Earlier messages are
   on your iPhone" shows once they do. The split stays where it was when the screen opened, so a message sent from it

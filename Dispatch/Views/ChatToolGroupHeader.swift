@@ -28,14 +28,14 @@ struct ChatToolGroupHeader: View {
                     }
                     // A live group's time waits for the turn to end, then fades in. (Its count doesn't roll: a numeric
                     // text transition kept a live turn's CPU twice as high while the agent waited.)
-                    Text(Self.caption(count: group.children.count, elapsed: live ? nil : group.elapsed, radio: theme.radioLog)).fixedSize()
+                    Text(Self.caption(count: group.children.count - thoughts, thoughts: thoughts, elapsed: live ? nil : group.elapsed, radio: theme.radioLog)).fixedSize()
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: live)
                 }
                 .frame(maxWidth: .infinity, minHeight: theme.typography.detailLineHeight, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(group.children.count) tool runs")
+            .accessibilityLabel(thoughts == 0 ? "\(group.children.count) tool runs" : "\(group.children.count - thoughts) tool runs, \(ChatTurnSummary.count(thoughts, "thought"))")
             .accessibilityValue(disclosure == .all ? "Expanded" : disclosure == .current ? "Current step" : "Collapsed")
             .accessibilityIdentifier("tool-group-header-\(group.id)")
             if let replyTime { ChatReplyTime(date: replyTime, info: replyInfo) }
@@ -49,9 +49,15 @@ struct ChatToolGroupHeader: View {
         }
     }
 
-    /// "6 steps · 47s"; the time only when every step's is known.
-    static func caption(count: Int, elapsed: TimeInterval?, radio: Bool) -> String {
-        "\(count < 1000 ? String(count) : count.formatted()) \(noun(count, radio: radio))" + (elapsed.map { " · " + ChatTranscript.elapsed($0.rounded()) } ?? "")
+    /// The thoughts folded into this group (`ChatThinkingFold`), told apart from its tools.
+    private var thoughts: Int { group.children.reduce(0) { $0 + ($1.item?.kind == .reasoning ? 1 : 0) } }
+
+    /// "6 steps · 47s", "4 steps, 1 thought · 47s"; the time only when every step's is known.
+    static func caption(count: Int, thoughts: Int = 0, elapsed: TimeInterval?, radio: Bool) -> String {
+        var parts: [String] = []
+        if count > 0 || thoughts == 0 { parts.append("\(count < 1000 ? String(count) : count.formatted()) \(noun(count, radio: radio))") }
+        if thoughts > 0 { parts.append(ChatTurnSummary.count(thoughts, "thought")) }
+        return parts.joined(separator: ", ") + (elapsed.map { " · " + ChatTranscript.elapsed($0.rounded()) } ?? "")
     }
 
     /// Nautical logs a tool run as a manoeuvre.
@@ -64,7 +70,7 @@ struct ChatToolGroupHeader: View {
         switch ChatToolStep.kind(of: item) {
         case .edit: "Patch"
         case .web: "Browse web"
-        case .other: nil
+        case .other, .think: nil
         }
     }
 }
@@ -104,7 +110,7 @@ struct ChatStepChart: View {
 
     /// A bar's color, apart from the theme.
     enum Shade: Hashable, Sendable {
-        case muted, mutedEdit, failed, edit, web, other
+        case muted, mutedEdit, failed, edit, web, other, think
 
         nonisolated init(_ step: ChatToolStep, colored: Bool) {
             if !colored { self = step.kind == .edit ? .mutedEdit : .muted }
@@ -114,6 +120,7 @@ struct ChatStepChart: View {
                 case .edit: self = .edit
                 case .web: self = .web
                 case .other: self = .other
+                case .think: self = .think
                 }
             }
         }
@@ -179,6 +186,7 @@ struct ChatStepChart: View {
         case .edit: theme.accent
         case .web: theme.cyan
         case .other: theme.blue
+        case .think: theme.muted
         }
     }
 

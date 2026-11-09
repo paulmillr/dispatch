@@ -650,12 +650,12 @@ final class ChatRedesignTests: XCTestCase {
 extension ChatRedesignTests {
     func testTheSummarySitsInTheReplysCornerAndThinkingIsABubble() async throws {
         var records = try ChatFixture.records("claude-thread")
-        let question = try XCTUnwrap(records.firstIndex { $0["kind"] as? String == "user" })
+        // In a turn still open: a turn that ended on a reply moves its thinking to message details.
+        let last = try XCTUnwrap(records.compactMap { $0["time_ms"] as? Int64 }.max())
         let thought = "Checking how retries reach the handler."
-        var thinking = ChatFixture.record("claude-thinking-1", "reasoning", turn: try XCTUnwrap(records[question]["turn"] as? String),
-                                          text: thought, time: (records[question]["time_ms"] as? Int64).map { $0 + 1 })
+        var thinking = ChatFixture.record("claude-thinking-1", "reasoning", turn: "open-turn", text: thought, time: last + 2)
         thinking["inline_reasoning"] = true
-        records.insert(thinking, at: question + 1)
+        records += [ChatFixture.record("open:started", "turn_started", turn: "open-turn", time: last + 1), thinking]
         let chat = try await opened(helper(), records: records)
         XCTAssertTrue(chat.transcript.rows.contains { $0.kind == .thinking && $0.item.text == thought })
         let summary = try XCTUnwrap(chat.transcript.rows.compactMap(\.kind.summary).first)
@@ -695,6 +695,86 @@ extension ChatRedesignTests {
         let probe = CGPoint(x: text.minX - 7, y: text.midY)
         let canvas = UIColor(Color.canvas).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
         XCTAssertNotEqual(Self.pixel(image, at: probe), Self.rgb(canvas), "a bubble behind the thinking, not the canvas")
+    }
+
+    // MARK: Thinking fold
+
+    private func thought(_ id: String, _ text: String, turn: String, time: Int64) -> [String: Any] {
+        var record = ChatFixture.record(id, "reasoning", turn: turn, text: text, time: time)
+        record["inline_reasoning"] = true
+        return record
+    }
+
+    private func finishedTurn(reply: Bool = true) -> [[String: Any]] {
+        [ChatFixture.record("t:started", "turn_started", turn: "t", time: 946_719_000_000),
+         ChatFixture.record("u", "user", turn: "t", text: "Fix it", time: 946_719_000_001),
+         thought("claude-a", "Checking the **retry** path", turn: "t", time: 946_719_000_002)]
+            + (reply ? [ChatFixture.record("r", "assistant", turn: "t", text: "Done.", time: 946_719_000_003)] : [])
+            + [ChatFixture.record("t:ended", "turn_ended", turn: "t", time: 946_719_000_004)]
+    }
+
+    func testAFinishedTurnsThinkingMovesToItsStepsWhenRead() async throws {
+        let chat = try await opened(helper(), records: finishedTurn())
+        XCTAssertFalse(chat.transcript.rows.contains { $0.kind == .thinking })
+        let turn = try XCTUnwrap(chat.transcript.turns.last)
+        let steps = ChatStep.steps(turn, directory: nil, reasoning: false, thinking: ChatThinkingFold.folds(turn.items, ended: turn.ended))
+        XCTAssertEqual(steps.map(\.kind), [.think])
+        XCTAssertEqual(ChatMessageDetails.stepCount(steps), "1 thought")
+        XCTAssertEqual(steps.first?.title, "Checking the retry path", "Markdown's marks do not show in a step's one line")
+    }
+
+    func testAStoppedTurnKeepsItsThinking() async throws {
+        let chat = try await opened(helper(), records: finishedTurn(reply: false))
+        XCTAssertTrue(chat.transcript.rows.contains { $0.kind == .thinking })
+    }
+
+    func testASideConversationKeepsItsThinking() async throws {
+        let chat = try await opened(helper(), records: finishedTurn())
+        XCTAssertTrue(chat.transcript.rows(foldingThinking: false).contains { $0.kind == .thinking })
+    }
+
+    private func live(_ helper: ScriptedHelper, _ records: [[String: Any]]) throws {
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.records", ["terminal": 7, "session": "00000000-0000-4000-8000-000000000201", "records": records])
+    }
+
+    /// Opens with a turn at work, then ends it live.
+    private func endedLive(_ helper: ScriptedHelper) async throws -> MobileChatSession {
+        let records = Array(finishedTurn().dropLast(2))
+        let chat = try await opened(helper, records: records)
+        try live(helper, [ChatFixture.record("r", "assistant", turn: "t", text: "Done.", time: 946_719_000_003),
+                          ChatFixture.record("t:ended", "turn_ended", turn: "t", time: 946_719_000_004)])
+        try await TestSupport.eventually(diagnostic: "the turn did not end") { chat.transcript.turns.last?.ended != nil }
+        return chat
+    }
+
+    func testAFinishedLiveTurnHoldsItsThinkingThenLetsItGo() async throws {
+        MobileChatSession.thinkingFoldDelay = 0.2
+        defer { MobileChatSession.thinkingFoldDelay = 1.2 }
+        let chat = try await endedLive(helper())
+        XCTAssertTrue(chat.transcript.rows.contains { $0.kind == .thinking }, "The reply settles first")
+        try await TestSupport.eventually(diagnostic: "the thinking stayed") { !chat.transcript.rows.contains { $0.kind == .thinking } }
+    }
+
+    func testAReaderScrolledUpHoldsTheThinkingUntilTheyReturn() async throws {
+        MobileChatSession.thinkingFoldDelay = 1000
+        defer { MobileChatSession.thinkingFoldDelay = 1.2 }
+        let chat = try await endedLive(helper())
+        chat.readingPosition = ChatReadingPosition(row: "r", into: 0, last: "r")
+        chat.attemptThinkingFold("t")
+        XCTAssertTrue(chat.transcript.rows.contains { $0.kind == .thinking }, "Rows must not move under the reader")
+        chat.readingPosition = nil
+        try await TestSupport.eventually(diagnostic: "returning to the end did not fold") { !chat.transcript.rows.contains { $0.kind == .thinking } }
+    }
+
+    func testTheNextTurnEndsTheWait() async throws {
+        MobileChatSession.thinkingFoldDelay = 1000
+        defer { MobileChatSession.thinkingFoldDelay = 1.2 }
+        let scripted = helper()
+        let chat = try await endedLive(scripted)
+        chat.readingPosition = ChatReadingPosition(row: "r", into: 0, last: "r")
+        try live(scripted, [ChatFixture.record("n:started", "turn_started", turn: "n", time: 946_719_000_010)])
+        try await TestSupport.eventually(diagnostic: "the next turn did not fold it") { !chat.transcript.rows.contains { $0.kind == .thinking } }
     }
 
     func testEveryReplyHasItsTimeAndTheTurnsLastOneItsSummary() {

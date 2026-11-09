@@ -9,8 +9,15 @@ struct MobileTranscript {
     /// The turn the latest live start opened (a later prompt may steer it without another start).
     private(set) var activeTurnID: String?
     private(set) var revision = 0
+    /// Turns seen ending live whose thinking still shows, until the session lets them fold (`attemptThinkingFold`).
+    private(set) var heldThinkingTurns: Set<String> = []
 
     var isEmpty: Bool { transcript.isEmpty }
+
+    mutating func releaseThinking(_ turnID: String) {
+        guard heldThinkingTurns.remove(turnID) != nil else { return }
+        revision += 1
+    }
 
     /// Applies helper records. `historical`: a page (no live delivery state); `earlier`: an older page, prepended.
     /// `prepare` sees every item that is not from an earlier page before it is merged; `arrived` hears the row id of
@@ -38,10 +45,15 @@ struct MobileTranscript {
             case .started:
                 if historical { batch.append(record) } else { transcript.turn(record.turnID, at: record.date, fileOffset: record.fileOffset) }
                 if !earlier { activeTurnID = record.turnID }
+                // A new turn ends the wait of the turns before it.
+                if !historical { heldThinkingTurns = heldThinkingTurns.filter { $0 == record.turnID } }
                 applied.append(.started(record.turnID))
             case .ended:
                 if historical { batch.append(record) } else {
                     let index = transcript.turn(record.turnID, at: record.date, fileOffset: record.fileOffset)
+                    if transcript.turns[index].ended == nil, transcript.turns[index].items.contains(where: { $0.isNarration && !$0.text.isEmpty }) {
+                        heldThinkingTurns.insert(record.turnID)
+                    }
                     transcript.turns[index].ended = record.date
                 }
                 applied.append(.ended(record.turnID))
@@ -107,14 +119,23 @@ struct ChatThreadRow: Identifiable, Equatable {
     let turnID: String
     /// When the record says it was written (nil for records read without times).
     let time: Date?
+    /// How many adjacent notices with this text the row stands for (`ChatNoticeFold`).
+    var repeats = 1
+    /// What a notice row draws.
+    var noticeText: String { item.text + ChatNoticeFold.count(repeats) }
 }
 
 extension MobileTranscript {
-    /// The thread's rows in order. A turn's caption goes under its last agent message once the turn has ended.
-    var rows: [ChatThreadRow] {
+    /// The thread's rows in order. A turn's caption goes under its last agent message once the turn has ended, and its
+    /// thinking moves to message details' steps once it has ended on a reply (`ChatThinkingFold`).
+    var rows: [ChatThreadRow] { rows(foldingThinking: true) }
+
+    /// `foldingThinking` false: every thought stays, where nothing else lists them (a side conversation has no details).
+    func rows(foldingThinking: Bool) -> [ChatThreadRow] {
         var rows: [ChatThreadRow] = []
         for turn in turns {
             let items = turn.items
+            let folded = foldingThinking && ChatThinkingFold.folds(items, ended: turn.ended) && !heldThinkingTurns.contains(turn.id)
             let lastAgent = items.lastIndex { $0.kind == .assistant }
             for (index, item) in items.enumerated() {
                 let time = item.source?.time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }
@@ -128,12 +149,12 @@ extension MobileTranscript {
                 case .notice:
                     rows.append(.init(id: id, kind: .notice, item: item, turnID: turn.id, time: time))
                 case .reasoning where item.isNarration && !item.text.isEmpty:
-                    rows.append(.init(id: id, kind: .thinking, item: item, turnID: turn.id, time: time))
+                    if !folded { rows.append(.init(id: id, kind: .thinking, item: item, turnID: turn.id, time: time)) }
                 case .tool, .reasoning: break
                 }
             }
         }
-        return rows
+        return ChatNoticeFold.fold(rows, text: { $0.kind == .notice ? $0.item.text : nil }) { first, _ in first.repeats += 1 }
     }
 
     /// The live turn: the active one while it has not ended.

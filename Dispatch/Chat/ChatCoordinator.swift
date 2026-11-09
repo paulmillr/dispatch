@@ -411,6 +411,7 @@ final class ChatCoordinator {
                 if historical { historicalRecords.append(record) }
                 else {
                     let index = session.turn(record.turnID, at: record.date, fileOffset: record.fileOffset)
+                    session.noteTurnEnded(record.turnID)
                     session.turns[index].ended = record.date
                 }
                 if !earlier && session.activeTurnID == record.turnID && !session.awaitingPromptAck && session.helper == nil { session.busy = false }

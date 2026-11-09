@@ -172,6 +172,20 @@ final class WatchThreadBuilderTests: XCTestCase {
 
     /// Claude's thinking is an item of its own (an agent bubble on the watch), other reasoning is left out; the prompt
     /// being sent comes last.
+    func testAFinishedTurnsThinkingLeavesThePage() async throws {
+        var thinking = ChatFixture.record("claude-r1", "reasoning", turn: "t1", text: "Checking the retry path", time: 946_719_000_100)
+        thinking["inline_reasoning"] = true
+        let opening = [ChatFixture.record("t1:started", "turn_started", turn: "t1", time: 946_719_000_000),
+                       ChatFixture.record("u1", "user", turn: "t1", text: "Fix it", time: 946_719_000_000), thinking]
+        let finished = try await opened(ScriptedHelper(), records: opening + [
+            ChatFixture.record("a1", "assistant", turn: "t1", text: "Done.", time: 946_719_000_300),
+            ChatFixture.record("t1:ended", "turn_ended", turn: "t1", time: 946_719_000_400),
+        ])
+        XCTAssertEqual(WatchThreadBuilder.page(finished, row: nil).items.map(\.kind), [.user, .agent])
+        let stopped = try await opened(ScriptedHelper(), records: opening + [ChatFixture.record("t1:ended", "turn_ended", turn: "t1", time: 946_719_000_400)])
+        XCTAssertEqual(WatchThreadBuilder.page(stopped, row: nil).items.map(\.kind), [.user, .thinking], "No reply: its thinking is the only account")
+    }
+
     func testThinkingAndTheSendingPromptAreItems() async throws {
         let helper = ScriptedHelper()
         var thinking = ChatFixture.record("claude-r1", "reasoning", turn: "t1", text: "Checking the **retry** path", time: 946_719_000_100)
@@ -190,6 +204,20 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(page.items.last?.text, "And add a test")
         XCTAssertEqual(page.items.last?.id, chat.optimisticPrompt?.id)
         XCTAssertNil(page.items[2].caption, "a turn still open has no caption")
+    }
+
+    /// A background agent's repeated reports are one item, as on the phone, timed by the newest so "seen" covers them all.
+    func testRepeatedNoticesAreOneItemWithTheNewestTime() async throws {
+        let helper = ScriptedHelper()
+        let waiting = "Agent \"Fixture run\" is waiting on its own background work"
+        let chat = try await opened(helper, records: [1, 2, 3].flatMap { n -> [[String: Any]] in
+            [ChatFixture.record("t\(n):started", "turn_started", turn: "t\(n)", time: 946_719_000_000 + n),
+             ChatFixture.record("notice-\(n)", "notice", turn: "t\(n)", text: waiting, time: 946_719_000_000 + n * 1000)]
+        })
+        let page = WatchThreadBuilder.page(chat, row: nil)
+        XCTAssertEqual(page.items.map(\.text), [waiting + " ×3"])
+        XCTAssertEqual(page.items[0].id, chat.transcript.rows[0].id, "The phone's row, so the watch's cache keys hold")
+        XCTAssertEqual(page.items[0].time, Date(timeIntervalSince1970: 946_719_003))
     }
 
     /// Approvals with the phone's chips in its order, question forms and side questions with their parts, the queue

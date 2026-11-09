@@ -41,7 +41,7 @@ final class MobileSideConversation: Identifiable {
     var title: String { mode.rawValue }
 
     /// The fork's rows, then the questions on their way.
-    var rows: [ChatThreadRow] { transcript.rows }
+    var rows: [ChatThreadRow] { transcript.rows(foldingThinking: false) }
 
     /// The newest answer, for "Bring into main thread" and Copy.
     var lastAnswer: String? { transcript.lastAgentItem?.text }

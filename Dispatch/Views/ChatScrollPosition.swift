@@ -47,6 +47,7 @@ final class ChatScrollPosition {
     /// Scroll views documents registered, newest last: when the newest view leaves, the one still showing takes over.
     private var viewports: [WeakScroll] = []
     private var document: ChatTranscriptDocument? { scroll?.documentView as? ChatTranscriptDocument }
+    var transcriptDocument: ChatTranscriptDocument? { document }
     private(set) var scrollbar: ChatScrollbar?
     private var observations: [(center: NotificationCenter, token: NSObjectProtocol)] = []
     private var eventMonitor: Any?

@@ -36,6 +36,7 @@ struct ChatTranscriptRowRevision: Equatable {
     private let turnID: String?
     private let bubbleStart: Bool, bubbleEnd: Bool, signsOff: Bool, placeholder: Bool
     private let workedFor: TimeInterval?
+    private let repeats: Int
     private let replyTime: Date?
     private let time: Date?
     private let timeline: Step?
@@ -54,7 +55,7 @@ struct ChatTranscriptRowRevision: Equatable {
         group = row.group?.presentationID
         toolGroupID = row.toolGroupID; turnID = row.turnID
         bubbleStart = row.bubbleStart; bubbleEnd = row.bubbleEnd; signsOff = row.signsOff; placeholder = row.placeholder
-        workedFor = row.workedFor; replyTime = row.replyTime; time = row.time
+        workedFor = row.workedFor; repeats = row.repeats; replyTime = row.replyTime; time = row.time
         timeline = row.timeline.map {
             Step(step: $0.step, first: $0.first, last: $0.last, current: $0.current, running: $0.running,
                  replaced: $0.replaced?.item.presentationID, replacedStep: $0.replaced?.step)
@@ -261,7 +262,7 @@ final class ChatTranscriptDocument: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { stopLookahead(); return }
+        guard window != nil else { stopLookahead(); finishThinkingFold(); return }
         mountedAt = CACurrentMediaTime()
         // Where the clip was before is no movement: placing it here would otherwise count as one and start the
         // lookahead at once.
@@ -314,9 +315,9 @@ final class ChatTranscriptDocument: NSView {
         guard let scroll = enclosingScrollView else { return [] }
         let clip = scroll.contentView.bounds
         return hosts.compactMap { id, host -> (Anchor, RowHost)? in
-            guard !host.isHidden, indices[id] != nil, retained?.contains(id) != false,
+            guard !host.isHidden, let index = indices[id], retained?.contains(id) != false,
                   host.frame.maxY > clip.minY + 1, host.frame.minY < clip.maxY else { return nil }
-            return (.init(id: id, offset: host.frame.minY - clip.minY), host)
+            return (.init(id: id, offset: host.frame.minY - foldOffset(index) - clip.minY), host)
         }
     }
 
@@ -399,6 +400,7 @@ final class ChatTranscriptDocument: NSView {
         if follow { travel = -1 }
         let visibleAnchor = position.restorationAnchor ?? requestedAnchor ?? keptAnchor()
         if abs(measuredWidth - width) > 0.5 {
+            finishThinkingFold()
             measuredWidth = width
             heights.removeAll(keepingCapacity: true)
             startsDirty = true
@@ -481,6 +483,7 @@ final class ChatTranscriptDocument: NSView {
             scroll.reflectScrolledClipView(scroll.contentView)
         }
         place(clipY: target.y, viewportHeight: viewportHeight, width: width, shown: shown)
+        startThinkingFoldIfReady(clipY: target.y, viewportHeight: viewportHeight)
         let first = !didLayout
         didLayout = true
         lastClipY = scroll.contentView.bounds.minY
@@ -501,7 +504,7 @@ final class ChatTranscriptDocument: NSView {
             // A host not measured at this width (the width changed) is only worth keeping where it is shown.
             guard heights[id] != nil, host.rootWidth == width else { retire(id); continue }
             if shown.contains(index) || (bottom > window.lower && top < window.upper) {
-                let frame = NSRect(x: 22, y: top, width: width, height: bottom - top)
+                let frame = NSRect(x: 22, y: top + foldOffset(index), width: width, height: bottom - top)
                 if host.frame != frame { host.frame = frame }
                 if host.isHidden {
                     host.isHidden = false
@@ -594,6 +597,130 @@ final class ChatTranscriptDocument: NSView {
         ChatTranscriptMetrics.count("retiredHosts")
         #endif
         host.removeFromSuperview()
+    }
+
+    // MARK: Thinking fold
+
+    private struct ThinkingFold {
+        let first: String, reply: String
+        /// Where the first folded row and the reply were on screen before the rows changed.
+        let firstY: CGFloat, replyY: CGFloat
+        /// The folded rows the clip showed, at the moment before the rows changed.
+        let image: NSImage
+        let autoplay: Bool
+        var started = false
+        var groupID = ""
+        /// How far the rows above the group and the rows from the group down start from their places.
+        var above: CGFloat = 0, below: CGFloat = 0
+        var progress: CGFloat = 0
+    }
+    private final class FoldClip: NSView { override var isFlipped: Bool { true } }
+    static let foldDuration: CFTimeInterval = 0.28
+    /// Of the fold's time: the snapshot is gone by this point, and the header fades in over this span.
+    private static let foldSnapshotEnd: CGFloat = 120.0 / 280
+    private static let foldHeaderSpan: ClosedRange<CGFloat> = (100.0 / 280)...(240.0 / 280)
+    private var thinkingFold: ThinkingFold?
+    private var foldClip: FoldClip?
+    private var foldImage: NSImageView?
+    private var foldLink: CADisplayLink?
+    private var foldStart: CFTimeInterval = 0
+    var thinkingFoldStarted: Bool { thinkingFold?.started == true }
+    var thinkingFoldActive: Bool { thinkingFold != nil }
+    func thinkingFoldDeltas() -> (above: CGFloat, below: CGFloat)? { thinkingFold.map { ($0.above, $0.below) } }
+
+    private func foldOffset(_ index: Int) -> CGFloat {
+        guard let fold = thinkingFold, fold.started, let group = indices[fold.groupID] else { return 0 }
+        return (index < group ? fold.above : fold.below) * (1 - Self.foldEased(fold.progress))
+    }
+
+    /// Whether any row from `first` through `last` is inside the clip.
+    func showsRows(from first: String, through last: String) -> Bool {
+        guard let scroll = enclosingScrollView, let top = indices[first], let bottom = indices[last], bottom + 1 < starts.count else { return false }
+        let clip = scroll.contentView.bounds
+        return starts[bottom + 1] > clip.minY && starts[top] < clip.maxY
+    }
+    private static func foldEased(_ progress: CGFloat) -> CGFloat { 1 - pow(1 - progress, 3) }
+
+    /// Call just before the rows change: takes the picture of what is about to go and where it stands.
+    func prepareThinkingFold(first: String, reply: String, autoplay: Bool = true) {
+        guard let scroll = enclosingScrollView, let firstIndex = indices[first], let replyIndex = indices[reply],
+              hosts[reply]?.isHidden == false else { return }
+        finishThinkingFold()
+        let clip = scroll.contentView.bounds
+        let top = max(clip.minY, starts[firstIndex]), bottom = starts[replyIndex]
+        guard bottom > top + 1 else { return }
+        let rect = NSRect(x: 0, y: top, width: bounds.width, height: bottom - top)
+        guard let rep = bitmapImageRepForCachingDisplay(in: rect) else { return }
+        cacheDisplay(in: rect, to: rep)
+        let image = NSImage(size: rect.size)
+        image.addRepresentation(rep)
+        thinkingFold = ThinkingFold(first: first, reply: reply, firstY: starts[firstIndex] - clip.minY,
+                                    replyY: bottom - clip.minY, image: image, autoplay: autoplay)
+    }
+
+    /// In the pass that first shows the new rows: starts the animation at the old picture, so no frame shows the end.
+    private func startThinkingFoldIfReady(clipY: CGFloat, viewportHeight: CGFloat) {
+        guard var fold = thinkingFold, !fold.started, indices[fold.first] == nil, let reply = indices[fold.reply], reply > 0 else { return }
+        fold.groupID = ids[reply - 1]
+        fold.below = fold.replyY - (starts[reply] - clipY)
+        // Never the folded rows' whole height: the same distance for 3 thoughts or 200.
+        fold.above = max(fold.firstY - (starts[reply - 1] - clipY), -viewportHeight)
+        fold.started = true
+        thinkingFold = fold
+        let clip = FoldClip()
+        clip.clipsToBounds = true
+        let imageView = NSImageView(image: fold.image)
+        imageView.imageScaling = .scaleNone
+        clip.addSubview(imageView)
+        addSubview(clip, positioned: .above, relativeTo: nil)
+        foldClip = clip; foldImage = imageView
+        setThinkingFoldProgress(0)
+        guard fold.autoplay, let screen = window?.screen ?? NSScreen.main else { return }
+        foldStart = CACurrentMediaTime()
+        let link = screen.displayLink(target: self, selector: #selector(foldTick(_:)))
+        link.preferredFrameRateRange = MotionRate.range(on: screen)
+        link.add(to: .main, forMode: .common)
+        foldLink = link
+    }
+
+    @objc private func foldTick(_ link: CADisplayLink) {
+        setThinkingFoldProgress(CGFloat((CACurrentMediaTime() - foldStart) / Self.foldDuration))
+    }
+
+    /// Moves what the fold moves: row origins, the snapshot's clip and two opacities. Nothing is measured.
+    func setThinkingFoldProgress(_ progress: CGFloat) {
+        guard var fold = thinkingFold, fold.started else { return }
+        // Rows that changed under it (a turn removed, history replaced): the end state, now.
+        guard let group = indices[fold.groupID], let reply = indices[fold.reply] else { finishThinkingFold(); return }
+        fold.progress = min(1, max(0, progress))
+        thinkingFold = fold
+        let remaining = 1 - Self.foldEased(fold.progress)
+        for (id, host) in hosts where !host.isHidden {
+            guard let index = indices[id], index + 1 < starts.count else { continue }
+            host.setFrameOrigin(NSPoint(x: 22, y: starts[index] + foldOffset(index)))
+        }
+        let span = Self.foldHeaderSpan
+        hosts[fold.groupID]?.alphaValue = min(1, max(0, (fold.progress - span.lowerBound) / (span.upperBound - span.lowerBound)))
+        if let foldClip, let foldImage {
+            let top = starts[group] + fold.above * remaining, bottom = starts[reply] + fold.below * remaining
+            foldClip.frame = NSRect(x: 0, y: top, width: bounds.width, height: max(0, bottom - top))
+            foldImage.frame = NSRect(x: 0, y: foldClip.bounds.height - fold.image.size.height,
+                                     width: fold.image.size.width, height: fold.image.size.height)
+            foldImage.alphaValue = max(0, 1 - fold.progress / Self.foldSnapshotEnd)
+        }
+        if fold.progress >= 1 { finishThinkingFold() }
+    }
+
+    private func finishThinkingFold() {
+        guard let fold = thinkingFold else { return }
+        foldLink?.invalidate(); foldLink = nil
+        foldClip?.removeFromSuperview(); foldClip = nil; foldImage = nil
+        hosts[fold.groupID]?.alphaValue = 1
+        thinkingFold = nil
+        // Whatever was mid-flight goes back to its row.
+        for (id, host) in hosts where !host.isHidden {
+            if let index = indices[id], index + 1 < starts.count { host.setFrameOrigin(NSPoint(x: 22, y: starts[index])) }
+        }
     }
 
     // MARK: Deferred lookahead

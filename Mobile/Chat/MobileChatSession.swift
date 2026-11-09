@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 /// One agent conversation on the phone: a terminal whose topology node carries an agent `Binding`, read and driven
 /// over the helper's `chat.*`, `interaction.*` and `queue.*` operations (helper/PROTOCOL.md). The phone's counterpart
@@ -75,7 +76,12 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored let typing = ChatTypingReveals()
     /// Where the thread was being read when it was last scrolled or left (`ChatThreadView`); nil while it showed its
     /// end. The next thread view opens there, so leaving the tab and coming back keeps the place. In memory only.
-    @ObservationIgnored var readingPosition: ChatReadingPosition?
+    @ObservationIgnored var readingPosition: ChatReadingPosition? {
+        didSet {
+            guard readingPosition == nil, oldValue != nil else { return }
+            for turn in transcript.heldThinkingTurns { scheduleThinkingFold(turn, after: 0.3) }
+        }
+    }
     /// The open turn's current step as a phrase ("Editing Sidebar.tsx"), and when that turn started: Spaces' tab lines
     /// read these, which change only when the step or the turn does, never with every streamed word of the transcript.
     private(set) var currentStep: String?
@@ -489,8 +495,11 @@ final class MobileChatSession: Identifiable {
                     turnEnded = Date()
                     starting = false; awaitingAck = false; submittedAt = nil
                 }
-            case .item(let item, _):
+                if transcript.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
+            case .item(let item, let turn):
                 if item.kind == .user, item.rowID != nil { awaitingAck = false }
+                // A reply recorded after its turn's end lets that turn fold.
+                if item.kind == .assistant, transcript.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
             case .output(let text):
                 // The pending command's result, as the Mac shows it (`receiveCommandExecution`).
                 commandResult = ChatCommandResult(title: lastCommand ?? "Command",
@@ -498,6 +507,29 @@ final class MobileChatSession: Identifiable {
             }
         }
         updateWorkingSince()
+    }
+
+    /// How long a finished reply stands before its turn's thinking leaves the thread.
+    static var thinkingFoldDelay: TimeInterval = 1.2
+    @ObservationIgnored private var thinkingFoldTasks: [String: Task<Void, Never>] = [:]
+
+    private func scheduleThinkingFold(_ turn: String, after delay: TimeInterval = MobileChatSession.thinkingFoldDelay) {
+        thinkingFoldTasks[turn]?.cancel()
+        thinkingFoldTasks[turn] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.thinkingFoldTasks[turn] = nil
+            self?.attemptThinkingFold(turn)
+        }
+    }
+
+    /// Lets a held turn's thinking go, with a fade, once it ended on a reply and the reader is at the end. A reader
+    /// scrolled up keeps it (the rows would move under them) until they return or the next turn starts.
+    func attemptThinkingFold(_ turn: String) {
+        guard transcript.heldThinkingTurns.contains(turn), readingPosition == nil,
+              let ended = transcript.turns.last(where: { $0.id == turn }),
+              ChatThinkingFold.folds(ended.items, ended: ended.ended) else { return }
+        withAnimation(.easeOut(duration: 0.25)) { transcript.releaseThinking(turn) }
     }
 
     /// A live user record that repeats the prompt shown while it was sent takes its bubble's place

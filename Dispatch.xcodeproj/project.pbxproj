@@ -613,6 +613,7 @@
 		D385F7FE473F18A35BD14364 /* ClaudeQuestions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8449E1FDF20F2E61618A22E3 /* ClaudeQuestions.swift */; };
 		D387BF83299E46FCA7CD2DD1 /* ChatDrafts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB19BDEF7D85EE30A3B83E1 /* ChatDrafts.swift */; };
 		D3F6773D05C50074D455A234 /* SSHIntegrationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DBC6F0B84A5789EF924000E /* SSHIntegrationPolicyTests.swift */; };
+		D50DF00529B2E29FBA50686A /* ThinkingFoldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C35CB2534587F636E770C29D /* ThinkingFoldTests.swift */; };
 		D60E7776556445BC883F6290 /* ReviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F4217C56173B6C4B887ACC /* ReviewViews.swift */; };
 		D64A4A9EF7401604FE6E28C4 /* ChatQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3C5AF39374D8CE7AC20324 /* ChatQueueTests.swift */; };
 		D68B6E783EE5A24045274C1A /* ClaudeModelMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD6B26350F634E09EB00300 /* ClaudeModelMenuTests.swift */; };
@@ -1429,6 +1430,7 @@
 		C225B0D135A610C1D5E6D217 /* bits.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bits.h; sourceTree = "<group>"; };
 		C28160E8597074B372547B8D /* AttentionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionView.swift; sourceTree = "<group>"; };
 		C34990B92F6DAA6396FCF7FF /* FilesFooter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesFooter.swift; sourceTree = "<group>"; };
+		C35CB2534587F636E770C29D /* ThinkingFoldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingFoldTests.swift; sourceTree = "<group>"; };
 		C389BC19C66799F97480B555 /* MotionRate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRate.swift; sourceTree = "<group>"; };
 		C3F4217C56173B6C4B887ACC /* ReviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewViews.swift; sourceTree = "<group>"; };
 		C445C743F30C99381F58AAEC /* ComposerFences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerFences.swift; sourceTree = "<group>"; };
@@ -1985,6 +1987,7 @@
 				2411CE1CAEE3339A03ED93D5 /* TestSupport.swift */,
 				267FFF5ABA667AAE737CF44E /* ThemeGeneratorTests.swift */,
 				AE3E0C8F97689DA939E22031 /* ThinkingAnimationTests.swift */,
+				C35CB2534587F636E770C29D /* ThinkingFoldTests.swift */,
 				3D50F15221F633D21046CC21 /* TmuxChatIntegrationTests.swift */,
 				38611C2188794ACA964EE631 /* TmuxEdgeCaseTests.swift */,
 				E27694C8C95F72900BF5B061 /* TmuxIntegrationTests.swift */,
@@ -3487,6 +3490,7 @@
 				4393C660FEA73E208E235A40 /* TestSupport.swift in Sources */,
 				1D41D63A9123DE790816A629 /* ThemeGeneratorTests.swift in Sources */,
 				E69FFA96A58D730C473CC69C /* ThinkingAnimationTests.swift in Sources */,
+				D50DF00529B2E29FBA50686A /* ThinkingFoldTests.swift in Sources */,
 				02A29BFBA62A9DC07CA0B4EC /* TmuxChatIntegrationTests.swift in Sources */,
 				C026AE857990DE31410D0FB2 /* TmuxEdgeCaseTests.swift in Sources */,
 				9C5F58F3FFEA2F4A6BD96849 /* TmuxIntegrationTests.swift in Sources */,

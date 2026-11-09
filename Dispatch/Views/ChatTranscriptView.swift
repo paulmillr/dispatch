@@ -712,7 +712,29 @@ private struct ChatTranscriptRowView: View {
                               ended: item.completed || streaming != .newest)
                 .foregroundStyle(theme.ink)
         case .notice:
-            Text(ChatSearchHighlight.text(AttributedString(item.text), query: query, theme: theme)).font(theme.typography.detail).foregroundStyle(theme.muted)
+            Text(ChatSearchHighlight.text(AttributedString(item.text), query: query, theme: theme) + AttributedString(ChatNoticeFold.count(row.repeats)))
+                .font(theme.typography.detail).foregroundStyle(theme.muted)
+        case .reasoning where item.isNarration && row.timeline != nil:
+            // A thought folded into its turn's steps: a step's row, its text under it when opened.
+            let open = session.expanded.contains(row.id)
+            VStack(alignment: .leading, spacing: 4) {
+                Button { expansion.wrappedValue.toggle() } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "brain").frame(width: 14)
+                        Text("Think").fontWeight(.semibold).foregroundStyle(theme.ink).lineLimit(1)
+                            .frame(width: theme.typography.stepTitleWidth, alignment: .leading)
+                        if !open {
+                            Text(ChatThinkingFold.headline(item.text)).lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                        if let seconds = row.timeline?.step.seconds { Text(ChatTranscript.elapsed(seconds)).opacity(0.75).fixedSize() }
+                        Color.clear.frame(width: 14, height: 1)  // A step's status: a thought has none to report.
+                        Image(systemName: "chevron.right").rotationEffect(.degrees(open ? 90 : 0)).frame(width: 8)
+                    }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("Think").accessibilityValue(open ? "Expanded" : "Collapsed")
+                if open { ChatMarkdown(text: item.text, color: theme.muted).foregroundStyle(theme.muted).padding(.leading, 23).padding(.bottom, 4) }
+            }
         case .reasoning where item.isNarration:
             ChatMarkdown(text: item.text, color: theme.muted).foregroundStyle(theme.muted)
         case .reasoning:

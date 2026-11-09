@@ -28,7 +28,7 @@ struct ChatMessageDetails: View {
 
     var body: some View {
         let summary = turn.map(ChatTurnSummary.init)
-        let steps = turn.map { ChatStep.steps($0, directory: directory, reasoning: false) } ?? []
+        let steps = turn.map { ChatStep.steps($0, directory: directory, reasoning: false, thinking: ChatThinkingFold.folds($0.items, ended: $0.ended)) } ?? []
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 quote
@@ -176,7 +176,7 @@ struct ChatMessageDetails: View {
         return HStack(alignment: .lastTextBaseline) {
             HStack(spacing: 6) {
                 Text("Steps").textCase(.uppercase).accessibilityAddTraits(.isHeader)
-                Text("\(steps.count)").foregroundStyle(.tertiary)
+                Text(Self.stepCount(steps)).foregroundStyle(.tertiary)
             }
             .font(.footnote).foregroundStyle(.secondary)
             Spacer()
@@ -190,6 +190,14 @@ struct ChatMessageDetails: View {
             }
         }
         .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 7)
+    }
+
+    /// "12", or "4 · 1 thought" with a folded turn's thinking among them.
+    static func stepCount(_ steps: [ChatStep]) -> String {
+        let thoughts = steps.filter { $0.kind == .think }.count
+        guard thoughts > 0 else { return "\(steps.count)" }
+        let said = ChatTurnSummary.count(thoughts, "thought")
+        return thoughts == steps.count ? said : "\(steps.count - thoughts) · \(said)"
     }
 
     @ViewBuilder private func stepList(_ steps: [ChatStep]) -> some View {
@@ -257,7 +265,7 @@ struct ChatMessageDetails: View {
         .frame(minHeight: 46)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityHint(step.kind == .patch ? "Shows the changes" : "Shows its full output")
+        .accessibilityHint(step.kind == .patch ? "Shows the changes" : step.kind == .think ? "Shows the whole thought" : "Shows its full output")
     }
 
     /// The steps between two shown ones, folded: what they did in words, and a disclosure that opens them in place.

@@ -24,6 +24,17 @@ final class ChatTranscriptTests: XCTestCase {
         XCTAssertEqual(transcript.rows[1].item.text, "Checking the retry path first.")
     }
 
+    /// A background agent's repeated reports fold into the first one's row, as on the Mac (`ChatNoticeFold`).
+    func testRepeatedAdjacentNoticesFoldIntoTheirFirstRow() throws {
+        let waiting = "Agent \"Fixture run\" is waiting on its own background work"
+        let records = ["a", "b", "c"].flatMap { [ChatFixture.record("\($0):started", "turn_started", turn: $0),
+                                                 ChatFixture.record("notice-\($0)", "notice", turn: $0, text: waiting)] }
+        var transcript = MobileTranscript()
+        transcript.apply(try self.records(records), historical: true)
+        XCTAssertEqual(transcript.rows.map(\.noticeText), [waiting + " ×3"])
+        XCTAssertTrue(transcript.rows[0].id.contains("notice-a"), "The row keeps the first report's place")
+    }
+
     /// Claude's shell mode records `!cmd` and its output as user messages in markup: the command reads as typed, and
     /// the output is the command's result (never a row), as a native command's printed output is.
     func testShellModeMarkupReadsAsTyped() throws {

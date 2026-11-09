@@ -654,7 +654,7 @@ struct ChatThreadView: View {
             // Claude's thinking: an agent bubble of its own, in the same colours and font as its messages.
             agentBubble(row, summary: nil)
         case .notice:
-            notice(row.item.text, row: row.id)
+            notice(row.noticeText, row: row.id)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

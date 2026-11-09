@@ -43,6 +43,29 @@ final class ChatPerformanceTests: XCTestCase {
         XCTAssertTrue(session.transcriptRows.isEmpty)
     }
 
+    func testRepeatedAdjacentNoticesFoldIntoTheirFirstRow() {
+        let waiting = "Agent \"Fixture run\" is waiting on its own background work"
+        let other = "Agent \"Fixture probe\" is waiting on its own background work"
+        func notice(_ id: String, _ text: String) -> ChatTurn { ChatTurn(id: id, items: [ChatItem(id: id, kind: .notice, text: text)]) }
+        let session = ChatSession(id: System.uuid())
+        session.turns = [notice("a", waiting), notice("b", waiting), notice("c", other), notice("d", waiting)]
+        var rows = session.transcriptRows
+        XCTAssertEqual(rows.map(\.item?.text), [waiting, other], "Another agent's notice between them does not end the run")
+        XCTAssertEqual(rows.map(\.repeats), [3, 1])
+        let first = rows[0].id
+
+        session.turns.append(notice("e", waiting))
+        rows = session.transcriptRows
+        XCTAssertEqual(rows.map(\.repeats), [4, 1])
+        XCTAssertEqual(rows[0].id, first, "A new report keeps the row where it is")
+
+        session.turns.append(ChatTurn(id: "reply", items: [ChatItem(id: "reply", kind: .assistant, text: "Still running.")]))
+        session.turns.append(notice("f", waiting))
+        rows = session.transcriptRows
+        XCTAssertEqual(rows.map(\.item?.text), [waiting, other, "Still running.", waiting], "A message ends the run")
+        XCTAssertEqual(rows.map(\.repeats), [4, 1, 1, 1])
+    }
+
     func testToolGeometrySurvivesPayloadEvictionAndExpiresWithItsTranscript() async {
         let cache = ToolPresentationCache(), session = ChatSession(id: System.uuid())
         let item = ChatItem(id: "tool", kind: .tool, text: "echo hello", title: "Shell", output: "hello")

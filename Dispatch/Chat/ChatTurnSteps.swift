@@ -32,7 +32,8 @@ struct ChatStep: Identifiable, Equatable {
         let directory = directory ?? item.directory ?? ""
         if item.kind == .reasoning {
             kind = .think
-            let rawTitle = item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Thinking"
+            let rawTitle = item.isNarration ? ChatThinkingFold.headline(item.text)
+                : item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Thinking"
             title = TextRendering.visible(TextRendering.prefix(rawTitle, scalars: 512).text)
             detail = nil; additions = 0; deletions = 0; failed = false; running = !item.completed
             return
@@ -100,10 +101,11 @@ struct ChatStep: Identifiable, Equatable {
     }
 
     /// A turn's steps, in order: its tools as the caption counts them, and its reasoning summaries in the live log
-    /// (Claude's thinking is a row of the thread itself).
-    static func steps(_ turn: ChatTurn, directory: String?, reasoning: Bool) -> [ChatStep] {
+    /// (Claude's thinking is a row of the thread itself until its turn folds: `thinking` lists it then).
+    static func steps(_ turn: ChatTurn, directory: String?, reasoning: Bool, thinking: Bool = false) -> [ChatStep] {
         ChatTurnSummary.displayed(turn.items, turnID: turn.id)
-            .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty }
+            .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty
+                || thinking && $0.isNarration && !$0.text.isEmpty }
             .map { ChatStep($0, directory: directory) }
     }
 
@@ -121,6 +123,22 @@ struct ChatStep: Identifiable, Equatable {
 
 extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// When a turn's Claude thinking leaves the thread, on every surface: the Mac folds it into the turn's step group, the
+/// phone into message details' steps, and the watch leaves it out.
+enum ChatThinkingFold {
+    /// The turn ended on a reply and has thinking to fold. One stopped or failed mid-work keeps it: the only account of it.
+    static func folds(_ items: [ChatItem], ended: Date?) -> Bool {
+        guard ended != nil, items.contains(where: { $0.isNarration && !$0.text.isEmpty }) else { return false }
+        return items.last { $0.kind == .assistant || $0.kind == .tool || $0.isNarration }?.kind == .assistant
+    }
+
+    /// A thought's one line in a step list: its first line, without Markdown's code and bold marks.
+    static func headline(_ text: String) -> String {
+        (text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Thinking")
+            .replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "**", with: "")
+    }
 }
 
 /// A turn's steps, duration and changes: the corner of its last agent bubble ("3 files +127 −22 · 10:17", S6d) and

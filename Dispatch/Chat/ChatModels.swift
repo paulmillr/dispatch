@@ -215,7 +215,7 @@ final class PendingApproval: Identifiable {
 /// One step of a tool group as its run chart draws it: cheap facts read from the item, never its formatted payload,
 /// so a collapsed group of thousands of tools parses nothing.
 struct ChatToolStep: Equatable, Sendable {
-    enum Kind: Sendable { case edit, web, other }
+    enum Kind: Sendable { case edit, web, other, think }
     let kind: Kind
     let failed: Bool
     /// Seconds since the step before it (the group's message for the first). A step keeps one recorded time (its
@@ -252,6 +252,7 @@ struct ChatToolStep: Equatable, Sendable {
     /// it reads the title without allocating (`WebToolPresentation.matches`, `ChatPatch.isPatchOperation` and a
     /// last-component `write_file`, in one pass).
     nonisolated static func kind(of item: ChatItem) -> Kind {
+        if item.kind == .reasoning { return .think }
         let title = item.title
         switch title {
         case "WebSearch", "WebFetch": return .web
@@ -479,6 +480,32 @@ struct ChatTranscriptRow: Identifiable {
         let item: ChatItem
         let step: ChatToolStep
     }
+
+    /// How many adjacent notices with this text the row stands for (`ChatNoticeFold`).
+    var repeats = 1
+}
+
+/// Claude Code writes every interim report of a background agent ("… is waiting on its own background work") as a turn
+/// of its own, dozens in a row while the agent waits. In a run of adjacent notices, a text already shown folds into its
+/// first row, which keeps its place and identity and counts the rest; anything else between two notices ends the run.
+enum ChatNoticeFold {
+    static func fold<Row>(_ rows: [Row], text: (Row) -> String?, merge: (inout Row, Row) -> Void) -> [Row] {
+        var folded: [Row] = [], shown: [String: Int] = [:]
+        folded.reserveCapacity(rows.count)
+        for row in rows {
+            guard let notice = text(row) else {
+                if !shown.isEmpty { shown.removeAll(keepingCapacity: true) }
+                folded.append(row)
+                continue
+            }
+            if let first = shown[notice] { merge(&folded[first], row) }
+            else { shown[notice] = folded.count; folded.append(row) }
+        }
+        return folded
+    }
+
+    /// What a row draws after its notice.
+    static func count(_ repeats: Int) -> String { repeats > 1 ? " ×\(repeats)" : "" }
 }
 
 struct ChatQueuedMessage: Identifiable {
@@ -1031,6 +1058,7 @@ final class ChatSession: Identifiable {
     var transcriptRows: [ChatTranscriptRow] {
         // Register dependencies, but flatten only when the conversation changes.
         let turns = turns, approvals = approvals, optimisticPrompt = optimisticPrompt, pendingReply = pendingReply
+        _ = heldThinkingTurns
         if let cachedRows { return cachedRows }
         var grouped = Dictionary(grouping: approvals, by: \.turnID)
         // A request can arrive before its tool call is read (Claude writes the call only after the reply). Once the
@@ -1079,6 +1107,7 @@ final class ChatSession: Identifiable {
                 rows.append(ChatTranscriptRow(id: "approval-\(approval.id)", item: nil, approval: approval))
             }
         }
+        rows = ChatNoticeFold.fold(rows, text: { $0.item?.kind == .notice ? $0.item?.text : nil }) { first, _ in first.repeats += 1 }
         if displayedTurns.count > turns.count { displayedTurns.retain(Set(turns.map(\.id))) }
         if let prompt = optimisticPrompt {
             rows.append(ChatTranscriptRow(id: prompt.id, item: prompt, approval: nil))
@@ -1107,6 +1136,79 @@ final class ChatSession: Identifiable {
         return date.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
     }
 
+    // MARK: Thinking fold
+
+    /// Whether a finished turn's Claude thinking folds into its step group (off while testing, as `readingHoldEnabled`:
+    /// recorded tests read the thinking rows; its own tests turn it on).
+    static var foldsThinkingEnabled = !System.testing && System.environment("XCTestConfigurationFilePath") == nil
+    /// How long a finished reply stands before its turn folds: its own landing motion ends first.
+    static var thinkingFoldDelay: TimeInterval = 1.2
+    /// Turns seen ending here whose thinking still shows, until `attemptThinkingFold` lets them go. Every other ended
+    /// turn with a final reply is folded as it is read.
+    private(set) var heldThinkingTurns: Set<String> = []
+    @ObservationIgnored private var thinkingFoldTimers: [String: DispatchWorkItem] = [:]
+
+    /// A turn folds when it ended on a reply: one stopped or failed mid-work keeps its thinking, the only account of it.
+    private static func foldsThinking(_ items: [ChatItem], ended: Date?) -> Bool {
+        foldsThinkingEnabled && ChatThinkingFold.folds(items, ended: ended)
+    }
+
+    /// The live turn is about to end. Call before `ended` is set, so no row list shows it folded early.
+    func noteTurnEnded(_ turnID: String) {
+        guard Self.foldsThinkingEnabled, let turn = turns.last(where: { $0.id == turnID }), turn.ended == nil,
+              turn.items.contains(where: { $0.isNarration && !$0.text.isEmpty }) else { return }
+        heldThinkingTurns.insert(turnID)
+        scheduleThinkingFold(turnID, after: Self.thinkingFoldDelay)
+    }
+
+    private func scheduleThinkingFold(_ turnID: String, after delay: TimeInterval) {
+        thinkingFoldTimers[turnID]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.thinkingFoldTimers[turnID] = nil
+            self?.attemptThinkingFold(turnID)
+        }
+        thinkingFoldTimers[turnID] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Whether the reader opened a step or the group of this turn: it stays as they left it until the next turn.
+    private func thinkingTurnHasOpenRows(_ turnID: String) -> Bool {
+        transcriptRows.contains { row in
+            guard row.turnID == turnID else { return false }
+            if let group = row.group, expandedToolGroups.contains(group.id) || group.children.contains(where: { expanded.contains($0.id) }) { return true }
+            return row.item?.kind == .tool && expanded.contains(row.id)
+        }
+    }
+
+    /// Folds a held turn if the reader allows it now: animated in a followed view, at once where nobody sees it, not
+    /// at all while they read its rows or have opened one. `autoplay` false leaves the animation to be stepped.
+    func attemptThinkingFold(_ turnID: String, autoplay: Bool = true) {
+        guard heldThinkingTurns.contains(turnID), let turn = turns.last(where: { $0.id == turnID }),
+              Self.foldsThinking(turn.items, ended: turn.ended), !thinkingTurnHasOpenRows(turnID) else { return }
+        let rows = visibleTranscriptRows.filter { $0.turnID == turnID }
+        guard isPresented, showChat, !transcriptHeld, let document = scrollPosition.transcriptDocument,
+              let first = rows.first(where: { $0.item?.isNarration == true || $0.item?.kind == .tool || $0.group != nil })?.id,
+              let reply = rows.last(where: { $0.item?.kind == .assistant })?.id else { foldThinking(turnID); return }
+        if !atBottom {
+            // A reader in this turn keeps it until they leave; one elsewhere sees nothing change.
+            guard !document.showsRows(from: first, through: reply) else { return }
+            foldThinking(turnID)
+            return
+        }
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, !MotionRate.lowPower {
+            document.prepareThinkingFold(first: first, reply: reply, autoplay: autoplay)
+        }
+        foldThinking(turnID)
+    }
+
+    private func foldThinking(_ turnID: String) {
+        thinkingFoldTimers.removeValue(forKey: turnID)?.cancel()
+        displayedTurns[turnID] = nil
+        cachedRows = nil; cachedVisibleRows = nil
+        heldThinkingTurns.remove(turnID)
+        releaseTranscript(.reading)
+    }
+
     private func preparedRows(for turn: ChatTurn, usedGroupIDs: inout Set<String>) -> TurnRows {
         // Ending or reordering a turn can change its rows without changing the
         // projected tool items. Keep their formatting identities stable when
@@ -1117,10 +1219,11 @@ final class ChatSession: Identifiable {
         } else { items = displayedItems(turn.items, turnID: turn.id) }
         var rows: [ChatTranscriptRow] = [], tools: [ChatTranscriptRow] = []
         var groupIDs: Set<String> = [], toolRevisions: Set<UUID> = []
+        let folded = Self.foldsThinking(items, ended: turn.ended) && !heldThinkingTurns.contains(turn.id)
         func flushTools() {
             guard !tools.isEmpty else { return }
             let hasMessage = rows.last?.item.map { $0.kind == .assistant || $0.isNarration } == true && rows.last?.group == nil
-            guard tools.count >= 2 || hasMessage else {
+            guard tools.count >= 2 || hasMessage || folded else {
                 rows.append(contentsOf: tools); tools.removeAll(keepingCapacity: true); return
             }
             // A split may reuse an old disclosure only once. A merge prefers
@@ -1133,11 +1236,12 @@ final class ChatSession: Identifiable {
                 if expandedToolGroups.contains(id) { expanded = id; break }
                 if collapsed == nil, collapsedToolGroups.contains(id) { collapsed = id }
             }
-            let proposed = expanded ?? collapsed ?? first ?? ("tool-group:" + tools[0].id)
+            // A fold starts collapsed: a group opened before it must not open the whole merged list.
+            let proposed = folded ? "thinking-fold:" + turn.id + ":" + tools[0].id : expanded ?? collapsed ?? first ?? ("tool-group:" + tools[0].id)
             let id = usedGroupIDs.contains(proposed) ? "tool-group:" + System.uuid().uuidString : proposed
             usedGroupIDs.insert(id); groupIDs.insert(id)
             // A message row already shows its group; a new header row is new presentation.
-            if first == nil, !hasMessage { transcriptArrivals.recordGroup(id, forming: tools.map(\.id)) }
+            if first == nil, !hasMessage, !folded { transcriptArrivals.recordGroup(id, forming: tools.map(\.id)) }
             for tool in tools { toolGroupIdentities[tool.id] = id }
             let children = tools.map { row in var row = row; row.toolGroupID = id; return row }
             // Timed from the message the steps follow (or the turn's start), so the first step's bar has a width.
@@ -1162,7 +1266,7 @@ final class ChatSession: Identifiable {
             let time = item.kind == .tool ? nil : replyTime(item, turnID: turn.id)
             let row = ChatTranscriptRow(id: item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)", item: item, approval: nil,
                                         turnID: turn.id, replyTime: item.kind == .assistant ? time : nil, time: time)
-            if item.kind == .tool { tools.append(row); toolRevisions.insert(item.presentationID) }
+            if item.kind == .tool || (folded && item.isNarration) { tools.append(row); toolRevisions.insert(item.presentationID) }
             else { flushTools(); rows.append(row) }
         }
         flushTools()
@@ -1405,7 +1509,13 @@ final class ChatSession: Identifiable {
     var version: String?
     var expanded: Set<String> = []
     var scrollAnchor: String?
-    var atBottom = true { didSet { acknowledgeVisibleOutput(); if atBottom { releaseTranscript(.reading) } } }
+    var atBottom = true { didSet {
+        acknowledgeVisibleOutput()
+        if atBottom {
+            releaseTranscript(.reading)
+            if !oldValue { for held in heldThinkingTurns { scheduleThinkingFold(held, after: 0.3) } }
+        }
+    } }
     var scrollToLatestRequest = System.uuid()
     var focusRequest = System.uuid()
     var revision = 0
@@ -1608,8 +1718,15 @@ final class ChatSession: Identifiable {
                 }
             } else if let arm = replyArm, turnID != arm.afterTurn { replyArm = nil }
         }
+        // A new turn ends the wait of any turn before it; a reply recorded after its turn's end lets that turn fold.
+        if !historical, !heldThinkingTurns.isEmpty {
+            for held in heldThinkingTurns where held != turnID { foldThinking(held) }
+        }
         let result = ChatTranscript.insert(item, turnID: turnID, at: date, historical: historical, fileOffset: fileOffset,
                                            turns: &turns, index: &transcriptIndex)
+        if !historical, item.kind == .assistant, heldThinkingTurns.contains(turnID) {
+            scheduleThinkingFold(turnID, after: Self.thinkingFoldDelay)
+        }
         // An acknowledged optimistic prompt already animated under its rowID.
         if result.added, !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
             if item.kind == .tool { transcriptArrivals.recordHandoff("\(turnID.utf8.count):\(turnID):\(item.id)") }

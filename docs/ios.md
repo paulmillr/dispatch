@@ -437,7 +437,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   and appear on a swipe (`ChatReveal`, below). A turn's last reply shows its step count above its time; changed files
   and line counts stay in message details. VoiceOver still reads the full summary (changed files, read files or steps, then when the turn
   ended) as the bubble's value (`ChatCorner.swiped`, `spokenOnly`); other replies read their own time, and Claude's
-  thinking has none. Message details keep "12 steps · 2m 4s". While a turn runs the
+  thinking has none. Once a turn ends on a reply its thinking leaves the thread (`ChatThinkingFold`, shared with the Mac and the watch) and message details list each thought as a `Think` step that pushes its whole text, counted apart from the tools ("4 · 1 thought"); a turn stopped or failed before a reply keeps it, and a side conversation, which has no details, keeps it too. A turn seen ending live holds its thoughts for 1.2 s, then they fade; a reader scrolled up holds them until they return to the end or the next turn starts. Message details keep "12 steps · 2m 4s". While a turn runs the
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's thinking), as the Mac's live tool group counts them, and it holds Stop beside
   the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware keyboard
