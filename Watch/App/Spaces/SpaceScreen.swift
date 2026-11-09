@@ -33,7 +33,7 @@ struct SpaceScreen: View {
     }
 }
 
-/// Above the tabs: the host's mark and name, the folder.
+/// Above the tabs: the host's mark and name, the folder's name unless the space is named for it (the title says it).
 struct SpaceHeader: View {
     let host: WatchHost
     let space: WatchSpace
@@ -44,8 +44,8 @@ struct SpaceHeader: View {
                 WatchHostMark(host: host, size: 16)
                 Text(host.name).font(.footnote.weight(.semibold)).foregroundStyle(Color(watchHex: host.tint))
             }
-            if let folder = space.folder {
-                Text(folder).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            if let folder = SpacesText.folder(space.folder, besides: space.name) {
+                Text(folder).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
         }
         .textCase(nil)

@@ -103,6 +103,34 @@ final class SharedStatsVoiceTests: XCTestCase {
         XCTAssertEqual(SpokenMarkdown.text("hello\u{202E}world"), "hello⟦RLO⟧world")
     }
 
+    /// Read Aloud reads a whole message: its prose in sentences, each code block and table said in a few words.
+    func testReadAloudSaysCodeBlocksInsteadOfReadingThem() {
+        let markdown = "# Fixed the rounding\n\nTotals now round once, in `Invoice.total`:\n\n```swift\nlet total = lines.sum()\n"
+            + "return total.rounded(.toNearestOrEven)\n```\n\nRun it with:\n\n```sh\nswift test --filter InvoiceTests\n```\n\n"
+            + "```\nplain\n```\n\n```diff\n-a\n+b\n+c\n```\n\n| case | total |\n|---|---|\n| zero | 0.00 |\n| thirds | 1.00 |\n\n"
+            + "- **first** item\n- second item"
+        XCTAssertEqual(SpokenMarkdown.message(markdown), [
+            "Fixed the rounding.",
+            "Totals now round once, in Invoice.total:",
+            "Swift code, 2 lines.",
+            "Run it with:",
+            "Shell command.",
+            "Code, 1 line.",
+            "A diff, 3 lines.",
+            "A table, 2 rows.",
+            "first item.",
+            "second item.",
+        ].joined(separator: "\n"))
+        XCTAssertEqual(SpokenMarkdown.code(language: "ts", lines: "a\nb"), "TypeScript code, 2 lines.")
+        XCTAssertEqual(SpokenMarkdown.code(language: "bash", lines: "cd app\nmake"), "Shell code, 2 lines.")
+        XCTAssertEqual(SpokenMarkdown.code(language: "elixir", lines: "x"), "Elixir code, 1 line.")
+        // Far longer than conversation mode's 1,500 before it stops.
+        let long = String(repeating: "word ", count: 1_000)
+        XCTAssertEqual(SpokenMarkdown.message(long), long.trimmingCharacters(in: .whitespaces) + ".")
+        XCTAssertEqual(SpokenMarkdown.message("```swift\nonly()\n```"), "Swift code, 1 line.")
+        XCTAssertEqual(SpokenMarkdown.message("---"), "")
+    }
+
     func testSpokenMarkdownBoundsUnicodeScalarsAndOnlyAppendsNoticeWhenTruncated() {
         let exact = String(repeating: "é", count: 1_500)
         XCTAssertEqual(SpokenMarkdown.text(exact), exact)

@@ -97,13 +97,15 @@ enum SpacesText {
         return .tab(WatchTabRoute(host: tab.host, tab: tab.key))
     }
 
-    /// The folder for a narrow row: "~/src/dispatch" as is; a deeper one keeps its last two components after "…/",
-    /// where the name of the project is.
-    static func folder(_ path: String?) -> String? {
+    /// The folder as the phone and the Mac say it: its name ("dispatch"; "~" for the home folder, "/" for the root),
+    /// nothing when that is the name beside it (a space named for its folder).
+    static func folder(_ path: String?, besides name: String? = nil) -> String? {
         guard let path, !path.isEmpty else { return nil }
-        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count > 3 else { return path }
-        return "…/" + parts.suffix(2).joined(separator: "/")
+        var trimmed = path
+        while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+        let folder = trimmed == "/" ? "/" : String(trimmed.split(separator: "/").last ?? Substring(trimmed))
+        if let name, folder.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame { return nil }
+        return folder
     }
 
     /// VoiceOver's value for a space: "2 unread, Working".

@@ -80,6 +80,8 @@ struct CodeComposer: View {
     /// What send's long press offers (`sendOptions`, or completing a command, opening Terminal); a tap does what the
     /// first that is not Send now would.
     var sendOptions: [SendOption] = [.send]
+    /// The draft is a queued message being edited: send is ✓, Save.
+    var saving = false
     /// What "+", a paste and a drop attach to and the strip shows; nil: attaching is not offered.
     var attachments: ComposerAttachments? = nil
     /// Whose dictation the mic starts and shows (the conversation).
@@ -99,6 +101,8 @@ struct CodeComposer: View {
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
     /// The first Esc only arms the stop; another within a second stops the turn.
     @State private var stopArmed: Date?
+    /// Send's long press opened its options (a tap felt, `menuOpenHaptic`).
+    @State private var optionsOpened = 0
     @ReduceMotion private var reduceMotion
 
     /// The trailing slot: send for text or attachments, else the mic.
@@ -402,11 +406,14 @@ struct CodeComposer: View {
         case .send:
             // A tap sends; a long press presents the ways the draft can go and sends nothing by itself.
             Menu {
-                ForEach(sendOptions) { option in
-                    Button(option.title, systemImage: option.image) { perform(option) }
+                Group {
+                    ForEach(sendOptions) { option in
+                        Button(option.title, systemImage: option.image) { perform(option) }
+                    }
                 }
+                .menuOpened($optionsOpened)
             } label: {
-                Image(systemName: "arrow.up")
+                Image(systemName: saving ? "checkmark" : "arrow.up")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Color.onAccent)
                     .frame(width: 28, height: 28)
@@ -420,7 +427,8 @@ struct CodeComposer: View {
             }
             .buttonStyle(.plain)
             .menuOrder(.fixed)
-            .accessibilityLabel("Send")
+            .menuOpenHaptic(optionsOpened)
+            .accessibilityLabel(saving ? "Save" : "Send")
             .accessibilityActions {
                 if let queue { Button("Queue", action: queue) } else if let steer { Button("Send now", action: steer) }
             }

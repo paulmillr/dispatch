@@ -21,14 +21,12 @@ struct ChatThreadView: View {
     var seen: () -> Void = {}
     /// Remembers models, efforts and the choice for New chat's defaults.
     var memory: ChatModelMemory?
-    /// Opens with the step list unfolded (M5f) or the queue open (M5c); for previews and the demo.
+    /// Opens with the step list unfolded (M5f); for previews and the demo.
     var expandSteps = false
-    var expandQueue = false
     /// Opens at the thread's top instead of its end (C6's demo).
     var startsAtTop = false
 
     @State private var workingExpanded = false
-    @State private var queueExpanded = false
     @State private var details: ChatThreadRow?
     @State private var step: ChatStep?
     @State private var settings = false
@@ -59,6 +57,7 @@ struct ChatThreadView: View {
     /// zone changes and on returning to the app, so the thread redraws for it then rather than on a timer per bubble.
     @State private var today = Date()
     @State private var voice = MobileVoiceConversation.shared
+    @State private var reader = MobileMessageReader.shared
     @Environment(\.chatShowTerminal) private var showTerminal
     @Environment(\.scenePhase) private var scenePhase
     /// The software keyboard floats (an iPad): the composer stays at the bottom (`MobileKeyboardReader`).
@@ -135,7 +134,6 @@ struct ChatThreadView: View {
             if Self.focusesOnAppear(requested: focusOnAppear, splitDetail: splitDetail,
                                     hardwareKeyboard: HardwareKeyboard.shared.attached) { focused = true }
             if expandSteps { workingExpanded = true }
-            if expandQueue { queueExpanded = true }
             seen()
             session.search.update(rows: rows)
         }
@@ -153,8 +151,13 @@ struct ChatThreadView: View {
             rail?.replyShown = false
             visible = false
             saveReading()
-            // Leaving the conversation (not pushing a message's details) ends conversation mode.
+            // Leaving the conversation (not pushing a message's details) ends conversation mode, Read Aloud and an edit
+            // of a queued message (its draft set aside comes back).
             if voice.active(for: session), details == nil { voice.stop() }
+            if details == nil { session.endQueueEdit(save: false) }
+            if details == nil, let reading = reader.reading, session.transcript.rows.contains(where: { $0.id == reading.row }) {
+                reader.stop()
+            }
         }
         // The side screen has no listening bar: conversation mode talks with the main thread only, so it ends there.
         .onChange(of: session.showingSide) { _, showing in
@@ -231,14 +234,13 @@ struct ChatThreadView: View {
                 .environment(\.chatSearchMarks, session.search.active
                              ? ChatSearchMarks(query: session.search.query.trimmingCharacters(in: .whitespacesAndNewlines)) : nil)
                 if showsWorkingRow {
-                    ChatWorkingRow(session: session, directory: directory, expanded: $workingExpanded,
-                                   queueExpanded: $queueExpanded) { step = $0 }
+                    ChatWorkingRow(session: session, directory: directory, expanded: $workingExpanded) { step = $0 }
                 }
                 if session.phase == .verified, !session.queueRows.isEmpty {
-                    // With the working row the queue folds into its capsule (Q1); without it, the card's own line.
-                    ChatQueueCard(session: session, expanded: $queueExpanded, inRow: showsWorkingRow)
+                    // The queued messages, the user's own faded bubbles under the working row (M5c).
+                    VStack(spacing: 8) { ChatQueuedBubbles(session: session, edit: editQueued) }
                         .padding(.horizontal, 16)
-                        .padding(.bottom, showsWorkingRow && !queueExpanded ? 0 : 8)
+                        .padding(.bottom, 8)
                         // The first message queued while the agent works rises into it; drained or emptied, it goes at once, as the
                         // rows that take its place come.
                         .transition(.asymmetric(insertion: sendRise, removal: .identity))
@@ -480,20 +482,30 @@ struct ChatThreadView: View {
                 if session.goal != nil, !session.goalStatus.isEmpty {
                     ChatGoalStatusLine(parts: session.goalStatus)
                 }
+                if session.queueEdit != nil {
+                    ChatQueueEditBar { session.endQueueEdit(save: false) }
+                } else if let note = session.queueEditNote {
+                    Button { session.queueEditNote = nil } label: { ChatCaption(text: note).padding(.horizontal, 10) }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Dismisses the note")
+                }
                 let routes = composerRoutes
                 // Settings › Chat may make send's tap steer while the agent works; its long press queues then.
                 let steers = sendWhileWorking == .steer && routes.steer == .steer
                 if !composerFolded {
+                let editing = session.queueEdit != nil
                 CodeComposer(text: draft, placeholder: placeholder, working: session.working && session.phase == .verified,
                              focus: $focused,
-                             send: { send(steer: steers) },
-                             steer: routes.steer == .steer ? {
+                             // Editing a queued message, send is ✓: the text goes back in its place.
+                             send: { if editing { session.endQueueEdit(save: true) } else { send(steer: steers) } },
+                             steer: !editing && routes.steer == .steer ? {
                                  session.send(steer: true)
                                  followAfterSending()
                              } : nil,
-                             queue: steers ? { send(steer: false) } : nil,
+                             queue: !editing && steers ? { send(steer: false) } : nil,
                              stop: { session.stop() },
-                             sendOptions: sendOptions(routes),
+                             sendOptions: editing ? [] : sendOptions(routes),
+                             saving: editing,
                              attachments: attachments,
                              dictationOwner: ObjectIdentifier(session), multiline: multiline,
                              converse: session.phase == .verified ? { voice.start(session) } : nil)
@@ -568,8 +580,15 @@ struct ChatThreadView: View {
             dismissError: { session.attachmentError = nil })
     }
 
+    /// A queued bubble's Edit: its text in the composer, focused.
+    private func editQueued(_ row: MobileChatSession.QueueRow) {
+        session.beginQueueEdit(row)
+        focused = true
+    }
+
     /// The composer's hint (M4a, M4c, M5a, M5c).
     private var placeholder: String {
+        if session.queueEdit != nil { return "Edit the queued message…" }
         if session.route(steer: false) == .outbox { return "Queue a message…" }
         if sendWhileWorking == .steer, session.route(steer: true) == .steer { return "Steer the current turn…" }
         if !session.queueRows.isEmpty { return "Queue another…" }
@@ -601,8 +620,7 @@ struct ChatThreadView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
         } else if session.loadingHistory && session.transcript.isEmpty {
-            ProgressView("Loading conversation…")
-                .font(.footnote)
+            ChatLoadingLine(session: session)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
         } else if session.transcript.isEmpty, session.optimisticPrompt == nil, session.queueRows.isEmpty, session.approvals.isEmpty {
@@ -631,7 +649,7 @@ struct ChatThreadView: View {
             ChatSideQuestionView(question: question) { session.answer(question, skip: $0) }
         }
         if session.phase != .verified {
-            ChatQueuedBubbles(session: session)
+            ChatQueuedBubbles(session: session, edit: editQueued)
         }
         notices
     }
@@ -639,26 +657,51 @@ struct ChatThreadView: View {
     @ViewBuilder private func rowView(_ row: ChatThreadRow) -> some View {
         switch row.kind {
         case .user:
-            ChatRevealSent(reveal: reveal, corner: sentCorner(row)) {
-                ChatUserMessage(text: row.item.text, attachments: row.item.attachments, host: session.key.host, read: read)
-                    .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
+            VStack(spacing: 5) {
+                ChatRevealSent(reveal: reveal, corner: sentCorner(row)) {
+                    ChatUserMessage(text: row.item.text, attachments: row.item.attachments, host: session.key.host, read: read)
+                        .contextMenu {
+                            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }
+                            readAloud(row)
+                        }
+                }
+                readingFootnote(row)
             }
         case .agent(let summary):
             VStack(spacing: 5) {
                 agentBubble(row, summary: summary)
                 if let reading = voice.reading, reading.row == row.id, voice.active(for: session) {
                     ChatReadingFootnote(since: reading.since)
+                } else {
+                    readingFootnote(row)
                 }
             }
         case .thinking:
             // Claude's thinking: an agent bubble of its own, in the same colours and font as its messages.
-            agentBubble(row, summary: nil)
+            VStack(spacing: 5) {
+                agentBubble(row, summary: nil)
+                readingFootnote(row)
+            }
         case .notice:
             notice(row.noticeText, row: row.id)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Read Aloud, or Stop Reading while this message is read; none while conversation mode reads the replies.
+    @ViewBuilder private func readAloud(_ row: ChatThreadRow) -> some View {
+        if !voice.active(for: session) {
+            ChatReadAloudButton(reader: reader, text: row.item.text, row: row.id)
+        }
+    }
+
+    /// "Reading aloud · 0:08" and Stop under the message Read Aloud reads.
+    @ViewBuilder private func readingFootnote(_ row: ChatThreadRow) -> some View {
+        if let reading = reader.reading, reading.row == row.id {
+            ChatReadingFootnote(since: reading.since, stop: { reader.stop() })
         }
     }
 
@@ -692,6 +735,7 @@ struct ChatThreadView: View {
                 .contextMenu {
                     Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }
                     Button("Reply", systemImage: "arrowshape.turn.up.left") { reply(to: row) }
+                    readAloud(row)
                     Button("Info", systemImage: "info.circle") { details = row }
                 }
         }

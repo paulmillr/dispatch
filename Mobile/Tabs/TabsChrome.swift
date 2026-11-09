@@ -483,6 +483,8 @@ struct TabsHostPath: View {
     let path: String?
     var trailing: String? = nil
     var mono = true
+    /// The whole path, when `path` is only the folder's name: what VoiceOver reads instead.
+    var full: String? = nil
     @ScaledMetric(relativeTo: .caption2) private var monoSize: CGFloat = 11.5
 
     var body: some View {
@@ -496,6 +498,7 @@ struct TabsHostPath: View {
         }
         if let trailing { text += AttributedString(" · " + trailing) }
         return Text(text)
+            .accessibilityLabel(([host.name, full ?? path, trailing] as [String?]).compactMap { $0 }.joined(separator: ", "))
     }
 }
 

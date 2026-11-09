@@ -41,7 +41,7 @@ GROUPS = {
         'terminal': ['T1-terminal-search', 'T2-terminal-menu'],
         'chat': ['C1-chat-search', 'C2-chat-slash', 'C3-chat-side', 'C4-chat-goal', 'C4b-chat-goal-sheet',
                  'C5-chat-conversation', 'C6-chat-jump'],
-        'queue': ['Q1-queue-capsule', 'Q1b-queue-capsule-open', 'Q6-queue-paused'],
+        'queue': ['Q1-queue-bubbles', 'Q1b-queue-menu', 'Q1c-queue-editing', 'Q6-queue-paused'],
         'message': ['M1-message-info', 'M1b-message-info-unfolded', 'M1c-message-info-short', 'M1d-message-info-stopped'],
         'mode-glyph': ['Z0-mode-glyph-compare', 'Z1-mode-glyph-soft-fill', 'Z2-mode-glyph-platter',
                        'Z3-mode-glyph-plain-bubble', 'Z4-mode-glyph-dot'],

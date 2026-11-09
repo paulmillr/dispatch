@@ -86,6 +86,8 @@ struct BubbleH: View {
 struct Composer: View {
     var text: String = ""
     var placeholder = "Message"
+    /// Editing a queued message: send is ✓, Save.
+    var saving = false
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 44, height: 44)
@@ -93,7 +95,7 @@ struct Composer: View {
             HStack {
                 if text.isEmpty { Text(placeholder).foregroundStyle(.tertiary) } else { Text(text) }
                 Spacer()
-                Image(systemName: text.isEmpty ? "mic" : "arrow.up").foregroundStyle(text.isEmpty ? Color.secondary : Color.onAccent)
+                Image(systemName: text.isEmpty ? "mic" : saving ? "checkmark" : "arrow.up").foregroundStyle(text.isEmpty ? Color.secondary : Color.onAccent)
                     .font(text.isEmpty ? .body : .body.weight(.bold))
                     .frame(width: 30, height: 30).background(text.isEmpty ? Color.clear : Color.dispatchPink, in: Circle())
             }

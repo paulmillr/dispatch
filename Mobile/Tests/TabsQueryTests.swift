@@ -125,9 +125,9 @@ final class TabsQueryTests: XCTestCase {
         model.paneTitle = { _, key in key == "p:zsh2" ? "vite ready · localhost:5173" : nil }
         let app = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:app")))
         XCTAssertEqual(model.rows(in: app).map { SpaceTabRow.line($0, model: model)?.text },
-                       ["Allow cargo test --workspace?", "~/src/app", "vite ready · localhost:5173"])
+                       ["Allow cargo test --workspace?", "app", "vite ready · localhost:5173"])
         let docs = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:docs")))
-        XCTAssertEqual(model.rows(in: docs).map { SpaceTabRow.line($0, model: model)?.text }, ["~/src/docs"], "a shell: its folder")
+        XCTAssertEqual(model.rows(in: docs).map { SpaceTabRow.line($0, model: model)?.text }, ["docs"], "a shell: its folder's name, as its header says it")
     }
 
     /// A tab on Files is named by what Files shows (the Mac's rule, `FilesTab.tabName`), in place of its conversation

@@ -44,7 +44,11 @@ struct SpaceTabsScreen: View {
                              atTrailingEdge: column == nil) {
                 TabsBackPill(label: "Spaces") { pop() }
             } subtitle: {
-                if let host { TabsHostPath(host: host, path: host.abbreviate(space?.cwd)) }
+                // As a tab's header: host · folder's name ("studio · app"), the whole path for VoiceOver.
+                if let host {
+                    TabsHostPath(host: host, path: TabScreenHeader.distinct(TabScreenHeader.folder(space?.cwd, host: host), from: space?.name),
+                                 mono: false, full: host.abbreviate(space?.cwd))
+                }
             } trailing: {
                 if editing {
                     TabsHeaderPill(action: { editing = false }) {
@@ -213,32 +217,8 @@ private struct SpaceMenu: View {
     let edit: () -> Void
 
     var body: some View {
-        let workspace = navigator.model.workspace(space.ref.host)
-        let connected = workspace?.client != nil
         Menu {
-            if workspace?.canAddTab(to: space) == true {
-                Button("New tab", systemImage: "plus") { navigator.newTab(in: space) }
-            }
-            if !shells {
-                Button("Edit", systemImage: "pencil", action: edit)
-                    .disabled(!connected)
-            }
-            Divider()
-            if shells {
-                Button(role: .destructive) { navigator.actions.close(.space(space.ref), .close) } label: {
-                    Text("Close all shells"); Text("ends every shell of this host"); Image(systemName: "xmark")
-                }
-                .disabled(space.tabs.isEmpty)
-            } else {
-                Button { navigator.actions.close(.space(space.ref), .detach) } label: {
-                    Text("Detach"); Text(SpaceCloseCopy.detachNote); Image(systemName: "eject")
-                }
-                .disabled(!connected)
-                Button(role: .destructive) { navigator.actions.close(.space(space.ref), .terminate) } label: {
-                    Text("Terminate…"); Text(SpaceCloseCopy.terminateNote); Image(systemName: "xmark.octagon")
-                }
-                .disabled(!connected)
-            }
+            SpaceMenuItems(navigator: navigator, space: space, edit: ("Edit", edit))
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -256,6 +236,54 @@ private struct SpaceMenu: View {
         .hoverEffect(.highlight)
         .accessibilityLabel("Space menu")
         .accessibilityIdentifier("space-menu")
+    }
+}
+
+/// A space's menu items, the header's "…" and a space row's long press alike: New tab, then the way to change it (the
+/// header's Edit, for the space and its tabs; the list's Rename… and Edit Spaces, which reorders them), then Detach
+/// and Terminate… (a Shell space: Close all shells). As a tab's menu: what it is called, then how it ends.
+struct SpaceMenuItems: View {
+    let navigator: SpacesNavigator
+    let space: MobileSpace
+    /// The header's Edit: a title and what it does.
+    var edit: (title: String, action: () -> Void)? = nil
+    /// The list's: Rename… and Edit Spaces.
+    var list = false
+
+    var body: some View {
+        let workspace = navigator.model.workspace(space.ref.host)
+        let connected = workspace?.client != nil
+        let shells = space.kind == .plainShell
+        if workspace?.canAddTab(to: space) == true {
+            Button("New tab", systemImage: "plus") { navigator.newTab(in: space) }
+        }
+        if !shells {
+            if let edit {
+                Button(edit.title, systemImage: "pencil", action: edit.action).disabled(!connected)
+            }
+            if list {
+                Button("Rename…", systemImage: "pencil") { navigator.actions.rename(.space(space.ref)) }.disabled(!connected)
+            }
+        }
+        if list {
+            Button("Edit Spaces", systemImage: "arrow.up.arrow.down") { navigator.editing = true }
+        }
+        Divider()
+        if shells {
+            Button(role: .destructive) { navigator.actions.close(.space(space.ref), .close) } label: {
+                Text("Close all shells"); Text("ends every shell of this host"); Image(systemName: "xmark")
+            }
+            .disabled(space.tabs.isEmpty)
+        } else {
+            Button { navigator.actions.close(.space(space.ref), .detach) } label: {
+                Text("Detach"); Text(SpaceCloseCopy.detachNote); Image(systemName: "eject")
+            }
+            .disabled(!connected)
+            Button(role: .destructive) { navigator.actions.close(.space(space.ref), .terminate) } label: {
+                Text("Terminate…"); Text(SpaceCloseCopy.terminateNote); Image(systemName: "xmark.octagon")
+            }
+            .disabled(!connected)
+        }
     }
 }
 
@@ -454,7 +482,7 @@ struct SpaceTabRow: View {
     /// The line under a tab's title: an ended shell's end ("Exited with status 1"); an agent's state from Chat (the
     /// current step and how long while working, the question or approval while it waits, the last message once done);
     /// else the terminal's own title ("vite ready · localhost:5173") or the program when the title is not already it;
-    /// else the folder ("~/src/app").
+    /// else the folder's name ("app", as the tab's header says it).
     @MainActor static func line(_ entry: TabsEntry, model: MobileTabs) -> TabsStatus? {
         let tab = entry.tab
         if let shell = tab.shell { return shell.summary.map { TabsStatus(text: $0) } }
@@ -462,7 +490,8 @@ struct SpaceTabRow: View {
         if let pane = tab.activePane, !tab.isChat, let title = model.paneTitle(tab.ref.host, pane.key)?.trimmingCharacters(in: .whitespaces),
            !title.isEmpty, title != entry.label, !TerminalTab.titleNamesDirectory(title, pane.cwd ?? "") { return TabsStatus(text: title) }
         if let program = tab.program, program != entry.label, !tab.atShell, !tab.isChat { return TabsStatus(text: program) }
-        return entry.host.abbreviate(tab.cwd).map { TabsStatus(text: $0) }
+        // Never the folder under a title that already names it.
+        return TabScreenHeader.distinct(TabScreenHeader.folder(tab.cwd, host: entry.host), from: entry.label).map { TabsStatus(text: $0) }
     }
 }
 

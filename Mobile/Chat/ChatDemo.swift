@@ -490,7 +490,7 @@ struct ChatDemoRoot: View {
                     ChatThreadView(session: session, space: "app", tab: redesign ? "Billing webhook retries" : "claude",
                                    directory: "/Users/alex/src/app",
                                    homes: HomePath(account: "/Users/alex"), focusOnAppear: ["M3b", "M5e"].contains(screen),
-                                   memory: ChatDemo.memory, expandSteps: screen == "M5f", expandQueue: screen == "M5c",
+                                   memory: ChatDemo.memory, expandSteps: screen == "M5f",
                                    startsAtTop: screen == "C6")
                 }
                 .toolbar(.hidden, for: .navigationBar)

@@ -42,6 +42,34 @@ final class TabsSpacesTreeTests: XCTestCase {
         XCTAssertEqual(model.sections()[1].spaces.map(\.space.name), ["docs", "app"])
     }
 
+    /// A space dragged straight from the list and dropped on another takes its place: after it from above, before it
+    /// from below, so both ends are reached; another host's space, or itself, moves nothing. The drag's payload names the
+    /// space, which a host's header (dragged hosts' UUIDs) cannot read as a host.
+    func testASpaceDroppedOnAnotherTakesItsPlace() {
+        let defaults = UserDefaults(suiteName: "tabs-tree-\(#function)")!
+        defaults.removePersistentDomain(forName: "tabs-tree-\(#function)")
+        let model = MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults)
+        let sketch = TopologySketch(backend: 1, first: 10, spaces: ["a", "b", "c"].map { name in
+            .init(key: "s:\(name)", name: name, tabs: [.init(key: "t:\(name)", name: name, panes: [.init(key: "p:\(name)", cwd: "/")])])
+        })
+        model.sync([TabsHostInput(host: ai, client: nil, topology: sketch.topology)])
+        func names() -> [String] { model.sections()[0].spaces.map(\.space.name) }
+        func ref(_ name: String) -> SpaceRef { SpaceRef(host: ai.id, key: "s:\(name)") }
+        func visible() -> [String] { model.sections()[0].spaces.map(\.id.key) }
+        XCTAssertTrue(model.moveSpace(ref("a"), onto: ref("c"), visible: visible()))
+        XCTAssertEqual(names(), ["b", "c", "a"], "From above: after the space it was dropped on")
+        XCTAssertTrue(model.moveSpace(ref("a"), onto: ref("b"), visible: visible()))
+        XCTAssertEqual(names(), ["a", "b", "c"], "From below: before it")
+        XCTAssertFalse(model.moveSpace(ref("a"), onto: ref("a"), visible: visible()))
+        XCTAssertFalse(model.moveSpace(SpaceRef(host: UUID(), key: "s:a"), onto: ref("b"), visible: visible()), "Another host's")
+        XCTAssertEqual(names(), ["a", "b", "c"])
+
+        let payload = SpaceDrag.payload(SpaceRef(host: ai.id, key: "herdr:w:1"))
+        XCTAssertEqual(SpaceDrag.ref(payload), SpaceRef(host: ai.id, key: "herdr:w:1"), "A key with colons survives")
+        XCTAssertNil(UUID(uuidString: payload), "Not a host")
+        XCTAssertNil(SpaceDrag.ref(ai.id.uuidString), "A dragged host is not a space")
+    }
+
     /// Dragging while a filter hides spaces moves the rows shown: their offsets are not the host's whole list, and the
     /// hidden spaces keep their places.
     func testMovingSpacesUnderAFilterMovesTheRowsShown() {

@@ -655,20 +655,48 @@ struct ChatCorner {
 /// C5: "Reading aloud · 0:08" under the bubble being read.
 struct ChatReadingFootnote: View {
     let since: Date
+    /// Read Aloud's: a Stop button ends the reading (conversation mode has its own controls).
+    var stop: (() -> Void)? = nil
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 6) {
-                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(Color.dispatchPink)
-                Text("Reading aloud · " + MobileVoiceConversation.clock(context.date.timeIntervalSince(since)))
-                    .font(.footnote)
-                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
-                Spacer(minLength: 0)
+        HStack(spacing: 6) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: 6) {
+                    Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(Color.dispatchPink)
+                    Text("Reading aloud · " + MobileVoiceConversation.clock(context.date.timeIntervalSince(since)))
+                        .font(.footnote)
+                        .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                }
             }
+            .accessibilityElement(children: .combine)
+            if let stop {
+                Button("Stop", action: stop)
+                    .font(.footnote.weight(.semibold))
+                    .tint(Color.dispatchPink)
+                    .accessibilityLabel("Stop reading")
+                    .accessibilityIdentifier("chat-reading-stop")
+            }
+            Spacer(minLength: 0)
         }
         .padding(.leading, 22)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-reading-aloud")
+    }
+}
+
+/// A message's Read Aloud, or Stop Reading while it is read (`MobileMessageReader`): in its bubble's long press and in
+/// message details' ⋯.
+struct ChatReadAloudButton: View {
+    let reader: MobileMessageReader
+    let text: String
+    let row: String
+
+    var body: some View {
+        if reader.isReading(row) {
+            Button("Stop Reading", systemImage: "stop.circle") { reader.stop() }
+        } else {
+            Button("Read Aloud", systemImage: "speaker.wave.2") { reader.toggle(text, row: row) }
+        }
     }
 }
 
@@ -861,4 +889,43 @@ struct ChatKeyboardDragDismissal: UIViewRepresentable {
             }
         }
     }
+}
+
+/// While a conversation loads, what it is doing and for how long: "Opening conversation…" until the helper answers,
+/// then "Reading Claude's transcript…" (`history_pending`), the seconds after the first two ("· 4s"). The helper says
+/// no more than that, so nothing pretends to a percentage.
+struct ChatLoadingLine: View {
+    let session: MobileChatSession
+
+    var body: some View {
+        let stage = session.historyPending
+            ? "Reading \(session.agentLabel.flatMap { $0.isEmpty ? nil : $0 + "’s" } ?? "the") transcript…"
+            : "Opening conversation…"
+        ProgressView {
+            if let since = session.loadingSince {
+                TimelineView(.periodic(from: since, by: 1)) { context in
+                    Text(Self.text(stage, elapsed: context.date.timeIntervalSince(since)))
+                }
+            } else {
+                Text(stage)
+            }
+        }
+        .font(.footnote)
+        .accessibilityIdentifier("chat-loading")
+    }
+
+    /// The stage, and from the third second on how long it has taken: "Opening conversation… · 3s".
+    static func text(_ stage: String, elapsed: TimeInterval) -> String {
+        let seconds = Int(elapsed)
+        return seconds < 3 ? stage : stage + " · \(seconds)s"
+    }
+}
+
+/// A tap felt as a menu opens on a long press (send's options, the mode button's modes, the tab's menu), as the
+/// system's context menus give one: a menu's items appearing are the only sign SwiftUI gives that it opened.
+extension View {
+    /// On a Menu: `opened` counts the openings, which the menu's items report (`menuOpened(_:)`).
+    func menuOpenHaptic(_ opened: Int) -> some View { sensoryFeedback(.impact(weight: .medium), trigger: opened) }
+    /// On a Menu's items: counts an opening.
+    func menuOpened(_ opened: Binding<Int>) -> some View { onAppear { opened.wrappedValue += 1 } }
 }

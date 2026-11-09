@@ -21,8 +21,6 @@ enum TabsRoute: Hashable {
 struct TabsContent {
     var terminal: @MainActor (MobileTab, MobilePane) -> AnyView
     var chat: @MainActor (MobileTab, MobilePane) -> AnyView
-    /// The Terminal segment's subtitle after the host ("~/src/app · zsh", M6a); nil: the topology's folder and program.
-    var terminalSubtitle: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
     /// The Terminal segment's folder as the shell reports it (OSC 7), for the phone's "host · folder · shell" (X9b);
     /// nil: the topology's.
     var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
@@ -752,6 +750,12 @@ private struct SpacesTree: View {
             if !section.collapsed, !(section.offline && !editing) {
                 ForEach(section.spaces) { row in
                     SpacesSpaceLine(row: row, editing: editing, gitFacts: navigator.gitFacts)
+                        // As a tab row's long press: the space's menu (`SpaceMenuItems`); dragged out of it, the space
+                        // moves among its host's (`SpaceDrag`). Edit has its own handles.
+                        .contextMenu {
+                            if !editing { SpaceMenuItems(navigator: navigator, space: row.space, list: true) }
+                        }
+                        .modifier(SpaceDrag(row: row.space, visible: section.spaces.map(\.id.key), model: model, on: !editing))
                 }
                 .onMove { source, destination in
                     model.moveSpaces(of: section.host.id, visible: section.spaces.map(\.id.key), from: source, to: destination)
@@ -1285,5 +1289,40 @@ struct TabsNothing: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 44)
             .multilineTextAlignment(.center)
+    }
+}
+
+/// A space dragged straight from the Spaces list (no Edit): a long press lifts it (its menu shows until it moves), and
+/// dropped on another space of its host it takes that one's place (`MobileTabs.moveSpace`). The payload names the
+/// space so a host's header, which takes dragged hosts, refuses it.
+struct SpaceDrag: ViewModifier {
+    let row: MobileSpace
+    let visible: [String]
+    let model: MobileTabs
+    let on: Bool
+
+    static let prefix = "dispatch-space:"
+
+    static func payload(_ ref: SpaceRef) -> String { prefix + ref.host.uuidString + ":" + ref.key }
+
+    static func ref(_ payload: String) -> SpaceRef? {
+        guard payload.hasPrefix(prefix) else { return nil }
+        let rest = payload.dropFirst(prefix.count)
+        guard let colon = rest.firstIndex(of: ":"), let host = UUID(uuidString: String(rest[..<colon])) else { return nil }
+        let key = String(rest[rest.index(after: colon)...])
+        return key.isEmpty ? nil : SpaceRef(host: host, key: key)
+    }
+
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .draggable(Self.payload(row.ref)) { Text(row.name).font(.headline).padding(8) }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let dragged = items.first.flatMap(Self.ref) else { return false }
+                    return model.moveSpace(dragged, onto: row.ref, visible: visible)
+                }
+        } else {
+            content
+        }
     }
 }

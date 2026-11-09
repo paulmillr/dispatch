@@ -235,7 +235,7 @@ final class TabsRenderTests: XCTestCase {
         let rows = model.rows(in: space)
         XCTAssertEqual(rows.map(\.label), ["Sidebar theme toggle", "pnpm dev", "zsh", "Rate limiter for the API", "Docs site migration"])
         XCTAssertEqual(rows.map { SpaceTabRow.line($0, model: model)?.text },
-                       ["Editing Sidebar.tsx", "vite ready · localhost:5173", "~/src/app", "Allow cargo test --workspace?",
+                       ["Editing Sidebar.tsx", "vite ready · localhost:5173", "app", "Allow cargo test --workspace?",
                         "Moved the docs to Starlight; the old MkDocs config is gone."])
         XCTAssertEqual(rows.map { model.agent(of: $0.tab) }, ["claude", nil, nil, "codex", "claude"])
         for entry in rows {

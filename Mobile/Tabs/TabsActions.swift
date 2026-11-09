@@ -28,7 +28,8 @@ final class TabsActions {
 
     func title(_ target: Target) -> String? {
         switch target {
-        case .tab(let ref): model.tab(ref)?.name
+        // What the tab shows, not the multiplexer's name for it (`MobileTabs.ownTitle`).
+        case .tab(let ref): model.tab(ref).map { model.ownTitle(of: $0) }
         case .space(let ref): model.space(ref)?.name
         }
     }

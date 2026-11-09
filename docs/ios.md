@@ -362,7 +362,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   the iPad strip keeps server order. A
   space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close, its rows in server
   order. Reorders go to the server (`memberships.move`) and the rows
-  keep the new order until the answer or a snapshot naming the moved tab. Paths shorten to `~` by
+  keep the new order until the answer or a snapshot naming the moved tab. In the Spaces list a space's long press is
+  its menu, as a tab's is (`SpaceMenuItems`, the space screen's "…" too): New tab, Rename…, Edit Spaces, then Detach and
+  Terminate… (a Shell space: Close all shells); dragged from there, without Edit, a space dropped on another of its
+  host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The spaces' order is this device's, as Edit's
+  handles keep it. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
 - **A tab's header** (phone stack, B7). Back and the host's glyph share one glass capsule at the leading end: Back
@@ -372,7 +376,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   goal), the pane picker when the segment can show more than one pane (on Chat only the panes running an agent, the
   shown one checked), the tab's row menu (Rename…, Close, Detach) and the host's Stats. The title block is two lines
   tall and top-aligned: a title that fits one line keeps `host · folder` under it (the folder's last component;
-  Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The trailing control is the mode
+  Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The same `host · folder` (the
+  folder's name, never its path) heads a space's screen, the switcher's space and the iPad's header beside its sidebar,
+  names a space on the watch (its Spaces rows and a space's header, `SpacesText.folder`), and is a tab row's line when it has
+  nothing else to say; a folder whose name is the title beside it goes unsaid (the host alone, never "app" under "app";
+  `TabScreenHeader.distinct`), and VoiceOver reads the full path. The Mac's hover card leads with it too. The trailing control is the mode
   button (`TabModeButton`), as the Mac strip's: a system bar item (a menu with a primary action, so the bar draws its
   glass and a hold opens the menu; a button-style Toggle draws on as a pink prominent disc and takes no menu). On Chat
   or Files it is on, its symbol filled in the accent, and a tap returns to Terminal; in Terminal it is off, its outline
@@ -441,10 +449,16 @@ The policies below are the ones a change must keep; the screens themselves are d
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's thinking), as the Mac's live tool group counts them, and it holds Stop beside
   the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware keyboard
-  still stops). While messages are queued its trailing side has the queue as a capsule with their count; a tap opens
-  the queue card under the row, and without the row (the agent stopped) the queue is the card's own "Queued · 2" line. An agent this phone starts (New chat, New
+  still stops). Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
+  Messages' Send Later (`ChatQueuedBubbles`; while the link is down the same bubbles, held): under the last, "3 queued ·
+  sends after this turn" (with Resume after Stop), under one that waits for the user its status. A tap or long press
+  on one is its menu, each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
+  agent works), Edit, Move Up and Move Down, Delete. Edit loads it into the composer (`beginQueueEdit`): the draft
+  there is set aside among the saved drafts, a bar says "Editing queued message" with Cancel, and send is ✓, which
+  saves the text in its place (`queue.update` by revision) and brings the draft back; a message that went out
+  meanwhile keeps the edit as the draft, with a note. Leaving the conversation cancels the edit. An agent this phone starts (New chat, New
   tab's agents) shows a spinner on Start or New tab until its tab shows, then "Starting Claude…" in the thread until
-  the conversation is verified (at most 15 s), as the Mac covers a launch until Chat opens. Records and busy state
+  the conversation is verified (at most 15 s), as the Mac covers a launch until Chat opens. Opening a conversation says its stage (`ChatLoadingLine`): "Opening conversation…" until the helper answers, then "Reading Claude's transcript…" while it reads (`history_pending`), with the seconds from the third on; the helper reports nothing finer. Menus a long press opens (send's options, the mode button's modes) and the tab's menu give a medium tap as they open (`menuOpenHaptic`), as the system's context menus do. Records and busy state
   arrive apart: for 3 s after the agent stops the row stays until the turn's end comes, and after the turn ends a busy
   state that ran through it keeps the row away, so the row goes as the summary comes; busy work that starts after the
   end (another device's prompt) shows the row at once, and a turn left open by an idle agent shows neither.
@@ -492,7 +506,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   (`animationDateOverride`) in SwiftUI, the frame the loops show then.
   The thread runs on under the composer (a bottom `safeAreaBar` with the soft scroll edge, as the side conversation's).
   Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
-  (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Composers are
+  (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Read Aloud, in a
+  message's long press and in message details' ⋯, reads that one message in the system's voice
+  (`MobileMessageReader`): all of it, Markdown's marks gone, each code block and table said in a few words instead of
+  read ("Swift code, 12 lines.", "Shell command.", "A table, 3 rows."; `SpokenMarkdown.message`). "Reading aloud ·
+  0:08" and Stop show under the message; another message's Read Aloud takes over, and leaving the conversation stops
+  it. It is spoken audio that ducks other audio, and hides while conversation mode reads replies itself. Both keep
+  the phone from auto-locking while they run (`ScreenAwake`): the lock would send the app to the background, where it
+  may neither listen nor speak and conversation mode ends. Composers are
   `ChatEditorTextView`-based, as on the Mac.
   A reply streaming into the live turn, or a short Claude Code post, types out as on the Mac (docs/architecture.md, Typed reveal;
   `MobileTypedMarkdown`): a text renderer draws its caret, and a bubble that hugs its text is as wide as what has

@@ -43,7 +43,9 @@ struct SpaceSwitcherSheet: View {
                             SpacesBranchChip.title(space.name, branch: branch(space))
                                 .lineLimit(1)
                                 .accessibilityAddTraits(.isHeader)
-                            TabsHostPath(host: host, path: host.abbreviate(space.cwd))
+                            TabsHostPath(host: host, path: TabScreenHeader.distinct(TabScreenHeader.folder(space.cwd, host: host),
+                                                                                    from: space.name),
+                                         mono: false, full: host.abbreviate(space.cwd))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)

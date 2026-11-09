@@ -214,8 +214,6 @@ struct ChatWorkingRow: View {
     let session: MobileChatSession
     let directory: String?
     @Binding var expanded: Bool
-    /// The queue card under the row, opened and folded by the capsule.
-    var queueExpanded: Binding<Bool> = .constant(false)
     var openStep: (ChatStep) -> Void
     @ReduceMotion private var reduceMotion
 
@@ -239,12 +237,7 @@ struct ChatWorkingRow: View {
         return session.workingSince
     }
 
-    /// The messages waiting for the turn's end, as the queue card shows them (none while the link is not verified:
-    /// then they are faded bubbles in the thread).
-    private var queued: Int {
-        session.phase == .verified ? session.queueRows.count : 0
-    }
-
+    
     /// The row's space: the hairline spans it from 0, and the label's light is placed on it.
     private static let space = "chat-working-row"
     @State private var lineWidth: CGFloat = 0
@@ -303,10 +296,6 @@ struct ChatWorkingRow: View {
                         .layoutPriority(1)
                         .accessibilityHidden(true)
                 }
-                if queued > 0 {
-                    ChatQueueCapsule(count: queued, expanded: queueExpanded, size: disclosure)
-                        .transition(.opacity.animation(reduceMotion ? nil : .easeOut(duration: 0.15)))
-                }
                 Button {
                     // The rows below appear in place; nothing else in the thread moves.
                     expanded.toggle()
@@ -352,39 +341,6 @@ struct ChatWorkingRow: View {
 
     @ScaledMetric(relativeTo: .subheadline) private var glyph: CGFloat = 16
     @ScaledMetric(relativeTo: .subheadline) private var disclosure: CGFloat = 28
-}
-
-/// The queue in the working row (Q1): the glyph and how many messages wait, pink on a faint pink fill, as tall as the
-/// row's discs; lit (the accent's fill, its ink on it) while the card under the row is open. A tap opens or folds it.
-struct ChatQueueCapsule: View {
-    let count: Int
-    @Binding var expanded: Bool
-    let size: CGFloat
-    @ReduceMotion private var reduceMotion
-
-    var body: some View {
-        Button { expanded.toggle() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.up.message")
-                Text("\(count)")
-                    .monospacedDigit()
-                    .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
-                    .animation(.snappy(duration: 0.25), value: count)
-            }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(expanded ? Color.onAccent : Color.dispatchPink)
-            .padding(.horizontal, size * 0.32)
-            .frame(minWidth: size, minHeight: size)
-            .background(expanded ? Color.dispatchPink : Color.dispatchPink.opacity(0.14), in: Capsule())
-            .contentShape(.hoverEffect, Capsule())
-            .hoverEffect(.highlight)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Queued")
-        .accessibilityValue(count == 1 ? "1 message" : "\(count) messages")
-        .accessibilityHint(expanded ? "Hides the queued messages" : "Shows the queued messages")
-        .accessibilityAddTraits(expanded ? .isSelected : [])
-    }
 }
 
 /// The thinking line for VoiceOver: "claude is thinking, 40 seconds", the steps as its value. The time is spoken in

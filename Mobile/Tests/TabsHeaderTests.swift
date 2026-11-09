@@ -17,7 +17,8 @@ final class TabsHeaderTests: XCTestCase {
     static let short = "ciphers"
     static let long = "See how we can speed-up sha3 without writing new code yet, and keep the tests green."
 
-    /// A title that fits on one line keeps "mba2 · ciphers" under it; a long one takes two lines and drops it.
+    /// A title that fits on one line keeps the host line under it ("mba2" alone: the title is the folder's name, and VoiceOver
+    /// reads the whole path); a long one takes two lines and drops it.
     func testATitleThatFitsKeepsTheHostLineALongOneTakesTwoLines() async throws {
         AccessibilityLabelTests.enableAccessibility()
         for width in Self.widths {
@@ -32,7 +33,7 @@ final class TabsHeaderTests: XCTestCase {
                     labels = Self.labels(in: window)
                     return labels[title] != nil && labels["Tab menu"] != nil
                 }
-                XCTAssertEqual(labels["mba2 · ciphers"] != nil, title == Self.short, "\(name): the host line, \(labels.keys.sorted())")
+                XCTAssertEqual(labels["mba2, ~/src/ciphers"] != nil, title == Self.short, "\(name): the host line, \(labels.keys.sorted())")
                 heights[title] = labels[title]?.height
                 try write(window, "header-\(title == Self.short ? "short" : "long")-\(Int(width))")
             }
@@ -45,6 +46,9 @@ final class TabsHeaderTests: XCTestCase {
     func testTheSubtitleNamesTheFolder() {
         let host = TabsFixtures.host
         XCTAssertEqual(TabScreenHeader.folder("/Users/alex/src/ciphers", host: host), "ciphers")
+        XCTAssertNil(TabScreenHeader.distinct("ciphers", from: "Ciphers"), "Never the folder under a title that names it")
+        XCTAssertEqual(TabScreenHeader.distinct("ciphers", from: "Speed up sha3"), "ciphers")
+        XCTAssertEqual(TabScreenHeader.distinct("ciphers", from: nil), "ciphers")
         XCTAssertEqual(TabScreenHeader.folder("/Users/alex", host: host), "~")
         XCTAssertEqual(TabScreenHeader.folder("/srv/app/", host: host), "app")
         XCTAssertEqual(TabScreenHeader.folder("/", host: host), "/")
@@ -198,7 +202,7 @@ extension TabsHeaderTests {
                     XCTAssertLessThanOrEqual(mode.maxX, edges.maxX, "\(name): \(mode)")
                     XCTAssertGreaterThan(mode.minX, edges.midX, "\(name): the mode button at the trailing edge, \(mode)")
                     if title == Self.short {
-                        XCTAssertNotNil(labels["mba2 · ciphers"], "\(name): a short title keeps the host line")
+                        XCTAssertNotNil(labels["mba2, ~/src/ciphers"], "\(name): a short title keeps the host line")
                     }
                     try write(window, "header-\(title == Self.short ? "short" : "long")-\(segment)\(listening ? "-listening" : "")-\(Int(width))")
                 }

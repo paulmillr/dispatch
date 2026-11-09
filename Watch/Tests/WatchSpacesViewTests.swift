@@ -117,11 +117,13 @@ final class WatchSpacesViewTests: XCTestCase {
         XCTAssertEqual(SpacesText.destination(unbound), .tab(WatchTabRoute(host: lab, tab: "tab_6")))
     }
 
-    func testDeepFoldersKeepTheirLastTwoComponents() {
+    func testFoldersAreTheirNamesSaidOnce() {
         XCTAssertEqual(SpacesText.folder("~"), "~")
-        XCTAssertEqual(SpacesText.folder("~/src/dispatch"), "~/src/dispatch")
-        XCTAssertEqual(SpacesText.folder("~/src/work/dispatch"), "…/work/dispatch")
-        XCTAssertEqual(SpacesText.folder("/srv/data/models/run-7"), "…/models/run-7")
+        XCTAssertEqual(SpacesText.folder("/"), "/")
+        XCTAssertEqual(SpacesText.folder("~/src/dispatch/"), "dispatch")
+        XCTAssertEqual(SpacesText.folder("/srv/data/models/run-7"), "run-7")
+        XCTAssertNil(SpacesText.folder("~/src/dispatch", besides: "Dispatch"), "A space named for its folder says it once")
+        XCTAssertEqual(SpacesText.folder("~/src/dispatch", besides: "notes"), "dispatch")
         XCTAssertNil(SpacesText.folder(""))
         XCTAssertNil(SpacesText.folder(nil))
     }

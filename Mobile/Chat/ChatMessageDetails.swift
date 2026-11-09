@@ -88,6 +88,9 @@ struct ChatMessageDetails: View {
                 Button("Reply", systemImage: "arrowshape.turn.up.left") { reply() }
             }
             ShareLink(item: row.item.text) { Label("Share…", systemImage: "square.and.arrow.up") }
+            if !MobileVoiceConversation.shared.active(for: session) {
+                ChatReadAloudButton(reader: MobileMessageReader.shared, text: row.item.text, row: row.id)
+            }
             if let showTerminal {
                 Divider()
                 Button("Show in Terminal", systemImage: "apple.terminal") { showTerminal() }

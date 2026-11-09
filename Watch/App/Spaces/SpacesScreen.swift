@@ -223,7 +223,7 @@ struct SpacesSpaceRow: View {
                     }
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if let folder = SpacesText.folder(space.folder) {
+                    if let folder = SpacesText.folder(space.folder, besides: space.name) {
                         Text(folder).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }
                     Spacer(minLength: 2)

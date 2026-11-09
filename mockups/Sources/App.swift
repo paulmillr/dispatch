@@ -68,9 +68,10 @@ enum Screens {
         case "C4b-chat-goal-sheet": ChatGoalScreen(sheet: true)
         case "C5-chat-conversation": ChatConversationScreen()
         case "C6-chat-jump": ChatJumpScreen()
-        // The queue in the working row.
-        case "Q1-queue-capsule": QueueRowScreen()
-        case "Q1b-queue-capsule-open": QueueRowScreen(open: true)
+        // The queue: queued messages as faded bubbles (Messages' Send Later).
+        case "Q1-queue-bubbles": QueueRowScreen()
+        case "Q1b-queue-menu": QueueRowScreen(variant: .menu)
+        case "Q1c-queue-editing": QueueRowScreen(variant: .editing)
         case "Q6-queue-paused": QueuePausedScreen()
         // Message details.
         case "M1-message-info": MessageInfoScreen()

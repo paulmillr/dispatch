@@ -403,6 +403,71 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(helper.requests("queue.start").first?.params["mode"] as? String, "steer", "Send now interrupts the turn")
     }
 
+    /// The loading line says what the conversation waits for: the helper's answer, then the agent's transcript being
+    /// read; seconds only from the third on.
+    func testLoadingSaysItsStageAndTime() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = MobileChatSession.scripted(helper, outbox: ChatOutbox(store: ChatOutboxMemoryStore()))
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        XCTAssertTrue(chat.loadingHistory)
+        XCTAssertFalse(chat.historyPending, "Opening: the helper has not answered")
+        XCTAssertNotNil(chat.loadingSince)
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.history", ChatFixture.history(session: conversation, key: "claude", state: ChatFixture.state(busy: false), pending: true))
+        try await TestSupport.eventually { chat.historyPending }
+        helper.notify(id, "chat.history", ChatFixture.history(session: conversation, key: "claude", records: []))
+        try await TestSupport.eventually { !chat.loadingHistory }
+        XCTAssertFalse(chat.historyPending)
+        XCTAssertNil(chat.loadingSince)
+        XCTAssertEqual(ChatLoadingLine.text("Opening conversation…", elapsed: 2.9), "Opening conversation…")
+        XCTAssertEqual(ChatLoadingLine.text("Opening conversation…", elapsed: 4.2), "Opening conversation… · 4s")
+    }
+
+    /// A queued bubble's Edit (M5c): the message into the composer, the draft there set aside; Cancel brings the draft
+    /// back untouched, the composer's ✓ saves the text in the message's place (by its revision). A message that went out
+    /// meanwhile keeps the edit as the draft, with the reason.
+    func testEditingAQueuedMessageInTheComposerSetsTheDraftAside() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.queue", ["terminal": 7, "session": conversation, "error": NSNull(), "items": [
+            ChatFixture.queued("held-1", "Also cover invoice.paid", revision: 4)]])
+        try await TestSupport.eventually { chat.queue.count == 1 }
+        chat.drafts.edit(text: "half a thought")
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertTrue(chat.canEditQueued(row))
+
+        chat.beginQueueEdit(row)
+        XCTAssertEqual(chat.queueEdit?.row, row.id)
+        XCTAssertEqual(chat.drafts.current.text, "Also cover invoice.paid")
+        chat.drafts.edit(text: "Also cover invoice.paid and refunds")
+        chat.endQueueEdit(save: false)
+        XCTAssertNil(chat.queueEdit)
+        XCTAssertEqual(chat.drafts.current.text, "half a thought", "Cancel: the draft is back")
+        XCTAssertTrue(helper.requests("queue.update").isEmpty)
+
+        chat.beginQueueEdit(row)
+        chat.drafts.edit(text: "Also cover invoice.paid and refunds")
+        chat.endQueueEdit(save: true)
+        try await TestSupport.eventually { helper.requests("queue.update").count == 1 && !chat.queueBusy }
+        let update = try XCTUnwrap(helper.requests("queue.update").first)
+        XCTAssertEqual(update.params["item"] as? String, "held-1")
+        XCTAssertEqual(update.params["revision"] as? UInt64, 4)
+        XCTAssertEqual(update.params["text"] as? String, "Also cover invoice.paid and refunds")
+        XCTAssertEqual(chat.drafts.current.text, "half a thought", "Saved: the draft is back")
+
+        chat.beginQueueEdit(try XCTUnwrap(chat.queueRows.first))
+        chat.drafts.edit(text: "Too late")
+        helper.notify(id, "chat.queue", ["terminal": 7, "session": conversation, "error": NSNull(), "items": [Any]()])
+        try await TestSupport.eventually { chat.queueRows.isEmpty }
+        chat.endQueueEdit(save: true)
+        XCTAssertEqual(chat.drafts.current.text, "Too late", "Gone out meanwhile: the edit stays as the draft")
+        XCTAssertNotNil(chat.queueEditNote)
+        XCTAssertEqual(helper.requests("queue.update").count, 1)
+    }
+
     func testAFailedReorderPutsTheRowsBack() async throws {
         let helper = ScriptedHelper()
         script(helper) { request in request.method == "queue.reorder" ? .error(code: "expired", message: "The queued message changed") : nil }
@@ -1042,7 +1107,7 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(row.text, "Then this one")
         XCTAssertEqual(row.attachments.map(\.path), [Self.stored])
         XCTAssertFalse(row.editable, "Not edited in place")
-        XCTAssertEqual(ChatQueueCard.accessibilityLabel(row), "Then this one, Image")
+        XCTAssertEqual(ChatQueuedBubbles.accessibilityLabel(row), "Then this one, Image")
         helper.notify(try XCTUnwrap(helper.subscription("chat.open")), "chat.queue", ["terminal": 7, "session": conversation, "items": [
             ["id": "held-1", "mode": "prompt", "revision": 2, "editable": false, "editing": false, "paused": NSNull(), "error": NSNull(),
              "preview": [["kind": "text", "text": "Then this one"], ["kind": "attachment", "type": "image"]]]], "error": NSNull()])

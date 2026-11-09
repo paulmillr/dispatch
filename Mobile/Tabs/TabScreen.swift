@@ -38,7 +38,7 @@ extension TabScreen where Terminal == AnyView, Chat == AnyView {
     /// With the injected segment views (`TabsContent`).
     init(model: MobileTabs, ref: TabRef, path: Binding<[TabsRoute]>, content: TabsContent) {
         self.init(model: model, ref: ref, path: path, terminal: content.terminal, chat: content.chat,
-                  terminalSubtitle: content.terminalSubtitle, terminalDirectory: content.terminalDirectory,
+                  terminalDirectory: content.terminalDirectory,
                   chatTrailing: content.chatTrailing, chatMenu: content.chatMenu, files: content.files,
                   gitFacts: content.gitFacts)
     }
@@ -58,8 +58,6 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     @Binding var path: [TabsRoute]
     let terminal: @MainActor (MobileTab, MobilePane) -> Terminal
     let chat: @MainActor (MobileTab, MobilePane) -> Chat
-    /// The Terminal segment's subtitle after the host (`TabsContent.terminalSubtitle`).
-    var terminalSubtitle: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
     /// The Terminal segment's folder as the shell reports it (`TabsContent.terminalDirectory`); nil: the topology's.
     var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
     /// The Chat segment's trailing header controls around the host disc (`TabsContent.chatTrailing`); nil: the disc.
@@ -216,7 +214,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
             if !strip, let tab, let workspace {
                 TabScreenHeader(tab: tab, title: model.label(of: tab, host: workspace.host), host: workspace.host,
                                 space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref), backTitle: backTitle,
-                                segment: current(tab), terminalSubtitle: tab.activePane.flatMap { terminalSubtitle(tab, $0) },
+                                segment: current(tab),
                                 terminalDirectory: tab.activePane.flatMap { terminalDirectory(tab, $0) },
                                 column: column, showsBack: !splitDetail,
                                 segmentSelection: segmentInHeader ? Binding(get: { current(tab) }, set: { choose($0) }) : nil,
@@ -382,9 +380,10 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                 .ignoresSafeArea(.container, edges: .vertical)
                 .overlay(alignment: .top) {
                     if titleShown, let workspace {
-                        TabTitleChip(title: model.label(of: tab, host: workspace.host), host: workspace.host,
-                                     folder: TabScreenHeader.folder(tab.activePane?.cwd ?? workspace.space(of: tab)?.cwd,
-                                                                    host: workspace.host))
+                        let label = model.label(of: tab, host: workspace.host)
+                        TabTitleChip(title: label, host: workspace.host,
+                                     folder: TabScreenHeader.distinct(TabScreenHeader.folder(tab.activePane?.cwd ?? workspace.space(of: tab)?.cwd,
+                                                                                             host: workspace.host), from: label))
                             .padding(.top, 8)
                             .transition(.opacity)
                             .allowsHitTesting(false)
@@ -633,8 +632,6 @@ struct TabScreenHeader: ToolbarContent {
     /// What Back returns to: its VoiceOver label.
     var backTitle = "Back"
     let segment: TabSegment
-    /// Terminal's "~/src/app · zsh" from the terminal itself, when it knows (beside the Duo's sidebar).
-    var terminalSubtitle: String? = nil
     /// Terminal's folder from the terminal itself, when it knows (the phone's subtitle).
     var terminalDirectory: String? = nil
     /// The column the bar is in (`TabsScreenHeader.column`).
@@ -737,22 +734,24 @@ struct TabScreenHeader: ToolbarContent {
         segment == .chat ? tab.panes.filter { $0.agent != nil } : tab.panes
     }
 
-    /// Beside the Duo's sidebar. Chat and Files: host · cwd (mono). Terminal: host · cwd · shell (M6a).
-    private var subtitle: some View {
-        if segment == .terminal, let terminalSubtitle {
-            return TabsHostPath(host: host, path: terminalSubtitle, trailing: nil, mono: false)
-        }
-        let pane = segment == .chat ? (tab.agentPane ?? tab.activePane) : tab.activePane
-        let cwd = host.abbreviate(pane?.cwd ?? space?.cwd)
-        return TabsHostPath(host: host, path: cwd, trailing: segment == .terminal ? tab.program : nil, mono: segment != .terminal)
-    }
+    /// Beside the Duo's sidebar: the phone's line (`folderSubtitle`), host · folder's name, and the shell in Terminal.
+    private var subtitle: some View { folderSubtitle }
 
     /// The phone's (X9b): host · folder, and the shell's name in Terminal ("mba2 · app · zsh").
     private var folderSubtitle: some View {
         let pane = segment == .chat ? (tab.agentPane ?? tab.activePane) : tab.activePane
         let directory = (segment == .terminal ? terminalDirectory : nil) ?? pane?.cwd ?? space?.cwd
         let shell = segment == .terminal ? tab.program.map(TerminalSubtitle.name(ofShell:)).flatMap { $0.isEmpty ? nil : $0 } : nil
-        return TabsHostPath(host: host, path: Self.folder(directory, host: host), trailing: shell, mono: false)
+        return TabsHostPath(host: host, path: Self.distinct(Self.folder(directory, host: host), from: title ?? tab.name),
+                            trailing: shell, mono: false, full: host.abbreviate(directory))
+    }
+
+    /// `folder`, unless the name beside it already is that folder's (an automatic name, a space named for its folder):
+    /// the host line then says the host alone, never "app" under "app".
+    static func distinct(_ folder: String?, from name: String?) -> String? {
+        guard let folder, let name, folder.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame
+        else { return folder }
+        return nil
     }
 
     /// A folder's name: its path's last component, "~" for the home folder, "/" for the root.
@@ -783,6 +782,8 @@ struct TabHeaderMenu: View {
     @Environment(\.tabsNavigator) private var navigator
 
     static let identifier = "tab-menu"
+    /// The menu opened (a tap felt, `menuOpenHaptic`).
+    @State private var opened = 0
 
     private var picksPane: Bool { TabScreenHeader.panes(tab, segment: segment).count > 1 }
 
@@ -806,22 +807,27 @@ struct TabHeaderMenu: View {
 
     private var menu: some View {
         Menu {
-            if let chat { chat }
-            if picksPane {
-                Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
-            }
-            if let navigator {
-                Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
-                Section(host.name) {
-                    Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = host.id }
+            // Its items appearing count the opening, for the haptic.
+            Group {
+                if let chat { chat }
+                if picksPane {
+                    Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
+                }
+                if let navigator {
+                    Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
+                    Section(host.name) {
+                        Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = host.id }
+                    }
                 }
             }
+            .menuOpened($opened)
         } label: {
             disc
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .tint(Color.primary)
+        .menuOpenHaptic(opened)
         .glassEffect(inCapsule ? .identity : .regular.interactive(), in: Circle())
         .contentShape(.hoverEffect, Circle())
         .hoverEffect(.highlight)
@@ -879,6 +885,8 @@ struct TabHeaderBackAndMenu<Content: View>: View {
 /// returns to Terminal. Held, every mode: Terminal, Chat, then Files, Review and Commits (those two inside a
 /// repository), the shown one checked. (A button-style Toggle draws on as a pink prominent disc and takes no menu.)
 struct TabModeButton: View {
+    /// The hold opened every mode (a tap felt, `menuOpenHaptic`).
+    @State private var modesOpened = 0
     let shown: TabSegment
     /// An agent runs in the tab (`MobileTab.isChat`).
     let agent: Bool
@@ -918,6 +926,7 @@ struct TabModeButton: View {
     var body: some View {
         Menu {
             item("Terminal", TabSegment.terminal.symbol, checked: shown == .terminal) { choose(.terminal, nil) }
+                .menuOpened($modesOpened)
             if segments.contains(.chat) {
                 item("Chat", TabSegment.chat.symbol, checked: shown == .chat) { choose(.chat, nil) }
                     .disabled(!agent && shown != .chat)
@@ -936,6 +945,7 @@ struct TabModeButton: View {
         } primaryAction: {
             if let next { choose(next, nil) }
         }
+        .menuOpenHaptic(modesOpened)
         // The bar draws its items in their tint: the accent when on, the label colour when off.
         .tint(on ? Color.dispatchPink : Color.primary)
         .disabled(next == nil && !segments.contains(.chat) && !segments.contains(.files))

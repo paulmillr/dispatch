@@ -2,6 +2,7 @@
 import Dictation
 import Foundation
 import Observation
+import UIKit
 
 /// Conversation mode (C5): hands-free chat with one conversation. The microphone listens continuously (`Dictation`,
 /// cut into utterances at the speaker's pauses); what is said collects into a message that is sent when the user says
@@ -72,6 +73,7 @@ final class MobileVoiceConversation {
         let token = run
         self.session = session
         phase = .listening
+        ScreenAwake.hold(Self.awake, true)
         heard = ""; message = ""; note = nil; failure = nil; reading = nil; added = []; queue = []
         // What is already there was seen; only what comes next is read.
         announced = Set(Self.events(session).map(\.key))
@@ -97,9 +99,13 @@ final class MobileVoiceConversation {
         speaker.stop()
         listener.stop()
         phase = .off
+        ScreenAwake.hold(Self.awake, false)
         heard = ""; message = ""; reading = nil; added = []
         session = nil
     }
+
+    /// Hands-free: the phone must not lock while it listens (`ScreenAwake`).
+    static let awake = "conversation-mode"
 
     // MARK: What it hears
 
@@ -436,5 +442,113 @@ final class MobileVoiceConversation {
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in self.done() }
+    }
+}
+
+/// Read Aloud on one message (a bubble's long press, message details' ⋯): the whole message in the system's voice,
+/// its code blocks and tables said in a few words (`SpokenMarkdown.message`). One message at a time: reading another
+/// stops the first. Spoken audio that lowers other audio while it reads, and lets it back up after. Conversation mode
+/// reads replies itself, so the action hides while it is on.
+@MainActor @Observable
+final class MobileMessageReader {
+    static let shared = MobileMessageReader()
+
+    /// The message being read (its row) and since when.
+    private(set) var reading: (row: String, since: Date)?
+
+    @ObservationIgnored private let speaker: any MessageSpeaker
+    @ObservationIgnored private var token = 0
+
+    init(speaker: any MessageSpeaker = SystemMessageSpeaker()) { self.speaker = speaker }
+
+    func isReading(_ row: String) -> Bool { reading?.row == row }
+
+    /// Reads `markdown` aloud as message `row`, or stops if that message is being read.
+    func toggle(_ markdown: String, row: String) {
+        if isReading(row) { return stop() }
+        let text = SpokenMarkdown.message(markdown)
+        guard !text.isEmpty else { return }
+        token += 1
+        let token = token
+        reading = (row, Date())
+        ScreenAwake.hold(Self.awake, true)
+        speaker.speak(text) { [weak self] in
+            // A message read after this one has the reader now: its end is not this one's.
+            guard let self, self.token == token else { return }
+            self.reading = nil
+            ScreenAwake.hold(Self.awake, false)
+        }
+    }
+
+    func stop() {
+        token += 1
+        reading = nil
+        ScreenAwake.hold(Self.awake, false)
+        speaker.stop()
+    }
+
+    /// A long message must not be cut off by the lock (`ScreenAwake`).
+    static let awake = "read-aloud"
+}
+
+/// What reads a message aloud; tests stand in for the system's voice.
+@MainActor protocol MessageSpeaker: AnyObject {
+    /// Speaks `text` in place of anything being spoken, then calls `finished` once it ends or is stopped.
+    func speak(_ text: String, finished: @escaping @MainActor () -> Void)
+    func stop()
+}
+
+/// The system's voice for Read Aloud, on the audio session as spoken audio that ducks others; the session is given
+/// back when nothing is left to read.
+@MainActor final class SystemMessageSpeaker: NSObject, MessageSpeaker, AVSpeechSynthesizerDelegate {
+    private let synthesizer = AVSpeechSynthesizer()
+    /// Each utterance's end, by the utterance: a stopped one's cancel arrives after the next has started.
+    private var endings: [ObjectIdentifier: @MainActor () -> Void] = [:]
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func speak(_ text: String, finished: @escaping @MainActor () -> Void) {
+        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
+        let utterance = AVSpeechUtterance(string: text)
+        endings[ObjectIdentifier(utterance)] = finished
+        synthesizer.speak(utterance)
+    }
+
+    func stop() { synthesizer.stopSpeaking(at: .immediate) }
+
+    private func ended(_ utterance: ObjectIdentifier) {
+        endings.removeValue(forKey: utterance)?()
+        guard endings.isEmpty, !synthesizer.isSpeaking else { return }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.ended(id) }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.ended(id) }
+    }
+}
+
+/// Keeps the screen from locking while something hands-free runs (conversation mode, Read Aloud): the lock would send
+/// the app to the background, where it may neither listen nor speak, and conversation mode ends there. Held by name;
+/// the system's auto-lock is back as soon as nothing holds it. Locking by hand still locks.
+@MainActor enum ScreenAwake {
+    private static var holders: Set<String> = []
+
+    static var held: Bool { !holders.isEmpty }
+
+    static func hold(_ holder: String, _ on: Bool) {
+        if on { holders.insert(holder) } else { holders.remove(holder) }
+        if UIApplication.shared.isIdleTimerDisabled != held { UIApplication.shared.isIdleTimerDisabled = held }
     }
 }

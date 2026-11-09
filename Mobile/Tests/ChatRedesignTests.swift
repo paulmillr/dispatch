@@ -557,6 +557,7 @@ final class ChatRedesignTests: XCTestCase {
         let voice = MobileVoiceConversation(listener: listener, speaker: speaker)
         voice.sendDelay = .seconds(60)
         voice.start(chat)
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled, "Hands-free: the phone does not lock while it listens")
         listener.update?(.utterance("Fix the login bug"))
         listener.update?(.utterance("and the logout one"))
         listener.update?(.utterance("scratch that"))
@@ -578,14 +579,17 @@ final class ChatRedesignTests: XCTestCase {
         voice.stop()
         XCTAssertEqual(voice.phase, .off)
         XCTAssertFalse(listener.listening)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "Off: the system's auto-lock is back")
         XCTAssertEqual(chat.drafts.current.text, "Half a thought and more", "Unsent words go to the draft")
 
         voice.start(chat)
         listener.update?(.utterance("stop listening"))
         XCTAssertEqual(voice.phase, .off)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
         voice.start(chat)
         listener.update?(.ended)
         XCTAssertEqual(voice.phase, .off, "The listener stopping ends conversation mode")
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
     }
 
     func testAPartialThatNeverFinalizesDoesNotHoldBackTheSendOrTheReading() async throws {
@@ -634,6 +638,48 @@ final class ChatRedesignTests: XCTestCase {
     func start(update: @escaping @MainActor (DictationUpdate) -> Void) { listening = true; self.update = update }
     func mute(_ muted: Bool) { self.muted = muted }
     func stop() { listening = false; update = nil }
+}
+
+/// Read Aloud in tests: what it was asked to say, each reading's end held until `finish(_:)`.
+@MainActor final class ScriptedMessageSpeaker: MessageSpeaker {
+    private(set) var spoken: [String] = []
+    private var endings: [@MainActor () -> Void] = []
+    func speak(_ text: String, finished: @escaping @MainActor () -> Void) { spoken.append(text); endings.append(finished) }
+    /// Stopping ends what is being read; its end arrives later, as the system's cancel does.
+    func stop() {}
+    func finish(_ index: Int) { endings[index]() }
+}
+
+extension ChatRedesignTests {
+    /// A message's Read Aloud: the message as words, its code said, not read; the same message again stops it;
+    /// another message takes over, and the first one's late end does not end it.
+    func testReadAloudReadsOneMessageAndStops() {
+        let speaker = ScriptedMessageSpeaker()
+        let reader = MobileMessageReader(speaker: speaker)
+        reader.toggle("Run the tests:\n\n```sh\nswift test\n```", row: "reply-1")
+        XCTAssertEqual(speaker.spoken, ["Run the tests:\nShell command."])
+        XCTAssertTrue(reader.isReading("reply-1"))
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled, "The phone does not lock while it reads")
+        reader.toggle("Run the tests:", row: "reply-1")
+        XCTAssertNil(reader.reading, "Its own Stop Reading")
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+
+        reader.toggle("First.", row: "reply-1")
+        reader.toggle("Second.", row: "reply-2")
+        XCTAssertTrue(reader.isReading("reply-2"))
+        speaker.finish(1)
+        XCTAssertTrue(reader.isReading("reply-2"), "The first reading's end, arriving late, is not the second's")
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
+        speaker.finish(2)
+        XCTAssertNil(reader.reading)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "Read to the end: the system's auto-lock is back")
+        reader.toggle("---", row: "reply-3")
+        XCTAssertEqual(speaker.spoken.count, 3, "Nothing to say: nothing read")
+        XCTAssertNil(reader.reading)
+        reader.toggle("Third.", row: "reply-3")
+        reader.stop()
+        XCTAssertNil(reader.reading)
+    }
 }
 
 /// Conversation mode's voice in tests: what it was asked to say; `finish` ends the reading.

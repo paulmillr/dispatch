@@ -616,14 +616,6 @@ final class MobileComposition {
                     .onDisappear { self.alerts?.onScreen.remove(key) }
                     .id(key))
             },
-            terminalSubtitle: { tab, pane in
-                // The sample's hosts have no hello: the tab's own folder and program, shortened by the sample's home.
-                if sample { return nil }
-                let presence = presences.presence(.init(host: tab.ref.host, node: pane.key))
-                let homes = HomePath(hosts.session(tab.ref.host)?.hello)
-                let text = TerminalSubtitle.text(directory: presence?.directory ?? pane.cwd, shell: tab.program, homes: homes)
-                return text.isEmpty ? nil : text
-            },
             terminalDirectory: { tab, pane in
                 if sample { return nil }
                 return presences.presence(.init(host: tab.ref.host, node: pane.key))?.directory

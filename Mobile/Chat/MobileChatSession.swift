@@ -86,7 +86,17 @@ final class MobileChatSession: Identifiable {
     /// read these, which change only when the step or the turn does, never with every streamed word of the transcript.
     private(set) var currentStep: String?
     private(set) var openTurnStarted: Date?
-    private(set) var loadingHistory = false
+    private(set) var loadingHistory = false {
+        didSet {
+            guard loadingHistory != oldValue else { return }
+            loadingSince = loadingHistory ? Date() : nil
+            if !loadingHistory { historyPending = false }
+        }
+    }
+    /// When the conversation began loading (the loading line's clock).
+    private(set) var loadingSince: Date?
+    /// The helper answered and is reading the transcript (`history_pending`): the loading line's second stage.
+    private(set) var historyPending = false
     private(set) var earlier: String?
     var hasEarlier: Bool { earlier != nil }
     /// An earlier page can load now: there is one and the conversation is verified.
@@ -467,6 +477,7 @@ final class MobileChatSession: Identifiable {
         }
         if history.history_pending {
             loadingHistory = transcript.isEmpty && named != nil
+            historyPending = loadingHistory
         } else {
             loadingHistory = false
             transcript.apply(history.records, historical: true, prepare: reconcile)
@@ -1445,6 +1456,55 @@ final class MobileChatSession: Identifiable {
         guard case .device(let id) = row.source, let item = queueItems.first(where: { $0.id == id }), item.helperID == nil else { return }
         drafts.restore(ChatDraft(text: item.text, multiline: item.text.contains("\n"), attachments: item.attachments))
         outbox.remove(id)
+    }
+
+    /// A queued message being edited in the composer (a queued bubble's Edit): its row, and the draft set aside for it
+    /// (kept among the saved drafts, brought back when the edit ends). The composer's send saves it in its place.
+    struct QueueEdit: Equatable {
+        let row: String
+        let aside: UUID?
+    }
+    private(set) var queueEdit: QueueEdit?
+    /// Why the last edit's save did not land in the queue (the message had gone out meanwhile); the text stays a draft.
+    var queueEditNote: String?
+
+    /// Whether a queued message can be edited in the composer: text only (the helper's queue refuses a change to one
+    /// with attachments), and one the helper's queue holds only while the link is verified.
+    func canEditQueued(_ row: QueueRow) -> Bool {
+        guard row.editable, draftUploads.isEmpty else { return false }
+        if phase == .verified { return !queueBusy }
+        guard case .device(let id) = row.source else { return false }
+        return queueItems.first { $0.id == id }?.helperID == nil
+    }
+
+    /// Edit: the message's text into the composer, the draft there set aside until the edit ends.
+    func beginQueueEdit(_ row: QueueRow) {
+        guard canEditQueued(row) else { return }
+        if queueEdit != nil { endQueueEdit(save: false) }
+        queueEditNote = nil
+        let aside = drafts.current.isEmpty ? nil : drafts.current.id
+        if aside != nil { drafts.keep() }
+        drafts.edit(text: row.text, multiline: row.text.contains("\n"))
+        queueEdit = QueueEdit(row: row.id, aside: aside)
+    }
+
+    /// Ends the edit: `save` puts the composer's text in the message's place (an empty text saves nothing). A message
+    /// that went out meanwhile keeps the edited text as the draft, with the reason; otherwise the draft set aside comes
+    /// back.
+    func endQueueEdit(save: Bool) {
+        guard let edit = queueEdit else { return }
+        queueEdit = nil
+        let text = drafts.current.text
+        if save, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard let row = queueRows.first(where: { $0.id == edit.row }) else {
+                queueEditNote = "That message was already sent. Your edit is kept here as a draft."
+                return
+            }
+            if text != row.text { editQueued(row, text: text) }
+        }
+        drafts.select(nil)
+        drafts.discard()
+        if let aside = edit.aside { drafts.select(aside) }
     }
 
     /// Resumes a queue paused after Stop: the helper's (`queue.restore`) and the device's own items.

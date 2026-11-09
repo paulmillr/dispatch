@@ -842,6 +842,20 @@ extension TabsCommandTests {
         actions.model.workspace(TabsFixtures.host.id)!.tab(key)!.ref
     }
 
+    /// Rename starts from what the tab shows: an agent's conversation title, not the window's automatic name (tmux names
+    /// it after the running command, the agent's launcher `dispatch-helper`); a tab the user named, from that name.
+    func testRenameStartsFromTheShownTitle() throws {
+        let (helper, actions, _, _) = actions([], state: nil)
+        defer { helper.close() }
+        let claude = ref(actions, "herdr:app:1")
+        actions.model.conversationTitle = { _, _ in "Fix the invoice rounding" }
+        actions.rename(.tab(claude))
+        XCTAssertEqual(actions.name, "Fix the invoice rounding")
+        XCTAssertEqual(actions.name, actions.model.label(of: try XCTUnwrap(actions.model.tab(claude)), host: nil))
+        actions.commitRename()
+        XCTAssertTrue(helper.requests.isEmpty, "Unchanged: the tab keeps following its conversation, nothing is renamed")
+    }
+
     func testCloseOfAFinishedAgentTerminatesAtOnce() async throws {
         for state in [PaneUrgency.idle, .unread] {
             let (helper, actions, sketch, closed) = actions([.closed(true, confirmation: false)], state: state)

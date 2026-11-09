@@ -191,6 +191,17 @@ final class MobileTabs {
         deviceState.spaceOrder = spaceOrder
     }
 
+    /// A space dragged straight from the list (no Edit) and dropped on another of its host's: it takes that space's
+    /// place, after it when it came from above and before it when from below, so either end can be reached. `visible`:
+    /// the rows shown, as `moveSpaces` takes them. Another host's space is refused.
+    @discardableResult
+    func moveSpace(_ dragged: SpaceRef, onto target: SpaceRef, visible: [String]) -> Bool {
+        guard dragged.host == target.host, dragged.key != target.key,
+              let from = visible.firstIndex(of: dragged.key), let to = visible.firstIndex(of: target.key) else { return false }
+        moveSpaces(of: target.host, visible: visible, from: [from], to: from < to ? to + 1 : to)
+        return true
+    }
+
     /// Drag in M1e: a dragged host lands before `target` (or last); the list follows at once and the new order goes to
     /// the host store (`actions`).
     func moveHost(_ id: UUID, before target: UUID?, actions: SpacesHostActions) {
@@ -326,6 +337,17 @@ final class MobileTabs {
     /// Files, else its agent's conversation title, and its agent's name for a window named after the launcher.
     func label(of tab: MobileTab, host: TabsHost?) -> String {
         let shown = segments[tab.ref] == .files ? filesName(tab, filesModes[tab.ref] ?? .files) : nil
+        return title(of: tab, host: host, conversation: shown)
+    }
+
+    /// The tab's own title, whatever its segment shows (not Files' name): what Rename starts from. A tab the user
+    /// named is that name; otherwise the title Dispatch gives it (the conversation's, the pane's), never the
+    /// multiplexer's automatic name, which is the running command (`dispatch-helper`, the agent's launcher).
+    func ownTitle(of tab: MobileTab) -> String {
+        title(of: tab, host: workspace(tab.ref.host)?.host, conversation: nil)
+    }
+
+    private func title(of tab: MobileTab, host: TabsHost?, conversation shown: String?) -> String {
         let conversation = shown ?? tab.agentPane.flatMap { conversationTitle(tab.ref.host, $0.id) }
         return tab.label(conversation: conversation, homes: host?.homes ?? HomePath(account: nil),
                   paneTitle: tab.activePane.flatMap { paneTitle(tab.ref.host, $0.key) }, agent: agent(of: tab))
