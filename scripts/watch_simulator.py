@@ -1,4 +1,4 @@
-"""The paired iPhone and Apple Watch simulators `./run.sh --watch` runs on (docs/watch.md, Building and running).
+"""The paired iPhone and Apple Watch simulators `./build.sh --watch --run` runs on (docs/watch.md, Building and running).
 
 The watch is found by name or UDID as scripts/ios_simulator.py finds an iPhone. Its phone is the one it is paired
 with; a watch without a pair is paired with a simulator of our own, "Dispatch Watch iPhone" (an iPhone 18 Pro, made

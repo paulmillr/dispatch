@@ -16,7 +16,7 @@ The host needs Apple Silicon, Xcode 26 with first launch completed, Homebrew in 
 - herdr 0.9.5 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
 - Native Codex from the global npm layout: `npm install --global --prefix /opt/homebrew @openai/codex`, giving `/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`. The runner copies the installed version and its `codex-code-mode-host` companion when present.
 
-The full suite also needs Claude Code on `PATH` and the pinned Pi from `./run.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
+The full suite also needs Claude Code on `PATH` and the pinned Pi from `./build.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
 
 ```sh
 python3 test/vm.py setup            # creates/reuses the VM from the digest-pinned image; copies host Rust + XcodeGen

@@ -120,7 +120,7 @@ final class PiChatIntegrationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) },
-                               "Run ./run.sh --test to prepare Pi")
+                               "Run ./build.sh --test to prepare Pi")
         let state = URL(fileURLWithPath: "/tmp/dispatch-pi-chat-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,

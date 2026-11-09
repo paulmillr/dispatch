@@ -33,12 +33,8 @@ final class TerminalPageMemoryTests: XCTestCase {
         #if os(macOS)
         // The suite's UI, renderer and helper callbacks allocate independently. Measure the same surface in a
         // fresh process so those allocations cannot offset its released pages in TASK_VM_INFO.
-        let directory = System.temporary.appendingPathComponent("terminal-page-memory-" + System.uuid().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let products = System.bundle.deletingLastPathComponent()
-        let binary = directory.appendingPathComponent("probe")
+        // The probe (test/fixtures/terminal-page-memory/main.swift) is built with the tests, beside the bundle.
+        let binary = System.bundle.deletingLastPathComponent().appendingPathComponent("TerminalPageMemoryProbe")
         var environment = System.inherited
         for name in environment.keys where name.hasPrefix("DYLD_") || name.hasPrefix("TEST_RUNNER_") || name.hasPrefix("XCTest") {
             environment.removeValue(forKey: name)
@@ -52,11 +48,6 @@ final class TerminalPageMemoryTests: XCTestCase {
             XCTAssertEqual(result.status, 0, String(decoding: result.errors, as: UTF8.self))
             return (result.status, result.output)
         }
-        let source = System.checkout.appendingPathComponent("test/fixtures/terminal-page-memory.swift")
-        let compiled = try run("/usr/bin/xcrun", ["swiftc", "-O", "-module-cache-path", directory.appendingPathComponent("modules").path,
-            "-F", products.path, "-framework", "Term", "-Xlinker", "-rpath", "-Xlinker", products.path,
-            source.path, "-o", binary.path])
-        guard compiled.0 == 0 else { return }
         let measured = try run(binary.path, [])
         let line = try XCTUnwrap(String(decoding: measured.1, as: UTF8.self).split(separator: "\n").last { $0.hasPrefix("PAGE_MEMORY ") })
         let values = line.split(separator: " ").dropFirst().compactMap { Int($0) }

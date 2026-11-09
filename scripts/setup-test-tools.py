@@ -56,7 +56,7 @@ def prepare(offline=False, dry_run=False):
             if not str(error).startswith('Missing compatible '):
                 raise
             if offline or os.environ.get('DISPATCH_SETUP_OFFLINE') == '1':
-                raise RuntimeError(f'Missing compatible {name}. Run ./run.sh --test online to prepare test tools.') from None
+                raise RuntimeError(f'Missing compatible {name}. Run ./build.sh --test online to prepare test tools.') from None
             missing.append(name)
     if missing:
         show_consent('Install SHA-256-verified test tools inside this checkout:')

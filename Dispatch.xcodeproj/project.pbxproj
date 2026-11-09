@@ -401,6 +401,7 @@
 		86C5955C403D632D7DEE7947 /* SharedStatsVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4EEBAAD1EA5A27703F94AF /* SharedStatsVoiceTests.swift */; };
 		8718E1DD895D255877BEC170 /* startup.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DFEDEB6E1E7B837C6E6B1F4 /* startup.json */; };
 		872F6BAC72CA51ECF8AA21EA /* NativeChatCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8AB4C40A3A88E2A37D1121 /* NativeChatCommandTests.swift */; };
+		8807A2B15210E797DA5B80D7 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FE0BAF090F72042CCCCB041 /* main.swift */; };
 		88446CBA8401DBA7E471E7CD /* ChatEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FCA65A469AA5B02AF4FE1A6 /* ChatEndToEndTests.swift */; };
 		88A4EA04CEED9B54EC229F9A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F41DFAEE8DEAE57308D7D55E /* AppDelegate.swift */; };
 		88D621D254688396ED44D50F /* FileFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = D948F566146912879C59C75A /* FileFormat.swift */; };
@@ -537,6 +538,7 @@
 		B53C9F32589B6C44923B4A46 /* ChatComposerMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8F149D58A6D789D4283007 /* ChatComposerMotion.swift */; };
 		B54071054D2E4A90F7B2F9AA /* TmuxOutputPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52D7A5F1A477558D8FF38FED /* TmuxOutputPerformanceTests.swift */; };
 		B555483DE2B97DAE142F860D /* fse_compress.c in Sources */ = {isa = PBXBuildFile; fileRef = 8FA4E9662109E15C523F497C /* fse_compress.c */; };
+		B57EC2CD4D33B7557B016CDF /* Term.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D524BFB06806D5CF1FEECC0B /* Term.framework */; };
 		B57F35542EDF0FBF9D720EE9 /* TerminalCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F8D6EE739E0C9E60DF28AD9 /* TerminalCoreTests.swift */; };
 		B6100407098733AC1F73C246 /* Atlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114ECF00E42DF5F436CBCBA2 /* Atlas.swift */; };
 		B634112AFE4A3922772B18AF /* ImportPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7977847DAFB3F66089FB7E0 /* ImportPlan.swift */; };
@@ -751,6 +753,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		43EC3AFCF4BBCD3EAB337FD5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 14AA8085D6B9BBFD53B912AB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2BD5640496F041D1472F45D6;
+			remoteInfo = Term;
+		};
 		4BF5A2BBF5C3A984D2889D4D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 14AA8085D6B9BBFD53B912AB /* Project object */;
@@ -792,6 +801,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 9DE155901122A52FEC36F9DD;
 			remoteInfo = Dispatch;
+		};
+		8257680B5AAC530247EF72C5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 14AA8085D6B9BBFD53B912AB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E905EC3DF3F5ACBFB5CA8164;
+			remoteInfo = TerminalPageMemoryProbe;
 		};
 		8B4763155FBE00620C589673 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -1104,6 +1120,7 @@
 		52E1E0F4EE74F40CDF666406 /* ChatEnergyBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatEnergyBenchmarkTests.swift; sourceTree = "<group>"; };
 		533104B8EA03F0EAA62D6D23 /* FilesFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesFormatting.swift; sourceTree = "<group>"; };
 		5353BBC1012DB136E3AAAB55 /* IntelOneMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IntelOneMono-Regular.ttf"; sourceTree = "<group>"; };
+		5436403863D77C818FF547F1 /* TerminalPageMemoryProbe */ = {isa = PBXFileReference; includeInIndex = 0; path = TerminalPageMemoryProbe; sourceTree = BUILT_PRODUCTS_DIR; };
 		543BF7BC4DD31B120089E70B /* SSHInvocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHInvocation.swift; sourceTree = "<group>"; };
 		545EADC388E657B620017ABE /* Input.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Input.swift; sourceTree = "<group>"; };
 		54B98C570FD867C93C26FA92 /* SSHReconnectOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHReconnectOverlay.swift; sourceTree = "<group>"; };
@@ -1238,6 +1255,7 @@
 		7EE6D5C08DABB1C94D3B8C52 /* ProgramStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgramStatus.swift; sourceTree = "<group>"; };
 		7F2438F1AEA70EA8B538EB00 /* IoskeleyMonoTerm-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IoskeleyMonoTerm-Bold.ttf"; sourceTree = "<group>"; };
 		7FA90B011B16544D2C1BFD64 /* FileTransferFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferFormatting.swift; sourceTree = "<group>"; };
+		7FE0BAF090F72042CCCCB041 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		7FEFD09C0E30EB2D40F28493 /* TerminalMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalMachineTests.swift; sourceTree = "<group>"; };
 		8056726ABFCC8CA8C049D8A2 /* OSC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSC.swift; sourceTree = "<group>"; };
 		805B0C571FCF57DC19C4972C /* FileTransferPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTransferPresentationTests.swift; sourceTree = "<group>"; };
@@ -1606,6 +1624,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		856893019FFEB8E81E75D1AD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B57EC2CD4D33B7557B016CDF /* Term.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -1694,6 +1720,7 @@
 				678D7A79F03B92576AE36EB9 /* libZstd.a */,
 				D524BFB06806D5CF1FEECC0B /* Term.framework */,
 				2DD959F527E377391ABDD4CA /* TermApple.framework */,
+				5436403863D77C818FF547F1 /* TerminalPageMemoryProbe */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -2211,6 +2238,15 @@
 			path = Files;
 			sourceTree = "<group>";
 		};
+		7F1B8DBC0C37974A48C1738C /* terminal-page-memory */ = {
+			isa = PBXGroup;
+			children = (
+				7FE0BAF090F72042CCCCB041 /* main.swift */,
+			);
+			name = "terminal-page-memory";
+			path = "test/fixtures/terminal-page-memory";
+			sourceTree = "<group>";
+		};
 		839FEAFED61F35C64854262C /* decompress */ = {
 			isa = PBXGroup;
 			children = (
@@ -2423,6 +2459,7 @@
 				A07401C679F02ADF3C3F7C88 /* Packages */,
 				18B1333FEC28E10526ACD76C /* Term */,
 				9D343A77925C3626BE30CAD4 /* TermApple */,
+				7F1B8DBC0C37974A48C1738C /* terminal-page-memory */,
 				C3F8A01A3F7F0FFBD4BA04C2 /* Frameworks */,
 				261B70FC90EBB0F0C3D583F8 /* Products */,
 			);
@@ -2570,6 +2607,7 @@
 			);
 			dependencies = (
 				5DF3540D242932AFBAC66E31 /* PBXTargetDependency */,
+				AEEEF1D3540294DA4B377D37 /* PBXTargetDependency */,
 				6EAB99706962E9E4D57B977F /* PBXTargetDependency */,
 				1516279CC30D91C88FE0049C /* PBXTargetDependency */,
 			);
@@ -2660,6 +2698,25 @@
 			productReference = 678D7A79F03B92576AE36EB9 /* libZstd.a */;
 			productType = "com.apple.product-type.library.static";
 		};
+		E905EC3DF3F5ACBFB5CA8164 /* TerminalPageMemoryProbe */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9BBD8D255B4D3B690E32B87E /* Build configuration list for PBXNativeTarget "TerminalPageMemoryProbe" */;
+			buildPhases = (
+				DE1A89F7AE4C811E41850FDA /* Sources */,
+				856893019FFEB8E81E75D1AD /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8782CE987A7BB9938E02012B /* PBXTargetDependency */,
+			);
+			name = TerminalPageMemoryProbe;
+			packageProductDependencies = (
+			);
+			productName = TerminalPageMemoryProbe;
+			productReference = 5436403863D77C818FF547F1 /* TerminalPageMemoryProbe */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -2687,6 +2744,9 @@
 					E4F4EC8C3ADAF99EEF93574A = {
 						ProvisioningStyle = Manual;
 					};
+					E905EC3DF3F5ACBFB5CA8164 = {
+						ProvisioningStyle = Manual;
+					};
 				};
 			};
 			buildConfigurationList = FE140F6FB49B1E6BA0BB785B /* Build configuration list for PBXProject "Dispatch" */;
@@ -2710,6 +2770,7 @@
 				66500CB6118ABDA7DB5ED22D /* TermApple */,
 				E4F4EC8C3ADAF99EEF93574A /* Zstd */,
 				9DE155901122A52FEC36F9DD /* Dispatch */,
+				E905EC3DF3F5ACBFB5CA8164 /* TerminalPageMemoryProbe */,
 				103C5B8B23A21AF77287FF3E /* DispatchTests */,
 				9F1C56ADC2E62C1FE494FD07 /* SSHHelpers */,
 			);
@@ -3522,6 +3583,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DE1A89F7AE4C811E41850FDA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8807A2B15210E797DA5B80D7 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DE5A579893A578AA95D145B2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -3581,6 +3650,16 @@
 			isa = PBXTargetDependency;
 			target = 2BD5640496F041D1472F45D6 /* Term */;
 			targetProxy = 4D0F31BFC656138738649CF4 /* PBXContainerItemProxy */;
+		};
+		8782CE987A7BB9938E02012B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2BD5640496F041D1472F45D6 /* Term */;
+			targetProxy = 43EC3AFCF4BBCD3EAB337FD5 /* PBXContainerItemProxy */;
+		};
+		AEEEF1D3540294DA4B377D37 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E905EC3DF3F5ACBFB5CA8164 /* TerminalPageMemoryProbe */;
+			targetProxy = 8257680B5AAC530247EF72C5 /* PBXContainerItemProxy */;
 		};
 		BE0EC39543D84D54042E324B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -3709,6 +3788,21 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch";
 			};
 			name = Debug;
+		};
+		56964AAABA9130C83171B9AA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5;
+			};
+			name = Release;
 		};
 		5A45DB93A2D393CCE8590A47 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -3880,6 +3974,21 @@
 			};
 			name = Release;
 		};
+		9D7ACE0259A33FE768BA1E14 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5;
+			};
+			name = Debug;
+		};
 		A34A9C0D676DB8E273E825DD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -4023,6 +4132,15 @@
 			buildConfigurations = (
 				E3BE2C5B3217F77B73490910 /* Debug */,
 				980E04F5BCCD8F3CEAD9A0B7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9BBD8D255B4D3B690E32B87E /* Build configuration list for PBXNativeTarget "TerminalPageMemoryProbe" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9D7ACE0259A33FE768BA1E14 /* Debug */,
+				56964AAABA9130C83171B9AA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

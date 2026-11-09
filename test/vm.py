@@ -38,7 +38,7 @@ IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
 # Every directory project.yml (the Mac app's project, all the guest builds) names: XcodeGen refuses the spec when a
 # target's sources or a local package are missing. The iPhone and Watch apps (project-mobile.yml) stay on the host.
 SOURCES = ["Dispatch", "DispatchTests", "Packages", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
-           "project.yml", "project-shared.yml", "run.sh"]
+           "project.yml", "project-shared.yml", "build.sh", "run.sh"]
 # The replay corpus (its own repository at replays/, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"
@@ -257,7 +257,7 @@ def sync_claude(vm):
 
 
 def pinned_tool(name):
-    """A SHA-verified project-local test tool. Never downloads; ./run.sh --test prepares it."""
+    """A SHA-verified project-local test tool. Never downloads; ./build.sh --test prepares it."""
     if str(ROOT / 'scripts') not in sys.path:
         sys.path.append(str(ROOT / 'scripts'))
     from setup_consent import load_script
@@ -265,7 +265,7 @@ def pinned_tool(name):
     try:
         return load_script('setup-build-tools').resolve(name, offline=True, lock=lock)
     except RuntimeError as error:
-        raise RuntimeError(f'{error} Prepare it with ./run.sh --test (downloads stay under build/).') from None
+        raise RuntimeError(f'{error} Prepare it with ./build.sh --test (downloads stay under build/).') from None
 
 
 _GUEST_MACOS = {}
@@ -304,13 +304,13 @@ def check_portable(vm, binary):
     available = guest_macos(vm) if required else None
     if required and required > available:
         raise RuntimeError(f'{binary} requires macOS {".".join(map(str, required))}, but {vm} runs '
-                           f'{".".join(map(str, available))}. Use a pinned project-local tool (./run.sh --test).')
+                           f'{".".join(map(str, available))}. Use a pinned project-local tool (./build.sh --test).')
     libraries = subprocess.run(['/usr/bin/otool', '-L', str(binary)], capture_output=True, text=True).stdout.splitlines()[1:]
     foreign = [line.strip().split(' (', 1)[0] for line in libraries
                if line.strip().startswith('/') and not line.strip().startswith(('/usr/lib/', '/System/'))]
     if foreign:
         raise RuntimeError(f'{binary} links host libraries the VM does not have: {", ".join(foreign)}. '
-                           'Use a pinned project-local tool (./run.sh --test).')
+                           'Use a pinned project-local tool (./build.sh --test).')
 
 
 def stage_unexecuted(source, staging):

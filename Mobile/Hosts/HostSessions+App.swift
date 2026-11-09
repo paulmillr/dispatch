@@ -8,7 +8,7 @@ extension HostSessions {
     /// screenshots and UI tests; nothing is read or written.
     static func app(environment: [String: String] = ProcessInfo.processInfo.environment) -> HostSessions {
         #if DEBUG
-        // The simulator demo (`./run.sh --ios --demo`): demo hosts behind an in-process helper, nothing saved.
+        // The simulator demo (`./build.sh --ios --demo`): demo hosts behind an in-process helper, nothing saved.
         if DemoScenario.enabled { return DemoScenario.sessions() }
         if let scripted = environment["DISPATCH_MOBILE_SCRIPTED"], scripted != "0" {
             return demo(empty: scripted == "empty", studio: scripted == "empty" ? .trust : DemoStudio(rawValue: scripted) ?? .connects)

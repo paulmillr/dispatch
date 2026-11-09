@@ -2,7 +2,7 @@ import XCTest
 
 /// Taps the watch app (docs/watch.md, Testing). `testScriptedTapsThroughAgentsAndSpaces` plays the scripted phone
 /// (`-DispatchWatchScripted 1`) and needs nothing else. `testLiveRoundTripWithThePairedPhone` talks to Dispatch running
-/// on the paired iPhone simulator over WatchConnectivity (`./run.sh --watch`) and skips when the phone does not answer.
+/// on the paired iPhone simulator over WatchConnectivity (`./build.sh --watch --run`) and skips when the phone does not answer.
 @MainActor
 final class WatchLiveTests: XCTestCase {
     override func setUp() {
@@ -158,7 +158,7 @@ final class WatchLiveTests: XCTestCase {
         }
         if rows.count == 0 || away.exists || waiting.exists {
             shot("no phone")
-            throw XCTSkip("The paired iPhone did not answer within 10 s: run Dispatch there first (./run.sh --watch, "
+            throw XCTSkip("The paired iPhone did not answer within 10 s: run Dispatch there first (./build.sh --watch --run, "
                           + "docs/watch.md, Testing).")
         }
         return (app, rows, away)

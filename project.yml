@@ -113,6 +113,20 @@ targets:
       - sdk: IOKit.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
+  # TerminalPageMemoryTests measures a surface's footprint in a process of its own. Built with the app (not compiled
+  # by the test with whichever swiftc the machine has), so a test VM whose Xcode is older runs it too.
+  TerminalPageMemoryProbe:
+    type: tool
+    platform: macOS
+    sources: [test/fixtures/terminal-page-memory]
+    dependencies:
+      - target: Term
+    settings:
+      base:
+        SWIFT_OPTIMIZATION_LEVEL: -O
+        # A top-level script, as swiftc compiled it before (Swift 5 mode: no actor isolation for its globals).
+        SWIFT_VERSION: "5"
+        ENABLE_HARDENED_RUNTIME: NO
   DispatchTests:
     type: bundle.unit-test
     platform: macOS
@@ -121,6 +135,9 @@ targets:
         excludes: [LocalToolAudit, "**/rollout-*.jsonl"]
     dependencies:
       - target: Dispatch
+      - target: TerminalPageMemoryProbe
+        link: false
+        embed: false
       # The tests use the terminal's modules directly; their code is the app's (BUNDLE_LOADER),
       # not a second copy.
       - target: Term

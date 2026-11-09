@@ -16,17 +16,17 @@ the helper ([Plain SSH](#plain-ssh)) needs only SSH and a login shell.
 ## Building and running
 
 ```sh
-./run.sh --ios [--simulator "iPhone 18 Pro"] [--just-build]   # Debug in the simulator (DISPATCH_IOS_SIMULATOR)
-./run.sh --ios --simulator "iPad Pro 11-inch (M5)"            # the same on an iPad
-./run.sh --ios --demo                                         # three scripted demo hosts, no SSH (Debug hooks, below)
-./run.sh --ios-device [--prod] ["<name or UDID>"]           # paired iPhone or iPad; --prod is Release
+./build.sh --ios --run [--simulator "iPhone 18 Pro"]         # Debug in the simulator (DISPATCH_IOS_SIMULATOR)
+./build.sh --ios --run --simulator "iPad Pro 11-inch (M5)"   # the same on an iPad
+./build.sh --ios --demo                                      # three scripted demo hosts, no SSH (Debug hooks, below)
+./build.sh --ios-device ["<name or UDID>"] [--release] --run # paired iPhone or iPad; Debug without --release
 test/run.sh --platform ios [--simulator NAME] [--suite full] [Class]   # Testing, below
-python3 test/ios-release.py [--simulator NAME]              # Release check, below
-./run.sh --archive PATH [--build-number N]                  # unsigned App Store archive (docs/releasing.md)
+python3 test/ios-release.py [--simulator NAME]               # Release check, below
+./build.sh --archive PATH [--build-number N]                 # unsigned App Store archive (docs/releasing.md)
 ```
 
 - Needs Xcode 27 with an iOS simulator runtime. The simulator window is DeviceHub (`com.apple.dt.Devices`, which
-  `./run.sh --ios` tries first, falling back to Simulator.app); without either the simulator runs headless
+  `./build.sh --ios --run` tries first, falling back to Simulator.app); without either the simulator runs headless
   (`xcrun simctl io booted screenshot`). `--simulator` takes a name or UDID (`scripts/ios_simulator.py`: the booted
   one wins, then the newest runtime); the default is `DISPATCH_IOS_SIMULATOR`, else iPhone Air.
 - **Two iOS 27.2 runtimes**: `iOS-27-2` has every iPhone and iPad but the Duo, and `iOS-27-2-iPhone19-4` has only the
@@ -39,7 +39,7 @@ python3 test/ios-release.py [--simulator NAME]              # Release check, bel
 - **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, for every
   scheme of `DispatchMobile.xcodeproj`, so the pinned Rust with its iOS targets and
   `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh --mobile` (which
-  `./run.sh --ios` and `test/run.sh --platform ios` run) does it through `scripts/setup_mobile.py`
+  `./build.sh --ios` and `test/run.sh --platform ios` run) does it through `scripts/setup_mobile.py`
   (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step: the locked crates and russh's
   crate, which it stages patched into `build/mobile-ssh/russh`); `DISPATCH_SETUP_OFFLINE=1` fails with the command
   instead. Setup rebuilds the XCFramework whenever its headers differ from `Mobile/Transport/Core/include`, and stages
@@ -68,7 +68,7 @@ publish. `build/signing.xcconfig` holds the team that signs them for a device.
 
 ### Release
 
-`./run.sh --ios-device --prod` and `test/ios-release.py` build the helpers with Cargo's `release` profile
+`./build.sh --ios-device --release` and `test/ios-release.py` build the helpers with Cargo's `release` profile
 (`DISPATCH_HELPER_PROFILE=release`); a plain `xcodebuild -configuration Release` uses the faster `local` one. Release
 strips the executable after making its dSYM; the bundle is about 36 MB, 8 MB of it the three helpers. They are gzipped
 (`helper/<name>.gz`, scripts/build-ssh-helper.py): App Store Connect refuses a Mach-O file that is not a bundle's
@@ -78,7 +78,7 @@ size and SHA-256 are the expanded file's (`GzipMember`, shared with the Mac's `S
 builds Release for simulator and device, checks the helpers' architectures and versions, Info.plist's device keys, the
 privacy manifest, and that every required-reason API the executable imports is declared in
 `Mobile/App/PrivacyInfo.xcprivacy`; the same for the embedded watch app. The fast suite cannot run against Release
-(`@testable`, Debug-only demos). `./run.sh --archive` builds Release for any iPhone without signing
+(`@testable`, Debug-only demos). `./build.sh --archive` builds Release for any iPhone without signing
 (`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team); there is no published iPhone release for now
 ([releasing.md](releasing.md#iphone)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
 code.

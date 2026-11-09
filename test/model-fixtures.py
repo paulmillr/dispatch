@@ -210,6 +210,13 @@ class ProcessCleanupTests(unittest.TestCase):
                 self.assertEqual(codex_pty.command('/codex', arguments, {}), ['/codex'] + arguments)
                 probe.assert_not_called()
 
+    def testTheDriversOwnPTYRunsCodexItselfInsideADispatchTerminal(self):
+        # codex-chat.py forks its own PTY, which no helper owns: an inherited helper would refuse its typed launch.
+        inherited = {'DISPATCH_HELPER_EXECUTABLE': '/helper', 'DISPATCH_SSH_HELPER': '/helper', 'HOME': '/home'}
+        self.assertEqual(codex_pty.standalone(inherited), {'HOME': '/home'})
+        arguments = ['--no-alt-screen', '--no-daemon']
+        self.assertEqual(codex_pty.command('/codex', arguments, codex_pty.standalone(inherited)), ['/codex'] + arguments)
+
     def testEndpointRemainsCompleteWhileReadinessIsPublished(self):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary).resolve()

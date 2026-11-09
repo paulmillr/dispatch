@@ -106,7 +106,7 @@ def main():
                              'DISPATCH_WATCH_SIMULATOR or Apple Watch Series 12 (46mm) for watch)')
     parser.add_argument('--list', action='store_true', help='Show the selection without building')
     parser.add_argument('--derived-data', default='build/ios', metavar='PATH',
-                        help="xcodebuild's DerivedData (default: build/ios, ./run.sh --ios's); another keeps parallel runs "
+                        help="xcodebuild's DerivedData (default: build/ios, ./build.sh --ios's); another keeps parallel runs "
                              'apart')
     args = parser.parse_args()
     platform = args.platform
@@ -153,7 +153,7 @@ def main():
     log.parent.mkdir(parents=True, exist_ok=True)
     command = ['xcodebuild', '-project', 'DispatchMobile.xcodeproj', '-scheme', scheme, '-configuration', 'Debug',
                '-destination', f'platform={simulator_platform} Simulator,id={udid}',
-               # ./run.sh --ios's DerivedData: not the Mac's build/, whose build database one build at a time holds.
+               # ./build.sh --ios's DerivedData: not the Mac's build/, whose build database one build at a time holds.
                '-derivedDataPath', args.derived_data,
                # A failure otherwise has xcodebuild gather a simulator sysdiagnose, which waits out its 600 s timeout.
                '-collect-test-diagnostics', 'never', 'test']

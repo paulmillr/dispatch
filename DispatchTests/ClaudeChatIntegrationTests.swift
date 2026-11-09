@@ -19,7 +19,7 @@ final class ClaudeChatIntegrationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default
         let binary = [TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) }
-        let claude = try XCTUnwrap(binary, "Run ./run.sh --test to prepare Claude Code")
+        let claude = try XCTUnwrap(binary, "Run ./build.sh --test to prepare Claude Code")
         let state = System.temporary.appendingPathComponent("dispatch-claude-chat-" + System.uuid().uuidString)
         let fixture = Process()
         fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")

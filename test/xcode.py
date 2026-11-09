@@ -31,7 +31,9 @@ JOURNAL = '/tmp/dt-journal'
 # those products' digest: the guest runs them as built, never building itself.
 PREBUILT = 'build/test-tools/xcode-prebuilt.json'
 PREBUILT_PRODUCTS = ('build/Build/Products/Debug/Dispatch.app', 'build/Build/Products/Debug/Term.framework',
-                     'build/Build/Products/Debug/TermApple.framework', 'build/Build/Products/Debug/PackageFrameworks')
+                     'build/Build/Products/Debug/TermApple.framework', 'build/Build/Products/Debug/PackageFrameworks',
+                     # TerminalPageMemoryTests runs it in a process of its own.
+                     'build/Build/Products/Debug/TerminalPageMemoryProbe')
 
 # Machine facts (home, temp dir, the bundle and checkout, the account, the machine's name and memory, variables) come
 # from System: read anywhere else they name this Mac in recorded requests, or meet recorded values with live ones, which

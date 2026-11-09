@@ -10,7 +10,7 @@ Signing and a device). Mobile/Config/Signing.xcconfig includes it; simulator bui
 build/signing.xcconfig signs the apps, yachts.dispatch.pilot.mobile and the rest (docs/ios.md, Bundle ids).
 
 The team id is the ten characters Xcode shows under Settings, Accounts (a free Apple ID's is its "Personal Team").
-Nothing here talks to Apple: xcodebuild does, with -allowProvisioningUpdates (`./run.sh --ios-device`)."""
+Nothing here talks to Apple: xcodebuild does, with -allowProvisioningUpdates (`./build.sh --ios-device`)."""
 import argparse
 import os
 from pathlib import Path

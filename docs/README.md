@@ -20,7 +20,7 @@ before changing it, and change it along with the behaviour.
 ## Commands
 
 ```sh
-./run.sh --just-build                      # Debug build (also replays the helper corpus, below)
+./build.sh                                 # Debug build (also replays the helper corpus, below)
 python3 scripts/generate-project.py        # after adding/moving source files; commit both project.pbxproj
 bash test/run.sh [Class[/testCase] ...]    # XCTest; no selector = fast suite
 python3 test/xcode.py --capture DispatchTests/Class/testX   # record one test; then --replay it

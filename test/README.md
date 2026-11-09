@@ -6,7 +6,7 @@ Test entry points live here; build/setup tools and shared agent fixtures remain 
 [performance benchmark guide](../docs/benchmarks.md) for longer workflows.
 
 Desktop tests need an unlocked desktop and take keyboard/window focus. Prefer the
-dedicated test VM while using the host. `./run.sh --test` prepares local build and test
+dedicated test VM while using the host. `./build.sh --test` prepares local build and test
 dependencies; `bash test/run.sh` keeps build setup offline. VM provisioning can download its pinned image
 and install dependencies. Linux runners require the existing archived VM/tool inventory.
 Use a dedicated Linux test instance, never `dispatch-manual-ssh`.
@@ -67,7 +67,7 @@ reconnect) and a session whose every pane the app detached (quiet until restored
 
 ## XCTest on the current Mac
 
-Use `./run.sh --test [options]` for first-time setup and test execution. It asks before
+Use `./build.sh --test [options]` for first-time setup and test execution. It asks before
 installing missing Codex, Claude Code, Pi, tmux, and herdr tools, pinned by version and
 SHA-256 in [`scripts/test-tools.lock.json`](../scripts/test-tools.lock.json). Native CLI
 packages are downloaded directly; tmux is built against pinned static libevent and
@@ -80,10 +80,10 @@ tool whose pinned version is missing; setup names each substitute.
 build commands, and local executable links without changing files.
 
 ```sh
-./run.sh --test                          # Prepare tools, then fast checks
-./run.sh --test --suite full             # Full correctness coverage
-./run.sh --test ClaudeChatIntegrationTests
-./run.sh --test --suite exhaustive --list # Read-only selection, no setup
+./build.sh --test                          # Prepare tools, then fast checks
+./build.sh --test --suite full             # Full correctness coverage
+./build.sh --test ClaudeChatIntegrationTests
+./build.sh --test --suite exhaustive --list # Read-only selection, no setup
 ```
 
 Setup does not change permissions, sudo policy, or system settings. Desktop tests

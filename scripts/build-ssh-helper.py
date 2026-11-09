@@ -366,7 +366,7 @@ def default_capture():
 
 def default_profile():
     # The fully optimized helper (fat LTO, no incremental builds) takes ~35s to rebuild after any edit,
-    # so it is reserved for archives and explicit requests (`./run.sh --prod`); other builds use `local`.
+    # so it is reserved for archives and explicit requests (`./build.sh --release`); other builds use `local`.
     requested = os.environ.get("DISPATCH_HELPER_PROFILE")
     if requested:
         return requested

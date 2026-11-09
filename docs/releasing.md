@@ -79,7 +79,7 @@ because source paths end up in the binaries, and it restarts itself in a fixed e
 `RELEASE_BUILDER` kept, `PATH` the system's folders alone (so `python3` is Xcode's), `LANG=en_US.UTF-8` and a fresh
 `HOME`, `/private/tmp/release-build-home`. GitHub's runner otherwise brings Homebrew's tools, rustup and its own
 settings, which the signing machine's build lacks. Then `scripts/release/app.sh`, the app's own part, builds: for
-Dispatch `./run.sh --prod --just-build`, the Mac app, from `Dispatch.xcodeproj` alone: the iPhone app's package and
+Dispatch `./build.sh --release`, the Mac app, from `Dispatch.xcodeproj` alone: the iPhone app's package and
 its Rust SSH engine are `DispatchMobile.xcodeproj`'s, so the Mac build neither fetches nor builds them. Then
 `scripts/release/normalize.py` removes the one thing the app takes from the machine that built it: Xcode writes that
 machine's macOS build, `BuildMachineOSBuild`, into every `Info.plist`, which the ad hoc signature seals, so it removes

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and launch Dispatch with a compact console and a complete local log."""
+"""Build Dispatch, and launch it with --run, with a compact console and a complete local log."""
 import argparse
 import codecs
 import json
@@ -265,7 +265,7 @@ def find_iphone(ui, args, env):
     listing, _ = ui.step('Finding a paired iPhone', ['xcrun', 'devicectl', 'list', 'devices', '--json-output', '-'],
                          env, capture=True)
     phone = choose_iphone(paired_iphones(json.loads(listing or '{}')), args.ios_device)
-    if phone is None and not args.just_build:
+    if phone is None and args.run:
         raise OSError(f'No paired iPhone or iPad{" named " + args.ios_device if args.ios_device else ""}: connect it by '
                       'cable once and trust this Mac (docs/ios.md, Signing and a device)')
     return phone
@@ -350,42 +350,42 @@ def main():
     if rest[:1] == ['--test']:
         os.chdir(ROOT)
         os.execvpe('bash', ['bash', 'test/run.sh', *rest[1:]], dict(environment(), DISPATCH_TEST_SETUP='1'))
-    parser = argparse.ArgumentParser(prog='./run.sh', description=__doc__, allow_abbrev=False, epilog=
+    parser = argparse.ArgumentParser(prog='./build.sh', description=__doc__, allow_abbrev=False, epilog=
         'Full logs: build/logs/latest.log. Set DISPATCH_SETUP_OFFLINE=1 to prohibit downloads; '
-        'NO_COLOR disables color. Builds Debug by default and launches it unless --just-build is set; '
+        'NO_COLOR disables color. Builds Debug by default and launches it only with --run; '
         'a running Dispatch is never stopped, so the new build takes effect when it is next opened. '
-        './run.sh --test [test options] prepares local test tools and runs the fast suite by default; '
+        './build.sh --test [test options] prepares local test tools and runs the fast suite by default; '
         'use --test --suite full for full coverage or --test --help for selection options.')
     configurations = parser.add_mutually_exclusive_group()
     configurations.add_argument('-d', '--debug', action='store_true',
                                 help='use the Debug configuration (the default; the terminal engine is still optimized)')
-    configurations.add_argument('-p', '--prod', '--production', action='store_true',
+    configurations.add_argument('-p', '--release', '--prod', '--production', action='store_true',
                                 help='use the optimized Release configuration')
-    parser.add_argument('--just-build', action='store_true',
-                        help='build without launching the app (Debug or Release)')
+    parser.add_argument('--run', action='store_true',
+                        help='launch the app after building it (Debug or Release)')
     parser.add_argument('--clean', action='store_true',
                         help='remove local build artifacts, logs, downloaded tools and caches, then rebuild')
     parser.add_argument('--ios', action='store_true',
-                        help='build Dispatch for iPhone and iPad (docs/ios.md) and run it in the simulator')
+                        help='build Dispatch for iPhone and iPad (docs/ios.md) for the simulator; --run launches it there')
     parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
                         help='the simulator --ios runs in, an iPhone or an iPad ("iPad Pro 11-inch (M5)"), by name or '
                              'UDID; a booted one, then the newest runtime, when several share the name (default: '
                              'DISPATCH_IOS_SIMULATOR, else iPhone Air; --watch uses the watch\'s paired iPhone)')
     parser.add_argument('--watch', action='store_true',
-                        help='build Dispatch for iPhone with Dispatch for Apple Watch (docs/watch.md) and run both on '
-                             'a paired iPhone and watch simulator')
+                        help='build Dispatch for iPhone with Dispatch for Apple Watch (docs/watch.md) for a paired '
+                             'iPhone and watch simulator; --run launches both')
     parser.add_argument('--watch-simulator', default=os.environ.get('DISPATCH_WATCH_SIMULATOR',
                                                                     'Apple Watch Series 12 (46mm)'), metavar='NAME',
                         help='the watch simulator --watch runs on, by name or UDID, with the iPhone it is paired with; '
                              'without one it is paired with a "Dispatch Watch iPhone" simulator, made once '
                              '(default: Apple Watch Series 12 (46mm))')
     parser.add_argument('--demo', action='store_true',
-                        help='with --ios: launch the simulator demo (three demo hosts with spaces, agents and terminals; '
-                             'Debug only, nothing reaches a host)')
+                        help='with --ios: launch the simulator demo, so --run is implied (three demo hosts with spaces, '
+                             'agents and terminals; Debug only, nothing reaches a host)')
     parser.add_argument('--ios-device', nargs='?', const='', default=None, metavar='NAME',
-                        help='build Dispatch for a device and install it there with devicectl '
+                        help='build Dispatch for a device; --run installs and launches it there with devicectl '
                              '(default: the first paired iPhone or iPad; needs a team in build/signing.xcconfig: '
-                             'scripts/ios-signing.py; add --prod for the build to keep on the phone)')
+                             'scripts/ios-signing.py; add --release for the build to keep on the phone)')
     parser.add_argument('--archive', type=Path, metavar='PATH',
                         help='build Dispatch for iPhone (Release, any device) into an .xcarchive at PATH, signed ad hoc: '
                              'no team or certificate here; the signing machine re-signs it for App Store Connect '
@@ -397,13 +397,13 @@ def main():
     if args.build_number is not None and not re.fullmatch(r'[0-9]+(\.[0-9]+){0,2}', args.build_number):
         parser.error('--build-number is one to three dot-separated integers')
     if args.archive:
-        if args.ios_device is not None or args.watch or args.demo or args.debug:
-            parser.error('--archive builds Release for any iPhone: no device, simulator, watch or demo')
-        args.ios = args.prod = args.just_build = True
+        if args.ios_device is not None or args.watch or args.demo or args.debug or args.run:
+            parser.error('--archive builds Release for any iPhone: no device, simulator, watch, demo or --run')
+        args.ios = args.release = True
     if args.demo:
-        if args.ios_device is not None or args.prod:
+        if args.ios_device is not None or args.release:
             parser.error('--demo runs in the simulator, in Debug (the demo is compiled out of Release)')
-        args.ios = True
+        args.ios = args.run = True
     if args.watch:
         if args.ios_device is not None:
             parser.error('--watch runs in the simulator; --ios-device installs on a phone')
@@ -414,7 +414,7 @@ def main():
         if problem:
             print(f'Cannot sign for a device: {problem}', file=sys.stderr)
             return 1
-    configuration = ('Debug' if args.debug else 'Release' if args.prod else
+    configuration = ('Debug' if args.debug else 'Release' if args.release else
                      os.environ.get('CONFIGURATION', 'Debug'))
     env = dict(environment(), CONFIGURATION=configuration,
                DISPATCH_SETUP_OFFLINE=os.environ.get('DISPATCH_SETUP_OFFLINE', '0'))
@@ -443,8 +443,8 @@ def main():
         ui = BuildUI(log)
         title = 'Dispatch for Apple Watch' if args.watch else 'Dispatch for iPhone' if args.ios else 'Dispatch'
         print(f'\n  {ui.style(title, "1")}  {ui.style(configuration, "36")}')
-        hint = ('./run.sh  # to get debug build' if configuration == 'Release' else
-                './run.sh --production  # to get faster release build')
+        hint = ('./build.sh  # to get debug build' if configuration == 'Release' else
+                './build.sh --release  # to get faster release build')
         print(f'  {ui.style(hint, "2")}\n')
         print(f'  Log  {display_path}\n', flush=True)
         log.write(f'Dispatch {configuration} — {datetime.now().isoformat()}\n')
@@ -487,9 +487,9 @@ def main():
                 app = ROOT / IOS_DERIVED_DATA / 'Build/Products' / f'{configuration}-{platform}' / 'DispatchMobile.app'
                 if args.archive:
                     app = args.archive / 'Products/Applications/DispatchMobile.app'
-                if not args.just_build and args.watch:
+                if args.run and args.watch:
                     launch_watch(ui, app, env, simulator, watch)
-                elif not args.just_build:
+                elif args.run:
                     launch_ios(ui, app, args, env, phone, simulator)
                 print(f'\n  {ui.style("Ready", "32")} in {time.monotonic() - started:.1f}s')
                 print(f'  App  {os.path.relpath(app)}' + ('' if args.watch else '\n'))
@@ -514,7 +514,7 @@ def main():
                 ui.step('Building SSH helper', command, env,
                         next_stage=(helper_complete, 'Building Dispatch macOS app'))
             app = ROOT / 'build/Build/Products' / configuration / 'Dispatch.app'
-            if not args.just_build:
+            if args.run:
                 launch_app(ui, app, env)
         except KeyboardInterrupt:
             print(f'\n  Cancelled. Full log: {display_path}', file=sys.stderr)

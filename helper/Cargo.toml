@@ -2,7 +2,7 @@
 members = ["core", "bin", "harnesses/*", "multiplexers/*", "plugins/*"]
 resolver = "3"
 
-# Archives and `./run.sh --prod`: the bundled helpers are most of the download. Fat LTO with one
+# Archives and `./build.sh --release`: the bundled helpers are most of the download. Fat LTO with one
 # unit and opt-level "s" (one LLVM thread per target, ~2x the thin-LTO build time) is ~30% smaller
 # than thin LTO at O3, with latency, throughput and CPU within noise (terminals bench, Linux arm64);
 # "z" was ~43% smaller but ~20% slower.

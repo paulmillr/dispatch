@@ -318,7 +318,7 @@ class SetupTests(unittest.TestCase):
         installer = consent.load_script('setup-test-tools')
         with patch.object(installer, 'ROOT', self.root), patch.object(installer, 'LOCK', self.lock), \
                 patch.object(installer, 'tools', setup), patch.object(installer, 'show_consent'):
-            for answer, offline, message in [('no\n', False, 'cancelled'), ('yes\n', True, './run.sh --test')]:
+            for answer, offline, message in [('no\n', False, 'cancelled'), ('yes\n', True, './build.sh --test')]:
                 with self.subTest(offline=offline), patch.object(sys, 'stdin', io.StringIO(answer)):
                     with self.assertRaisesRegex(RuntimeError, message):
                         installer.prepare(offline=offline)
@@ -366,7 +366,8 @@ class BuildEntryPointTests(unittest.TestCase):
         for name in ('build.sh', 'run.py', 'ios_simulator.py', 'watch_simulator.py', 'generate-project.py',
                      'build-ssh-helper.sh', 'setup_consent.py', 'build.lock.json'):
             shutil.copyfile(source / name, scripts / name)
-        shutil.copyfile(source.parent / 'run.sh', self.root / 'run.sh')
+        for name in ('build.sh', 'run.sh'):
+            shutil.copyfile(source.parent / name, self.root / name)
         self.log = self.root / 'calls'
         (scripts / 'setup.sh').write_text(
             'echo "setup ${DISPATCH_SETUP_OFFLINE:-unset}" >> "$CALLS"\nexit "${SETUP_EXIT:-0}"\n')
@@ -400,20 +401,20 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def invoke(self, name, *args, input_text=None, **environment):
         self.log.write_text('')
-        entry = self.root / ('run.sh' if name == 'root' else 'scripts/' + name)
+        entry = self.root / {'root': 'build.sh', 'old': 'run.sh'}.get(name, 'scripts/' + name)
         self.result = subprocess.run(['bash', str(entry), *args], cwd=self.root.parent,
                                      env=dict(self.env, **environment), capture_output=True, text=True,
                                      input=input_text)
         return self.result.returncode, self.log.read_text().splitlines()
 
     def testEntryPointsPrepareOnceWithTheirExpectedDownloadPolicy(self):
-        for name, args, offline in [('root', (), '0'), ('root', ('--prod',), '0'), ('build.sh', (), '1')]:
+        for name, args, offline in [('root', ('--run',), '0'), ('root', ('--release', '--run'), '0'), ('build.sh', (), '1')]:
             with self.subTest(name=name, args=args):
                 code, calls = self.invoke(name, *args)
                 self.assertEqual(code, 0)
                 self.assertEqual([line for line in calls if line.startswith('setup ')], ['setup ' + offline])
                 self.assertEqual(sum(line.startswith('build ') for line in calls), 1)
-                configuration = 'Release' if args == ('--prod',) else 'Debug'
+                configuration = 'Release' if '--release' in args else 'Debug'
                 self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
                 self.assertEqual(any(line.startswith('open ') for line in calls), name == 'root')
 
@@ -466,7 +467,7 @@ class BuildEntryPointTests(unittest.TestCase):
             self.assertEqual(calls[0], 'setup 1')
 
     def testHelperAndAppHaveSeparateStagesInOneBuild(self):
-        code, calls = self.invoke('root', '--just-build')
+        code, calls = self.invoke('root')
         self.assertEqual(code, 0, self.result.stderr)
         self.assertEqual(calls.count('helper'), 1)
         self.assertEqual(sum(line.startswith('build ') for line in calls), 1)
@@ -479,7 +480,7 @@ class BuildEntryPointTests(unittest.TestCase):
         for failure, stage in [('HELPER_EXIT', 'Building SSH helper'),
                                ('BUILD_EXIT', 'Building Dispatch macOS app')]:
             with self.subTest(failure=failure):
-                code, calls = self.invoke('root', **{failure: '7'})
+                code, calls = self.invoke('root', '--run', **{failure: '7'})
                 self.assertEqual(code, 7)
                 self.assertIn('✗ ' + stage, self.result.stdout)
                 self.assertNotIn('stop', calls)
@@ -490,7 +491,7 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def testSetupAndBuildFailureLeaveRunningAppAlone(self):
         for failure in ('SETUP_EXIT', 'BUILD_EXIT'):
-            code, calls = self.invoke('root', **{failure: '7'})
+            code, calls = self.invoke('root', '--run', **{failure: '7'})
             self.assertEqual(code, 7)
             self.assertNotIn('stop', calls)
             self.assertFalse(any(line.startswith('open ') for line in calls))
@@ -498,36 +499,49 @@ class BuildEntryPointTests(unittest.TestCase):
                 self.assertEqual(calls, ['setup 0'])
 
     def testConfigurationFlagsBuildAndLaunchTheirConfiguration(self):
-        for flags, configuration in [((), 'Debug'), (('--prod',), 'Release'), (('--production',), 'Release'),
+        for flags, configuration in [((), 'Debug'), (('--release',), 'Release'), (('--prod',), 'Release'), (('--production',), 'Release'),
                                      (('-p',), 'Release'), (('--debug',), 'Debug'), (('-d',), 'Debug')]:
             with self.subTest(flags=flags):
                 environment = {'CONFIGURATION': 'Release' if configuration == 'Debug' else 'Debug'}
-                code, calls = self.invoke('root', *flags, **(environment if flags else {}))
+                code, calls = self.invoke('root', *flags, '--run', **(environment if flags else {}))
                 self.assertEqual(code, 0, self.result.stderr)
                 self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
                 self.assertNotIn('stop', calls)
                 self.assertEqual(calls[-1], f'open {self.root.resolve()}/build/Build/Products/{configuration}/Dispatch.app')
-        code, _ = self.invoke('root', '--debug', '--prod')
+        code, _ = self.invoke('root', '--debug', '--release')
         self.assertEqual(code, 2)
 
     def testRunningAppIsNeverStoppedOrReopened(self):
-        code, calls = self.invoke('root', APP_RUNNING='0')
+        code, calls = self.invoke('root', '--run', APP_RUNNING='0')
         self.assertEqual(code, 0, self.result.stderr)
         self.assertNotIn('stop', calls)
         self.assertFalse(any(line.startswith('open ') for line in calls))
         self.assertIn('already running', self.result.stdout)
 
-    def testJustBuildLeavesRunningAppAloneInBothConfigurations(self):
-        for args, configuration in [(('--just-build',), 'Debug'),
-                                    (('--prod', '--just-build'), 'Release'),
-                                    (('--just-build', '--production'), 'Release'),
-                                    (('-d', '--just-build'), 'Debug')]:
+    def testWithoutRunTheAppIsNotLaunchedInEitherConfiguration(self):
+        for args, configuration in [((), 'Debug'), (('--release',), 'Release'), (('--production',), 'Release'),
+                                    (('-d',), 'Debug')]:
             with self.subTest(args=args):
                 code, calls = self.invoke('root', *args)
                 self.assertEqual(code, 0, self.result.stderr)
                 self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
                 self.assertNotIn('stop', calls)
                 self.assertFalse(any(line.startswith('open ') for line in calls))
+
+    def testOldRunScriptStillLaunchesUnlessJustBuild(self):
+        for args, configuration, launches in [((), 'Debug', True), (('--prod',), 'Release', True),
+                                              (('--just-build',), 'Debug', False),
+                                              (('--prod', '--just-build'), 'Release', False)]:
+            with self.subTest(args=args):
+                code, calls = self.invoke('old', *args)
+                self.assertEqual(code, 0, self.result.stderr)
+                self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
+                self.assertEqual(any(line.startswith('open ') for line in calls), launches)
+        tests = self.root / 'test'
+        tests.mkdir()
+        (tests / 'run.sh').write_text('echo "tests ${DISPATCH_TEST_SETUP:-unset} $*" >> "$CALLS"\nexit 7\n')
+        code, calls = self.invoke('old', '--test', 'ChatTests')
+        self.assertEqual((code, calls), (7, ['tests 1 ChatTests']))
 
     def testSuccessfulOutputIsCompactAndFullLogsAreRetained(self):
         for _ in range(2):
@@ -560,13 +574,14 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertIn('0' * 2000, (self.root / 'build/logs/latest.log').read_text())
 
     def testHelpAndInvalidArgumentsNeverBuild(self):
-        for arguments, expected in [(('--help',), 0), (('--unknown',), 2)]:
+        for arguments, expected in [(('--help',), 0), (('--unknown',), 2), (('--just-build',), 2),
+                                    (('--archive', 'x', '--run'), 2)]:
             code, calls = self.invoke('root', *arguments)
             self.assertEqual(code, expected)
             self.assertEqual(calls, [])
             self.assertFalse((self.root / 'build').exists())
             if arguments == ('--help',):
-                for flag in ('--prod', '--production', '-p', '--just-build'):
+                for flag in ('--release', '--prod', '--production', '-p', '--debug', '--run'):
                     self.assertIn(flag, self.result.stdout)
 
     def testCleanRemovesGeneratedFilesThenBuildsWithSelectedOptions(self):
@@ -580,7 +595,7 @@ class BuildEntryPointTests(unittest.TestCase):
         project = self.root / 'Dispatch.xcodeproj/project.pbxproj'
         project.parent.mkdir()
         project.write_text('tracked project stays')
-        code, calls = self.invoke('root', '--clean', '--prod', '--just-build')
+        code, calls = self.invoke('root', '--clean', '--release')
         self.assertEqual(code, 0, self.result.stderr)
         self.assertEqual(source.read_text(), 'source stays')
         self.assertEqual(project.read_text(), 'tracked project stays')
@@ -596,7 +611,7 @@ class BuildEntryPointTests(unittest.TestCase):
             destination = Path(external)
             (destination / 'keep').write_text('external cache')
             (self.root / 'build').symlink_to(destination, target_is_directory=True)
-            code, _ = self.invoke('root', '--clean', '--just-build')
+            code, _ = self.invoke('root', '--clean')
             self.assertEqual(code, 0, self.result.stderr)
             self.assertEqual((destination / 'keep').read_text(), 'external cache')
             self.assertFalse((self.root / 'build').is_symlink())
@@ -623,7 +638,7 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertIn('--clean', self.result.stdout)
 
     def testConfigurationOverrideStillLaunchesMatchingApp(self):
-        code, calls = self.invoke('root', CONFIGURATION='Release')
+        code, calls = self.invoke('root', '--run', CONFIGURATION='Release')
         self.assertEqual(code, 0)
         self.assertTrue(any('-configuration Release' in line for line in calls))
         self.assertTrue(any('Release/Dispatch.app' in line for line in calls if line.startswith('open ')))
@@ -652,7 +667,7 @@ class BuildEntryPointTests(unittest.TestCase):
         (self.root / 'scripts/setup.sh').write_text(
             'python3 -c \'import sys; print("Installing Rust", end=""); '
             'sys.stderr.write("Downloading 50%\\r"); sys.stdin.readline()\'\n')
-        process = subprocess.Popen(['bash', str(self.root / 'run.sh'), '--just-build'],
+        process = subprocess.Popen(['bash', str(self.root / 'build.sh')],
                                    cwd=self.root, env=self.env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output = b''
@@ -702,7 +717,7 @@ class BuildEntryPointTests(unittest.TestCase):
             'echo "    … Compiling renderer"\n'
             'for i in {1..100}; do echo "compiler detail $i"; done\n'
             'echo "    ✓ Compiling renderer"\n')
-        code, _ = self.invoke('root', '--just-build')
+        code, _ = self.invoke('root')
         self.assertEqual(code, 0, self.result.stderr)
         self.assertIn('… Compiling renderer', self.result.stdout)
         self.assertIn('✓ Compiling renderer', self.result.stdout)
@@ -761,7 +776,7 @@ class BuildEntryPointTests(unittest.TestCase):
         for interrupt, expected in [(signal.SIGINT, 130), (signal.SIGTERM, 143)]:
             self.log.write_text('')
             pid_file.unlink(missing_ok=True)
-            process = subprocess.Popen(['bash', str(self.root / 'run.sh')], cwd=self.root,
+            process = subprocess.Popen(['bash', str(self.root / 'build.sh'), '--run'], cwd=self.root,
                                        env=dict(self.env, CHILD_PID=str(pid_file)),
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.addCleanup(lambda process=process: process.kill() if process.poll() is None else None)

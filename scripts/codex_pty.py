@@ -28,11 +28,19 @@ def command(executable, arguments, environment):
     return [executable, *isolated, *arguments]
 
 
+def standalone(environment):
+    """A PTY this driver forks is never a Dispatch helper's terminal, so the helper refuses its typed launch ("Launch
+    process is no longer owned by this helper"): run Codex itself, even from inside a Dispatch terminal."""
+    return {name: value for name, value in environment.items()
+            if name not in ('DISPATCH_HELPER_EXECUTABLE', 'DISPATCH_SSH_HELPER')}
+
+
 class CodexPTY:
     def __init__(self, executable, work, env, arguments=None):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(work)
+            env = standalone(env)
             env = dict(env, PATH=os.path.dirname(executable) + os.pathsep + env.get('PATH', ''))
             argv = command(executable, ['--no-alt-screen', *(arguments or [])], env)
             os.execvpe(argv[0], argv, env)

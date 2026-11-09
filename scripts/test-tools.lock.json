@@ -1,28 +1,28 @@
 {
   "codex": {
-    "version": "0.166.0",
+    "version": "0.167.0",
     "check": [
       "--version"
     ],
     "banner": "codex-cli {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-apple-darwin.tar.gz",
-        "sha256": "55a440cb579f970abe7c79ab181e54b0ea4c419be99f333bbd868eebac9c21f0",
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-package-aarch64-apple-darwin.tar.gz",
+        "sha256": "af45ed45d940d7998809622c1c0296d3098ed7d7fad695284422c228bd454517",
         "binary": "bin/codex"
       }
     }
   },
   "claude": {
-    "version": "2.1.316",
+    "version": "2.1.321",
     "check": [
       "--version"
     ],
     "banner": "{version} (Claude Code)",
     "archives": {
       "arm64": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.316/darwin-arm64/claude",
-        "sha256": "64c327e92b2c5e0f78c0a980c5a518121e1f0d140ca771ca5dd4488d1a2dcb3f",
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/darwin-arm64/claude",
+        "sha256": "abc9feeeca8091d51b623291e044cf0528c2f6b74e0c1d6ef671d52c73f7cd3c",
         "binary": "bin/claude",
         "format": "binary"
       }

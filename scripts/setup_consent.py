@@ -120,7 +120,7 @@ def main():
                 succeeds(['xcrun', '--sdk', 'macosx', '--find', 'swiftc'])):
             raise RuntimeError('Full Xcode is required. Install/select Xcode and complete its first-launch setup.')
         if not succeeds(['xcodebuild', '-checkFirstLaunchStatus']):
-            raise RuntimeError('Complete Xcode first-launch setup, then rerun ./run.sh.')
+            raise RuntimeError('Complete Xcode first-launch setup, then rerun ./build.sh.')
         os.environ.pop(APPROVAL, None)
         components = plan(wants_mobile)
         confirm(components)

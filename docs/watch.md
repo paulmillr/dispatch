@@ -12,14 +12,14 @@ addresses or credentials a user or agent put in them. What crosses the link, and
 ## Building and running
 
 ```sh
-./run.sh --watch [--watch-simulator NAME] [--just-build]   # Debug on paired simulators (DISPATCH_WATCH_SIMULATOR)
+./build.sh --watch --run [--watch-simulator NAME]          # Debug on paired simulators (DISPATCH_WATCH_SIMULATOR)
 test/run.sh --platform watch [--suite full] [Class]        # Testing, below
 ```
 
-`--watch` builds the `DispatchMobile` scheme (which embeds the watch app) into `build/ios`, boots the pair, opens
+`--watch` builds the `DispatchMobile` scheme (which embeds the watch app) into `build/ios`; `--run` then boots the pair, opens
 DeviceHub, installs the phone app on the phone and `DispatchMobile.app/Watch/DispatchWatch.app` on the watch (a
 simulator does not install an embedded watch app by itself), and launches both, phone first. `SIMCTL_CHILD_` variables
-reach both launches: `SIMCTL_CHILD_DISPATCH_MOBILE_SCRIPTED=1 SIMCTL_CHILD_DISPATCH_MOBILE_STORE=memory ./run.sh --watch`
+reach both launches: `SIMCTL_CHILD_DISPATCH_MOBILE_SCRIPTED=1 SIMCTL_CHILD_DISPATCH_MOBILE_STORE=memory ./build.sh --watch --run`
 runs the phone on its scripted hosts (no SSH) and the watch over WatchConnectivity; add
 `SIMCTL_CHILD_DISPATCH_WATCH_SCRIPTED=1` for the watch's own scripted phone instead. A booted phone keeps those
 variables for every later launch, UI tests included: shut it down and boot it without them first.

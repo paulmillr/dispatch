@@ -84,7 +84,7 @@ def main():
     build = ROOT / 'build/release-smoke'
     build.mkdir(parents=True, exist_ok=True)
     if args.app is None:
-        subprocess.run([str(ROOT / 'run.sh'), '--prod', '--just-build'], cwd=ROOT, check=True, timeout=1800)
+        subprocess.run([str(ROOT / 'build.sh'), '--release'], cwd=ROOT, check=True, timeout=1800)
     app = (args.app or ROOT / 'build/Build/Products/Release/Dispatch.app').resolve()
     source = build / 'controller.swift'
     source.write_text(CONTROLLER)

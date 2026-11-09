@@ -20,7 +20,7 @@ settings:
     OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
     # CZstd: the app journal's capture files (target Zstd).
     SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Zstd"]
-    # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
+    # `./build.sh --release` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
     # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
     DISPATCH_STRIP_APP: NO
     # Every app's bundle id starts with this: the Pilot account's apps (docs/ios.md, Bundle ids).

@@ -62,7 +62,7 @@ The design follows Apple's guidelines. **It has a lot of features, but it stays 
 ## Quick start
 
 1. Either download via [Homebrew](https://brew.sh): `brew install --cask paulmillr/tap/dispatch`
-2. Or compile by yourself: clone repo and do `./run.sh --prod`. It needs xcode, xcode needs apple id; easiest way to install xcode: `brew install xcodes; xcodes install 27.2`.
+2. Or compile by yourself: clone repo and do `./build.sh --release --run`. It needs xcode, xcode needs apple id; easiest way to install xcode: `brew install xcodes; xcodes install 27.2`.
 
 Dispatch is a normal terminal. If you've used terminals, it should be intuitive.
 
@@ -78,7 +78,7 @@ Dispatch is a normal terminal. If you've used terminals, it should be intuitive.
     - Command+Option+Enter (⌥⌘⏎) takes the other send action; it can also send a selected or hovered queued message now
     - Option+Enter and Shift+Enter add a line; editor mode (Return adds lines, Command+Enter sends) turns on with Command+E or a multi-line paste, or by default in Settings. It highlights markdown code brackets
     - Press Escape twice within a second to stop the agent and keep the draft
-    - Recommended: codex-cli 0.166.0, claude 2.1.316 or pi 1.5.0
+    - Recommended: codex-cli 0.167.0, claude 2.1.321 or pi 1.5.0
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 ## License

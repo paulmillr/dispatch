@@ -1,7 +1,7 @@
 import XCTest
 @testable import DispatchMobile
 
-/// The simulator demo's scenario (`./run.sh --ios --demo`) and its fixtures (`test/mobile-demo-fixtures.py`): every
+/// The simulator demo's scenario (`./build.sh --ios --demo`) and its fixtures (`test/mobile-demo-fixtures.py`): every
 /// agent tab has a conversation the real helper recorded, every shell a screen, every live tab its lines.
 @MainActor
 final class DemoScenarioTests: XCTestCase {

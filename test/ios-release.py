@@ -353,7 +353,7 @@ def main(arguments=None):
     parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
                         help='name or UDID; a booted one, then the newest runtime, when several share the name')
     parser.add_argument('--helper-profile', choices=('release', 'local'), default='release',
-                        help="the helpers' Cargo profile (default release: fat LTO, what ./run.sh --prod ships)")
+                        help="the helpers' Cargo profile (default release: fat LTO, what ./build.sh --release ships)")
     parser.add_argument('--skip-build', action='store_true', help='check the existing Release builds in build/dd')
     parser.add_argument('--no-launch', action='store_true', help='do not launch the Release app in the simulator')
     parser.add_argument('--with-fast-suite', action='store_true', help='then run the fast suite (Debug) on the simulator')

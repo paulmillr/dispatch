@@ -88,6 +88,7 @@ final class ChatPresentationTests: XCTestCase {
         upload.size = 421_888; upload.sent = 0.42
         session.attachmentUploads = [upload]
         try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames(label: "Uploading", in: window).count == 1 }
+        try await Task.sleep(for: .milliseconds(300)) // The chips' row folds open.
         let uploading = try await PresentationTestSupport.capture(window, named: "attachment-uploading", in: "chat-validation").text().lowercased()
         XCTAssertTrue(uploading.contains("uploading 42%"), uploading)
         session.attachmentUploads[0].sent = 1

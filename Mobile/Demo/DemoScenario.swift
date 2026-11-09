@@ -1,7 +1,7 @@
 #if DEBUG
 import Foundation
 
-/// The simulator demo (`./run.sh --ios --demo`, `DISPATCH_MOBILE_DEMO=1`): three hosts a day of work left behind, over
+/// The simulator demo (`./build.sh --ios --demo`, `DISPATCH_MOBILE_DEMO=1`): three hosts a day of work left behind, over
 /// the scripted driver and an in-process helper (`DemoHelper`) that speaks the real protocol, so Spaces, Agents, chat
 /// threads, approvals and terminals all run the app's own code. Conversations are the real helper's records of
 /// authored transcripts and terminals recorded sessions (`Mobile/Demo/Fixtures`, `test/mobile-demo-fixtures.py`);

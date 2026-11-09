@@ -186,7 +186,7 @@ def resolve(name, offline=False, *, lock=None, approve=None, quiet=False):
             return binary
         raise RuntimeError('Invalid project-local tool; remove its directory and rerun setup: ' + str(directory))
     if offline or os.environ.get('DISPATCH_SETUP_OFFLINE') == '1':
-        raise RuntimeError(f'Missing compatible {name}. Run ./run.sh to prepare project-local tools.')
+        raise RuntimeError(f'Missing compatible {name}. Run ./build.sh to prepare project-local tools.')
     (confirm if approve is None else approve)([name])
     archive = download(artifact, ROOT / 'build/downloads', quiet=quiet)
     directory.parent.mkdir(parents=True, exist_ok=True)

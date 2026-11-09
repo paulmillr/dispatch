@@ -173,7 +173,8 @@ final class SSHTransportTests: XCTestCase {
         // The pipe holds far less than the frame: it goes out in many writes as this side reads.
         var received = Data()
         for _ in 0..<10_000 where received.count < expected.count {
-            received += try XCTUnwrap(output.fileHandleForReading.read(upToCount: 65_536))
+            // `read(upToCount:)` waits for the whole count: never more than is still to come.
+            received += try XCTUnwrap(output.fileHandleForReading.read(upToCount: min(65_536, expected.count - received.count)))
         }
         transport.queue.sync {}
         XCTAssertEqual(received, expected)
