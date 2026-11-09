@@ -235,16 +235,147 @@ final class FilePreviewPresentationTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "file-preview-hex-strings", in: "files-audit", published: true)
     }
 
-    func testMarkdownShowsSourceThenRendered() async throws {
-        let (window, session) = try host(FakeFilesSource.mockupAPI(), preview: base + "/README.md")
+    /// Markdown opens rendered (Settings › Files › Render Markdown) and set for reading: a centred column of larger
+    /// prose whose source lines flow, six sizes of heading. The eye is the tab's choice, for the next file too.
+    func testMarkdownOpensRenderedInAReadingColumnAndTheEyeIsTheTabsChoice() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Before macOS 26 the prose is SwiftUI text, with no view to measure") }
+        let source = FakeFilesSource.mockupAPI()
+        let guide = base + "/GUIDE.md"
+        source.file(guide, Self.guide)
+        let (window, session) = try host(source, preview: guide, size: NSSize(width: 1_000, height: 620))
         try await TestSupport.eventually { if case .markdown = session.preview?.kind { return true }; return false }
-        let source = try await PresentationTestSupport.capture(window, named: "file-preview-markdown-source", in: "files-audit")
-        try PresentationTestSupport.assertText("# api", in: source)
-        try click("file-preview-rendered", in: window)
-        try await TestSupport.eventually { !PresentationTestSupport.accessibilityFrames("file-preview-markdown", in: window).isEmpty }
+        try await TestSupport.eventually(diagnostic: "Markdown did not open rendered") { text(Self.opening, in: window) != nil }
+        XCTAssertNil(session.previewRendered, "Rendered is Settings' choice until the eye says otherwise")
+
+        let reading = FileMarkdownStyle.typography(TerminalRuntime.shared.preferences).prose
+        let measure = FileMarkdownStyle.measure(reading)
+        // The source breaks this paragraph twice: found whole, its lines flowed into one.
+        let paragraph = try XCTUnwrap(text(Self.opening, in: window))
+        let frame = paragraph.convert(paragraph.bounds, to: nil)
+        // Centred in what scrolls: a scroller always shown takes its width from the pane first.
+        let clip = try XCTUnwrap(paragraph.enclosingScrollView?.contentView)
+        let area = clip.convert(clip.bounds, to: nil)
+        XCTAssertEqual(frame.minX, area.minX + (area.width - measure) / 2, accuracy: 1, "The column is centred in the pane")
+        XCTAssertGreaterThan(area.width, measure + 2 * FileMarkdownStyle.margin, "The pane is wider than the column")
+        XCTAssertLessThanOrEqual(frame.width, measure + 0.5, "Prose wraps at the column, not the pane")
+        XCTAssertGreaterThan(frame.width, measure - 80, "A paragraph fills its column")
+        XCTAssertGreaterThan(frame.height, 40, "On more than one line")
+        XCTAssertEqual(try size(of: paragraph), reading.pointSize(), accuracy: 0.01, "Prose at the reading size")
+        let headings = try ["Guide", "Install", "On a host", "Level four", "Level five", "Level six"].map {
+            try size(of: try XCTUnwrap(text($0, in: window), "No heading \($0)"))
+        }
+        XCTAssertEqual(headings, headings.sorted(by: >), "Each level smaller than the one above it")
+        XCTAssertEqual(Set(headings).count, 6, "No two levels alike: \(headings)")
+        XCTAssertEqual(headings[0], reading.pointSize(offset: FileMarkdownStyle.headingOffset(1, reading)), accuracy: 0.01)
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-preview-outline", in: window).isEmpty,
+                       "The header offers the file's outline")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("file-preview-wrap", in: window).isEmpty,
+                      "Nothing to wrap while rendered")
         let rendered = try await PresentationTestSupport.capture(window, named: "file-preview-markdown-rendered", in: "files-audit")
-        XCTAssertFalse(try rendered.reads(["# api"]), "The heading renders without its marker")
-        try PresentationTestSupport.assertText("The billing service.", in: rendered)
+        XCTAssertFalse(try rendered.reads(["# Guide"]), "The heading renders without its marker")
+        try PresentationTestSupport.assertText("The billing service takes a charge request", in: rendered)
+
+        try click("file-preview-rendered", in: window)
+        try await TestSupport.eventually(diagnostic: "The eye did not show the source") { line(1, in: window) != nil }
+        XCTAssertEqual(session.previewRendered, false)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("file-preview-outline", in: window).isEmpty,
+                      "No outline over the source")
+        let shown = try await PresentationTestSupport.capture(window, named: "file-preview-markdown-source", in: "files-audit")
+        try PresentationTestSupport.assertText("# Guide", in: shown)
+
+        // The next Markdown file on this tab opens as the last was left, and the eye brings it back rendered.
+        show(base + "/README.md", from: source, in: session)
+        try await TestSupport.eventually(diagnostic: "README.md did not open as source") {
+            session.preview?.name == "README.md" && line(1, in: window) != nil && text("The billing service.", in: window) == nil
+        }
+        try click("file-preview-rendered", in: window)
+        try await TestSupport.eventually(diagnostic: "The eye did not render README.md") { text("The billing service.", in: window) != nil }
+        XCTAssertEqual(session.previewRendered, true)
+    }
+
+    /// A section folds from the chevron beside its heading and stays folded while the tab shows another file; the
+    /// mark after a folded heading opens it. The outline's choice scrolls to its heading, opening what is folded
+    /// around it.
+    func testMarkdownSectionsFoldAndTheOutlineScrollsToAHeading() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Before macOS 26 the prose is SwiftUI text, with no view to measure") }
+        let source = FakeFilesSource.mockupAPI()
+        let guide = base + "/GUIDE.md"
+        source.file(guide, Self.guide)
+        let (window, session) = try host(source, preview: guide, size: NSSize(width: 640, height: 460))
+        try await TestSupport.eventually(diagnostic: "Markdown did not open rendered") { text("Steps.", in: window) != nil }
+        let document = FileMarkdownDocuments.document(Self.guide)
+        let install = try XCTUnwrap(document.headings.first { $0.title == "Install" })
+        XCTAssertEqual(document.headings.firstIndex(of: install), 1)
+
+        try click("file-markdown-fold-1", in: window)
+        try await TestSupport.eventually(diagnostic: "Install did not fold: \(session.previewFolds)") {
+            text("Steps.", in: window) == nil && text("On a host", in: window) == nil
+        }
+        XCTAssertEqual(session.previewFolds[guide], [install.id])
+        XCTAssertNotNil(text("Install", in: window), "A folded section keeps its heading")
+        XCTAssertNotNil(text("Run it.", in: window), "The next section is untouched")
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-markdown-folded-1", in: window).isEmpty,
+                       "A folded heading says there is more")
+        _ = try await PresentationTestSupport.capture(window, named: "file-preview-markdown-folded", in: "files-audit")
+
+        show(base + "/README.md", from: source, in: session)
+        try await TestSupport.eventually { text("The billing service.", in: window) != nil }
+        show(guide, from: source, in: session)
+        try await TestSupport.eventually(diagnostic: "GUIDE.md did not come back") { text("Run it.", in: window) != nil }
+        XCTAssertNil(text("Steps.", in: window), "The file comes back as it was left")
+
+        try click("file-markdown-folded-1", in: window)
+        try await TestSupport.eventually(diagnostic: "The mark did not unfold Install") { text("Steps.", in: window) != nil }
+        XCTAssertNil(session.previewFolds[guide])
+
+        // The outline's choice: a heading far down comes to the top of the pane, under the header.
+        let height = try XCTUnwrap(window.contentView).bounds.height
+        let far = try XCTUnwrap(document.headings.first { $0.title == "Section 6" })
+        session.reveal(far, of: document, at: guide)
+        var top: CGFloat?
+        try await TestSupport.eventually(diagnostic: "Section 6 did not scroll to the top: \(String(describing: top)) pt down") {
+            guard session.previewReveal == nil, let heading = text("Section 6", in: window) else { return false }
+            top = height - heading.convert(heading.bounds, to: nil).maxY
+            // Under the 41 pt header, the heading's own space above it.
+            return top.map { (41...100).contains($0) } ?? false
+        }
+        // And one inside a folded section opens the sections around it.
+        session.setFolds([install.id], at: guide)
+        let inside = try XCTUnwrap(document.headings.first { $0.title == "On a host" })
+        session.reveal(inside, of: document, at: guide)
+        try await TestSupport.eventually(diagnostic: "On a host did not show: \(session.previewFolds)") {
+            session.previewReveal == nil && text("Copy the helper.", in: window) != nil
+        }
+        XCTAssertNil(session.previewFolds[guide])
+    }
+
+    /// A file's other blocks read as a document's: front matter as a `yaml` block, a list item whole with the line
+    /// that continues it, a quote's lines as one quote, and a table and a fenced block in the column.
+    func testMarkdownBlocksReadAsADocument() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Before macOS 26 the prose is SwiftUI text, with no view to measure") }
+        let source = FakeFilesSource.mockupAPI()
+        let notes = base + "/NOTES.md"
+        source.file(notes, Self.notes)
+        let (window, session) = try host(source, preview: notes, size: NSSize(width: 760, height: 860))
+        try await TestSupport.eventually { if case .markdown = session.preview?.kind { return true }; return false }
+        let item = "Replay first, record last. After a change, replay the affected classes; the failures are exactly what changed."
+        try await TestSupport.eventually(diagnostic: "The list item did not take the line that continues it") {
+            text(item, in: window) != nil
+        }
+        let paragraph = try XCTUnwrap(text("Debug builds replay every helper recording and fail on any mismatch, so a helper "
+                                           + "change fails the build until the affected recordings are recorded again.", in: window),
+                                      "The paragraph's two source lines flow into one")
+        let listed = try XCTUnwrap(text(item, in: window)), nested = try XCTUnwrap(text("Replay the class.", in: window))
+        func left(_ view: NSTextView) -> CGFloat { view.convert(view.bounds, to: nil).minX }
+        XCTAssertGreaterThan(left(listed), left(paragraph) + 12, "An item is set in from the prose")
+        XCTAssertGreaterThan(left(nested), left(listed) + 12, "And a nested one from its item")
+        XCTAssertNotNil(text("A quote wrapped over two lines.", in: window), "A quote's lines are one quote")
+        XCTAssertNil(text("name: build-notes", in: window), "Front matter is not prose")
+        let snapshot = try await PresentationTestSupport.capture(window, named: "file-preview-markdown-blocks", in: "files-audit")
+        try PresentationTestSupport.assertText("name: build-notes", in: snapshot)
+        try PresentationTestSupport.assertText("Build notes", in: snapshot)
+        try PresentationTestSupport.assertText("the desktop's focus", ["the desktop’s focus", "the desktops focus"], in: snapshot)
+        try PresentationTestSupport.assertText("bash test/run.sh FilePreviewTests", in: snapshot)
     }
 
     func testWrapSoftWrapsLongLinesAtThePaneWidth() async throws {
@@ -303,6 +434,98 @@ final class FilePreviewPresentationTests: XCTestCase {
         }
         return (window, session)
     }
+
+    /// Selects another file on the tab, as a click on its row does.
+    private func show(_ path: String, from source: FakeFilesSource, in session: FilesSession) {
+        let parent = (path as NSString).deletingLastPathComponent, name = (path as NSString).lastPathComponent
+        session.preview = FilePreviewState(path: path, entry: source.node(parent)?.children[name].map {
+            FileEntry(name: name, kind: $0.kind, size: UInt64($0.data.count), modified: $0.modified)
+        })
+    }
+
+    /// The rendered Markdown's text view that says exactly `string`: a paragraph, a heading, a list item.
+    private func text(_ string: String, in window: NSWindow) -> NSTextView? {
+        guard let root = window.contentView else { return nil }
+        return PresentationTestSupport.views(of: NSTextView.self, in: root, includingNestedMatches: true).first { $0.string == string }
+    }
+
+    /// The size of the font a text view's first character is set in.
+    private func size(of view: NSTextView) throws -> CGFloat {
+        let font = try XCTUnwrap(view.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        return font.pointSize
+    }
+
+    /// Notes as an editor wraps them: front matter, wrapped prose and list items, a quote, a table and a fence.
+    private static let notes = """
+        ---
+        name: build-notes
+        description: What the build needs
+        ---
+
+        # Build notes
+
+        Debug builds replay every helper recording and fail on any mismatch, so a helper
+        change fails the build until the affected recordings are recorded again.
+
+        - **Replay first, record last.** After a change, replay the affected classes; the failures
+          are exactly what changed.
+        - Record again only what changed on purpose.
+          1. Replay the class.
+          2. Read the failures.
+
+        > A quote wrapped
+        > over two lines.
+
+        | Runner | Where | Takes |
+        | --- | --- | --- |
+        | `test/run.sh` | this Mac | the desktop's focus |
+        | `test/vm.py` | the test VM | nothing |
+
+        ```sh
+        bash test/run.sh FilePreviewTests
+        ```
+
+        See [the test guide](https://example.com/guide) for the rest.
+
+        """
+
+    /// A guide whose source wraps its first paragraph, with every level of heading and enough sections to scroll.
+    private static let opening = "The billing service takes a charge request, checks its idempotency key against the ledger, "
+        + "and answers once, however many times the request arrives: a retry gets the first answer back."
+    private static let guide = """
+        # Guide
+
+        The billing service takes a charge request, checks its idempotency key against the ledger,
+        and answers once, however many times the request arrives:
+        a retry gets the first answer back.
+
+        ## Install
+
+        Steps.
+
+        ### On a host
+
+        Copy the helper.
+
+        #### Level four
+
+        Text four.
+
+        ##### Level five
+
+        Text five.
+
+        ###### Level six
+
+        Text six.
+
+        ## Use
+
+        Run it.
+
+
+        """ + (1...12).map { "## Section \($0)\n\n" + String(repeating: "Filler sentence for section \($0). ", count: 8) + "\n\n" }.joined()
+        + "## Appendix\n\nThe end.\n"
 
     /// A line's frame in window coordinates. The row's identifier reaches its gutter number and its text, so the
     /// line is their union: its top is the row's top plus the row's inset, its height the text's.

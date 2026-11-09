@@ -62,6 +62,14 @@ import Foundation
     }
     /// Nil follows Settings › Files › Wrap lines; the preview's wrap button sets it for this tab.
     var previewWrap: Bool?
+    /// Nil follows Settings › Files › Render Markdown; the preview's eye button sets it for this tab, for every
+    /// Markdown file it shows.
+    var previewRendered: Bool?
+    /// The sections folded in rendered Markdown (`FileMarkdownDocument.Heading.id`), by the file's path: a file comes
+    /// back as it was left while the tab shows others.
+    var previewFolds: [String: Set<String>] = [:]
+    /// A heading the rendered Markdown is to scroll to (the outline's choice); the view clears it once shown.
+    var previewReveal: FileMarkdownReveal?
     /// The preview's width as the divider left it on this tab; nil takes the last width chosen on any tab, else the
     /// default (`FilesCoordinator.previewPreference`, `FilesView.layout`). Kept while the view is too narrow for it,
     /// so the pane comes back at the width the user chose.

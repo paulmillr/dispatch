@@ -342,6 +342,9 @@ struct Preferences: Codable, Equatable {
     var filesLineNumbers = true
     /// The file preview wraps long lines; each tab's wrap button overrides it for that tab (FilesSession.previewWrap).
     var filesWrapLines = false
+    /// The file preview shows Markdown rendered rather than as its source; each tab's eye button overrides it for that
+    /// tab (FilesSession.previewRendered).
+    var filesRenderMarkdown = true
     /// Git in files mode (the Review and Commits tabs) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
     var gitEnabled = true
     /// Chat's Return while the agent works: queue the message (⌥⌘⏎ steers) or steer it into the turn (⌥⌘⏎ queues).
@@ -396,7 +399,7 @@ struct Preferences: Codable, Equatable {
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case textContrast, colorVision, terminalOpacity
         case spaces, enableKittyGraphics
-        case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, gitEnabled
+        case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, filesRenderMarkdown, gitEnabled
         case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatToolSteps
         case dictationEnabled, dictationKey, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
@@ -477,6 +480,7 @@ struct Preferences: Codable, Equatable {
         filesPreviews = try fields.decodeIfPresent(Bool.self, forKey: .filesPreviews) ?? filesPreviews
         filesLineNumbers = try fields.decodeIfPresent(Bool.self, forKey: .filesLineNumbers) ?? filesLineNumbers
         filesWrapLines = try fields.decodeIfPresent(Bool.self, forKey: .filesWrapLines) ?? filesWrapLines
+        filesRenderMarkdown = try fields.decodeIfPresent(Bool.self, forKey: .filesRenderMarkdown) ?? filesRenderMarkdown
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
         chatSendWhileWorking = try fields.decodeIfPresent(String.self, forKey: .chatSendWhileWorking)
             .flatMap(ChatSendWhileWorking.init(rawValue:)) ?? chatSendWhileWorking

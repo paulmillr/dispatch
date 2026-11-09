@@ -76,7 +76,8 @@ extension FilesFormatting {
     }
 }
 
-/// One selection's header and body. Its view state (find, rendered, fit) belongs to this file only.
+/// One selection's header and body. Its view state (find, fit) belongs to this file only; whether Markdown shows
+/// rendered is the tab's choice (`FilesSession.previewRendered`), and a file's folded sections stay with the tab too.
 private struct FilePreviewDetail: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
@@ -84,7 +85,6 @@ private struct FilePreviewDetail: View {
     let preview: FilePreviewState
     var root: String?
     @State private var find = FilePreviewFind()
-    @State private var rendered = false
     @State private var zoom = FileImageZoom.fit
     @State private var headRequest: UUID?
     @State private var spinner = false
@@ -230,8 +230,14 @@ private struct FilePreviewDetail: View {
                 .accessibilityValue(wrap ? "on" : "off")
                 .accessibilityIdentifier("file-preview-wrap")
             }
+            if rendered, case .markdown(let text) = preview.kind {
+                let document = FileMarkdownDocuments.document(text)
+                if !document.headings.isEmpty {
+                    FileMarkdownOutlineButton(session: session, path: preview.path, document: document)
+                }
+            }
             if case .markdown = preview.kind {
-                Button { rendered.toggle() } label: {
+                Button { session.previewRendered = !rendered } label: {
                     Image(systemName: "eye").font(.system(size: 11))
                 }
                 .buttonStyle(FilePreviewIconButtonStyle(on: rendered))
@@ -283,6 +289,8 @@ private struct FilePreviewDetail: View {
     /// This tab's wrap choice, else Settings' (Files › Wrap lines).
     private var wrap: Bool { session.previewWrap ?? TerminalRuntime.shared.preferences.filesWrapLines }
     private var lineNumbers: Bool { TerminalRuntime.shared.preferences.filesLineNumbers }
+    /// This tab's choice for Markdown, else Settings' (Files › Render Markdown).
+    private var rendered: Bool { session.previewRendered ?? TerminalRuntime.shared.preferences.filesRenderMarkdown }
 
     private var wrappable: Bool {
         switch preview.kind {
@@ -332,13 +340,9 @@ private struct FilePreviewDetail: View {
                             find: find, highlightsQuery: find.open)
         case .markdown(let text):
             if rendered {
-                ScrollView {
-                    ChatMarkdown(text: text, fillWidth: true, color: theme.ink)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .environment(\.chatSearchQuery, find.open ? find.query : "")
-                .accessibilityIdentifier("file-preview-markdown")
+                FileMarkdownView(session: session, path: preview.path, text: text)
+                    .environment(\.chatSearchQuery, find.open ? find.query : "")
+                    .accessibilityIdentifier("file-preview-markdown")
             } else {
                 FileTextPreview(owner: owner, content: .text(text, language: "markdown"), wrap: wrap, lineNumbers: lineNumbers,
                                 find: find, highlightsQuery: find.open)

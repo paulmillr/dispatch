@@ -8,6 +8,7 @@ final class FilesSettingsTests: XCTestCase {
         XCTAssertTrue(decoded.filesDragAndDrop, "Drag and drop is on by default")
         XCTAssertTrue(decoded.filesShowHidden, "Hidden files show until hidden")
         XCTAssertTrue(decoded.filesPreviews, "Files previews until they are disabled")
+        XCTAssertTrue(decoded.filesRenderMarkdown, "Markdown opens rendered")
         XCTAssertEqual(decoded, Preferences())
     }
 
@@ -17,12 +18,14 @@ final class FilesSettingsTests: XCTestCase {
         changed.filesDragAndDrop = false
         changed.filesShowHidden = false
         changed.filesPreviews = false
+        changed.filesRenderMarkdown = false
         let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed))
         XCTAssertEqual(decoded, changed)
         XCTAssertFalse(decoded.filesEnabled)
         XCTAssertFalse(decoded.filesDragAndDrop)
         XCTAssertFalse(decoded.filesShowHidden)
         XCTAssertFalse(decoded.filesPreviews)
+        XCTAssertFalse(decoded.filesRenderMarkdown)
     }
 
     @MainActor func testDragAndDropIsOffWithFiles() {

@@ -208,8 +208,9 @@ struct ChatMarkdown: View {
 /// The native text view reports no text baselines, so baseline-aligned stacks (the radio log's columns) would fall back
 /// to its bottom edge. Its first line sits at the top with no inset, on a fixed line (`ChatTypography.lineHeight(for:)`),
 /// so TextKit 1 draws the first baseline the font's descent above the line's bottom, rounded to a whole point.
+/// Files' rendered Markdown sets its text the same way (`FileMarkdownView`).
 @available(macOS 26, *)
-private struct ChatSelectableBaseline: ViewModifier {
+struct ChatSelectableBaseline: ViewModifier {
     // The keys it reads, not the whole environment: any environment change would run it again for every block.
     @Environment(\.font) private var font
     @Environment(\.chatTheme) private var theme
@@ -225,7 +226,7 @@ private struct ChatSelectableBaseline: ViewModifier {
 // when accessibility inspects an offscreen LazyVStack row. Keep native selection
 // without that overlay; Font.resolve preserves the inherited SwiftUI typography.
 @available(macOS 26, *)
-private struct ChatSelectableText: NSViewRepresentable {
+struct ChatSelectableText: NSViewRepresentable {
     // The keys the text is built from, not the whole environment (`\.self`): with that, every environment change
     // anywhere above a transcript rebuilt and measured every block of every mounted message.
     @Environment(\.chatTheme) private var theme

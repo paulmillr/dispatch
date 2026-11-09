@@ -659,7 +659,7 @@ struct SettingsView: View {
                             enabled: $draft.filesEnabled,
                             fold: Fold(title: "Options",
                                        changed: changed { [$0.gitEnabled, $0.filesDragAndDrop, $0.filesShowHidden, $0.filesPreviews,
-                                                           $0.filesLineNumbers, $0.filesWrapLines] },
+                                                           $0.filesLineNumbers, $0.filesWrapLines, $0.filesRenderMarkdown] },
                                        isExpanded: $filesOptionsExpanded)) {
                 cardOption("Git", detail: "review mode, commit log and the sidebar's branch names", detailBelow: true) {
                     settingToggle("Git", isOn: $draft.gitEnabled)
@@ -687,6 +687,12 @@ struct SettingsView: View {
                     settingToggle("Wrap lines", isOn: $draft.filesWrapLines)
                         .disabled(!draft.filesPreviews)
                         .accessibilityIdentifier("settings-files-wrap-lines")
+                }
+                cardOption("Render Markdown", detail: "Markdown files open rendered; the preview's eye button sets each tab",
+                           detailBelow: true) {
+                    settingToggle("Render Markdown", isOn: $draft.filesRenderMarkdown)
+                        .disabled(!draft.filesPreviews)
+                        .accessibilityIdentifier("settings-files-render-markdown")
                 }
             }
                 .accessibilityIdentifier("settings-files")

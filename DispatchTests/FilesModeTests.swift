@@ -674,7 +674,7 @@ final class FilesModeTests: XCTestCase {
         let shown = files.session(for: id)
         files.switchMode(id, to: .files)
         shown.tab = .commits; shown.selectedCommit = "4f2a9c1"; shown.commitFile = "README.md"; shown.pinnedRoot = "/work/app"
-        shown.selection = ["/work/app/README.md"]; shown.logScope = .all
+        shown.selection = ["/work/app/README.md"]; shown.logScope = .all; shown.previewRendered = false
         files.retainView(id)
         files.forget(id); fixture.chat.close(id)
         XCTAssertNil(files.existing(id))
@@ -688,6 +688,7 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(restored.tab, .commits); XCTAssertEqual(restored.selectedCommit, "4f2a9c1")
         XCTAssertEqual(restored.commitFile, "README.md"); XCTAssertEqual(restored.pinnedRoot, "/work/app")
         XCTAssertEqual(restored.selection, ["/work/app/README.md"]); XCTAssertEqual(restored.logScope, .all)
+        XCTAssertEqual(restored.previewRendered, false, "The eye's choice for Markdown comes back with the tab")
         XCTAssertTrue(fixture.chat.session(for: id).manualViewChoice, "Discovery must not cover the restored files with chat")
         files.restoreViews(present: [id])
         XCTAssertTrue(files.existing(id) === restored, "A view is given back once")

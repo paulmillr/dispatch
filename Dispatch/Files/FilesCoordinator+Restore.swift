@@ -27,6 +27,8 @@ struct RetainedTabView: Codable {
         /// The tab's views choice (`FilesSession.oneView`); nil follows the layout.
         var oneView: Bool? = nil
         var previewWidth: CGFloat?
+        /// The eye's choice for Markdown (`FilesSession.previewRendered`); nil follows Settings, as older saves do.
+        var previewRendered: Bool? = nil
         var changesSelection: String?
         var changesFilter: String
         var diffMode: GitDiffMode
@@ -43,7 +45,7 @@ struct RetainedTabView: Codable {
             tab = session.tab; pinnedRoot = session.pinnedRoot; expanded = session.expanded; selection = session.selection
             anchor = session.anchor; filter = session.filter; showHidden = session.showHidden; sort = session.sort
             sortDescending = session.sortDescending; previewHidden = session.oneView == true; oneView = session.oneView
-            previewWidth = session.previewWidth
+            previewWidth = session.previewWidth; previewRendered = session.previewRendered
             changesSelection = session.changesSelection; changesFilter = session.changesFilter; diffMode = session.diffMode
             diffWrap = session.diffWrap; logScope = session.logScope; logFilter = session.logFilter
             logRef = session.logRef; logTagged = session.logTagged
@@ -54,7 +56,7 @@ struct RetainedTabView: Codable {
             session.tab = tab; session.pinnedRoot = pinnedRoot; session.expanded = expanded; session.selection = selection
             session.anchor = anchor; session.filter = filter; session.showHidden = showHidden; session.sort = sort
             session.sortDescending = sortDescending; session.oneView = oneView ?? (previewHidden ? true : nil)
-            session.previewWidth = previewWidth
+            session.previewWidth = previewWidth; session.previewRendered = previewRendered
             session.changesSelection = changesSelection; session.changesFilter = changesFilter; session.diffMode = diffMode
             session.diffWrap = diffWrap; session.logScope = logScope; session.logFilter = logFilter
             session.logRef = logScope == .branch ? logRef : nil; session.logTagged = logTagged ?? false
