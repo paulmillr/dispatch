@@ -18,13 +18,19 @@ final class TerminalView: NSView {
     /// Whether terminal output may name files or shared memory on this Mac.
     let allowHostMedia: Bool
     var onProcessExit: (() -> Void)?
-    var foregroundPIDOverride: UInt64? {
+    /// A workspace terminal's tty on this Mac (a terminal on another machine has none here); nil outer: a standalone view.
+    private var helperDevice: UInt32?? {
         guard launchCommand == nil, let workspace = TerminalRuntime.shared.workspace,
               let helper = workspace.helper(containing: id),
               let terminal = workspace.spaces.flatMap(\.tabs).first(where: { $0.id == id })?.terminal else { return nil }
-        guard helper.endpoint == .local else { return 0 }
-        guard let tty = helper.node(terminal)?.tty, let device = UInt32(exactly: tty) else { return 0 }
-        return AgentProcess.foregroundGroup(device: device) ?? 0
+        guard helper.endpoint == .local, let tty = helper.node(terminal)?.tty else { return .some(nil) }
+        return UInt32(exactly: tty)
+    }
+    var foregroundPIDOverride: UInt64? { helperDevice.map { $0.flatMap(AgentProcess.foregroundGroup(device:)) ?? 0 } }
+    /// The program here is reading a password, as far as this Mac can tell.
+    private var atPasswordPrompt: Bool {
+        guard let device = helperDevice else { return surface?.passwordInput ?? false }
+        return device.map(System.passwordPrompt(device:)) ?? false
     }
     /// The grid a multiplexer server keeps for this pane; while set, the view renders exactly that grid
     /// (another client may make it smaller) and reports the cells it could show to `reportAvailable`.
@@ -198,6 +204,7 @@ final class TerminalView: NSView {
 
     func destroy() {
         destroyed = true
+        SecureKeyboardEntry.blur(self)
         history?.setActive(false)
         helper?.revoke(id)
         surface?.close()
@@ -227,8 +234,12 @@ final class TerminalView: NSView {
         }
     }
 
-    func updateFocus() {
-        surface?.setFocus(!inputParked && isPresented && window?.isKeyWindow == true && window?.firstResponder === self)
+    func updateFocus() { setFocus(!inputParked && isPresented && window?.isKeyWindow == true && window?.firstResponder === self) }
+
+    private func setFocus(_ focused: Bool) {
+        surface?.setFocus(focused)
+        if focused { SecureKeyboardEntry.focus(self) { [weak self] in self?.atPasswordPrompt ?? false } }
+        else { SecureKeyboardEntry.blur(self) }
     }
 
     @objc private func windowOcclusionDidChange(_ notification: Notification) { updateVisibility() }
@@ -272,7 +283,7 @@ final class TerminalView: NSView {
     }
 
     override func resignFirstResponder() -> Bool {
-        surface?.setFocus(false)
+        setFocus(false)
         return super.resignFirstResponder()
     }
 

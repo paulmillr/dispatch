@@ -94,6 +94,15 @@ public final class Pty {
         return journal?.write(bytes, accepted) ?? accepted
     }
 
+    /// The program on this pty is reading a password: lines are collected but not echoed (Ghostty's termios timer,
+    /// termio/Exec.zig). A replayed pty has no line discipline, and so no prompt.
+    public var passwordInput: Bool { master.map { Self.passwordInput($0.fd) } ?? false }
+    public static func passwordInput(_ fd: Int32) -> Bool {
+        var modes = termios()
+        guard tcgetattr(fd, &modes) == 0 else { return false }
+        return modes.c_lflag & tcflag_t(ICANON) != 0 && modes.c_lflag & tcflag_t(ECHO) == 0
+    }
+
     /// The terminal's foreground process group (ghostty_surface_foreground_pid).
     public var foregroundPID: pid_t {
         let live = master.map { tcgetpgrp($0.fd) } ?? 0

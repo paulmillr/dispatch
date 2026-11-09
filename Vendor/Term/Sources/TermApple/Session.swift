@@ -211,6 +211,7 @@ public final class Session {
 
     /// The process group in the terminal's foreground (0: none yet).
     public var foregroundPID: pid_t { pty.map { max(0, $0.foregroundPID) } ?? 0 }
+    public var passwordInput: Bool { pty?.passwordInput ?? false }
 
     /// The surface's queued work: pty writes, its messages and scrollbar for the host, the pty size,
     /// a frame (callers may have changed the screen). `urgent`: the host's own action (a key, a scroll, a

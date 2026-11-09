@@ -995,6 +995,12 @@ extension ChatCoordinator {
         }
     }
 
+    /// Why installing `key` on this Mac last failed, for the agent's row in Settings.
+    func localInstallationFailure(_ key: String) -> String? {
+        _ = error // installationFailures is not observed; `error` changes with it.
+        return installationFailures[.init(key: key, endpoint: .local, terminal: nil)]
+    }
+
     private func installed(_ key: String, endpoint: HelperWorkspace.Endpoint, terminal: UInt64? = nil, error: Error?) {
         let current = endpoint.connection.map { TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains($0) } ?? true
         installationFailures[.init(key: key, endpoint: endpoint, terminal: terminal)] = current ? error?.localizedDescription : nil

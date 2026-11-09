@@ -51,6 +51,8 @@ final class AppFilesTests: XCTestCase {
         let launch = try Launch(command: "/bin/zsh", directory: nil, overrides: [], config: SwiftEngine.parse("", dark: true),
                                 environment: ["HOME": directory.path, "ZDOTDIR": user.path, "PATH": "/usr/bin:/bin"], machine: System.machine.launch, resources: resources.path, id: 1)
         XCTAssertEqual(launch.env["ZDOTDIR"], resources.path + "/shell-integration/zsh")
+        let config = SwiftEngine.parse(try TerminalRuntime.shared.makeConfig(Preferences()), dark: true)
+        XCTAssertFalse(config.shellIntegration.cursor, "A shell must not override Settings' cursor at every prompt")
         let zsh = Process()
         zsh.executableURL = URL(fileURLWithPath: "/bin/zsh")
         zsh.arguments = ["-i", "-c", #"print -r -- "$DISPATCH_ZSHRC $ZDOTDIR" > "$1""#, "zsh", output.path]

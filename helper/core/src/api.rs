@@ -1184,6 +1184,8 @@ pub trait Harness {
     fn launch(&mut self, io: &mut dyn Io, cwd: &Path, arguments: &[String], done: Done<Command>);
     /// Typed passthrough commands retain their configuration; managed launches may install hooks.
     fn configures(&self, _arguments: &[String]) -> bool { true }
+    /// The agent runs without this integration (an opt-in bridge): a failed setup never stops its launch.
+    fn optional(&self) -> bool { false }
     /// Run one composer command natively; "unsupported" makes core send it as typed input,
     /// the old terminal path; c1654cc Dispatch/Chat/ChatCommands.swift:292-298,505-507.
     fn command(&mut self, io: &mut dyn Io, binding: &Binding, text: &str, done: Done<Outcome>);

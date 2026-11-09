@@ -5,6 +5,12 @@ use std::rc::Rc;
 
 type Attempt = Rc<dyn Fn(&mut dyn Io, Done<Install>)>;
 
+/// A typed launch's answer once its integration's setup failed: an agent that needs the integration
+/// does not start and the terminal says why; one that runs without it starts, and Settings reports the failure.
+pub(crate) fn failed(optional: bool, error: Error) -> Result<bool, Error> {
+    if optional { Ok(false) } else { Err(error) }
+}
+
 pub(crate) fn run(
     io: &mut dyn Io,
     allowed: Rc<dyn Fn() -> bool>,

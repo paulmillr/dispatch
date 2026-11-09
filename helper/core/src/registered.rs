@@ -67,6 +67,9 @@ impl<T: Harness> Harness for Registered<T> {
     fn configures(&self, arguments: &[String]) -> bool {
         self.part.configures(arguments)
     }
+    fn optional(&self) -> bool {
+        self.part.optional()
+    }
     fn native_queue(&self) -> bool {
         self.part.native_queue()
     }

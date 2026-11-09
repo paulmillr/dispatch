@@ -26,6 +26,8 @@ protocol TerminalEngine: AnyObject {
 @MainActor
 protocol TerminalBackend: AnyObject {
     var foregroundPID: UInt64 { get }
+    /// This terminal's own pty is reading a password (Pty.passwordInput).
+    var passwordInput: Bool { get }
     var needsConfirmQuit: Bool { get }
     var hasSelection: Bool { get }
     /// The grid and its pixel sizes (cols, rows, cell size, the surface's size in pixels).

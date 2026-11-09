@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import TermApple
 import UserNotifications
 import XCTest
 @testable import DispatchApp
@@ -6,12 +7,13 @@ import XCTest
 /// What Dispatch keeps from other apps, the lock screen and other people: keystrokes, banners, a program's clipboard
 /// writes and its own files.
 @MainActor final class PrivacyTests: XCTestCase {
-    /// On by default; engaged only while it is on and Dispatch is the active app, and released when either ends.
+    /// Off by default, so other apps keep their Option-only hotkeys; a choice already saved stays. On, engaged only
+    /// while Dispatch is the active app, and released when either ends.
     func testSecureKeyboardEntryFollowsTheSettingAndTheActiveApp() throws {
-        XCTAssertTrue(Preferences().secureKeyboardEntry)
-        XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).secureKeyboardEntry)
-        var off = Preferences(); off.secureKeyboardEntry = false
-        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(off)).secureKeyboardEntry)
+        XCTAssertFalse(Preferences().secureKeyboardEntry)
+        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).secureKeyboardEntry)
+        var on = Preferences(); on.secureKeyboardEntry = true
+        XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(on)).secureKeyboardEntry)
 
         let (enabled, active) = (SecureKeyboardEntry.enabled, SecureKeyboardEntry.active)
         defer { (SecureKeyboardEntry.enabled, SecureKeyboardEntry.active) = (enabled, active) }
@@ -26,6 +28,57 @@ import XCTest
         SecureKeyboardEntry.active = true
         SecureKeyboardEntry.enabled = false
         XCTAssertFalse(SecureKeyboardEntry.engaged)
+    }
+
+    /// With the setting off, a password prompt in the focused terminal still engages it, for as long as the prompt
+    /// lasts and only while Dispatch is active; another terminal losing focus changes nothing.
+    func testSecureKeyboardEntryEngagesAtAPasswordPromptWithTheSettingOff() async throws {
+        let (enabled, active) = (SecureKeyboardEntry.enabled, SecureKeyboardEntry.active)
+        final class Owner {}
+        let (terminal, other) = (Owner(), Owner())
+        defer {
+            SecureKeyboardEntry.blur(terminal)
+            (SecureKeyboardEntry.enabled, SecureKeyboardEntry.active) = (enabled, active)
+        }
+        (SecureKeyboardEntry.enabled, SecureKeyboardEntry.active) = (false, true)
+        var prompt = false
+        SecureKeyboardEntry.focus(terminal) { prompt }
+        XCTAssertFalse(SecureKeyboardEntry.engaged, "No password is being asked for")
+        prompt = true
+        try await TestSupport.eventually { SecureKeyboardEntry.engaged }
+        XCTAssertTrue(IsSecureEventInputEnabled())
+        SecureKeyboardEntry.blur(other)
+        XCTAssertTrue(SecureKeyboardEntry.engaged, "Focus left a terminal that did not have it")
+        SecureKeyboardEntry.active = false
+        XCTAssertFalse(SecureKeyboardEntry.engaged, "Released for the app that became active")
+        SecureKeyboardEntry.active = true
+        XCTAssertTrue(SecureKeyboardEntry.engaged)
+        prompt = false
+        try await TestSupport.eventually { !SecureKeyboardEntry.engaged }
+        prompt = true
+        SecureKeyboardEntry.blur(terminal)
+        XCTAssertFalse(SecureKeyboardEntry.engaged, "The prompt's terminal lost the keyboard")
+    }
+
+    /// A password prompt is what `getpass` leaves on the tty: lines collected, nothing echoed. A raw TUI is not one.
+    func testPasswordInputIsCanonicalModeWithoutEcho() throws {
+        var (master, slave) = (Int32(-1), Int32(-1))
+        XCTAssertEqual(openpty(&master, &slave, nil, nil, nil), 0)
+        defer { close(master); close(slave) }
+        var modes = termios()
+        XCTAssertEqual(tcgetattr(slave, &modes), 0)
+        XCTAssertFalse(Pty.passwordInput(master), "A new tty echoes")
+        modes.c_lflag &= ~tcflag_t(ECHO)
+        XCTAssertEqual(tcsetattr(slave, TCSANOW, &modes), 0)
+        XCTAssertTrue(Pty.passwordInput(master))
+        var device = stat()
+        XCTAssertEqual(fstat(slave, &device), 0)
+        XCTAssertTrue(System.passwordPrompt(device: UInt32(bitPattern: device.st_rdev)), "A helper's terminal, by its tty")
+        XCTAssertFalse(System.passwordPrompt(device: UInt32.max))
+        modes.c_lflag &= ~tcflag_t(ICANON)
+        XCTAssertEqual(tcsetattr(slave, TCSANOW, &modes), 0)
+        XCTAssertFalse(Pty.passwordInput(master), "Raw mode: a full-screen program")
+        XCTAssertFalse(Pty.passwordInput(-1))
     }
 
     /// With previews hidden, a banner says only that an agent needs you: neither the pane, its folder nor the reply.

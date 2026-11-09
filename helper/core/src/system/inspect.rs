@@ -395,6 +395,32 @@ fn jobs(shell: &Process) -> io::Result<bool> {
 }
 
 /// One native job: its request and answer are encoded plain values (wire::body).
+/// The executables called `program` on `path`, in order, each with whether it is Dispatch's own: this helper
+/// (`image`) or a shim that runs its launcher.
+pub(super) fn programs<'a>(
+    program: &'a str,
+    cwd: &'a std::path::Path,
+    path: &'a str,
+    image: &'a fs::Metadata,
+) -> impl Iterator<Item = (std::path::PathBuf, bool)> + 'a {
+    path.split(':').filter_map(move |directory| {
+        let candidate = cwd.join(directory).join(program);
+        let metadata = fs::metadata(&candidate).ok()?;
+        if !metadata.is_file() || metadata.mode() & 0o111 == 0 { return None; }
+        unsafe extern "C" { fn access(path: *const std::ffi::c_char, mode: i32) -> i32; }
+        let path = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes()).ok()?;
+        // POSIX X_OK checks this account's execution rights, not another mode class.
+        if unsafe { access(path.as_ptr(), 1) } != 0 { return None; }
+        let mut own = (metadata.dev(), metadata.ino()) == (image.dev(), image.ino());
+        let mut prefix = Vec::new();
+        if let Ok(file) = fs::File::open(&candidate) && file.take(1024).read_to_end(&mut prefix).is_ok() {
+            let prefix = String::from_utf8_lossy(&prefix);
+            own |= prefix.contains(&format!("launch {program}")) || prefix.contains(&format!("'launch' '{program}'")) || prefix.contains(&format!("--{program}-launch"));
+        }
+        Some((candidate, own))
+    })
+}
+
 pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
     let root = crate::wire::body::decode_plain(input).map_err(|_| invalid())?;
     let root = &root;
@@ -600,24 +626,8 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             if !cwd.is_absolute() { return Err(invalid()); }
             let path = root.get("path").and_then(|v| v.string()).ok_or_else(invalid)?;
             let skip = fs::metadata(root.get("skip").and_then(Data::path).ok_or_else(invalid)?)?;
-            for directory in path.split(':') {
-                let candidate = cwd.join(directory).join(program);
-                let Ok(metadata) = fs::metadata(&candidate) else { continue; };
-                if !metadata.is_file() || metadata.mode() & 0o111 == 0
-                    || (metadata.dev(), metadata.ino()) == (skip.dev(), skip.ino()) { continue; }
-                unsafe extern "C" { fn access(path: *const std::ffi::c_char, mode: i32) -> i32; }
-                let path = std::ffi::CString::new(candidate.as_os_str().as_encoded_bytes()).map_err(|_| invalid())?;
-                // POSIX X_OK checks this account's execution rights, not another mode class.
-                if unsafe { access(path.as_ptr(), 1) } != 0 { continue; }
-                let mut prefix = Vec::new();
-                if let Ok(file) = fs::File::open(&candidate) {
-                    file.take(1024).read_to_end(&mut prefix)?;
-                    let prefix = String::from_utf8_lossy(&prefix);
-                    if prefix.contains(&format!("launch {program}")) || prefix.contains(&format!("'launch' '{program}'")) || prefix.contains(&format!("--{program}-launch")) { continue; }
-                }
-                return write(&Data::Object(vec![("path", Data::from(candidate.as_path()))]));
-            }
-            Err(io::ErrorKind::NotFound.into())
+            let found = programs(program, cwd, path, &skip).find(|(_, own)| !own).ok_or(io::ErrorKind::NotFound)?;
+            write(&Data::Object(vec![("path", Data::from(found.0.as_path()))]))
         }
         "file.realpath" => {
             let path = fs::canonicalize(root.get("path").and_then(Data::path).ok_or_else(invalid)?)?;

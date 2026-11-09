@@ -1033,6 +1033,7 @@ impl DispatchHelper {
         let Some(harness) = self.harnesses.get(index).cloned() else {
             return done(io, Err(Error { code: "setup", message: "Unknown launch integration".into() }));
         };
+        let optional = harness.borrow().optional();
         let previous = io.section(&format!("harness/{index}"));
         let route = io.route();
         io.section(&previous);
@@ -1066,7 +1067,7 @@ impl DispatchHelper {
             installation::run(io, enabled.clone(), Rc::new(move |io, done| {
                 harness.borrow_mut().install(io, &route, None, audit_binding.as_ref(), done);
             }), Box::new(move |io, result| {
-                let audit = match result { Ok(audit) => audit, Err(error) => return done(io, Err(error)) };
+                let audit = match result { Ok(audit) => audit, Err(error) => return done(io, installation::failed(optional, error)) };
                 // Optional integrations require an explicit enabled state on this helper,
                 // even when the launcher's custom HOME has never seen their files.
                 if !enabled() || audit.optional && !installs.borrow().contains_key(&index) {
@@ -1077,7 +1078,7 @@ impl DispatchHelper {
                     installation::run(io, enabled.clone(), Rc::new(move |io, done| {
                         next.borrow_mut().install(io, &target, Some(true), binding.as_ref(), done);
                     }), Box::new(move |io, result| {
-                        done(io, result.map(|_| enabled()));
+                        done(io, match result { Ok(_) => Ok(enabled()), Err(error) => installation::failed(optional, error) });
                     }));
                 }));
             }));

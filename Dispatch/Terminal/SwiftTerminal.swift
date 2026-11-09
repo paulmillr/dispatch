@@ -138,6 +138,7 @@ final class SwiftBackend: TerminalBackend {
     }
 
     var foregroundPID: UInt64 { UInt64(session.foregroundPID) }
+    var passwordInput: Bool { session.passwordInput }
     var needsConfirmQuit: Bool { started && !exited && session.locked { session.surface.needsConfirmQuit } }
     var hasSelection: Bool { session.locked { session.surface.hasSelection } }
     var grid: TerminalGrid {

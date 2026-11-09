@@ -79,6 +79,13 @@ fn setup_replans_conflicts_but_bounds_contention() {
 }
 
 #[test]
+fn only_an_integration_the_agent_needs_stops_its_launch() {
+    let error = || Error { code: "install", message: String::new() };
+    assert!(!failed(true, error()).unwrap());
+    assert_eq!(failed(false, error()).unwrap_err().code, "install");
+}
+
+#[test]
 fn setup_never_retries_process_failures_partial_writes_or_revoked_permission() {
     for code in ["process", "uncertain", "io", "settings"] {
         let (calls, result) = exercise(&[code], false);

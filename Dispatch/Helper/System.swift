@@ -31,6 +31,17 @@ enum System {
 
     static func terminal(_ tab: UUID) -> Terminal? { lock.withLock { terminals[tab.uuidString] } }
 
+    /// The tty with this device number on this Mac is reading a password. Not recorded: it is asked on a timer, and the
+    /// answer goes only to macOS's secure input.
+    static func passwordPrompt(device: UInt32) -> Bool {
+        var name = [CChar](repeating: 0, count: 128)
+        guard devname_r(dev_t(bitPattern: device), S_IFCHR, &name, Int32(name.count)) != nil else { return false }
+        let fd = open("/dev/" + String(cString: name), O_RDONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        return Pty.passwordInput(fd)
+    }
+
     /// Pty.journal: what the process prints, what is typed and its end (its window is drawing: the app's).
     static func pty(_ launch: Launch) throws -> Pty.Journal? {
         // The environment carries this run's renderer token and paths; the command and a renderer's tab (a recorded

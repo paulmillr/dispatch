@@ -939,7 +939,7 @@ struct SettingsView: View {
                         isExpanded: $securityExpanded)
         let state = [draft.allowClipboardWrites ? "programs can copy" : "no clipboard writes",
                      draft.autoApproveUnsafePastes ? "pastes approved" : "unsafe pastes ask",
-                     draft.secureKeyboardEntry ? "secure keyboard" : "keyboard not secured",
+                     draft.secureKeyboardEntry ? "secure keyboard" : "secure at password prompts",
                      draft.enableKittyGraphics ? "kitty images" : "no images"]
         row("Security", detail: state.joined(separator: " · "),
             privacy: "What programs in any tab, and other apps, can reach: your clipboard, your keystrokes and files on this Mac.") {
@@ -959,8 +959,8 @@ struct SettingsView: View {
                     settingToggle("Automatically approve unsafe pastes", isOn: $draft.autoApproveUnsafePastes)
                         .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
                 }
-                cardOption("Secure keyboard entry", detail: "other apps can't read what you type", detailBelow: true,
-                           privacy: "While Dispatch is the active app, apps with Input Monitoring see none of your keystrokes, passwords included. Some text expanders and keyboard tools stop working meanwhile.") {
+                cardOption("Secure keyboard entry", detail: "other apps can't read what you type; off, only at password prompts", detailBelow: true,
+                           privacy: "On: while Dispatch is the active app, apps with Input Monitoring see none of your keystrokes. Other apps' Option-only global hotkeys, some text expanders and keyboard tools stop working meanwhile. Off: the same protection only while the focused terminal waits for a password on this Mac (sudo, ssh's own prompt); a prompt on an SSH host can't be seen from here.") {
                     settingToggle("Secure keyboard entry", isOn: $draft.secureKeyboardEntry)
                         .accessibilityIdentifier("settings-secure-keyboard-entry")
                 }

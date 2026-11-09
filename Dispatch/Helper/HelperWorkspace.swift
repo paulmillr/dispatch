@@ -1646,12 +1646,13 @@
           focusTargets[node, default: 1] -= 1
           if focusTargets[node] == 0 { focusTargets.removeValue(forKey: node) }
         }
-        if let route { settled(route, unchanged: previous, leaf: leaf) }
+        if let route { settled(route, unchanged: previous, leaf: leaf, node: node) }
       }
     }
 
     /// Focus updates held during our requests become authoritative when the requests settle.
-    private func settled(_ route: HelperBackend.Route, unchanged: HelperTopology? = nil, leaf: Bool = false) {
+    private func settled(_ route: HelperBackend.Route, unchanged: HelperTopology? = nil, leaf: Bool = false,
+                         node: UInt64? = nil) {
       focusing[route, default: 1] -= 1
       print("Helper focus settled: route=\(route), pending=\(focusing[route, default: 0]), creating=\(creating[route, default: 0]), selected=\(String(describing: workspace?.activeTab?.terminal)), server=\(String(describing: snapshots[route]?.focus))")
       guard !stopped, focusing[route, default: 0] == 0, creating[route, default: 0] == 0,
@@ -1669,7 +1670,32 @@
       // the focus from before the app's selection, however late its topology was read: no other client's change, so it
       // must not take the selection back. (A space or window focus leaves the terminal to the server: follow it.)
       lastFocus[route] = leaf && unchanged?.focus == topology.focus ? topology.focus : workspace?.activeTab?.terminal
+      // A space or window focus the user has since left (another space chosen while it waited behind a creation):
+      // the terminal the server focused for it is this app's own stale request, not another client's change. Keep
+      // the selection, and give the server the terminal the user chose instead.
+      if !leaf, let node, let active = workspace?.activeTab, known(node), !selection(active.id, isUnder: node) {
+        lastFocus[route] = topology.focus
+        if let terminal = active.terminal, terminal != topology.focus,
+          owned.contains(where: { $0.backend == topology.backend && $0.tabs.contains { $0.id == active.id } })
+        { focus(terminal) }
+      }
       do { try apply(topology, route: route) } catch { fail(error) }
+    }
+
+    /// Whether `node` still names a space, window or terminal this app shows (herdr gives a moved window a new one).
+    private func known(_ node: UInt64) -> Bool {
+      owned.contains { space in
+        space.node == node || space.containers.contains { $0.node == node } || space.tabs.contains { $0.terminal == node }
+      }
+    }
+
+    /// Whether the tab is in the space or window `node`, or is that terminal.
+    private func selection(_ tab: UUID, isUnder node: UInt64) -> Bool {
+      owned.contains { space in
+        guard space.tabs.contains(where: { $0.id == tab }) else { return false }
+        return space.node == node || space.tabs.contains { $0.id == tab && $0.terminal == node }
+          || space.containers.contains { $0.node == node && $0.terminals.contains { $0.id == tab } }
+      }
     }
 
     @discardableResult

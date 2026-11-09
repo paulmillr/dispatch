@@ -301,8 +301,8 @@ struct Preferences: Codable, Equatable {
     var autoApproveUnsafePastes = true
     /// A helper connection lost while Dispatch runs logs back in by itself, with keys or the SSH agent only.
     var autoReconnectSSH = false
-    /// Keystrokes kept from other apps while Dispatch is active (SecureKeyboardEntry).
-    var secureKeyboardEntry = true
+    /// Keystrokes kept from other apps whenever Dispatch is active; off, only at a password prompt (SecureKeyboardEntry).
+    var secureKeyboardEntry = false
     /// nil until onboarding is answered; both nil and false make no automatic update requests.
     var automaticUpdates: Bool? = nil
     /// The first-launch setup sheet (LocalAgentsConsent) has been shown on this Mac, by this build or another sharing

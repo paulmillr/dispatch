@@ -541,6 +541,10 @@ struct SSHHostsSettings: View {
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         .help("\(launch.label) is not installed on this Mac: run this in a terminal")
                         .accessibilityIdentifier("settings-install-command-\(launch.key)")
+                } else if let failure = chat.localInstallationFailure(launch.key) {
+                    Text(failure).font(typography, .body).foregroundStyle(.red).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-install-failure-\(launch.key)")
                 } else {
                     Text(localStatus(launch)).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .fixedSize(horizontal: false, vertical: true)

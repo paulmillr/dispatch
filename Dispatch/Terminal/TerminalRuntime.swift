@@ -231,7 +231,8 @@ final class TerminalRuntime {
         // A custom scheme by its file's path; one that's gone, Dispatch's own (Settings says which).
         let resolution = ThemeResolution.value(for: settings.resolvedTheme(systemIsDark: systemIsDark)), theme = resolution.value
         // A small app-owned config keeps unsupported standalone Ghostty actions
-        // and external command wrappers out of this embedding.
+        // and external command wrappers out of this embedding. no-cursor: the integration's blinking bar at every
+        // prompt would override Settings' cursor.
         return """
         term = xterm-256color
         font-family = \(settings.fontFamily)
@@ -253,7 +254,7 @@ final class TerminalRuntime {
         clipboard-read = ask
         clipboard-write = ask
         vt-xt-checksum-report = false
-        shell-integration-features = cursor,no-sudo,title,no-ssh-env,no-ssh-terminfo,no-path
+        shell-integration-features = no-cursor,no-sudo,title,no-ssh-env,no-ssh-terminfo,no-path
         keybind = clear
         keybind = super+c=copy_to_clipboard
         keybind = super+v=paste_from_clipboard

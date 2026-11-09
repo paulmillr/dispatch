@@ -4,12 +4,47 @@
 //! and exits with the child's status.
 use super::System;
 use crate::api::*;
-use std::{cell::RefCell, io, rc::Rc};
+use std::{cell::RefCell, io, os::unix::process::CommandExt, path::Path, process::Command, rc::Rc};
 
 /// Discards updates: a launcher has no UI.
 struct Silent;
 impl Ui for Silent {
     fn update(&mut self, _: Update) {}
+}
+
+/// A harness names its program bare; this launcher's own shim for it may come first on `PATH`, and would run this
+/// launcher again, forever. Past such a shim, the first real program; a command with nothing in the way is unchanged.
+fn past_shims(command: Command) -> io::Result<Command> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let (Ok(image), Ok(cwd)) = (System::image().and_then(std::fs::metadata), System::cwd()) else { return Ok(command) };
+    resolved(command, &path, &cwd, &image)
+}
+
+fn resolved(command: Command, path: &str, cwd: &Path, image: &std::fs::Metadata) -> io::Result<Command> {
+    let Some(program) = command.get_program().to_str().filter(|name| !name.contains('/')).map(str::to_owned) else {
+        return Ok(command);
+    };
+    if command.get_envs().any(|(name, _)| name == "PATH") {
+        return Ok(command);
+    }
+    let directory = command.get_current_dir().unwrap_or(cwd).to_path_buf();
+    let mut found = super::inspect::programs(&program, &directory, path, image);
+    if !found.next().is_some_and(|(_, own)| own) {
+        return Ok(command);
+    }
+    let (real, _) = found.find(|(_, own)| !own).ok_or(io::ErrorKind::NotFound)?;
+    let mut direct = Command::new(real);
+    direct.arg0(&program).args(command.get_args());
+    if let Some(directory) = command.get_current_dir() {
+        direct.current_dir(directory);
+    }
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => direct.env(name, value),
+            None => direct.env_remove(name),
+        };
+    }
+    Ok(direct)
 }
 
 pub fn run(io: &mut System, harness: Shared<dyn Harness>, arguments: &[String]) -> io::Result<i32> {
@@ -45,7 +80,10 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, arguments: &[String]) 
             let command = result.map_err(|error| io::Error::other(error.code))?;
             io.section("launch");
             let program = std::path::PathBuf::from(command.get_program());
-            match io.launch(command, None, true, None) {
+            // A replay's PATH is this machine's, not the recording's.
+            let resolved = if io.capture.replay.is_some() { Ok(command) } else { past_shims(command) };
+            let started = resolved.and_then(|command| io.launch(command, None, true, None));
+            match started {
                 Ok(spawned) => child = Some(spawned.pid),
                 // Shell exit codes for a command that cannot run; old ssh-helper codex.rs:80-86.
                 Err(error) => {
@@ -107,3 +145,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, arguments: &[String]) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "launch.test.rs"]
+mod tests;

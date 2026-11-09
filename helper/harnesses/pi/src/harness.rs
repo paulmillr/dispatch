@@ -590,6 +590,9 @@ impl Harness for Pi {
     ) {
         crate::install::run(&self.runtime, io, enabled, agent, done);
     }
+    fn optional(&self) -> bool {
+        true
+    }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         crate::transcript::event(&self.runtime, io, ui, &event);
         crate::side::event(&self.runtime, io, &event);
