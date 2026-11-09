@@ -175,6 +175,14 @@ struct ChatView: View {
                     Button("Open in terminal") { coordinator.showTerminal(session) }
                 }.floatingGlassPanel()
             }
+            if let notice = session.terminalPromptNotice, TerminalRuntime.shared.hosts.reconnect.state(for: session.id) == nil {
+                HStack {
+                    Text(notice).font(theme.typography.detail).foregroundStyle(theme.muted).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Clear") { coordinator.clearTerminalPrompt(session) }.disabled(session.clearingTerminalPrompt)
+                    Button("Open in terminal") { coordinator.showTerminal(session) }
+                }.floatingGlassPanel()
+            }
             if let side = session.sideConversation {
                 ChatSideSheet(side: side, close: { coordinator.closeSideConversation(session) }, maximumHeight: availableChatHeight * 0.55,
                               shortcutsEnabled: focused && session.showChat)

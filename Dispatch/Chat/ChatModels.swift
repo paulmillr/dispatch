@@ -1458,6 +1458,12 @@ final class ChatSession: Identifiable {
     // Transcript polling and activity hooks may replace their own status, but
     // a failed send must remain visible until the user acts or identity ends.
     var submissionFailure: String?
+    /// Text in the agent's own prompt that did not move to the draft and is in the way of sending: the strip above the
+    /// composer says so and offers Clear and Open in terminal. Mac only; until a send lands or the terminal shows.
+    var terminalPromptNotice: String?
+    var clearingTerminalPrompt = false
+    /// `adoptTerminalTypeahead` is running: one at a time, or the text would be erased and moved twice.
+    var adoptingTerminalPrompt = false
     private var activityStatus: String?
     var status: String? {
         get { terminalAttention ?? submissionFailure ?? activityStatus }
@@ -1594,6 +1600,7 @@ final class ChatSession: Identifiable {
         command?.cancel(); command = nil; commandResult = nil; commandEditor = nil
         clearQuestions()
         nativePrompt = nil; nativeInputs.removeAll(); claudePromptObservedAt = nil
+        terminalPromptNotice = nil
         serviceTier = nil; collaborationMode = nil; threadName = nil; goal = nil; confirmedConversation = nil
         settingsRevision = 0; goalRevision = 0; usage = nil
         invalidateQueuedDestination(replacing: true)

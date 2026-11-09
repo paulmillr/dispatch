@@ -59,13 +59,49 @@ final class ClaudeTransportTests: XCTestCase {
         terminal.insertText("unsent native input", replacementRange: NSRange(location: NSNotFound, length: 0))
         try await TestSupport.eventually { terminal.agentMenuScreen.contains("unsent native input") }
         session.draft = "preserve Chat draft"; runtime.chat.submit(session)
-        // The helper refuses input while Claude's composer holds unsent text; the refusal is its reply.
-        try await TestSupport.eventually(timeout: .seconds(10)) { session.submissionFailure != nil && session.submissionID == nil }
+        // The helper refuses input while Claude's composer holds unsent text. The keys vouch for this text: it moves
+        // ahead of the message, nothing is sent, and the user is told.
+        try await TestSupport.eventually(timeout: .seconds(10)) {
+            session.draft == "unsent native input preserve Chat draft" && session.submissionID == nil
+                && ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen) && session.submissionFailure != nil
+        }
+        XCTAssertNil(session.terminalPromptNotice)
+        XCTAssertNil(session.optimisticPrompt, "Chat must not append to existing native input")
+        // Keys lost track (an arrow): the refusal says what is in the way, and the text and the draft both stay.
+        terminal.insertText("unsent after arrows", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await TestSupport.eventually { terminal.agentMenuScreen.contains("unsent after arrows") }
+        TerminalTestSupport.key(123, "", terminal)
+        session.draft = "preserve Chat draft"; runtime.chat.submit(session)
+        try await TestSupport.eventually(timeout: .seconds(10)) { session.terminalPromptNotice != nil && session.submissionID == nil }
+        XCTAssertEqual(session.terminalPromptNotice, "Claude's prompt in Terminal already has “unsent after arrows”. Clear it or send it there first.")
+        XCTAssertNil(session.submissionFailure)
         XCTAssertEqual(session.draft, "preserve Chat draft")
         XCTAssertNil(session.optimisticPrompt, "Chat must not append to existing native input")
-        // The user clears Claude's line (the old clearLine key: C-u) in the terminal.
-        TerminalTestSupport.key(32, "u", terminal, modifiers: .control)
-        try await TestSupport.eventually { ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen) }
+        // The strip's Clear empties the prompt; Chat's draft is untouched.
+        runtime.chat.clearTerminalPrompt(session)
+        try await TestSupport.eventually { ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen) && session.terminalPromptNotice == nil }
+        XCTAssertEqual(session.draft, "preserve Chat draft")
+        // A message long enough to wrap moves whole to the draft when Chat shows, line for line as it was typed.
+        func compact(_ text: String) -> String { text.filter { !$0.isWhitespace } }
+        session.draft = ""
+        runtime.chat.chooseChat(false, session: session)
+        let wrapped = String(repeating: "a long message wraps in the prompt ", count: 8).trimmingCharacters(in: .whitespaces)
+        terminal.insertText(wrapped, replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await TestSupport.eventually { ClaudeModelMenu.composerText(terminal.agentMenuScreen).map(compact) == compact(wrapped) }
+        runtime.chat.chooseChat(true, session: session)
+        try await TestSupport.eventually { session.draft == wrapped && ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen) }
+        XCTAssertNil(session.terminalPromptNotice)
+        // Text the keys lost track of stays, and the strip says so as soon as Chat shows.
+        session.draft = ""
+        runtime.chat.chooseChat(false, session: session)
+        terminal.insertText("edited with arrows", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await TestSupport.eventually { terminal.agentMenuScreen.contains("edited with arrows") }
+        TerminalTestSupport.key(123, "", terminal)
+        runtime.chat.chooseChat(true, session: session)
+        try await TestSupport.eventually(timeout: .seconds(5)) { session.terminalPromptNotice?.contains("edited with arrows") == true }
+        XCTAssertEqual(session.draft, "")
+        runtime.chat.clearTerminalPrompt(session)
+        try await TestSupport.eventually { ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen) && session.terminalPromptNotice == nil }
         func reply(_ text: String) -> Bool {
             !session.busy && session.turns.flatMap(\.items).contains { $0.kind == .assistant && $0.text.contains(text) }
         }

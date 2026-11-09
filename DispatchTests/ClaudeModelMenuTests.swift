@@ -3,7 +3,23 @@ import XCTest
 
 final class ClaudeModelMenuTests: XCTestCase {
     /// Text typed into Terminal before Chat opened is read back from the plain composer only.
-    func testComposerTextReadsOnlyTheOneLineComposer() {
+    /// As Claude Code 2.1.321 and Codex 0.167 draw a long draft in a 60-column terminal.
+    func testComposerTextJoinsWrappedRows() {
+        let rule = String(repeating: "─", count: 60)
+        let claude = "  hint\n\(rule)\n❯ the quick brown fox jumps over the lazy dog the quick\n  brown fox jumps over the lazy dog\n\(rule)\n  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+        XCTAssertEqual(ClaudeModelMenu.composerText(claude), "the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog")
+        let codex = "• Note.\n\n\n› the quick brown fox jumps over the lazy dog the quick\n  brown fox jumps over the lazy dog\n\n  Model-A high · ~/work/example\n"
+        XCTAssertEqual(ClaudeModelMenu.codexComposerText(codex), "the quick brown fox jumps over the lazy dog the quick brown fox jumps over the lazy dog")
+        // A framed or footed list of choices is not a wrapped draft.
+        XCTAssertNil(ClaudeModelMenu.composerText("\(rule)\n❯ 1. Yes\n  2. No\n\(rule)\n  footer\n"))
+        XCTAssertNil(ClaudeModelMenu.codexComposerText("› 2. Approve for me\n  3. Full Access\n\n  enter select · esc back\n"))
+        // A faint tail at the cursor is a suggestion, whatever else the screen shows.
+        let suggestion = "\(rule)\n❯ try fixing the build\n\(rule)\n  an unknown footer\n"
+        XCTAssertEqual(ClaudeModelMenu.promptText(suggestion, column: 2, row: 1, faint: true, codex: false), "")
+        XCTAssertEqual(ClaudeModelMenu.promptText(suggestion, column: 2, row: 1, faint: false, codex: false), "try fixing the build")
+    }
+
+    func testComposerTextReadsOnlyTheComposer() {
         let empty = "Claude Code v2.1.287\n──── design ─\n❯ \n───\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent\n"
         XCTAssertEqual(ClaudeModelMenu.composerText(empty), "")
         XCTAssertEqual(ClaudeModelMenu.composerText(empty.replacingOccurrences(of: "❯ ", with: "❯ hello there  ")), "hello there")
@@ -11,8 +27,8 @@ final class ClaudeModelMenuTests: XCTestCase {
         // Captured from 2.1.285: a no-break space after the marker, and no shortcut hint while typing.
         let typing = "Claude Code v2.1.285\n───\n❯\u{a0}thinking hello \n───\n  ⏸ manual mode on\n"
         XCTAssertEqual(ClaudeModelMenu.composerText(typing), "thinking hello")
+        XCTAssertEqual(ClaudeModelMenu.composerText(empty.replacingOccurrences(of: "❯ \n", with: "❯ first\n  second\n")), "first second")
         for other in [empty.replacingOccurrences(of: "❯ ", with: "❯hello"),
-                      empty.replacingOccurrences(of: "❯ \n", with: "❯ first\n  second\n"),
                       empty.replacingOccurrences(of: "───\n  ⏵⏵", with: "───\n❯ 1. Yes\n  ⏵⏵"),
                       empty + "───\n Do you want to proceed?\n",
                       empty.replacingOccurrences(of: "──── design ─", with: "")] {

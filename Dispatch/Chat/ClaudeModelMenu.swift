@@ -98,33 +98,55 @@ struct ClaudeModelMenu: Equatable {
         }
     }
 
-    /// The one-line draft in Claude's composer ("" when empty); nil for menus, dialogs, wrapped
-    /// or multiline drafts, and anything else that is not the plain bordered composer. Claude
+    /// A row of a numbered choice list: a menu when rows follow it, never a composer's wrapped text.
+    private static func numbered(_ text: some StringProtocol) -> Bool {
+        text.trimmingCharacters(in: .whitespaces).range(of: #"^[0-9]+\. "#, options: .regularExpression) != nil
+    }
+
+    /// The draft in Claude's composer, its rows joined by spaces ("" when empty); nil for menus, dialogs, and anything
+    /// else that is not the plain bordered composer. Rows wrap anywhere, so compare it without white space. Claude
     /// separates the draft from "❯" with a no-break space and drops its shortcut hint while typing.
     static func composerText(_ screen: String) -> String? {
         guard screen.utf8.count <= 65_536 else { return nil }
         let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
         func rule(_ line: String) -> Bool { !line.isEmpty && line.allSatisfy { $0 == "─" } }
         guard let row = lines.lastIndex(where: { $0.hasPrefix("❯") }), row >= 1, row + 1 < lines.count,
-              isComposerTopBorder(lines[row - 1]), rule(lines[row + 1]),
-              !lines.dropFirst(row + 2).contains(where: rule) else { return nil }
+              isComposerTopBorder(lines[row - 1]), let end = lines[(row + 1)...].firstIndex(where: rule),
+              !lines.dropFirst(end + 1).contains(where: rule) else { return nil }
         let rest = lines[row].dropFirst()
-        guard rest.first?.isWhitespace != false else { return nil }
-        return rest.trimmingCharacters(in: .whitespaces)
+        guard rest.first?.isWhitespace != false, end == row + 1 || !numbered(rest) else { return nil }
+        return ([String(rest)] + lines[(row + 1)..<end]).joined(separator: " ").trimmingCharacters(in: .whitespaces)
     }
 
-    /// Codex's prompt line (`› text`, 0.166) with only its footer below it: the text typed there, "" when empty (its
-    /// faint placeholder removed first, `removingPlaceholder`); nil while a menu, a popup or a multiline draft shows.
+    /// Codex's prompt (`› text`, its wrapped rows down to the blank row above the footer, 0.166) with only its footer
+    /// below: the text typed there, rows joined by spaces, "" when empty (its faint placeholder removed first); nil
+    /// while a menu or a popup shows.
     static func codexComposerText(_ screen: String) -> String? {
         guard screen.utf8.count <= 65_536 else { return nil }
         let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
         guard let row = lines.lastIndex(where: { $0.hasPrefix("›") }) else { return nil }
-        let below = lines.dropFirst(row + 1).filter { !$0.isEmpty }
+        func footer(_ line: String) -> Bool { line.contains(" · ") }
+        let after = Array(lines.dropFirst(row + 1)), blank = after.firstIndex(where: \.isEmpty) ?? 0
+        var continued = after.prefix(blank), below = after.dropFirst(blank).filter { !$0.isEmpty }
+        if !below.contains(where: footer) { continued = []; below = after.filter { !$0.isEmpty } }
         // Below the prompt: one footer line (model · folder), and a notice at most; never a popup's rows.
-        guard below.count <= 2, below.contains(where: { $0.contains(" · ") }), !below.contains(where: { $0.hasPrefix("/") }) else { return nil }
+        guard below.count <= 2, below.contains(where: footer), !below.contains(where: { $0.hasPrefix("/") }) else { return nil }
         let rest = lines[row].dropFirst()
-        guard rest.first?.isWhitespace != false else { return nil }
-        return rest.trimmingCharacters(in: .whitespaces)
+        guard rest.first?.isWhitespace != false,
+              continued.isEmpty || !(numbered(rest) || below.contains { $0.contains("esc back") }) else { return nil }
+        return ([String(rest)] + continued).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// What the agent's prompt holds on `screen` (`composerText`, `codexComposerText`). A faint tail right after the
+    /// marker, at the cursor (`column`, `row`), is a placeholder or a suggestion: nothing typed.
+    static func promptText(_ screen: String, column: Int, row: Int, faint: Bool, codex: Bool) -> String? {
+        var lines = screen.components(separatedBy: .newlines), text = screen
+        if faint, lines.indices.contains(row),
+           String(lines[row].prefix(column)).trimmingCharacters(in: .whitespaces) == (codex ? "›" : "❯") {
+            lines[row] = String(lines[row].prefix(column))
+            text = lines.joined(separator: "\n")
+        }
+        return codex ? codexComposerText(text) : composerText(text)
     }
 
     static func removingPlaceholder(_ screen: String, column: Int, row: Int, faint: Bool, marker: String = "❯") -> String {

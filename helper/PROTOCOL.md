@@ -177,9 +177,9 @@ These are literal codes in each producer; native error codes/details and platfor
 
 | Producer | Literal codes |
 | --- | --- |
-| harnesses/claude | `changed`, `exited`, `expired`, `hook`, `identity`, `input`, `invalid`, `io`, `json`, `limit`, `menu`, `missing`, `question`, `session`, `settings`, `shape`, `side`, `state`, `transcript`, `unsupported` |
+| harnesses/claude | `changed`, `exited`, `expired`, `hook`, `identity`, `input`, `invalid`, `io`, `json`, `limit`, `menu`, `missing`, `question`, `session`, `settings`, `shape`, `side`, `state`, `terminal_draft`, `transcript`, `unsupported` |
 | harnesses/codex | `busy`, `capacity`, `changed`, `channel`, `closed`, `command_arguments`, `endpoint`, `environment`, `goal`, `history`, `hook`, `identity`, `input`, `io`, `json`, `menu`, `models`, `native`, `not_found`, `process`, `question`, `queue`, `removed`, `side`, `socket`, `stale`, `thread`, `timeout`, `tool`, `turn`, `unsupported` |
-| harnesses/pi | `attention`, `changed`, `command_arguments`, `deadline`, `history`, `install`, `io`, `may_have_sent`, `menu`, `models`, `native`, `not_found`, `not_sent`, `setup`, `side`, `state`, `unsupported` |
+| harnesses/pi | `attention`, `changed`, `command_arguments`, `deadline`, `history`, `install`, `io`, `may_have_sent`, `menu`, `models`, `native`, `not_found`, `not_sent`, `setup`, `side`, `state`, `terminal_draft`, `unsupported` |
 | multiplexers/herdr | `busy`, `closed`, `expired`, `herdr`, `raw_input`, `uncertain` |
 | multiplexers/native | `agent_changed`, `backend_unavailable`, `busy`, `control_process_unavailable`, `destination_unavailable`, `expired`, `foreground_missing`, `input_closed`, `input_unavailable`, `io_failure`, `layout_app_owned`, `process_identity_invalid`, `process_identity_missing`, `process_missing`, `scrollback_app_owned`, `uncertain` |
 | multiplexers/tmux | `expired`, `invalidFrame`, `malformed`, `scrollback_app_owned`, `stale`, `tmux`, `uncertain`, `unsupported` |

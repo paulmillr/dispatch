@@ -58,6 +58,20 @@ pub struct Error {
     pub message: String,
 }
 
+/// Longest quote of the prompt's text in a `terminal_draft` refusal.
+const DRAFT_QUOTE: usize = 80;
+
+/// A send refused only because the agent's own prompt already holds `text`: pasted after it, Chat's
+/// message would arrive as one message nobody wrote. The client offers a way out (`terminal_draft`).
+pub fn terminal_draft(agent: &str, text: &str) -> Error {
+    let quote: String = text.chars().take(DRAFT_QUOTE).collect();
+    let more = if text.chars().nth(DRAFT_QUOTE).is_some() { "…" } else { "" };
+    Error {
+        code: "terminal_draft",
+        message: format!("{agent}'s prompt in Terminal already has “{quote}{more}”. Clear it or send it there first."),
+    }
+}
+
 /// A native JSON value; wraps the vendored yyjson document (user decision). Opaque here.
 pub use crate::json::Json;
 

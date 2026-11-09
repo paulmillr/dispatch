@@ -399,6 +399,14 @@ pub fn prompt(screen: &Screen) -> Option<Interaction> {
         }],
     })
 }
+/// The cursor sits right after the prompt marker with faint text behind it: a placeholder or a
+/// suggestion, nothing typed.
+fn faint_only(screen: &Screen) -> bool {
+    screen.faint_tail
+        && screen.text.lines().nth(screen.cursor.1 as usize).is_some_and(|s| {
+            s.chars().take(screen.cursor.0 as usize).collect::<String>().trim() == "❯"
+        })
+}
 /// `name`: the verified registration name. USER DECISION 2026-10-03 (diverges from c1654cc
 /// isEmptyComposer): Claude draws it into the top rule after /rename ('──── name ─'); only that
 /// exact name is accepted there.
@@ -406,12 +414,7 @@ pub fn ready(screen: &Screen, working: bool, name: Option<&str>) -> bool {
     let Some(mut all) = lines(&screen.text).map(Iterator::collect::<Vec<_>>) else {
         return false;
     };
-    let prefix = screen
-        .text
-        .lines()
-        .nth(screen.cursor.1 as usize)
-        .map(|s| s.chars().take(screen.cursor.0 as usize).collect::<String>());
-    if screen.faint_tail && prefix.as_ref().is_some_and(|s| s.trim() == "❯") {
+    if faint_only(screen) {
         if let Some(row) = all.get_mut(screen.cursor.1 as usize) {
             *row = "❯";
         }
@@ -832,6 +835,16 @@ impl Walk {
                 !all[top..bottom].iter().any(|s| s.starts_with('❯'))
                     || !(top..bottom).contains(&(screen.cursor.1 as usize))
             });
+            // The session could take this send; only the text in its prompt is in the way.
+            let held = match goal {
+                Goal::Send { mode, .. }
+                    if valid && !faint_only(screen)
+                        && (status == "idle" || *mode == Mode::Steer && ["working", "busy"].contains(&status)) =>
+                {
+                    drafted(screen, *mode == Mode::Steer, name).filter(|text| !text.is_empty())
+                }
+                _ => None,
+            };
             return match goal {
                 Goal::Stop if interrupt(status, name, screen) => {
                     self.stage = Stage::Exit;
@@ -864,9 +877,9 @@ impl Walk {
                     // A missing prompt marker may be a partial redraw; a visible draft is refused.
                     Step::Wait
                 }
-                _ => Step::Fail(error(
-                    "input",
-                    "Claude's current prompt or session does not allow input",
+                _ => Step::Fail(held.map_or_else(
+                    || error("input", "Claude's current prompt or session does not allow input"),
+                    |text| terminal_draft("Claude", &text),
                 )),
             };
         }
@@ -1371,7 +1384,17 @@ mod tests {
         assert!(matches!(step(&mut walk, &goal, &composer("[Image #1] [Image #2]"), true), Step::Fail(_)));
         // A draft that was already there refuses the send before anything is pasted.
         let mut walk = Walk::default();
-        assert!(matches!(step(&mut walk, &goal, &composer("draft"), false), Step::Fail(_)));
+        let refused = step(&mut walk, &goal, &composer("draft"), false);
+        assert!(matches!(&refused, Step::Fail(Error { code: "terminal_draft", message }) if message.contains("“draft”")), "{refused:?}");
+        // Another reason to refuse is not blamed on the prompt: a busy session, a suggestion.
+        let mut walk = Walk::default();
+        let busy = walk.next("s", "busy", None, &goal, &composer("draft"));
+        assert!(matches!(busy, Step::Fail(Error { code: "input", .. })), "{busy:?}");
+        let mut suggestion = composer("try this");
+        suggestion.faint_tail = true;
+        suggestion.cursor = (2, 1);
+        let mut walk = Walk::default();
+        assert!(!matches!(step(&mut walk, &goal, &suggestion, false), Step::Fail(Error { code: "terminal_draft", .. })));
     }
 
     #[test]

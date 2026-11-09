@@ -180,8 +180,11 @@ final class PiChatIntegrationTests: XCTestCase {
 
             terminal.insertText("native draft", replacementRange: NSRange(location: NSNotFound, length: 0))
             try await TestSupport.eventually { terminal.agentMenuScreen.contains("native draft") }
+            // An arrow loses the keys' track of the text: it stays in Terminal instead of moving to the draft.
+            TerminalTestSupport.key(123, "", terminal); TerminalTestSupport.key(124, "", terminal)
             session.draft = "must preserve native draft"; runtime.chat.submit(session)
-            try await TestSupport.eventually { session.submissionFailure != nil && session.submissionID == nil }
+            try await TestSupport.eventually { session.terminalPromptNotice != nil && session.submissionID == nil }
+            XCTAssertEqual(session.terminalPromptNotice, "Pi's prompt in Terminal already has “native draft”. Clear it or send it there first.")
             XCTAssertEqual(session.draft, "must preserve native draft")
             let nativeDraft = try await XCTUnwrap(session.helper).native()
             XCTAssertEqual(nativeDraft.editor, "native draft")

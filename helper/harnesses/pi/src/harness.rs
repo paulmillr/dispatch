@@ -289,12 +289,12 @@ impl Harness for Pi {
                         let state = document.root().get("state").ok_or_else(|| {
                             bridge::fail("not_sent", "Pi returned no session state.")
                         })?;
-                        if state.get("busy").and_then(Value::boolean) != Some(false)
-                            || !text(state, "editor").is_empty() {
-                            return Err(bridge::fail(
-                                "not_sent",
-                                "Pi is busy or has input in Terminal. Your Chat draft is preserved.",
-                            ));
+                        if state.get("busy").and_then(Value::boolean) != Some(false) {
+                            return Err(bridge::fail("not_sent", BUSY));
+                        }
+                        let editor = text(state, "editor");
+                        if !editor.is_empty() {
+                            return Err(terminal_draft("Pi", &editor));
                         }
                         Ok(Sent::Keys(Pi::input(&value)))
                     });
@@ -302,6 +302,7 @@ impl Harness for Pi {
                 }),
             );
         } else {
+            let (runtime, held) = (self.runtime.clone(), binding.clone());
             bridge::call(
                 &self.runtime,
                 io,
@@ -312,7 +313,31 @@ impl Harness for Pi {
                     Mode::FollowUp => "follow_up",
                 },
                 vec![("text", Data::String(value))],
-                Box::new(move |io, result| done(io, Ok(sent(result)))),
+                Box::new(move |io, result| match result {
+                    // The bridge refuses while Pi's own prompt holds text; name it (`terminal_draft`), as for commands,
+                    // so the client can move or clear it. Still busy, or the prompt since emptied: the refusal stands.
+                    Err(refused) if refused.message == BUSY => bridge::call(
+                        &runtime,
+                        io,
+                        &held,
+                        "state",
+                        Vec::new(),
+                        Box::new(move |io, state| {
+                            let editor = state.ok().and_then(|document| {
+                                let state = document.root().get("state")?;
+                                (state.get("busy").and_then(Value::boolean) == Some(false))
+                                    .then(|| text(state, "editor"))
+                            });
+                            match editor {
+                                Some(editor) if !editor.is_empty() => {
+                                    done(io, Err(terminal_draft("Pi", &editor)))
+                                }
+                                _ => done(io, Ok(sent(Err(refused)))),
+                            }
+                        }),
+                    ),
+                    result => done(io, Ok(sent(result))),
+                }),
             );
         }
     }
@@ -756,6 +781,9 @@ fn choice<'a>(value: Value<'a>, selected: &str) -> Result<Value<'a>, Error> {
         .and_then(|mut values| values.find(|value| model(*value) == selected))
         .ok_or_else(|| bridge::fail("models", "This model is not available in the Pi session"))
 }
+/// The bridge's refusal (`bridge.js`) while Pi works or its own prompt holds text.
+const BUSY: &str = "Pi is busy or has input in Terminal. Your Chat draft is preserved.";
+
 fn sent(result: Result<Json, Error>) -> Sent {
     match result {
         Ok(_) => Sent::Native {

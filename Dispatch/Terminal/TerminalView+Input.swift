@@ -260,7 +260,12 @@ extension TerminalView {
         guard key.action != .release, modifierForKeyCode(UInt16(clamping: key.keycode)) == nil else { return }
         let plain = key.mods.intersection([.ctrl, .alt, .super]).isEmpty
         if key.keycode == 36 || key.keycode == 76 {
-            if plain, !key.mods.contains(.shift), let line = typeahead, !line.isEmpty {
+            // Shift- or Option-Return breaks the line in an agent's prompt; adoption checks that it did.
+            if key.mods.intersection([.ctrl, .super]).isEmpty, !key.mods.intersection([.shift, .alt]).isEmpty {
+                typeahead?.append("\n")
+                return
+            }
+            if plain, !key.mods.contains(.shift), let line = typeahead, !line.isEmpty, !line.contains("\n") {
                 TerminalRuntime.shared.chat.terminalSubmitted(line, tab: id)
             }
             typeahead = plain && !key.mods.contains(.shift) ? "" : nil
@@ -280,6 +285,14 @@ extension TerminalView {
     func eraseTypedCharacters(_ count: Int) {
         guard let surface, !inputParked else { return }
         for _ in 0..<count { sendKey(TerminalKey(action: .press, keycode: 51, mods: []), text: "\u{7f}", to: surface) }
+    }
+
+    /// Control-E, then `count` Deletes: from wherever the cursor was, an agent's prompt loses that many characters
+    /// from its end (Claude Code 2.1.321, Codex 0.167: wrapped and multiline text alike).
+    func eraseAgentPrompt(_ count: Int) {
+        guard let surface, !inputParked else { return }
+        sendKey(TerminalKey(action: .press, keycode: 14, mods: .ctrl, unshifted: 101), to: surface)
+        eraseTypedCharacters(count)
     }
 
     private func makeKeyEvent(_ event: NSEvent, action: KeyEvent.Action) -> TerminalKey {
@@ -424,7 +437,8 @@ extension TerminalView: NSMenuItemValidation {
     @objc func copy(_ sender: Any?) { performBindingAction("copy_to_clipboard") }
 
     @objc func paste(_ sender: Any?) {
-        performBindingAction("paste_from_clipboard")
+        guard performBindingAction("paste_from_clipboard") else { return }
+        if let text = NSPasteboard.general.string(forType: .string) { typeahead?.append(text) }
     }
 
     override func selectAll(_ sender: Any?) { performBindingAction("select_all") }

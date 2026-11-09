@@ -232,8 +232,10 @@ final class SSHPiIntegrationTests: XCTestCase {
         runtime.chat.chooseChat(true, session: session)
         terminal.insertText("unsent native Pi draft", replacementRange: NSRange(location: NSNotFound, length: 0))
         _ = try await waitForState(session) { $0.editor == "unsent native Pi draft" }
+        // An arrow loses the keys' track of the text: it stays in Terminal instead of moving to the draft.
+        TerminalTestSupport.key(123, "", terminal); TerminalTestSupport.key(124, "", terminal)
         session.draft = "preserve both drafts"; runtime.chat.submit(session)
-        try await TestSupport.eventually(timeout: .seconds(10)) { session.submissionFailure != nil && session.submissionID == nil }
+        try await TestSupport.eventually(timeout: .seconds(10)) { session.terminalPromptNotice != nil && session.submissionID == nil }
         XCTAssertEqual(session.draft, "preserve both drafts")
         let nativeDraft = try await XCTUnwrap(session.helper).native()
         XCTAssertEqual(nativeDraft.editor, "unsent native Pi draft")

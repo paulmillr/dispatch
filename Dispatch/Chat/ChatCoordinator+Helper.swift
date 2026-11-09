@@ -345,52 +345,119 @@ extension ChatCoordinator {
         return key
     }
 
-    /// Text typed in Terminal after the launch command, before Chat opened, sits in Claude's own
-    /// prompt, where it would refuse every Chat send. When Claude's composer shows exactly that
-    /// text, it moves to the Chat draft ahead of anything typed there since.
-    /// What was typed into the agent's own prompt in Terminal moves to the Chat draft when Chat shows: left there,
-    /// Chat's message would be pasted after it and arrive as one message Chat never sent (Pi refuses Chat's message
-    /// instead). Claude's and Codex's prompt lines are read back from the screen, Pi's editor from its bridge
-    /// (`chat.state` draft), so only text both the keys and the agent agree on moves.
-    func adoptTerminalTypeahead(_ session: ChatSession) {
-        let codex = session.agentID == "codex", pi = session.agentID == "pi"
-        guard session.agentID == "claude" || codex || pi, let terminal = TerminalRuntime.shared.views[session.id],
-              let typed = terminal.typeahead, !typed.trimmingCharacters(in: .whitespaces).isEmpty,
+    /// What Claude's or Codex's prompt shows on the terminal's screen ("" when empty); nil when the screen shows no
+    /// plain prompt. Reading a hidden terminal makes it follow again (`agentMenuScreen`).
+    private func screenPromptText(_ session: ChatSession, _ terminal: TerminalView) -> String? {
+        let tail = terminal.surface?.cursorFaintTail()
+        return ClaudeModelMenu.promptText(terminal.agentMenuScreen, column: Int(tail?.column ?? 0), row: Int(tail?.row ?? 0),
+                                          faint: tail?.faint == true, codex: session.agentID == "codex")
+    }
+
+    /// What the agent's prompt holds now, from the screen or Pi's bridge (`chat.state` draft).
+    private func promptText(_ session: ChatSession, _ terminal: TerminalView) async -> String? {
+        guard session.agentID == "pi" else { return screenPromptText(session, terminal) }
+        struct Observed: Decodable { let state: HelperChat.State }
+        guard let helper = session.helper,
+              let observed: Observed = try? await helper.call("chat.state", input: .init(helper.route)) else { return nil }
+        return (observed.state.draft ?? "").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Polls the prompt for about a second, while this chat shows, until `condition` holds.
+    private func promptSettles(_ session: ChatSession, _ terminal: TerminalView, _ condition: (String?) -> Bool) async -> Bool {
+        for _ in 0..<25 {
+            guard sessions[session.id] === session, session.active, session.showChat, !Task.isCancelled else { return false }
+            if condition(await promptText(session, terminal)) { return true }
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        return false
+    }
+
+    private func promptNotice(_ session: ChatSession, _ text: String) -> String {
+        let quote = text.count > 80 ? text.prefix(80) + "…" : text[...]
+        return "\(session.agentTitle)'s prompt in Terminal already has “\(quote)”. Clear it or send it there first."
+    }
+
+    /// What was typed into the agent's own prompt in Terminal moves to the Chat draft when Chat shows, ahead of
+    /// anything typed there since: left there, Chat's message would be pasted after it and arrive as one message Chat
+    /// never sent (Claude and Pi refuse Chat's message instead). The keys say exactly what was typed, line breaks
+    /// included; the prompt, read back ignoring white space because its rows wrap, says the agent has that text.
+    /// Text they don't agree on stays, and `terminalPromptNotice` says so instead of leaving a refusal to explain it.
+    /// The keys are kept until the text has moved, so a refused send (`afterRefusal`) can try again.
+    func adoptTerminalTypeahead(_ session: ChatSession, afterRefusal: Bool = false) {
+        guard ["claude", "codex", "pi"].contains(session.agentID), !session.adoptingTerminalPrompt,
+              let terminal = TerminalRuntime.shared.views[session.id] else { return }
+        guard let typed = terminal.typeahead, !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               // Delete removes one character; keep to characters that are one UTF-16 unit.
               typed.unicodeScalars.count == typed.count, typed.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF })
-        else { return }
-        terminal.typeahead = nil
-        let expected = typed.trimmingCharacters(in: .whitespaces)
-        operations.run(for: session.id) { [weak self, weak session, weak terminal] in
-            // The last keystrokes may still be on their way to Claude's screen.
-            @MainActor func settled(_ condition: (String?) -> Bool) async -> Bool {
-                for _ in 0..<25 {
-                    guard let self, let session, let terminal, self.sessions[session.id] === session,
-                          session.active, session.showChat, !Task.isCancelled else { return false }
-                    if pi {
-                        struct Observed: Decodable { let state: HelperChat.State }
-                        let helper = session.helper
-                        let observed: Observed? = if let helper { try? await helper.call("chat.state", input: .init(helper.route)) } else { nil }
-                        if let observed, condition((observed.state.draft ?? "").trimmingCharacters(in: .whitespaces)) { return true }
-                        try? await Task.sleep(for: .milliseconds(40))
-                        continue
-                    }
-                    // An empty composer shows a faint placeholder after the cursor.
-                    let tail = terminal.surface?.cursorFaintTail()
-                    let screen = ClaudeModelMenu.removingPlaceholder(terminal.agentMenuScreen, column: Int(tail?.column ?? 0),
-                                                                     row: Int(tail?.row ?? 0), faint: tail?.faint == true,
-                                                                     marker: codex ? "›" : "❯")
-                    if condition(codex ? ClaudeModelMenu.codexComposerText(screen) : ClaudeModelMenu.composerText(screen)) { return true }
-                    try? await Task.sleep(for: .milliseconds(40))
-                }
-                return false
+        else {
+            // No keys to vouch for it. Only a terminal still on screen, read as it was last drawn (a held one is stale,
+            // and waking it would cost every switch a request); Pi's bridge answers at the send's refusal.
+            if !afterRefusal, session.agentID != "pi", terminal.onScreen,
+               let held = screenPromptText(session, terminal), !held.isEmpty {
+                session.terminalPromptNotice = promptNotice(session, held)
             }
-            guard await settled({ $0 == expected }), let terminal else { return }
+            return
+        }
+        session.adoptingTerminalPrompt = true
+        func compact(_ text: String) -> String { text.filter { !$0.isWhitespace } }
+        operations.run(for: session.id) { [weak self, weak session, weak terminal] in
+            guard let self, let session, let terminal else { return }
+            defer { session.adoptingTerminalPrompt = false }
+            @MainActor func noteWhatStayed() async {
+                guard let held = await self.promptText(session, terminal) else { return }
+                session.terminalPromptNotice = held.isEmpty ? nil : self.promptNotice(session, held)
+            }
+            // The last keystrokes may still be on their way to the agent's screen.
+            guard await self.promptSettles(session, terminal, { $0.map(compact) == compact(typed) }) else {
+                return await noteWhatStayed()
+            }
             terminal.eraseTypedCharacters(typed.count)
-            guard await settled({ $0 == "" }), let session else { return }
-            let draft = session.drafts.current, shift = typed.utf16.count
-            session.drafts.edit(text: typed + draft.text,
+            // Moved even if the empty prompt is not seen in time: keys already erased it, and a copy loses nothing.
+            _ = await self.promptSettles(session, terminal) { $0 == "" }
+            let draft = session.drafts.current
+            let lead = typed + (afterRefusal && !draft.text.isEmpty ? " " : ""), shift = lead.utf16.count
+            session.drafts.edit(text: lead + draft.text,
                                 selection: NSRange(location: draft.selection.location + shift, length: draft.selection.length))
+            terminal.typeahead = nil
+            await noteWhatStayed()
+            if afterRefusal {
+                session.submissionFailure = "What was in Terminal's prompt is now in your draft. Nothing was sent; send again when it reads right."
+            }
+        }
+    }
+
+    /// The strip's Clear: empties the agent's prompt, checking each pass against what it shows, then lets a queue the
+    /// text had paused go on. Stops as soon as a pass removes nothing.
+    func clearTerminalPrompt(_ session: ChatSession) {
+        guard !session.clearingTerminalPrompt, let terminal = TerminalRuntime.shared.views[session.id] else { return }
+        session.clearingTerminalPrompt = true
+        let pausedBy = session.terminalPromptNotice
+        operations.run(for: session.id) { [weak self, weak session, weak terminal] in
+            guard let self, let session, let terminal else { return }
+            defer { session.clearingTerminalPrompt = false }
+            if !terminal.onScreen {
+                // The first read makes a held terminal follow; its screen comes back from the host a moment later.
+                _ = terminal.agentMenuScreen
+                try? await Task.sleep(for: .milliseconds(400))
+            }
+            var before: String?
+            for _ in 0..<8 {
+                guard let now = await self.promptText(session, terminal), before.map({ now.count < $0.count }) ?? true else { break }
+                if now.isEmpty {
+                    session.terminalPromptNotice = nil
+                    terminal.typeahead = ""
+                    session.focusRequest = System.uuid()
+                    for index in session.queuedMessages.indices
+                    where pausedBy.map({ session.queuedMessages[index].pause == .needsEdit($0) }) == true {
+                        session.queuedMessages[index].pause = nil
+                    }
+                    return self.drainQueue(session)
+                }
+                before = now
+                terminal.eraseAgentPrompt(min(now.count, 4096))
+                _ = await self.promptSettles(session, terminal) { $0 != now }
+            }
+            session.terminalPromptNotice = "Could not clear \(session.agentTitle)'s prompt. Open Terminal to edit it."
         }
     }
 
@@ -663,6 +730,7 @@ extension ChatCoordinator {
                     result = nil
                 }
                 guard session.helper === helper, session.submissionID == id else { return }
+                session.terminalPromptNotice = nil
                 if let delivery { session.drafts.finish(delivery, success: true) }
                 if let queued { session.queuedMessages.removeAll { $0.id == queued.id } }
                 struct Observed: Decodable, Sendable {
@@ -753,6 +821,10 @@ extension ChatCoordinator {
                     session.terminalAttention = error.localizedDescription
                 } else if arguments {
                     session.commandResult = .init(title: "Command arguments", text: "This command does not accept those arguments. Use its listed form.")
+                } else if (error as? HelperFailure)?.code == "terminal_draft" {
+                    // Not a failure to report but text to deal with: moved if the keys vouch for it, else the strip.
+                    session.terminalPromptNotice = error.localizedDescription
+                    self.adoptTerminalTypeahead(session, afterRefusal: true)
                 } else { session.submissionFailure = keep ? notSentNow(error.localizedDescription) : error.localizedDescription }
             }
             guard session.helper === helper, session.submissionID == id else { return }

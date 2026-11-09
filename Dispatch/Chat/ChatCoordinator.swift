@@ -220,6 +220,7 @@ final class ChatCoordinator {
     /// the chat, gives way to the terminal, where `showChat` is already false.
     func leaveChat(_ session: ChatSession) {
         session.submissionFailure = nil
+        session.terminalPromptNotice = nil
         session.command?.cancel(); session.command = nil; session.nativePrompt = nil
         session.relinquish(); DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
     }
