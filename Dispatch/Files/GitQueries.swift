@@ -206,8 +206,8 @@ struct GitQueries: Sendable {
     /// A page of the log, newest first: this branch (from `tip`, else HEAD) or every ref, optionally only the commits
     /// whose message or author holds `match` (literally, ignoring case).
     func log(scope: GitLogScope, match: GitLogMatch = .everything, skip: Int, count: Int,
-             from tip: String? = nil) async throws(GitError) -> GitLogPage {
-        try await commits.log(scope: scope, match: match, skip: skip, count: count, tip: tip)
+             from tip: String? = nil, tagged: Bool = false) async throws(GitError) -> GitLogPage {
+        try await commits.log(scope: scope, match: match, skip: skip, count: count, tip: tip, tagged: tagged)
     }
 
     /// The commit's signature checked with the user's own keys and allowed signers (`verify-commit --raw`, with the
@@ -335,9 +335,9 @@ struct GitQueries: Sendable {
 extension GitLogPages {
     /// `fill` through `queries`, a page (`GitLoader.page`) at a time.
     mutating func fill(_ wanted: Int, with queries: GitQueries) async throws(GitError) {
-        let scope = scope
+        let scope = scope, tagged = tagged
         try await fill(wanted, page: GitLoader.page) { (match, skip, count, tip) throws(GitError) in
-            try await queries.log(scope: scope, match: match, skip: skip, count: count, from: tip)
+            try await queries.log(scope: scope, match: match, skip: skip, count: count, from: tip, tagged: tagged)
         }
     }
 }

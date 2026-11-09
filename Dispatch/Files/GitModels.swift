@@ -221,6 +221,13 @@ struct GitLog: Hashable, Sendable {
     var scope: GitLogScope
     var filter: String
     var loadedAt: Date
+    /// The branch shown in place of HEAD's, by its full name.
+    var ref: String? = nil
+    /// Only the commits a tag names.
+    var tagged = false
+
+    /// The rows follow parent to child (the graph links them): neither a search nor the tagged commits alone.
+    var linked: Bool { filter.isEmpty && !tagged }
 }
 
 /// One file's diff as git prints it (unified, no colour), or the facts of a binary change.

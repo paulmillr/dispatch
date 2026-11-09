@@ -32,10 +32,14 @@ enum GitCommands {
     static let head = ["rev-parse", "--verify", "HEAD"]
 
     /// A page of the log, newest first: this branch (from `tip`, a hash the caller checked, else HEAD) or every ref,
-    /// optionally only the commits whose message or author holds `match` (literally, ignoring case).
-    static func log(scope: GitLogScope, match: GitLogMatch, skip: Int, count: Int, tip: String?) -> [String] {
+    /// optionally only the commits whose message or author holds `match` (literally, ignoring case). `tagged`: only
+    /// the commits a tag names, decorated with their tags alone; git adds an undecorated root commit, which
+    /// `GitLogPages` leaves out.
+    static func log(scope: GitLogScope, match: GitLogMatch, skip: Int, count: Int, tip: String?,
+                    tagged: Bool = false) -> [String] {
         var args = ["log", "-n", String(count), "--skip=\(skip)", format, "--date=unix"]
         if scope == .all { args.append("--all") }
+        if tagged { args += ["--simplify-by-decoration", "--decorate-refs=refs/tags"] }
         switch match {
         case .everything: break
         case .message(let text): args += ["--grep=\(text)", "--regexp-ignore-case", "--fixed-strings"]
@@ -113,16 +117,19 @@ struct GitLogPages: Hashable, Sendable {
 
     var scope: GitLogScope
     var filter: String
-    /// The commit the branch scope pages from (HEAD when the first page was read), so a commit or checkout between
-    /// two pages cannot shift the second; nil follows HEAD (nothing committed yet). The refs check notices the move
-    /// and starts the pages over.
+    /// The commit the branch scope pages from (HEAD, or the branch shown instead, when the first page was read), so a
+    /// commit or checkout between two pages cannot shift the second; nil follows HEAD (nothing committed yet). The
+    /// refs check notices the move and starts the pages over.
     var tip: String?
+    /// Only the commits a tag names (`GitCommands.log`): a page keeps those its tags decorate.
+    var tagged: Bool
     var queries: [Query]
 
-    init(scope: GitLogScope, filter: String, tip: String? = nil) {
+    init(scope: GitLogScope, filter: String, tip: String? = nil, tagged: Bool = false) {
         self.scope = scope
         self.filter = filter
         self.tip = tip
+        self.tagged = tagged
         let text = filter.trimmingCharacters(in: .whitespacesAndNewlines)
         queries = text.isEmpty ? [Query(match: .everything)] : [Query(match: .message(text)), Query(match: .author(text))]
     }
@@ -160,7 +167,8 @@ struct GitLogPages: Hashable, Sendable {
                 let query = queries[index]
                 let loaded = try await read(query.match, query.fetched, min(wanted - query.commits.count, page), tip)
                 var seen = Set(query.commits.map(\.hash))
-                queries[index].commits += loaded.commits.filter { seen.insert($0.hash).inserted }
+                let kept = tagged ? loaded.commits.filter { $0.refs.contains { $0.kind == .tag } } : loaded.commits
+                queries[index].commits += kept.filter { seen.insert($0.hash).inserted }
                 queries[index].fetched += loaded.commits.count
                 queries[index].exhausted = loaded.exhausted
                 if loaded.commits.isEmpty { break }

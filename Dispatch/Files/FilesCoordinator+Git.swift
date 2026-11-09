@@ -185,6 +185,8 @@ extension FilesCoordinator {
             _ = session.tab
             _ = session.logWanted
             _ = session.logScope
+            _ = session.logRef
+            _ = session.logTagged
             _ = session.logFilter
             _ = session.selectedCommit
             _ = session.changesSelection
@@ -240,6 +242,9 @@ extension FilesCoordinator {
         if session.commitFile != nil { session.commitFile = nil }
         if session.commitDiff != nil { session.commitDiff = nil }
         if session.logWanted != Self.page { session.logWanted = Self.page }
+        // Another repository's branch names nothing here.
+        if session.logRef != nil { session.logRef = nil }
+        if !session.gitRefs.isEmpty { session.gitRefs = [] }
     }
 
     private func apply(_ state: GitState, _ session: FilesSession, _ watch: Watch) {
@@ -506,7 +511,8 @@ extension FilesCoordinator {
 
     private func log(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
         guard session.showsLog else { return }
-        let target = LogTarget(repository: repository, scope: session.logScope, filter: session.logFilter)
+        let target = LogTarget(repository: repository, scope: session.logScope, filter: session.logFilter,
+                               ref: session.logScope == .branch ? session.logRef : nil, tagged: session.logTagged)
         let wanted = max(session.logWanted, Self.page)
         if watch.logTask != nil {
             // A different scope or filter replaces the read in flight; more of the same waits for it.
@@ -542,7 +548,8 @@ extension FilesCoordinator {
             watch.logTask = nil
             defer { self.sync(watch) }
             guard watch.shows, watch.source === source, let session = watch.session, session.git.repository == repository,
-                  session.logScope == target.scope, session.logFilter == target.filter else { return }
+                  session.logScope == target.scope, session.logFilter == target.filter,
+                  session.logRef == target.ref, session.logTagged == target.tagged else { return }
             switch result {
             case .success(let read):
                 let moved = read.refs != watch.refs || read.head != watch.head
@@ -550,8 +557,15 @@ extension FilesCoordinator {
                 watch.head = read.head
                 watch.pages = read.pages
                 watch.pagesTarget = target
+                if session.gitRefs != read.refs { session.gitRefs = read.refs }
+                if read.refGone {
+                    // The branch shown was deleted: its history gives way to HEAD's, which this read loaded.
+                    session.logRef = nil
+                    watch.pagesTarget?.ref = nil
+                }
                 let log = GitLog(commits: GitRefs.merge(read.pages.commits, refs: read.refs), exhausted: read.pages.exhausted,
-                                 scope: target.scope, filter: target.filter, loadedAt: self.environment.now())
+                                 scope: target.scope, filter: target.filter, loadedAt: self.environment.now(),
+                                 ref: read.refGone ? nil : target.ref, tagged: target.tagged)
                 if let shown = session.log {
                     var same = shown
                     same.loadedAt = log.loadedAt
@@ -588,6 +602,8 @@ extension FilesCoordinator {
         var pages: GitLogPages
         var refs: [GitRefRecord]
         var head: String?
+        /// The target's branch is not among the refs: the pages are HEAD's.
+        var refGone = false
     }
 
     /// The refs and HEAD (when asked) and the log: from the start when there is no base or either moved, else the
@@ -600,15 +616,18 @@ extension FilesCoordinator {
             async let refsRead = checkRefs ? Self.attempt { () throws(GitError) in try await queries.refs() } : .success(refs)
             async let headRead = checkRefs ? Self.attempt { () throws(GitError) in try await queries.head() } : .success(head)
             let current = try await refsRead.get(), tip = try await headRead.get()
+            // A branch shown in place of HEAD's pages from its own commit.
+            let shown = target.ref.flatMap { ref in current.first { $0.refname == ref }?.hash }
+            let refGone = target.ref != nil && shown == nil
             var pages: GitLogPages
-            if let base, current == refs, tip == head {
+            if let base, current == refs, tip == head, !refGone {
                 pages = base
             } else {
-                pages = GitLogPages(scope: target.scope, filter: target.filter, tip: tip)
+                pages = GitLogPages(scope: target.scope, filter: target.filter, tip: shown ?? tip, tagged: target.tagged)
             }
             let loaded = base?.queries.map(\.commits.count).max() ?? 0
             try await pages.fill(max(wanted, loaded), with: queries)
-            return .success(LogRead(pages: pages, refs: current, head: tip))
+            return .success(LogRead(pages: pages, refs: current, head: tip, refGone: refGone))
         } catch {
             return .failure(error)
         }
@@ -813,6 +832,9 @@ extension FilesCoordinator {
         var repository: GitRepository
         var scope: GitLogScope
         var filter: String
+        /// The branch shown in place of HEAD's (`FilesSession.logRef`).
+        var ref: String? = nil
+        var tagged = false
     }
 
     /// An untracked file's size and modification time as its folder's listing shows them.

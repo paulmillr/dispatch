@@ -263,6 +263,81 @@ final class GitEndToEndTests: XCTestCase {
         XCTAssertEqual(session.commitDetail?.files.map(\.path), ["src/routes/billing.ts"])
     }
 
+    /// The Commits filter end to end: another branch's history (nothing checked out), the tagged commits of a branch
+    /// and of all of them (the untagged root git adds left out), and a deleted branch giving way to HEAD's.
+    @MainActor
+    func testTheCommitsFilterShowsAnotherBranchAndTheTaggedCommits() async throws {
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: false)
+        try git("init", "-q")
+        try write("src/routes/billing.ts", "a\n")
+        try git("add", "-A")
+        try git("commit", "-q", "-m", "Initial billing route")
+        try git("checkout", "-q", "-b", "feat/webhook")
+        try write("src/routes/webhook.ts", "verify\n")
+        try git("add", "-A")
+        try git("commit", "-q", "-m", "Verify webhook signatures", date: 1_760_001_800)
+        try git("tag", "webhook-preview")
+        try git("checkout", "-q", "main")
+        try write("src/routes/billing.ts", "a\nb\n")
+        try git("commit", "-q", "-a", "-m", "Keep the retry queue bounded", date: 1_760_003_600)
+        try git("tag", "v1")
+        try write("src/routes/billing.ts", "a\nb\nc\n")
+        try git("commit", "-q", "-a", "-m", "Draft the invoices page", date: 1_760_007_200)
+        try git("tag", "-a", "v2", "-m", "Release two", date: 1_760_007_200)
+        try write("notes.md", "one\n")
+
+        let coordinator = FilesCoordinator { nil }
+        let session = coordinator.session(for: System.uuid())
+        session.visible = true
+        session.presented = true
+        let source = try XCTUnwrap(self.source), path = repo.path
+        coordinator.loader.environment = FilesLoader.Environment(
+            resolve: { _, _ in .available(source) }, directory: { _ in path }, track: { _ in }, preferences: { .init() },
+            sleep: { try await System.sleep(for: $0, "files.refresh") }, now: { System.date() })
+        coordinator.observe(session)
+        defer { coordinator.forget(session.id) }
+        try await TestSupport.eventually(timeout: .seconds(20)) { session.git != .loading }
+        if case .unavailable = session.git { return }
+        session.select(.commits)
+        func subjects() -> [String] { session.log?.commits.map(\.subject) ?? [] }
+        try await TestSupport.eventually(timeout: .seconds(20)) { subjects().count == 3 }
+        XCTAssertEqual(subjects(), ["Draft the invoices page", "Keep the retry queue bounded", "Initial billing route"])
+        XCTAssertEqual(GitLogFilterText.branches(session.gitRefs).local.map(\.refname), ["refs/heads/feat/webhook"])
+        XCTAssertGreaterThan(session.logUncommitted, 0)
+
+        session.showLog(scope: .branch, ref: "refs/heads/feat/webhook")
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "\(subjects())") {
+            session.log?.ref == "refs/heads/feat/webhook"
+        }
+        XCTAssertEqual(subjects(), ["Verify webhook signatures", "Initial billing route"])
+        XCTAssertEqual(session.logUncommitted, 0)
+
+        session.showLog(scope: .branch, ref: session.logRef, tagged: true)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "\(subjects())") { session.log?.tagged == true }
+        XCTAssertEqual(subjects(), ["Verify webhook signatures"], "the untagged root is left out")
+        XCTAssertTrue(session.log?.commits.first?.refs.contains(GitRef(name: "feat/webhook", kind: .branch, current: false)) == true,
+                      "the branches' chips still show: \(session.log?.commits.first?.refs ?? [])")
+
+        session.showLog(scope: .branch, ref: nil)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "\(subjects())") {
+            session.log?.ref == nil && session.log?.tagged == true
+        }
+        XCTAssertEqual(subjects(), ["Draft the invoices page", "Keep the retry queue bounded"], "v2 is annotated: its commit")
+
+        session.showLog(scope: .all)
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "\(subjects())") { session.log?.scope == .all }
+        XCTAssertEqual(subjects(), ["Draft the invoices page", "Keep the retry queue bounded", "Verify webhook signatures"])
+
+        // The branch shown goes: HEAD's history takes its place.
+        session.showLog(scope: .branch, ref: "refs/heads/feat/webhook", tagged: false)
+        try await TestSupport.eventually(timeout: .seconds(20)) { session.log?.ref == "refs/heads/feat/webhook" }
+        try git("branch", "-q", "-D", "feat/webhook")
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "\(subjects())") {
+            session.logRef == nil && session.log?.ref == nil && subjects().count == 3
+        }
+        XCTAssertEqual(subjects().first, "Draft the invoices page")
+    }
+
     /// The three tabs end to end on this Mac's helper: a visible, presented session's loader fills the Files listing,
     /// the Review tab's status, counts and diffs, and the Commits tab's log, refs, a commit's files with their
     /// letters and a file's diff, as the tab switches.

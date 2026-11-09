@@ -693,6 +693,9 @@ fn log(argument: &str) -> bool {
             | "--decorate=full"
             | "--decorate=short"
             | "--decorate=no"
+            // The tagged commits alone: decorations from tags only, and only the commits they decorate.
+            | "--simplify-by-decoration"
+            | "--decorate-refs=refs/tags"
     ) || reference(argument)
 }
 

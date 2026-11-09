@@ -597,6 +597,76 @@ final class FilesModeTests: XCTestCase {
         XCTAssertFalse(files.session(for: System.uuid()).previewOff, "and each tab's Files starts with its pane")
     }
 
+    /// The Commits filter: another branch (only with the branch scope), the tagged commits, and back; each choice starts
+    /// the log from one page, and its name says what shows.
+    func testTheCommitsFilterChoosesABranchAndTheTaggedCommits() throws {
+        let session = FilesSession(id: System.uuid())
+        session.tab = .commits
+        session.gitRefs = [
+            GitRefRecord(refname: "refs/heads/main", hash: String(repeating: "a", count: 40), head: true),
+            GitRefRecord(refname: "refs/heads/feat/webhook", hash: String(repeating: "b", count: 40), head: false),
+            GitRefRecord(refname: "refs/remotes/origin/HEAD", hash: String(repeating: "a", count: 40), head: false),
+            GitRefRecord(refname: "refs/remotes/origin/main", hash: String(repeating: "a", count: 40), head: false),
+            GitRefRecord(refname: "refs/tags/v1", hash: String(repeating: "a", count: 40), head: false),
+        ]
+        let branches = GitLogFilterText.branches(session.gitRefs)
+        XCTAssertEqual(branches.local.map(\.refname), ["refs/heads/feat/webhook"], "not the checked-out one")
+        XCTAssertEqual(branches.remote.map(\.refname), ["refs/remotes/origin/main"], "not a remote's HEAD")
+        XCTAssertEqual(GitLogFilterText.current(session.gitRefs), "main")
+        XCTAssertFalse(session.logFiltered)
+        XCTAssertEqual(GitLogFilterText.title(session, short: false), "This branch")
+
+        session.logWanted = 600
+        session.showLog(scope: .branch, ref: "refs/heads/feat/webhook")
+        XCTAssertEqual(session.logRef, "refs/heads/feat/webhook")
+        XCTAssertEqual(session.logWanted, GitLoader.page)
+        XCTAssertTrue(session.logFiltered)
+        XCTAssertEqual(GitLogFilterText.title(session, short: false), "feat/webhook")
+        session.showLog(scope: session.logScope, ref: session.logRef, tagged: true)
+        XCTAssertEqual(GitLogFilterText.title(session, short: false), "Tags · feat/webhook")
+        XCTAssertEqual(GitLogFilterText.title(session, short: true), "Tags")
+        session.status = GitStatus(branch: "main", head: "aaaaaaa", changes: [
+            GitChange(path: "notes.md", kind: .untracked, area: .untracked, additions: 2, deletions: 0)], loadedAt: System.date())
+        XCTAssertEqual(session.logUncommitted, 0, "HEAD's changes are not over another branch")
+
+        // Every branch has no branch of its own; the tagged choice stays.
+        session.showLog(scope: .all, ref: "refs/heads/feat/webhook")
+        XCTAssertNil(session.logRef)
+        XCTAssertTrue(session.logTagged)
+        XCTAssertEqual(GitLogFilterText.title(session, short: false), "Tags · All branches")
+        XCTAssertEqual(GitLogFilterText.empty(search: "", tagged: true), "No tagged commits")
+        XCTAssertEqual(GitLogFilterText.empty(search: "sam", tagged: true), "No tagged commits match “sam”")
+        XCTAssertEqual(GitLogFilterText.empty(search: "", tagged: false), "No commits yet")
+
+        session.showLog(scope: .branch, ref: nil, tagged: false)
+        XCTAssertFalse(session.logFiltered)
+        XCTAssertEqual(session.logUncommitted, 1)
+    }
+
+    /// A tab's Commits filter comes back with it; a save from before the filter restores the whole branch.
+    func testARestoredTabKeepsItsCommitsFilter() throws {
+        let fixture = fixture(agent: false), files = fixture.files, id = fixture.id
+        let shown = files.session(for: id)
+        shown.tab = .commits
+        shown.showLog(scope: .branch, ref: "refs/remotes/origin/main", tagged: true)
+        files.retainView(id)
+        files.forget(id)
+        files.restoreViews(present: [id])
+        let restored = try XCTUnwrap(files.existing(id))
+        XCTAssertEqual(restored.logRef, "refs/remotes/origin/main")
+        XCTAssertTrue(restored.logTagged)
+
+        var view = RetainedTabView.Files(shown)
+        let encoded = try JSONEncoder().encode(view)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["logRef"] = nil; object["logTagged"] = nil
+        view = try JSONDecoder().decode(RetainedTabView.Files.self, from: JSONSerialization.data(withJSONObject: object))
+        let older = FilesSession(id: System.uuid())
+        view.apply(to: older)
+        XCTAssertNil(older.logRef)
+        XCTAssertFalse(older.logTagged)
+    }
+
     /// Restore of a detached tab brings back what it showed: Files on Commits with its commit and pinned folder, and the
     /// user's choice to leave chat. The sessions are gone in between, as detach closes them.
     func testARestoredTabShowsWhatItShowedWhenDetached() throws {

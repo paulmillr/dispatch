@@ -94,9 +94,10 @@ struct GitCommitReads<Failure: Error & Sendable>: Sendable {
         return checked
     }
 
-    func log(scope: GitLogScope, match: GitLogMatch, skip: Int, count: Int, tip: String?) async throws(Failure) -> GitLogPage {
+    func log(scope: GitLogScope, match: GitLogMatch, skip: Int, count: Int, tip: String?,
+             tagged: Bool = false) async throws(Failure) -> GitLogPage {
         let tip = try scope == .branch ? tip.map(checked) : nil
-        let args = GitCommands.log(scope: scope, match: match, skip: skip, count: count, tip: tip)
+        let args = GitCommands.log(scope: scope, match: match, skip: skip, count: count, tip: tip, tagged: tagged)
         async let raw = execute(GitCommands.raw(args), 0)
         let result = await execute(args, 0)
         if case .failure(let error) = result, let message = failedMessage(error),

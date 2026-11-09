@@ -136,10 +136,31 @@ import Foundation
     var diffWrap: Bool?
     var log: GitLog?
     var logScope: GitLogScope = .branch
+    /// The branch Commits shows in place of the checked-out one, by its full name (`refs/heads/feature`,
+    /// `refs/remotes/origin/main`), read-only: nothing is checked out. Only with the branch scope; nil shows HEAD's.
+    var logRef: String?
+    /// Commits lists only the commits a tag names.
+    var logTagged = false
+    /// The repository's branches and tags as the log last read them: the filter menu's choices.
+    var gitRefs: [GitRefRecord] = []
     var logFilter = ""
     /// How many commits the Commits tab wants loaded (200 a page): the view raises it near the end of the list,
     /// the git data layer fills `log` up to it.
     var logWanted = GitLoader.page
+    /// The Commits filter (`GitLogFilterMenu`): which history shows and whether only tagged commits do. Another choice
+    /// starts the log again from one page.
+    func showLog(scope: GitLogScope, ref: String? = nil, tagged: Bool? = nil) {
+        let ref = scope == .branch ? ref : nil, tagged = tagged ?? logTagged
+        guard scope != logScope || ref != logRef || tagged != logTagged else { return }
+        logScope = scope
+        logRef = ref
+        logTagged = tagged
+        logWanted = GitLoader.page
+    }
+
+    /// The log shows something other than the checked-out branch's whole history.
+    var logFiltered: Bool { logScope != .branch || logRef != nil || logTagged }
+
     /// The hash selected in the Commits list, its detail, the file picked there and that file's diff.
     /// Another commit leaves the file a one-column view had open (`narrowFile`) for that commit's files.
     var selectedCommit: String? { didSet { if selectedCommit != oldValue { narrowFile = false } } }

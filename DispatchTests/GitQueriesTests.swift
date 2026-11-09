@@ -296,6 +296,39 @@ final class GitQueriesTests: XCTestCase {
         XCTAssertEqual(empty, GitLogPage(commits: [], exhausted: true))
     }
 
+    /// Only tagged commits: git simplifies the log to what tags decorate (decorated with tags alone), and the pages
+    /// leave out the undecorated root git adds, paging on until they hold what was wanted.
+    func testTaggedPagesKeepOnlyTheCommitsTagsName() async throws {
+        let tip = "8c55745e219a449f587bbd4ad476d0f376670a0d"
+        XCTAssertEqual(GitCommands.log(scope: .branch, match: .everything, skip: 0, count: 2, tip: tip, tagged: true),
+                       ["log", "-n", "2", "--skip=0", GitCommands.format, "--date=unix",
+                        "--simplify-by-decoration", "--decorate-refs=refs/tags", tip])
+        XCTAssertEqual(GitCommands.log(scope: .all, match: .author("ivan"), skip: 0, count: 2, tip: nil, tagged: true),
+                       ["log", "-n", "2", "--skip=0", GitCommands.format, "--date=unix", "--all",
+                        "--simplify-by-decoration", "--decorate-refs=refs/tags",
+                        "--author=ivan", "--regexp-ignore-case", "--fixed-strings"])
+        XCTAssertFalse(GitCommands.log(scope: .all, match: .everything, skip: 0, count: 2, tip: nil)
+            .contains("--simplify-by-decoration"))
+
+        func commit(_ hash: String, _ at: Int, tag: String?) -> GitCommit {
+            GitCommit(hash: String(repeating: hash, count: 40), parents: [], subject: hash, body: "", author: "Ivan",
+                      email: "ivan@example.com", date: Date(timeIntervalSince1970: TimeInterval(at)),
+                      refs: tag.map { [GitRef(name: $0, kind: .tag, current: false)] } ?? [])
+        }
+        // Git's pages of two: a tag, the root it adds untagged, then another tag.
+        let printed = [commit("c", 30, tag: "v2"), commit("b", 20, tag: nil), commit("a", 10, tag: "v1")]
+        var pages = GitLogPages(scope: .branch, filter: "", tip: tip, tagged: true)
+        var reads: [Int] = []
+        try await pages.fill(2, page: 2) { (_, skip, count, _) async throws(GitError) -> GitLogPage in
+            reads.append(skip)
+            let page = Array(printed.dropFirst(skip).prefix(count))
+            return GitLogPage(commits: page, exhausted: page.count < count)
+        }
+        XCTAssertEqual(pages.commits.map(\.subject), ["c", "a"])
+        XCTAssertEqual(reads, [0, 2], "the second page from where git's first ended, the root counted")
+        XCTAssertFalse(pages.exhausted, "git filled the page it was asked for")
+    }
+
     func testRefsCommitsAndCommitDiffs() async throws {
         let source = FakeFilesSource.mockupAPI()
         let hash = "8c55745e219a449f587bbd4ad476d0f376670a0d", parent = "7b984b71ab4bcb7cb46ccfa9ffde329d32f8d0b8"

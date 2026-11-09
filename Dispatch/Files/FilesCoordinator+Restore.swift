@@ -32,6 +32,9 @@ struct RetainedTabView: Codable {
         var diffMode: GitDiffMode
         var diffWrap: Bool?
         var logScope: GitLogScope
+        /// The branch shown instead of HEAD's and the tagged-only choice; absent from older saves.
+        var logRef: String? = nil
+        var logTagged: Bool? = nil
         var logFilter: String
         var selectedCommit: String?
         var commitFile: String?
@@ -43,6 +46,7 @@ struct RetainedTabView: Codable {
             previewWidth = session.previewWidth
             changesSelection = session.changesSelection; changesFilter = session.changesFilter; diffMode = session.diffMode
             diffWrap = session.diffWrap; logScope = session.logScope; logFilter = session.logFilter
+            logRef = session.logRef; logTagged = session.logTagged
             selectedCommit = session.selectedCommit; commitFile = session.commitFile
         }
 
@@ -53,6 +57,7 @@ struct RetainedTabView: Codable {
             session.previewWidth = previewWidth
             session.changesSelection = changesSelection; session.changesFilter = changesFilter; session.diffMode = diffMode
             session.diffWrap = diffWrap; session.logScope = logScope; session.logFilter = logFilter
+            session.logRef = logScope == .branch ? logRef : nil; session.logTagged = logTagged ?? false
             session.selectedCommit = selectedCommit; session.commitFile = commitFile
         }
     }

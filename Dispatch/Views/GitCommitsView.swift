@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 /// The Commits tab: the log as a graph under the uncommitted-changes row (which opens the Review tab), with the
-/// selected commit beside it, read-only (F4a). `FilesHeader` carries its branch and search, the list's footer its scope.
-/// The git data layer fills `log`, `commitDetail`, `commitDiff` and `status`; this view asks through `logWanted`,
-/// `logScope`, `logFilter`, `selectedCommit` and `commitFile`.
+/// selected commit beside it, read-only (F4a). `FilesHeader` carries its branch, search and filter, the list's footer
+/// the filter again by name (`GitLogFilterMenu`). The git data layer fills `log`, `commitDetail`, `commitDiff`, `status`
+/// and `gitRefs`; this view asks through `logWanted`, `logScope`, `logRef`, `logTagged`, `logFilter`, `selectedCommit`
+/// and `commitFile`.
 struct GitCommitsView: View {
     @Bindable var session: FilesSession
     let focused: Bool
@@ -80,8 +81,8 @@ enum GitCommitsFocus: Hashable {
         let commits = session.log?.commits ?? []
         let head = GitGraph.head(in: commits, status: session.status, scope: session.log?.scope ?? session.logScope)
         let key = Key(loadedAt: session.log?.loadedAt, count: commits.count, first: commits.first?.hash,
-                      last: commits.last?.hash, head: head, uncommitted: (session.status?.changedFiles ?? 0) > 0,
-                      linked: (session.log?.filter ?? session.logFilter).isEmpty, maxLanes: maxLanes)
+                      last: commits.last?.hash, head: head, uncommitted: session.logUncommitted > 0,
+                      linked: session.log?.linked ?? (session.logFilter.isEmpty && !session.logTagged), maxLanes: maxLanes)
         if key != self.key {
             self.key = key
             value = GitGraph.layout(commits, head: head, uncommitted: key.uncommitted, linked: key.linked,
@@ -308,7 +309,7 @@ private struct GitCommitsList: View {
         let graphWidth = GitGraphCell.width(lanes: layout.lanes, scale: scale)
         let refsWidth = GitRefChips.maxWidth(list: width)
         let author = GitAuthorColumn.style(width: width, typography: typography)
-        let uncommitted = session.status?.changedFiles ?? 0
+        let uncommitted = session.logUncommitted
         // Commits that arrived above the one shown first (a commit made, a pull): they slide in and draw their graph.
         // Anything else that changes the first row (another scope, a filter) just shows.
         let previousTop = shownTop.flatMap { top in commits.prefix(Self.arrivalLimit + 1).firstIndex { $0.hash == top } }
@@ -414,7 +415,7 @@ private struct GitCommitsList: View {
         if session.log == nil {
             GitCentredNote(text: "Loading the log…", identifier: "git-commits-loading")
         } else if empty {
-            GitCentredNote(text: session.logFilter.isEmpty ? "No commits yet" : "No commits match “\(session.logFilter)”",
+            GitCentredNote(text: GitLogFilterText.empty(search: session.logFilter, tagged: session.logTagged),
                            identifier: "git-commits-empty")
         }
     }
@@ -801,10 +802,10 @@ private struct GitCommitsFooter: View {
             Text(verbatim: GitCommitsText.footer(session.log))
                 .accessibilityIdentifier("git-commits-footer-summary")
             Spacer(minLength: 0)
-            // Narrow lists keep the menu as "All ▾" / "Branch ▾".
+            // Narrow lists keep the menu short: "All ▾", "Branch ▾", the shown branch's name.
             ViewThatFits(in: .horizontal) {
-                scopeMenu(short: false)
-                scopeMenu(short: true)
+                filterMenu(short: false)
+                filterMenu(short: true)
             }
             .layoutPriority(1)
         }
@@ -820,32 +821,154 @@ private struct GitCommitsFooter: View {
         .accessibilityIdentifier("git-commits-footer")
     }
 
-    /// This branch's history or every branch's.
-    private func scopeMenu(short: Bool) -> some View {
-        let title = session.logScope == .all ? (short ? "All" : "All branches") : (short ? "Branch" : "This branch")
-        return Menu {
-            Picker("Show", selection: Binding(get: { session.logScope }, set: { scope in
-                guard scope != session.logScope else { return }
-                session.logScope = scope
-                // Another query starts again from one page.
-                session.logWanted = GitLoader.page
-            })) {
-                Text("This branch").tag(GitLogScope.branch)
-                Text("All branches").tag(GitLogScope.all)
-            }
-            .pickerStyle(.inline)
+    /// The filter by name: whose history shows, and whether only the tagged commits do.
+    private func filterMenu(short: Bool) -> some View {
+        Menu {
+            GitLogFilterMenu(session: session)
         } label: {
             // One text, so the menu keeps the chevron after the title and draws both in the footer's ink.
-            (Text(verbatim: title + " ") + Text(Image(systemName: "chevron.down")).font(.system(size: typography.size(offset: -5),
-                                                                                               weight: .semibold)))
+            (Text(verbatim: GitLogFilterText.title(session, short: short) + " ")
+                + Text(Image(systemName: "chevron.down")).font(.system(size: typography.size(offset: -5), weight: .semibold)))
                 .font(typography, .caption)
-                .foregroundStyle(Chrome.palette.muted)
+                .foregroundStyle(session.logFiltered ? Chrome.palette.accent : Chrome.palette.muted)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Show this branch’s history or all branches")
+        .help("Show another branch, all branches or only tagged commits")
         .accessibilityIdentifier("git-log-scope")
+    }
+}
+
+// MARK: Filter
+
+extension FilesSession {
+    /// The uncommitted row's files: over the checked-out branch's history or every branch's, not over another
+    /// branch's or the tagged commits alone, which HEAD's changes do not follow.
+    var logUncommitted: Int { logRef == nil && !logTagged ? (status?.changedFiles ?? 0) : 0 }
+}
+
+/// What the filter shows and offers, apart from the views so the fast tests read it.
+@MainActor enum GitLogFilterText {
+    /// The footer's name for the filter: "This branch", "All branches", "feature/login", with "Tags · " before it.
+    static func title(_ session: FilesSession, short: Bool) -> String {
+        let shown: String
+        if session.logScope == .all { shown = short ? "All" : "All branches" }
+        else if let ref = session.logRef { shown = name(ref) }
+        else { shown = short ? "Branch" : "This branch" }
+        return session.logTagged ? (short ? "Tags" : "Tags · " + shown) : shown
+    }
+
+    /// A ref's name as its chip shows it: `feature/login`, `origin/main`, `v1.2`.
+    static func name(_ refname: String) -> String {
+        for prefix in ["refs/heads/", "refs/remotes/", "refs/tags/"] where refname.hasPrefix(prefix) {
+            return String(refname.dropFirst(prefix.count))
+        }
+        return refname
+    }
+
+    /// The branches the filter offers besides the checked-out one: local, then remote (without a remote's `HEAD`),
+    /// each in git's order (by name).
+    static func branches(_ refs: [GitRefRecord]) -> (local: [GitRefRecord], remote: [GitRefRecord]) {
+        let local = refs.filter { $0.refname.hasPrefix("refs/heads/") && !$0.head }
+        let remote = refs.filter { $0.refname.hasPrefix("refs/remotes/") && $0.ref != nil }
+        return (local, remote)
+    }
+
+    /// The checked-out branch's name; nil with HEAD detached.
+    static func current(_ refs: [GitRefRecord]) -> String? {
+        refs.first { $0.head && $0.refname.hasPrefix("refs/heads/") }.map { name($0.refname) }
+    }
+
+    static func empty(search: String, tagged: Bool) -> String {
+        let commits = tagged ? "tagged commits" : "commits"
+        return search.isEmpty ? (tagged ? "No tagged commits" : "No commits yet") : "No \(commits) match “\(search)”"
+    }
+}
+
+/// The Commits filter's menu, behind the header's filter button and the footer's name: the checked-out branch, all
+/// branches, or another branch, local or remote, shown read-only (nothing is checked out); and only tagged commits,
+/// with any of them.
+struct GitLogFilterMenu: View {
+    let session: FilesSession
+
+    private enum Choice: Hashable { case head, all, ref(String) }
+
+    var body: some View {
+        let branches = GitLogFilterText.branches(session.gitRefs)
+        let choice = Binding<Choice>(get: {
+            session.logScope == .all ? .all : session.logRef.map(Choice.ref) ?? .head
+        }, set: { choice in
+            switch choice {
+            case .head: session.showLog(scope: .branch)
+            case .all: session.showLog(scope: .all)
+            case .ref(let ref): session.showLog(scope: .branch, ref: ref)
+            }
+        })
+        Picker("Show", selection: choice) {
+            Text(verbatim: GitLogFilterText.current(session.gitRefs).map { "Current branch · \($0)" } ?? "Current commit")
+                .tag(Choice.head)
+            Text("All branches").tag(Choice.all)
+        }
+        .pickerStyle(.inline)
+        if !branches.local.isEmpty {
+            Menu("Branch") { refs(branches.local, choice: choice) }
+        }
+        if !branches.remote.isEmpty {
+            Menu("Remote branch") { refs(branches.remote, choice: choice) }
+        }
+        Divider()
+        Toggle("Only tagged commits", isOn: Binding(get: { session.logTagged }, set: { tagged in
+            session.showLog(scope: session.logScope, ref: session.logRef, tagged: tagged)
+        }))
+        if session.logFiltered {
+            Divider()
+            Button("Show This Branch’s Commits") { session.showLog(scope: .branch, ref: nil, tagged: false) }
+        }
+    }
+
+    private func refs(_ records: [GitRefRecord], choice: Binding<Choice>) -> some View {
+        Picker("Branch", selection: choice) {
+            ForEach(records, id: \.refname) { record in
+                Text(verbatim: GitLogFilterText.name(record.refname)).tag(Choice.ref(record.refname))
+            }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+    }
+}
+
+/// The header's filter button on Commits: the filter's menu, lit while it shows anything but the checked-out branch's
+/// whole history.
+struct GitLogFilterButton: View {
+    let session: FilesSession
+    @Environment(\.appTypography) private var typography
+    @State private var hovering = false
+
+    var body: some View {
+        let palette = Chrome.palette, on = session.logFiltered
+        let fill = on ? palette.ink.opacity(0.06) : hovering ? palette.hover : .clear
+        Menu {
+            GitLogFilterMenu(session: session)
+        } label: {
+            Text(Image(systemName: on ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"))
+                .font(typography.symbol(.body))
+                .foregroundStyle(on ? palette.accent : palette.muted)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
+        .background {
+            if LiquidGlassStore.shared.active { Capsule().fill(fill) } else { RoundedRectangle(cornerRadius: 4).fill(fill) }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(on ? "Filtered: \(GitLogFilterText.title(session, short: false)) · branches and tags"
+                 : "Filter: another branch, all branches, only tagged commits")
+        .accessibilityLabel("Filter commits")
+        .accessibilityValue(GitLogFilterText.title(session, short: false))
+        .accessibilityIdentifier("git-log-filter")
     }
 }
 

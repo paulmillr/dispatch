@@ -199,6 +199,9 @@ fn each_allowed_command_answers_what_git_says() {
         let found = ok(files, root, &["log", "--grep=TWO", "--regexp-ignore-case", "--all", "--format=%s"]);
         assert_eq!(found, "two\n");
         assert_eq!(ok(files, root, &["log", "--author=nobody", "-F", "--format=%s"]), "");
+        let tagged = ["log", "--simplify-by-decoration", "--decorate-refs=refs/tags", "--all", "--format=%s %D"];
+        // The root commit comes too, undecorated: the app leaves out what no tag decorates.
+        assert_eq!(ok(files, root, &tagged), "two tag: v1\none \n");
         assert_eq!(ok(files, root, &["log", "--max-count=1", "--skip=1", "--format=%s", "--", "a.txt"]), "one\n");
 
         let detail = ok(files, root, &["show", "--numstat", "-z", "--format=%H%x1f%s%x1e", &repo.second]);
@@ -263,6 +266,7 @@ fn anything_off_the_list_is_refused_by_name() {
         (&["log", "--frobnicate"], "--frobnicate"),
         (&["log", "-p"], "-p"),
         (&["log", "--show-signature"], "--show-signature"),
+        (&["log", "--decorate-refs=refs/heads"], "--decorate-refs=refs/heads"),
         (&["log", "-n", "1001"], "1001"),
         (&["log", "--max-count=5000"], "--max-count=5000"),
         (&["log", "-n"], "-n"),
