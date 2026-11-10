@@ -287,8 +287,8 @@ they let the helper do on the host is in [security](security.md#dispatch-for-iph
   new binding. `chat.open` answers with a `chat.history` notification and `backends.open` with `backend.opened`, not a
   response frame.
 - **Re-enable integrations per connection.** `installation.install` state is in helper memory: every connection with
-  Chat on installs Claude Code's and Codex's hooks and enables Pi's extension where installed (Pi's is opt-in: New
-  chat asks first). A per-host refusal given on the Mac stays on the Mac; the phone's consent is its Chat switch.
+  Chat on installs Claude Code's and Codex's hooks and Pi's extension (inert outside the terminals Dispatch can show:
+  [security](security.md#agent-chat)); New chat installs a missing one before it starts. A per-host refusal given on the Mac stays on the Mac; the phone's consent is its Chat switch.
 - **Surface native trust steps.** Codex shows "Hooks need review" after the helper installs hooks; until the user picks
   "Trust all" in its terminal, approvals stay in Codex's TUI.
 - **Keep the outbox.** A Claude Code or Pi queue of a named conversation lives in the host's queue store and survives

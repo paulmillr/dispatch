@@ -185,7 +185,7 @@ final class ChatTests: XCTestCase {
         await chat.integrationChanges?.value
         XCTAssertNil(chat.error)
         XCTAssertEqual(chat.hookStatus("codex"), .restart)
-        XCTAssertEqual(chat.hookStatus("pi"), .off, "Pi's extension stays opt-in")
+        XCTAssertEqual(chat.hookStatus("pi"), .ready, "Chat installs Pi's extension with the others; no Pi process predates it")
         XCTAssertEqual(chat.hookStatus("claude"), .ready, "No Claude process predates its hooks")
         XCTAssertEqual(System.signal(process.pid, SIGTERM), 0)
         try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive }

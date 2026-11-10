@@ -8,6 +8,59 @@ final class PiChatIntegrationTests: XCTestCase {
     func testTmuxPiChatTransport() async throws { try await transport("tmux") }
     func testHerdrPiChatTransport() async throws { try await transport("herdr") }
 
+    /// Dispatch's extension does nothing in a Pi outside the terminals Dispatch can show (none of bridge.js `terminals`
+    /// set, as in another terminal app's plain shell): no session record and no socket. The same Pi in a Dispatch
+    /// terminal registers, as it always has.
+    func testExtensionStaysInertOutsideDispatchTerminals() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let fm = FileManager.default
+        let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) })
+        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-inert-" + System.uuid().uuidString)
+        let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
+                             "serve", "--state", state.path, "--delay", "0.025"]
+        fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
+        let child = try System.Child(fixture)
+        defer { child.stop() }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
+        let home = System.home.appendingPathComponent(".pi/agent")
+        try fm.createDirectory(at: home.appendingPathComponent("extensions"), withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        try Data("{\"quietStartup\":true,\"editorPaddingX\":2}\n".utf8).write(to: home.appendingPathComponent("settings.json"))
+        let runtime = TerminalRuntime.shared, previous = runtime.chat
+        runtime.chat = ChatCoordinator(enabled: true)
+        defer { runtime.chat = previous }
+        let chat = runtime.chat
+        defer { chat.setHelperIntegration("pi", enabled: false) }
+        try await TestSupport.integrations(["pi"], enabled: true, chat: chat)
+        XCTAssertTrue(System.exists(home.appendingPathComponent("extensions/dispatch-chat.js")))
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        // Each Pi in a tab of its own, `prefix` before the fixture; returns its process id once it shows its editor.
+        func start(_ prefix: [String]) async throws -> UInt64 {
+            let id = try XCTUnwrap(app.workspace.activeSurfaceID)
+            try await app.wait { runtime.views[id].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+            let terminal = try XCTUnwrap(runtime.views[id])
+            runtime.chat.session(for: id).manualViewChoice = true
+            TerminalTestSupport.send((prefix + ["python3", CodexTestSupport.root.appendingPathComponent("scripts/pi_fixture.py").path,
+                "--state", state.path, "--pi", pi, "--integration", "--home", home.path]).map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+            try await TestSupport.eventually(timeout: .seconds(20), diagnostic: terminal.agentMenuScreen) {
+                terminal.foregroundPID > 1 && terminal.foregroundPID <= UInt64(Int32.max)
+                    && AgentProcess.capture(pid_t(terminal.foregroundPID)) != nil
+                    && terminal.agentMenuScreen.contains("dispatch-fixture")
+            }
+            return terminal.foregroundPID
+        }
+        let names = ["DISPATCH_TMUX_CREATION", "DISPATCH_HERDR_TAB", "DISPATCH_HELPER_ENDPOINT", "DISPATCH_SSH_SESSION",
+                     "DISPATCH_RENDERER_TAB", "DISPATCH_PI_OWNED", "TMUX", "HERDR_ENV"]
+        let outside = try await start(["env"] + names.flatMap { ["-u", $0] })
+        app.workspace.newTab()
+        let inside = try await start([])
+        let record = { (pid: UInt64) in home.appendingPathComponent("dispatch/sessions/\(pid).json") }
+        try await TestSupport.eventually(timeout: .seconds(20)) { System.exists(record(inside)) }
+        // The record and the socket are made together, after the check.
+        XCTAssertFalse(System.exists(record(outside)), "Pi outside a Dispatch terminal registers nothing")
+    }
+
     func testManagedExtensionReloadNativeDialogAndRevocation() async throws {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default

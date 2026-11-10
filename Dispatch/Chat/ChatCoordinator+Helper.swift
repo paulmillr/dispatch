@@ -1078,6 +1078,8 @@ extension ChatCoordinator {
         installationFailures[.init(key: key, endpoint: endpoint, terminal: terminal)] = current ? error?.localizedDescription : nil
     }
 
+    /// Whether `key` may be installed on `endpoint`: this Mac's switch here, the host's own answer on an SSH host
+    /// (on when unanswered). What this Mac installed never decides for a host.
     private func permits(_ key: String, on endpoint: HelperWorkspace.Endpoint) -> Bool {
         guard let connection = endpoint.connection else { return localHooksAllowed(key) }
         let ssh = TerminalRuntime.shared.ssh
@@ -1091,7 +1093,6 @@ extension ChatCoordinator {
     private func installHelperIntegration(_ key: String, endpoint: HelperWorkspace.Endpoint, terminal: UInt64) {
         integrationWork { chat in
             guard let connection = endpoint.connection, chat.enabled, !chat.disabledIntegrations.contains(key),
-                  chat.helperInstalls[key].map({ $0.optional != true || $0.status != "off" }) == true,
                   TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains(connection) else { return }
             guard chat.permits(key, on: endpoint) else { return }
             do {
@@ -1106,12 +1107,12 @@ extension ChatCoordinator {
         }
     }
 
-    /// A newly connected SSH host gets the integrations installed on this Mac.
+    /// A newly connected SSH host gets every agent on in Chat mode that the host's grant allows (`permits`), whether
+    /// or not this Mac has it installed: an agent may run only on the host.
     func installHelperIntegrations(on connection: SSHConnectionID) {
         integrationWork { chat in
             guard chat.enabled, TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains(connection) else { return }
-            for key in (chat.helperLaunches ?? []).map(\.key)
-            where !chat.disabledIntegrations.contains(key) && chat.helperInstalls[key].map({ $0.optional != true || $0.status != "off" }) == true {
+            for key in (chat.helperLaunches ?? []).map(\.key) where !chat.disabledIntegrations.contains(key) {
                 guard chat.permits(key, on: .remote(connection)) else { continue }
                 do {
                     _ = try await HelperChat.setup(.remote(connection), key: key, enabled: true, terminal: nil)
@@ -1124,26 +1125,23 @@ extension ChatCoordinator {
     }
 
     /// The first-launch answer to whether agents run on this Mac (LocalAgentsConsent). Yes (the launch keys whose
-    /// CLIs were found) installs their integrations here; optional ones stay opt-in, as for a new SSH host. No
-    /// (nil) turns this Mac's agent hooks off, leaving the agents' settings as they are.
+    /// CLIs were found) installs their integrations here, Pi's extension too. No (nil) turns this Mac's agent hooks
+    /// off, leaving the agents' settings as they are.
     func adoptLocalAgents(_ found: Set<String>?) {
         loadLaunches()
         integrationWork { chat in
             for launch in chat.helperLaunches ?? [] {
                 guard let found else { chat.setLocalHooks(launch.key, allowed: false); continue }
-                guard found.contains(launch.key), let install = chat.helperInstalls[launch.key], install.optional != true else { continue }
+                guard found.contains(launch.key) else { continue }
                 if !chat.localHooksAllowed(launch.key) { chat.localHooks[launch.key] = nil }
                 chat.setHelperIntegration(launch.key, enabled: true)
             }
         }
     }
 
-    /// Settings defaults: every required integration on, every optional one off.
+    /// Settings defaults: every integration on.
     func restoreHelperIntegrations() {
-        for launch in helperLaunches ?? [] {
-            let optional = helperInstalls[launch.key]?.optional == true
-            if !optional || helperInstalls[launch.key]?.status != "off" { setHelperIntegration(launch.key, enabled: !optional) }
-        }
+        for launch in helperLaunches ?? [] { setHelperIntegration(launch.key, enabled: true) }
     }
 
     /// The helper's agents in its own order, except Codex listed just above Claude Code. Only the list moves: a

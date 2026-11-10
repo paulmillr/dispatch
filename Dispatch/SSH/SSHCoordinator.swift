@@ -13,10 +13,9 @@ final class SSHCoordinator {
         await SSHIntegrationConsent.present($0, window: $1)
     }
     /// Auto-confirm uploads (Settings › Features › Remote helper) answers the consent sheet with this.
-    /// Pi stays opt-in because it installs an extension on the remote host.
     static let fullFeatures = SSHIntegrationSelection(
         grant: .init(helperEnabled: true, features: Set(SSHIntegrationFeature.allCases)),
-        agents: [.codex: true, .claude: true, .pi: false])
+        agents: [.codex: true, .claude: true, .pi: true])
 
     /// First choice for a login: automatic with Auto-confirm uploads, otherwise the sheet.
     private func newHostSelection(_ scope: SSHIntegrationScope, window: NSWindow?) async -> SSHIntegrationSelection? {

@@ -283,8 +283,8 @@ final class MobileCompositionTests: XCTestCase {
         XCTAssertEqual(app.tabs.needsYou(excluding: ref), app.conversations.needsYouCount)
     }
 
-    /// Every connection with Chat on installs Claude Code's and Codex's hooks, as the Mac does for a newly connected host;
-    /// Pi's extension is opt-in and only enabled again where it is installed. Chat off changes nothing.
+    /// Every connection with Chat on installs Claude Code's and Codex's hooks and Pi's extension, installed before or not,
+    /// as the Mac does for a newly connected host. Chat off changes nothing.
     func testIntegrationsAreEnabledOnEachConnection() async throws {
         for (installed, chat) in [(true, true), (false, true), (false, false)] {
             let helper = ScriptedHelper.scripted { request in
@@ -306,7 +306,7 @@ final class MobileCompositionTests: XCTestCase {
             }
             await MobileComposition.enableIntegrations(session, helper.client)
             let installs = helper.requests("installation.install").compactMap { $0.params["launch"] as? UInt64 }
-            XCTAssertEqual(installs, !chat ? [] : installed ? [4, 5] : [5], "installed \(installed), chat \(chat)")
+            XCTAssertEqual(installs, chat ? [4, 5] : [], "installed \(installed), chat \(chat)")
             XCTAssertTrue(helper.requests("installation.install").allSatisfy { $0.params["enabled"] as? Bool == true })
         }
     }

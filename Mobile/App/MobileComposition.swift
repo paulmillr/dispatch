@@ -522,27 +522,19 @@ final class MobileComposition {
                 throw TabsFailure(message: "\(choice.label) is no longer on \(session.host.name).")
             }
             let target = ChatSpaceChoice(host: space.ref.host, hostName: session.host.name, key: space.ref.key, name: space.name)
-            do {
-                let key = try await conversations.start(launch, in: target, settings: nil)
-                memory.remember(agent: launch.key)
-                self?.openChat(key, keyboard: true)
-            } catch let consent as ChatIntegrationConsent {
-                throw TabsFailure(message: consent.message + " Start it once from New chat to add it.")
-            }
+            let key = try await conversations.start(launch, in: target, settings: nil)
+            memory.remember(agent: launch.key)
+            self?.openChat(key, keyboard: true)
         })
     }
 
     /// The agents' integrations on every connection, as the Mac's `installHelperIntegrations` does for a newly connected
-    /// host: each non-optional one (Claude Code's and Codex's hooks) is installed, so an agent started outside Dispatch
-    /// still asks here; an optional one (Pi's extension) is opt-in and only enabled again where it is installed (the
-    /// helper keeps that per connection, docs/ios.md, Helper contract). New chat installs it once the user agrees. With
-    /// Chat off the grant has no `hooks.configure` and nothing changes.
+    /// host: Claude Code's and Codex's hooks and Pi's extension (which does nothing outside the terminals Dispatch can
+    /// show) are installed, so an agent started outside Dispatch still asks here (the helper keeps that per connection,
+    /// docs/ios.md, Helper contract). With Chat off the grant has no `hooks.configure` and nothing changes.
     static let enableIntegrations: HostPostConnectStep = { session, client in
         guard session.host.chat, let launches = try? await client.launches() else { return }
         for launch in launches {
-            guard let audit: HelperChat.Installation = try? await client.connection.request(
-                "installation.audit", params: HelperChat.Setup(launch: launch.launch, enabled: nil, terminal: nil)),
-                  audit.optional != true || audit.installed == true else { continue }
             let _: HelperChat.Installation? = try? await client.connection.request(
                 "installation.install", params: HelperChat.Setup(launch: launch.launch, enabled: true, terminal: nil))
         }

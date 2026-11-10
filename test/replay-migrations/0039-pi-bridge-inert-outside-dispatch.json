@@ -1,0 +1,8 @@
+{
+  "kind": "resource",
+  "why": "Pi's bridge (helper/harnesses/pi/resources/bridge.js) does nothing outside the terminals Dispatch can show (its own, and tmux and herdr panes): no socket, no session record. The helper bundles it and writes it whole into every Pi installation reply and installation job, and its SHA-256 into the receipt, so every capture holding it holds the new copy and its hash instead. No answer depends on the script's text: the tests running Pi run it in Dispatch's terminals, where it behaves as before.",
+  "resources": [
+    {"old": "0039-pi-bridge-inert-outside-dispatch/bridge.old.js", "new": "0039-pi-bridge-inert-outside-dispatch/bridge.new.js"}
+  ],
+  "fingerprints": {"pi-bridge": "0d7feea21bb5a4ace5f3179daf10c5692dd53f00501dde27fe635e863d8e1fcb"}
+}

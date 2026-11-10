@@ -12,6 +12,43 @@ final class SSHPiIntegrationTests: XCTestCase {
     func testRemoteTmuxTransportAndSessionLifecycle() async throws { try await walkthrough("tmux", transportOnly: true) }
     func testRemoteHerdrTransportAndSessionLifecycle() async throws { try await walkthrough("herdr", transportOnly: true) }
 
+    /// A host whose Pi hooks are on gets Pi's extension when it connects, though this Mac never set Pi up (no Pi here,
+    /// or its This Mac switch off): the agent may run only on the host. (A host that said no:
+    /// testRemoteManagedPiExtensionInstallReloadAndRevocation.)
+    func testRemotePiExtensionInstallsWithoutPiOnThisMac() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let runtime = TerminalRuntime.shared, previous = runtime.chat
+        runtime.chat = ChatCoordinator(enabled: true)
+        defer { runtime.chat = previous }
+        let chat = runtime.chat
+        chat.loadLaunches()
+        try await TestSupport.eventually(timeout: .seconds(10)) { chat.helperLaunches?.contains { $0.key == "pi" } == true }
+        let saved = chat.localHooks["pi"]
+        defer { chat.localHooks["pi"] = saved }
+        chat.setLocalHooks("pi", allowed: false)
+        await chat.integrationChanges?.value
+        XCTAssertEqual(chat.hookStatus("pi"), .off, "Pi is not set up on this Mac")
+        let ssh = try await SSHTestServer(grant: .init(profile: .full, hooks: true)); defer { ssh.stop() }
+        let managed = ssh.agents.appendingPathComponent("pi/extensions/dispatch-chat.js")
+        let source = try Data(contentsOf: CodexTestSupport.root.appendingPathComponent("helper/harnesses/pi/resources/bridge.js"))
+        let scope = try await ssh.authorize()
+        XCTAssertEqual(runtime.ssh.permissions.hooks(scope, agent: .pi), false, "The fixture leaves Pi off")
+        runtime.ssh.permissions.saveHooks(true, for: scope, agent: .pi)
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let id = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { runtime.views[id].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let terminal = try XCTUnwrap(runtime.views[id])
+        TerminalTestSupport.send("ssh " + (ssh.options + [ssh.destination]).map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(20)) {
+            runtime.ssh.links.values.contains { $0.launch.tabID == id && $0.shellPID != nil }
+        }
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi on the host: \(chat.error ?? "none")") {
+            (try? System.read(managed)) == source
+        }
+        await chat.integrationChanges?.value
+        XCTAssertEqual(chat.hookStatus("pi"), .off, "Installing on the host leaves this Mac as it was")
+    }
+
     func testRemoteManagedPiExtensionInstallReloadAndRevocation() async throws {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default

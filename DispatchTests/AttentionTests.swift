@@ -38,7 +38,7 @@ final class AttentionTests: XCTestCase {
         let response = try JSONDecoder().decode(SSHConsentResponse.self, from: System.read(reply))
         XCTAssertEqual(response.grant?.selectedFeatures, Set(SSHIntegrationFeature.allCases))
         XCTAssertEqual(coordinator.permissions.remembered(scope), response.grant)
-        XCTAssertEqual(coordinator.permissions.agentHooks(scope), [.codex: true, .claude: true, .pi: false], "Pi's remote extension stays opt-in")
+        XCTAssertEqual(coordinator.permissions.agentHooks(scope), [.codex: true, .claude: true, .pi: true])
     }
 
     func testPreferencesMigrateAndRoundTrip() throws {

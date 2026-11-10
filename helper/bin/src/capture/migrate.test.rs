@@ -1,5 +1,5 @@
 use super::*;
-use super::super::tests::{record, write};
+use super::super::tests::{layered, record, write};
 
 fn template(text: &str) -> Template {
     Template::parse(text).unwrap()
@@ -169,4 +169,104 @@ fn every_wire_name_encodes_as_its_permanent_number() {
         assert_eq!(body::symbol(name), Some(number as u16), "{name}");
     }
     assert_eq!(body::symbol("not a wire name"), None);
+}
+
+fn frame(id: u64, value: &Data<'_>) -> Vec<u8> {
+    wire::packet(wire::Kind::Response, id, &body::encode(value).unwrap()).unwrap()
+}
+
+/// A corpus with one helper capture holding the bundled file `old` as the helper records it: inside a reply it wrote
+/// (with the write's length), as a write job's bytes, as a read's result, and its SHA-256 in an installation receipt.
+fn installation(replays: &Path, script: &[u8]) -> (PathBuf, Vec<trace::Record>) {
+    let digest = String::from_utf8(sha256(script)).unwrap();
+    let receipt = format!("{{\"schema\":1,\"sha256\":\"{digest}\"}}");
+    let reply = frame(6, &Data::Object(vec![("result", Data::Object(vec![
+        ("edits", Data::Array(vec![Data::Object(vec![("before", Data::Null), ("after", Data::Bytes(script))])])),
+        ("restart", Data::Bool(true)),
+    ]))]));
+    fn job(bytes: &[u8]) -> Data<'_> {
+        Data::Object(vec![("job", Data::String("write")), ("bytes", Data::Bytes(bytes))])
+    }
+    let records = vec![
+        record("write", &Data::Object(vec![("fd", Data::Unsigned(17)), ("length", Data::Unsigned(reply.len() as u64))]), &Data::Bytes(&reply)),
+        record("submit", &job(script), &Data::Unsigned(1)),
+        record("submit", &job(receipt.as_bytes()), &Data::Unsigned(2)),
+        record("file.done", &Data::Unsigned(3), &Data::Object(vec![("kind", Data::String("value")), ("bytes", Data::Bytes(script))])),
+        record("now", &Data::Null, &Data::Unsigned(7)),
+    ];
+    let file = replays.join("PiTests/testInstall/helper.rpl.zst");
+    layered(&file, trace::Layer::Native, &records);
+    (file, records)
+}
+
+fn bridge(migrations: &Path, old: &[u8], new: &[u8]) {
+    migration(migrations, "0000-baseline", r#"{"kind": "baseline", "why": "the corpus as it was"}"#);
+    std::fs::create_dir_all(migrations.join("0001-bridge")).unwrap();
+    std::fs::write(migrations.join("0001-bridge/old.js"), old).unwrap();
+    std::fs::write(migrations.join("0001-bridge/new.js"), new).unwrap();
+    migration(migrations, "0001-bridge", r#"{"kind": "resource", "why": "the bridge changed",
+        "resources": [{"old": "0001-bridge/old.js", "new": "0001-bridge/new.js"}]}"#);
+}
+
+/// A bundled file's new copy replaces the old one wherever a capture holds it as a value, and its SHA-256 the old one's:
+/// the capture then holds what the new helper would have recorded, its other records as they were.
+#[test]
+fn a_resource_migration_swaps_a_bundled_file_and_its_digest_everywhere_it_was_recorded() {
+    let root = temporary("resource");
+    let (old, new) = (b"// bridge v1\nexport default 1;\n".to_vec(), b"// bridge v2, a little longer\nexport default 2;\n".to_vec());
+    let (migrations, replays) = (root.join("migrations"), root.join("replays"));
+    bridge(&migrations, &old, &new);
+    let (file, _) = installation(&replays, &old);
+    let expected = installation(&root.join("expected"), &new).1;
+    run(vec![replays.display().to_string(), migrations.display().to_string()]).unwrap();
+    let records = trace::read(File::open(&file).unwrap(), usize::MAX).unwrap().1;
+    assert_eq!(records, expected);
+    assert_eq!(std::fs::read_to_string(replays.join("MIGRATIONS")).unwrap(), "0000-baseline\n0001-bridge\n");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// An old copy inside a larger value (a diff, a file that only starts with it) is no value to swap: the capture fails and
+/// the ledger stays, so the test is recorded again rather than half migrated.
+#[test]
+fn a_resource_inside_another_value_fails_the_capture() {
+    let root = temporary("resource-inside");
+    let (old, new) = (b"// bridge v1\n".to_vec(), b"// bridge v2\n".to_vec());
+    let (migrations, replays) = (root.join("migrations"), root.join("replays"));
+    bridge(&migrations, &old, &new);
+    let larger = [&old[..], b"// edited by hand\n"].concat();
+    layered(&replays.join("PiTests/testEdited/helper.rpl.zst"), trace::Layer::Native,
+            &[record("file.done", &Data::Unsigned(1), &Data::Object(vec![("bytes", Data::Bytes(&larger))]))]);
+    let error = run(vec![replays.display().to_string(), migrations.display().to_string()]).unwrap_err();
+    assert!(error.to_string().contains("0001-bridge"), "{error}");
+    assert!(!std::fs::read_to_string(replays.join("MIGRATIONS")).unwrap_or_default().contains("0001-bridge"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The Pi bridge the helper bundles is the new copy of the last migration fingerprinting it: changing bridge.js changes
+/// what every Pi installation records, so it ships with a resource migration (docs/replay.md, Migrations).
+#[test]
+fn the_bundled_pi_bridge_has_its_resource_migration() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/replay-migrations");
+    let bundled = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../harnesses/pi/resources/bridge.js")).unwrap();
+    let digest = String::from_utf8(sha256(&bundled)).unwrap();
+    let declared = load(&directory).unwrap().into_iter().rev()
+        .find_map(|migration| migration.fingerprints.into_iter().find(|(name, _)| name == "pi-bridge").map(|(_, hash)| hash));
+    assert_eq!(declared.as_deref(), Some(digest.as_str()),
+               "bridge.js changed: add a resource migration with its old and new copy and fingerprint pi-bridge = {digest}");
+}
+
+/// A helper executable the app read to upload embeds the bundled file: it stays as recorded, and passes.
+#[test]
+fn a_resource_migration_leaves_recorded_executables_alone() {
+    let root = temporary("resource-executable");
+    let (old, new) = (b"// bridge v1\n".to_vec(), b"// bridge v2\n".to_vec());
+    let (migrations, replays) = (root.join("migrations"), root.join("replays"));
+    bridge(&migrations, &old, &new);
+    let binary = [&b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"[..], &old, b"\x00\x00"].concat();
+    let records = vec![record("in.result", &Data::Null, &Data::Bytes(&binary))];
+    let file = replays.join("SSHTests/testUpload/app.rpl.zst");
+    write(&file, &records);
+    run(vec![replays.display().to_string(), migrations.display().to_string()]).unwrap();
+    assert_eq!(trace::read(File::open(&file).unwrap(), usize::MAX).unwrap().1, records);
+    std::fs::remove_dir_all(&root).unwrap();
 }

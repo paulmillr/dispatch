@@ -18,8 +18,26 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 const limit = 4 * 1024 * 1024;
 
+// Variables of the terminals Dispatch can show: its own (a pane Dispatch
+// created in tmux, a herdr pane or launch of Dispatch's helper, a shell of an
+// SSH login Dispatch made, a tab of the Mac app) and any tmux or herdr pane,
+// since Dispatch shows every session of a server it opens, those started
+// outside it too. Anywhere else (a plain shell of another terminal app) the
+// bridge stays inert: no socket, no session record, Pi's UI untouched.
+// Dispatch could not attach there anyway.
+const terminals = [
+  "DISPATCH_TMUX_CREATION",
+  "DISPATCH_HERDR_TAB",
+  "DISPATCH_HELPER_ENDPOINT",
+  "DISPATCH_SSH_SESSION",
+  "DISPATCH_RENDERER_TAB",
+  "TMUX",
+  "HERDR_ENV",
+];
+
 export default function dispatchChat(pi) {
   const owned = process.env.DISPATCH_PI_OWNED === "1";
+  const dispatched = owned || terminals.some((name) => !!process.env[name]);
   let context, server, registrationPath, socketPath, token, partial, uiPrompt;
   let session;
   let generation = 0;
@@ -272,6 +290,7 @@ export default function dispatchChat(pi) {
     // RPC/print sessions already have a controlling client. Only the visible
     // interactive CLI exposes a bridge, including terminals hosted by SSH.
     if (
+      !dispatched ||
       !ctx.hasUI ||
       (!owned && (!process.stdin.isTTY || !process.stdout.isTTY)) ||
       !process.getuid

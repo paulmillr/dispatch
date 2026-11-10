@@ -129,9 +129,10 @@ final class ChatCoordinator {
         enabled = value; defaults?.set(value, forKey: "agentChatEnabled")
         error = nil
         installationFailures.removeAll()
-        // Chat is the switch for every required integration the helper lists; optional ones stay opt-in.
+        // Chat is the switch for every integration the helper lists, Pi's extension too: outside the terminals Dispatch
+        // can show it does nothing (bridge.js `terminals`).
         if !value { for session in sessions.values { end(session, preservingPresentation: false) } }
-        for launch in helperLaunches ?? [] where helperInstalls[launch.key]?.optional != true {
+        for launch in helperLaunches ?? [] {
             setHelperIntegration(launch.key, enabled: value)
         }
     }

@@ -12,6 +12,8 @@
 //!   where the new code would get the same answers, which replay then checks.
 //! - `rerecord`: tests whose answers changed: their recordings move out of the corpus (to DIR, `build/retired-replays`
 //!   beside REPLAYS by default), so they run live until recorded again.
+//! - `resource`: a file the helper bundles (Pi's bridge.js) changed: wherever a capture holds the old copy as a value (in
+//!   our frames, a job's bytes, a read's result) it holds the new one, and its SHA-256 the new one's (`resourced`).
 //!
 //! A migration's `fingerprints` name what the code generates for recorded inputs once it applies (checked by
 //! `ReplayMigrationTests` and `the_current_schema_has_its_dictionary_and_migration`).
@@ -33,6 +35,8 @@ pub(super) enum Kind {
     Wire { edits: Vec<String> },
     Rewrite { ops: Vec<String>, pairs: Vec<(Template, Template)> },
     Rerecord { tests: Vec<String> },
+    /// Each bundled file's old and new copy, as the migration keeps them (`resources`, beside its JSON).
+    Resource { pairs: Vec<(Vec<u8>, Vec<u8>)> },
 }
 
 /// Literal text with `{{name}}` slots. A slot matches a run of letters, digits, `.`, `_` and `-` (a digest, a session,
@@ -165,6 +169,12 @@ pub(super) fn replaced(text: &str, pairs: &[(Template, Template)]) -> Option<(St
 /// A plain value with its text rewritten by `change` (keys stay), or None when nothing changed. Containers count their
 /// elements, so only a rewritten text's own length changes.
 pub(super) fn rewritten_value(bytes: &[u8], change: &dyn Fn(&str) -> Option<String>) -> io::Result<Option<Vec<u8>>> {
+    swapped_value(bytes, &|tag, value| (tag == 6).then(|| std::str::from_utf8(value).ok().and_then(change)).flatten().map(String::into_bytes))
+}
+
+/// A plain value with each text (tag 6) or bytes (tag 11) `change` returns new contents for replaced, or None when
+/// nothing changed.
+pub(super) fn swapped_value(bytes: &[u8], change: &dyn Fn(u8, &[u8]) -> Option<Vec<u8>>) -> io::Result<Option<Vec<u8>>> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
     let changed = copy(bytes, &mut at, &mut out, change)?;
@@ -174,7 +184,7 @@ pub(super) fn rewritten_value(bytes: &[u8], change: &dyn Fn(&str) -> Option<Stri
     Ok(changed.then_some(out))
 }
 
-fn copy(bytes: &[u8], at: &mut usize, out: &mut Vec<u8>, change: &dyn Fn(&str) -> Option<String>) -> io::Result<bool> {
+fn copy(bytes: &[u8], at: &mut usize, out: &mut Vec<u8>, change: &dyn Fn(u8, &[u8]) -> Option<Vec<u8>>) -> io::Result<bool> {
     let tag = bytes[take(bytes, at, 1)?];
     out.push(tag);
     let mut changed = false;
@@ -188,8 +198,8 @@ fn copy(bytes: &[u8], at: &mut usize, out: &mut Vec<u8>, change: &dyn Fn(&str) -
             let length = count(bytes, at)?;
             let start = take(bytes, at, length)?;
             let value = &bytes[start..start + length];
-            let new = (tag == 6).then(|| std::str::from_utf8(value).ok().and_then(change)).flatten();
-            let value = new.as_deref().map_or(value, str::as_bytes);
+            let new = change(tag, value);
+            let value = new.as_deref().unwrap_or(value);
             changed = new.is_some();
             let length = u32::try_from(value.len()).map_err(|_| io::Error::other("rewritten text too long"))?;
             out.extend_from_slice(&length.to_le_bytes());
@@ -283,7 +293,30 @@ fn parse(path: &Path) -> io::Result<Migration> {
             }
             Kind::Rerecord { tests }
         }
-        _ => return Err(bad("kind is baseline, encode, wire, rewrite or rerecord")),
+        Some("resource") => {
+            let base = path.parent().unwrap_or(Path::new("."));
+            let pairs = root.get("resources").and_then(|value| value.array()).ok_or_else(|| bad("no resources list"))?
+                .map(|pair| {
+                    let file = |key: &str| -> io::Result<Vec<u8>> {
+                        let name = pair.get(key).and_then(|name| name.string()).ok_or_else(|| bad(&format!("a resource without {key}")))?;
+                        if name.starts_with('/') || name.split('/').any(|part| part == "..") {
+                            return Err(bad("a resource's copies sit beside its migration"));
+                        }
+                        std::fs::read(base.join(name)).map_err(|error| bad(&format!("{name}: {error}")))
+                    };
+                    let (old, new) = (file("old")?, file("new")?);
+                    if old.is_empty() || old == new {
+                        return Err(bad("a resource's old copy is empty or its new one"));
+                    }
+                    Ok((old, new))
+                })
+                .collect::<io::Result<Vec<_>>>()?;
+            if pairs.is_empty() {
+                return Err(bad("no resources"));
+            }
+            Kind::Resource { pairs }
+        }
+        _ => return Err(bad("kind is baseline, encode, wire, rewrite, rerecord or resource")),
     };
     Ok(Migration { id, kind, fingerprints })
 }
@@ -425,6 +458,9 @@ pub(super) fn run(mut args: Vec<String>) -> io::Result<()> {
                     Ok(changes)
                 })));
             }
+            Kind::Resource { pairs } => {
+                tally(parallel(&files, jobs, |file| rewrite_file(file, dry, &|header, records| resourced(header, records, pairs))));
+            }
             Kind::Rerecord { tests } => {
                 for test in tests {
                     let source = replays.join(test);
@@ -457,6 +493,189 @@ pub(super) fn run(mut args: Vec<String>) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn holds(bytes: &[u8], needle: &[u8]) -> bool {
+    needle.len() <= bytes.len() && bytes.windows(needle.len()).any(|window| window == needle)
+}
+
+/// A recorded executable (Mach-O, universal, ELF): a helper the app uploads embeds its resources, the build's as recorded,
+/// which replay never compares with this build's, so a resource migration leaves it as it is.
+fn executable(bytes: &[u8]) -> bool {
+    [&b"\xcf\xfa\xed\xfe"[..], b"\xca\xfe\xba\xbe", b"\x7fELF"].iter().any(|magic| bytes.starts_with(magic))
+}
+
+/// Whether a record's part still holds an old copy in a value that is no recorded executable (walked as a plain value;
+/// one that is none counts as holding it).
+fn left(part: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> bool {
+    if !pairs.iter().any(|(old, _)| holds(part, old)) {
+        return false;
+    }
+    let found = std::cell::Cell::new(false);
+    let walked = swapped_value(part, &|tag, value| {
+        if !(tag == 11 && executable(value)) && pairs.iter().any(|(old, _)| holds(value, old)) {
+            found.set(true);
+        }
+        None
+    });
+    walked.is_err() || found.get()
+}
+
+/// A file's SHA-256 as the helper writes it (lowercase hex: Pi's installation receipt).
+pub(super) fn sha256(bytes: &[u8]) -> Vec<u8> {
+    let mut hash = Sha256::new();
+    hash.update(bytes);
+    hash.finish().iter().map(|byte| format!("{byte:02x}")).collect::<String>().into_bytes()
+}
+
+/// `records` holding each pair's new copy where they held its old one (`Kind::Resource`), returning how many values
+/// changed: a value of our frames (written again token by token, after checking the frame encodes again as recorded; a
+/// streamed value's chunks joined and cut again, its count kept), a plain value (a job's bytes, a read's result), and the
+/// old copy's SHA-256 as text anywhere (same length). An old copy left anywhere else (inside a larger value, bytes no
+/// frame of ours carries) fails the capture, which is then recorded again. Recorded executables stay as they are.
+pub(super) fn resourced(header: &mut trace::Header, records: &mut [trace::Record], pairs: &[(Vec<u8>, Vec<u8>)]) -> io::Result<usize> {
+    let old = |bytes: &[u8]| pairs.iter().any(|(old, _)| holds(bytes, old));
+    let digests: Vec<(Vec<u8>, Vec<u8>)> = pairs.iter().map(|(old, new)| (sha256(old), sha256(new))).collect();
+    let digested = |bytes: &[u8]| digests.iter().any(|(old, _)| holds(bytes, old));
+    if !records.iter().any(|record| [&record.args, &record.output].iter().any(|part| old(part) || digested(part))) {
+        return Ok(0);
+    }
+    if header.wire != wire::VERSION {
+        return Err(io::Error::other("recorded in another wire generation: a wire migration converts it first"));
+    }
+    let names = body::Names { schema: body::SCHEMA, symbols: body::SYMBOLS, records: body::RECORDS };
+    let mut changes = 0;
+    restream(records, &[0, 1], &mut |joined| framed(joined, &names, pairs, &mut changes))?;
+    for record in records.iter_mut() {
+        for part in [&mut record.args, &mut record.output] {
+            if !old(part) || matches!(body::decode_plain(part), Ok(Data::Bytes(_))) {
+                continue;
+            }
+            let counted = std::cell::Cell::new(0);
+            let change = |tag: u8, value: &[u8]| (tag == 6 || tag == 11).then(|| pairs.iter().find(|(old, _)| old == value)).flatten()
+                .filter(|(_, new)| tag == 11 || std::str::from_utf8(new).is_ok())
+                .map(|(_, new)| { counted.set(counted.get() + 1); new.clone() });
+            if let Some(value) = swapped_value(part, &change)? {
+                *part = value;
+                changes += counted.get();
+            }
+        }
+    }
+    for record in records.iter_mut() {
+        for part in [&mut record.args, &mut record.output] {
+            for (old, new) in &digests {
+                let mut at = 0;
+                while let Some(found) = part.get(at..).and_then(|rest| rest.windows(old.len()).position(|window| window == old)) {
+                    part[at + found..at + found + old.len()].copy_from_slice(new);
+                    at += found + old.len();
+                    changes += 1;
+                }
+            }
+        }
+    }
+    if let Some(index) = records.iter().position(|record| left(&record.args, pairs) || left(&record.output, pairs)) {
+        return Err(io::Error::other(format!("record {index} ({}) holds an old resource inside another value", records[index].op)));
+    }
+    Ok(changes)
+}
+
+/// The changes to one stream of our frames that make each value holding an old copy hold the new one (`resourced`).
+fn framed(joined: &[u8], names: &body::Names, pairs: &[(Vec<u8>, Vec<u8>)], changes: &mut usize) -> io::Result<Vec<(Range<usize>, Vec<u8>)>> {
+    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
+    let old = |bytes: &[u8]| pairs.iter().any(|(old, _)| holds(bytes, old));
+    let (mut at, mut edits, mut chunks) = (0, Vec::new(), HashMap::<u64, Vec<Range<usize>>>::new());
+    while let Some(head) = joined.get(at..at + 13) {
+        let header = wire::Header::decode(head.try_into().unwrap(), wire::LIMIT).map_err(invalid)?;
+        let end = at + 13 + header.len as usize;
+        let Some(frame) = joined.get(at + 13..end) else { break };
+        match header.kind {
+            wire::Kind::Chunk => chunks.entry(header.id).or_default().push(at..end),
+            wire::Kind::Cancel => {}
+            _ if !frame.starts_with(&names.schema) => {}
+            _ => {
+                let streamed = body::decode_as(frame, names).ok()
+                    .and_then(|value| value.get("stream").and_then(|stream| stream.get("encoding")).and_then(Data::string).map(str::to_owned));
+                match (streamed.as_deref(), chunks.remove(&header.id)) {
+                    (Some("value"), Some(ranges)) => {
+                        let inner: Vec<u8> = ranges.iter().flat_map(|range| joined[range.start + 21..range.end].iter().copied()).collect();
+                        if old(&inner) {
+                            let (swapped_inner, count) = swapped(&inner, names, pairs)?;
+                            let pieces: Vec<&[u8]> = swapped_inner.chunks(wire::CHUNK).collect();
+                            if pieces.len() != ranges.len() {
+                                return Err(io::Error::other("the new copy needs another number of chunks: record the test again"));
+                            }
+                            for (sequence, (range, piece)) in ranges.iter().zip(&pieces).enumerate() {
+                                let body = [&(sequence as u64).to_le_bytes()[..], piece].concat();
+                                edits.push((range.clone(), wire::packet(wire::Kind::Chunk, header.id, &body).map_err(invalid)?));
+                            }
+                            // The end frame counts the stream's bytes.
+                            let mut end_value = tokens(frame, names)?;
+                            if let Token::Object { keys, values, .. } = &mut end_value {
+                                for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                    if *key == "stream" && let Token::Object { keys, values, .. } = value {
+                                        for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                            if *key == "bytes" {
+                                                *value = Token::Scalar([&[3u8][..], &(swapped_inner.len() as u64).to_le_bytes()].concat());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let mut out = body::SCHEMA.to_vec();
+                            written(&end_value, false, names, &mut out);
+                            edits.push((at..end, wire::packet(header.kind, header.id, &out).map_err(invalid)?));
+                            *changes += count;
+                        }
+                    }
+                    _ if old(frame) => {
+                        let (value, count) = swapped(frame, names, pairs)?;
+                        edits.push((at..end, wire::packet(header.kind, header.id, &value).map_err(invalid)?));
+                        *changes += count;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        at = end;
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    Ok(edits)
+}
+
+/// A wire body with each value that is an old copy (text or bytes) the new one, and how many there were. The body must
+/// encode again token by token as recorded, so nothing else in it changes.
+fn swapped<'a>(bytes: &'a [u8], names: &body::Names, pairs: &'a [(Vec<u8>, Vec<u8>)]) -> io::Result<(Vec<u8>, usize)> {
+    let mut value = tokens(bytes, names)?;
+    let mut again = body::SCHEMA.to_vec();
+    written(&value, false, names, &mut again);
+    if again != bytes {
+        return Err(io::Error::other("a frame holding an old resource does not encode again as recorded"));
+    }
+    fn swap<'a>(token: &mut Token<'a>, pairs: &'a [(Vec<u8>, Vec<u8>)]) -> usize {
+        match token {
+            Token::Scalar(bytes) if bytes.first() == Some(&11) => match pairs.iter().find(|(old, _)| bytes.get(5..) == Some(&old[..])) {
+                Some((_, new)) => {
+                    *bytes = [&[11u8][..], &(new.len() as u32).to_le_bytes(), new].concat();
+                    1
+                }
+                None => 0,
+            },
+            Token::Text { text, symbol: false } => match pairs.iter().find(|(old, _)| text.as_bytes() == &old[..]).and_then(|(_, new)| std::str::from_utf8(new).ok()) {
+                Some(new) => {
+                    *text = new;
+                    1
+                }
+                None => 0,
+            },
+            Token::Array(items) => items.iter_mut().map(|item| swap(item, pairs)).sum(),
+            Token::Object { values, .. } => values.iter_mut().map(|value| swap(value, pairs)).sum(),
+            _ => 0,
+        }
+    }
+    let count = swap(&mut value, pairs);
+    let mut out = body::SCHEMA.to_vec();
+    written(&value, false, names, &mut out);
+    Ok((out, count))
 }
 
 #[cfg(test)]

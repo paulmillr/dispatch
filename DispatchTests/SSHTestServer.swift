@@ -163,10 +163,12 @@ final class SSHTestServer {
             permissionsByRoot[root, default: []].insert(scope)
         }
         TerminalRuntime.shared.ssh.permissions.save(grant, for: scope)
-        // These fixtures preauthorize integration. Agent setup has its own
-        // remembered decisions now; consent tests exercise the actual prompts.
+        // These fixtures preauthorize integration; consent tests exercise the actual prompts. Pi is left off, so a
+        // connection installs its extension only in the tests about it, which save their own answer.
         if grant.hooks {
-            for agent in SSHHookAgent.allCases { TerminalRuntime.shared.ssh.permissions.saveHooks(true, for: scope, agent: agent) }
+            for agent in SSHHookAgent.allCases {
+                TerminalRuntime.shared.ssh.permissions.saveHooks(agent != .pi, for: scope, agent: agent)
+            }
         }
         return scope
     }
