@@ -340,6 +340,16 @@ enum System {
         (try? observe("file.exists", url.path) { FileManager.default.fileExists(atPath: url.path) }) ?? false
     }
 
+    /// A filesystem object's identity without following its final symlink. Download replacement approval is bound to
+    /// this object, so something another process puts at the same pathname is never removed in its place.
+    static func identity(_ url: URL) -> FileIdentity? {
+        try? observe("file.identity", url.path) {
+            var value = stat()
+            guard lstat(url.path, &value) == 0 else { return nil }
+            return FileIdentity(device: UInt64(bitPattern: Int64(value.st_dev)), inode: UInt64(value.st_ino))
+        }
+    }
+
     /// A directory another process changes: its entries' names.
     static func list(_ url: URL) throws -> [String] {
         try observe("file.list", url.path) { try FileManager.default.contentsOfDirectory(atPath: url.path) }
@@ -352,6 +362,58 @@ enum System {
 
     static func move(_ url: URL, to target: URL) throws {
         _ = try act("file.move", [url.path, target.path]) { try FileManager.default.moveItem(at: url, to: target); return true }
+    }
+
+    /// Replaces exactly the object the save panel approved. The downloaded item first moves beside the destination
+    /// (also supporting another volume), then an atomic exchange puts it in place. If the destination changed across
+    /// either identity check, the exchange is undone and the new occupant is left untouched.
+    static func replace(_ url: URL, at target: URL, replacing expected: FileIdentity) throws {
+        struct Input: Codable { let source: String; let target: String; let expected: FileIdentity; let beside: String }
+        let beside = target.deletingLastPathComponent().appendingPathComponent(".Dispatch-download-" + uuid().uuidString)
+        let input = Input(source: url.path, target: target.path, expected: expected, beside: beside.path)
+        _ = try act("file.replace", input) {
+            func identity(_ path: String) -> FileIdentity? {
+                var value = stat()
+                guard lstat(path, &value) == 0 else { return nil }
+                return FileIdentity(device: UInt64(bitPattern: Int64(value.st_dev)), inode: UInt64(value.st_ino))
+            }
+            func changed() -> CocoaError {
+                CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: target.path])
+            }
+            guard identity(target.path) == expected else { throw changed() }
+            try FileManager.default.moveItem(at: url, to: beside)
+            var swapped = false
+            do {
+                guard identity(target.path) == expected else { throw changed() }
+                guard renamex_np(beside.path, target.path, UInt32(RENAME_SWAP)) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                swapped = true
+                guard identity(beside.path) == expected else {
+                    guard renamex_np(beside.path, target.path, UInt32(RENAME_SWAP)) == 0 else {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    swapped = false
+                    throw changed()
+                }
+                do {
+                    try FileManager.default.removeItem(at: beside)
+                } catch {
+                    // The replacement is already safely installed. Move the approved old object back into the
+                    // staging folder when possible, so its normal cleanup can remove it without reporting failure.
+                    try? FileManager.default.moveItem(at: beside, to: url)
+                    if FileManager.default.fileExists(atPath: beside.path) { throw error }
+                }
+                return true
+            } catch {
+                // Before a successful exchange, put the download back for the caller's normal staging cleanup.
+                if !swapped, FileManager.default.fileExists(atPath: beside.path),
+                   !FileManager.default.fileExists(atPath: url.path) {
+                    try? FileManager.default.moveItem(at: beside, to: url)
+                }
+                throw error
+            }
+        }
     }
 
     /// A copy made by the app itself (a clone on APFS): what it may read and the processes it starts may not.

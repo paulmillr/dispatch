@@ -16,6 +16,10 @@ struct SSHAskpassRequest: Codable, Sendable, Equatable {
     /// A restored tab logging in again in its own terminal (`DISPATCH_ASKPASS_TERMINAL`): its terminals share the
     /// launch identity of their helper, so the tab is named.
     var terminal: UUID?
+    /// The waiting `Dispatch --ssh-askpass` process, and its direct parent ssh. The app checks both live identities
+    /// before showing a trusted prompt; a ProxyCommand or other child that inherited the launch token is not ssh.
+    var requester: AgentProcess? = nil
+    var ssh: AgentProcess? = nil
 
     enum Kind: Sendable, Equatable { case secret, confirm, notice }
     /// A question OpenSSH asks as text but answers yes or no (an unknown host key's `(yes/no/[fingerprint])`) is a
@@ -26,6 +30,26 @@ struct SSHAskpassRequest: Codable, Sendable, Equatable {
         case "none": .notice
         default: prompt.lowercased().contains("(yes/no") ? .confirm : .secret
         }
+    }
+
+    /// The request still comes from this app's askpass process, directly under the ssh it names. Old capture replays
+    /// predate these fields; replay starts no process and may use their recorded request.
+    var hasValidRequester: Bool {
+        if AppReplay.replaying, requester == nil, ssh == nil { return true }
+        guard let requester, let ssh, requester.alive, ssh.alive,
+              requester.executable == System.resolve(System.executable).path,
+              AgentProcess.info(requester.pid)?.parent == ssh.pid else { return false }
+        return true
+    }
+
+    /// The parent is the executable this login was started with. A script's kernel process is its interpreter, whose
+    /// argv still names the script; custom ssh wrappers therefore remain supported without accepting another child.
+    func isFromSSH(executable expected: String) -> Bool {
+        if AppReplay.replaying, ssh == nil { return true }
+        guard let ssh, ssh.alive else { return false }
+        let resolved = System.resolve(URL(fileURLWithPath: expected)).path
+        if ssh.executable == resolved { return true }
+        return ssh.arguments?.prefix(3).contains(where: { $0 == expected || $0 == resolved }) == true
     }
 }
 
@@ -85,11 +109,14 @@ enum SSHAskpassCommand {
         let environment = System.inherited
         guard let directory = environment["DISPATCH_HERDR_DIRECTORY"],
               let tab = environment["DISPATCH_HERDR_TAB"].flatMap(UUID.init(uuidString:)),
-              let token = environment["DISPATCH_HERDR_TOKEN"] else { return 1 }
+              let token = environment["DISPATCH_HERDR_TOKEN"],
+              let requester = AgentProcess.capture(System.pid),
+              let ssh = AgentProcess.capture(getppid()) else { return 1 }
         let root = URL(fileURLWithPath: directory)
         let request = SSHAskpassRequest(id: System.uuid(), tabID: tab, token: token,
                                         prompt: String((arguments.first ?? "").prefix(2048)), hint: environment["SSH_ASKPASS_PROMPT"],
-                                        terminal: environment["DISPATCH_ASKPASS_TERMINAL"].flatMap(UUID.init(uuidString:)))
+                                        terminal: environment["DISPATCH_ASKPASS_TERMINAL"].flatMap(UUID.init(uuidString:)),
+                                        requester: requester, ssh: ssh)
         let answer = root.appendingPathComponent(request.id.uuidString + ".sshanswer")
         guard mkfifo(answer.path, 0o600) == 0 else { return 1 }
         fifo = strdup(answer.path)

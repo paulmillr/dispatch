@@ -14,6 +14,7 @@ extension FilesCoordinator {
 extension TerminalRuntime {
     /// The one drag controller every files view's outline talks to.
     func installFileTransfers() {
+        FilesClipboardFolder.sweep()
         if files.dragDelegate == nil { files.dragDelegate = FilesDragController.shared }
     }
 }
@@ -32,10 +33,10 @@ extension FilesCoordinator {
         let names = paths.map { ($0 as NSString).lastPathComponent }
         let folders = paths.map { session.isDirectory($0) }
         let start = Self.downloadFolder ?? System.home.appendingPathComponent("Downloads")
-        let finish: @MainActor ([URL]) -> Void = { [weak session] destinations in
+        let finish: @MainActor ([URL], [FileIdentity?]) -> Void = { [weak session] destinations, replacements in
             guard let session, let folder = destinations.first?.deletingLastPathComponent() else { return }
             Self.downloadFolder = folder
-            FilesDragController.shared.download(paths, to: destinations, in: session) { error in
+            FilesDragController.shared.download(paths, to: destinations, replacing: replacements, in: session) { error in
                 if let error { Self.present(error, title: "The download could not be saved", window: window) }
             }
         }
@@ -47,7 +48,9 @@ extension FilesCoordinator {
             panel.directoryURL = start
             panel.canCreateDirectories = true
             panel.message = session.hostLabel.map { "\(names[0]) from \($0)" } ?? names[0]
-            Self.run(panel, window: window) { if let url = panel.url { finish([url]) } }
+            Self.run(panel, window: window) {
+                if let url = panel.url { finish([url], [System.identity(url)]) }
+            }
         } else {
             let panel = NSOpenPanel()
             panel.title = "Download"
@@ -60,7 +63,8 @@ extension FilesCoordinator {
             panel.message = "Download \(paths.count) items" + (session.hostLabel.map { " from \($0)" } ?? "") + " into:"
             Self.run(panel, window: window) {
                 guard let folder = panel.url else { return }
-                finish(FilesDragController.destinations(for: names, folders: folders, in: folder, exists: System.exists))
+                let destinations = FilesDragController.destinations(for: names, folders: folders, in: folder, exists: System.exists)
+                finish(destinations, Array(repeating: nil, count: destinations.count))
             }
         }
     }

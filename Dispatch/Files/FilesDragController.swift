@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import os
 import UniformTypeIdentifiers
 
@@ -546,8 +547,12 @@ extension FilesDragController {
         let change = pasteboard.changeCount
         engine.copy(items: paths, from: source, to: local, directory: folder.path, in: session, kind: .copyOut,
                     label: "Clipboard", retryable: false) { transfer in
-            guard transfer.stage == .done, pasteboard.changeCount == change else { return }
+            guard transfer.stage == .done, pasteboard.changeCount == change else {
+                FilesClipboardFolder.remove(folder)
+                return
+            }
             Self.write(payload, files: names.map { folder.appendingPathComponent($0) }, to: pasteboard)
+            FilesClipboardFolder.keep(folder, whileOwnedBy: pasteboard, change: pasteboard.changeCount)
         }
     }
 
@@ -569,9 +574,12 @@ extension FilesDragController {
     /// Download…: `paths` fetched into a private folder, as a drag out is, then moved by the app to `destinations`
     /// (one URL per path, which a save or open panel let it write; the helper may not write in Downloads or Desktop).
     /// A destination that exists is replaced: the panel asked. `done` gets the failure, if any, once it settles.
-    func download(_ paths: [String], to destinations: [URL], in session: FilesSession,
+    func download(_ paths: [String], to destinations: [URL], replacing replacements: [FileIdentity?]? = nil,
+                  in session: FilesSession,
                   done: @escaping @MainActor ((any Error)?) -> Void = { _ in }) {
         guard let source = session.source, let local = localSource(), paths.count == destinations.count, !paths.isEmpty else { return }
+        let replacements = replacements ?? Array(repeating: nil, count: destinations.count)
+        guard replacements.count == destinations.count else { return }
         let folder = System.temporary.appendingPathComponent("dispatch-download-" + System.uuid().uuidString)
         do { try System.directory(folder) } catch { done(error); return }
         let label = destinations[0].deletingLastPathComponent().lastPathComponent
@@ -580,9 +588,10 @@ extension FilesDragController {
             defer { try? System.remove(folder) }
             guard transfer.stage == .done else { return done(nil) }
             do {
-                for (path, destination) in zip(paths, destinations) {
-                    if System.exists(destination) { try System.remove(destination) }
-                    try System.move(folder.appendingPathComponent((path as NSString).lastPathComponent), to: destination)
+                for ((path, destination), replacement) in zip(zip(paths, destinations), replacements) {
+                    let staged = folder.appendingPathComponent((path as NSString).lastPathComponent)
+                    if let replacement { try System.replace(staged, at: destination, replacing: replacement) }
+                    else { try System.move(staged, to: destination) }
                 }
                 done(nil)
             } catch { done(error) }
@@ -610,14 +619,63 @@ enum FilesClipboardFolder {
     static let prefix = "dispatch-clipboard-"
 
     @MainActor static func next() throws -> URL {
-        if let current { try? System.remove(current) }
-        let folder = System.temporary.appendingPathComponent(prefix + System.uuid().uuidString)
+        if let current { remove(current) }
+        guard let owner = AgentProcess.capture(System.pid) else { throw POSIXError(.ESRCH) }
+        let name = [String(owner.pid), String(owner.startedSeconds), String(owner.startedMicroseconds), System.uuid().uuidString]
+            .joined(separator: "-")
+        let folder = System.temporary.appendingPathComponent(prefix + name)
         try System.directory(folder)
         current = folder
         return folder
     }
 
+    /// The staged files live only while this copy still owns the pasteboard. A paste consumes their URLs but does not
+    /// change the pasteboard; replacing the clipboard does, and releases them on the next short poll.
+    @MainActor static func keep(_ folder: URL, whileOwnedBy pasteboard: NSPasteboard, change: Int) {
+        guard current == folder else { return remove(folder) }
+        ownership?.cancel()
+        ownership = Task { @MainActor in
+            while !Task.isCancelled, current == folder, pasteboard.changeCount == change {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard !Task.isCancelled, current == folder else { return }
+            remove(folder)
+        }
+    }
+
+    @MainActor static func remove(_ folder: URL) {
+        if current == folder {
+            current = nil
+            ownership?.cancel()
+            ownership = nil
+        }
+        try? System.remove(folder)
+    }
+
+    /// Normal quit removes the backing copy for any file URLs this app put on the clipboard.
+    @MainActor static func removeAll() {
+        if let current { remove(current) }
+    }
+
+    /// Folders left by a crash have their creator's process identity in their name. A live other Dispatch keeps its
+    /// own even when pids have been recycled; folders from older name formats are stale too. Replay performs no sweep.
+    @MainActor static func sweep() {
+        guard !AppReplay.replaying else { return }
+        for name in (try? System.list(System.temporary)) ?? [] where name.hasPrefix(prefix) {
+            let suffix = name.dropFirst(prefix.count)
+            let parts = suffix.split(separator: "-", maxSplits: 3, omittingEmptySubsequences: false)
+            let pid = parts.count == 4 ? Int32(parts[0]) : nil
+            let seconds = parts.count == 4 ? UInt64(parts[1]) : nil
+            let microseconds = parts.count == 4 ? UInt64(parts[2]) : nil
+            let identifier = parts.count == 4 ? UUID(uuidString: String(parts[3])) : nil
+            let process = pid.flatMap(AgentProcess.capture)
+            let live = identifier != nil && process?.startedSeconds == seconds && process?.startedMicroseconds == microseconds
+            if !live { try? System.remove(System.temporary.appendingPathComponent(name)) }
+        }
+    }
+
     @MainActor private static var current: URL?
+    @MainActor private static var ownership: Task<Void, Never>?
 }
 
 /// The `scp` command that fetches rows of a remote files view into the current folder, by the destination the tab's

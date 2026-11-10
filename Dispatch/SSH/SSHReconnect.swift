@@ -104,8 +104,9 @@ final class SSHReconnectController {
     private(set) var sources: [HostID: UUID] = [:]
     /// Hosts whose login terminal runs, so the log can type into it.
     private(set) var loginsRunning: Set<HostID> = []
-    /// A login terminal's identity (what its ssh asks under) and the host it logs in to.
-    @ObservationIgnored private var logins: [UUID: HostID] = [:]
+    /// A login terminal's identity (what its ssh asks under), its host and the exact ssh executable it starts.
+    private struct Login { let host: HostID; let executable: String }
+    @ObservationIgnored private var logins: [UUID: Login] = [:]
     @ObservationIgnored private var loginInputs: [HostID: (Data) -> Void] = [:]
     /// Ends a login terminal (Cancel), by its identity.
     @ObservationIgnored private var loginClosers: [UUID: () -> Void] = [:]
@@ -371,7 +372,7 @@ final class SSHReconnectController {
         if operations.removeValue(forKey: hostID).map({ $0.cancel() }) != nil { log(hostID, "cancelled", kind: .step) }
         endLogin(hostID)
         // A login no attempt of this controller runs (a detached space's restore) ends with its terminal.
-        for (identity, host) in logins where host == hostID { loginClosers[identity]?() }
+        for (identity, login) in logins where login.host == hostID { loginClosers[identity]?() }
         for recipe in recipes.values where recipe.host == hostID {
             var state = states[recipe.connection] ?? State()
             state.reconnecting = false; state.attempted = true; state.error = nil; state.step = nil
@@ -428,10 +429,11 @@ final class SSHReconnectController {
     /// logs in.
     func host(asking request: SSHAskpassRequest) -> HostID? {
         if let terminal = request.terminal {
-            guard launchingShells[terminal] != nil else { return nil }
+            guard let recipe = launchingShells[terminal], request.isFromSSH(executable: recipe.shell.executable) else { return nil }
             return runtime?.workspace?.hosts.terminals[terminal]?.host
         }
-        return logins[request.tabID]
+        guard let login = logins[request.tabID], request.isFromSSH(executable: login.executable) else { return nil }
+        return login.host
     }
 
     /// ssh asks: the strip of every tab of the host shows it (`orphan` when none is open). An ssh that is no login of
@@ -476,8 +478,9 @@ final class SSHReconnectController {
         awaitingTerminal.remove(host)
     }
 
-    func loginStarted(_ identity: UUID, host: HostID, input: @escaping (Data) -> Void, close: @escaping () -> Void) {
-        logins[identity] = host
+    func loginStarted(_ identity: UUID, host: HostID, executable: String,
+                      input: @escaping (Data) -> Void, close: @escaping () -> Void) {
+        logins[identity] = Login(host: host, executable: executable)
         loginInputs[host] = input
         loginClosers[identity] = close
         loginsRunning.insert(host)
@@ -485,8 +488,9 @@ final class SSHReconnectController {
 
     func loginEnded(_ identity: UUID) {
         loginClosers[identity] = nil
-        guard let host = logins.removeValue(forKey: identity) else { return }
-        if !logins.values.contains(host) {
+        guard let login = logins.removeValue(forKey: identity) else { return }
+        let host = login.host
+        if !logins.values.contains(where: { $0.host == host }) {
             loginInputs[host] = nil
             loginsRunning.remove(host)
             awaitingTerminal.remove(host)
@@ -603,7 +607,8 @@ enum SSHReconnectLogin {
         }
 
         /// `logged`: its output goes to the log (a login's); a resumed login shell's does not.
-        static func start(command: String, directory: String?, host: HostID, logged: Bool = true) async throws -> Terminal {
+        static func start(command: String, executable: String, directory: String?, host: HostID,
+                          logged: Bool = true) async throws -> Terminal {
             let process = Process()
             process.executableURL = HelperApp.executable
             guard process.executableURL != nil else { throw HerdrFailure("The bundled helper is missing.") }
@@ -639,7 +644,8 @@ enum SSHReconnectLogin {
                 let node = try await client.create(.init(parent: parent, beside: nil, cwd: directory ?? System.home.path, launch: nil,
                     command: command, environment: variables.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }))
                 let terminal = Terminal(identity: identity, host: host, session: session, client: client, node: node)
-                runtime.hosts.reconnect.loginStarted(identity, host: host, input: { [weak terminal] bytes in terminal?.type(bytes) },
+                runtime.hosts.reconnect.loginStarted(identity, host: host, executable: executable,
+                                                     input: { [weak terminal] bytes in terminal?.type(bytes) },
                                                      close: { [weak terminal] in terminal?.close() })
                 _ = try await client.attach(.init(terminal: node, size: .init(columns: 120, rows: 32), takeover: false)) { [weak terminal] result in
                     DispatchQueue.main.async {
@@ -687,7 +693,8 @@ enum SSHReconnectLogin {
     static func authenticate(shell: SSHShell, master: SSHMaster, host: HostID, configuration: String? = nil) async throws {
         let arguments = interactiveArguments(shell: shell, master: master, configuration: configuration)
         let command = ([shell.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
-        let terminal = try await Terminal.start(command: command, directory: shell.workingDirectory, host: host)
+        let terminal = try await Terminal.start(command: command, executable: shell.executable,
+                                                directory: shell.workingDirectory, host: host)
         defer { terminal.close() }
         let controller = TerminalRuntime.shared.hosts.reconnect
         // A login waiting for an answer has as long as it needs; one waiting for nothing gives up after two minutes.

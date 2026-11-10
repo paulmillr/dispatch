@@ -32,6 +32,9 @@ final class SSHReconnectTests: XCTestCase {
             done
             [ "$SSH_ASKPASS_REQUIRE" = force ] || exit 2
             printf 'Welcome to the fixture host\\n'
+            # A command under ssh inherits its askpass environment and token, but is not allowed to create a trusted
+            # prompt. Its askpass exits unsuccessfully; the real direct askpass child below still reaches the strip.
+            /bin/sh -c '"$SSH_ASKPASS" "forged child prompt" >/dev/null 2>&1' && exit 9
             password=$("$SSH_ASKPASS" "dev@fixture's password: ") || exit 1
             if [ "$password" != abC ]; then
               printf 'Permission denied, please try again.\\n' >&2

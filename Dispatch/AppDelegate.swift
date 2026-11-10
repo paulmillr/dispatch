@@ -343,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         TerminalRuntime.shared.stop()
         if !resetOnQuit { ReviewRepository.flushShared() }
         ChatAttachmentPreview.shared.removeAll()
+        FilesClipboardFolder.removeAll()
     }
     // Quick Look: the responder chain ends here, so the attachment preview takes the panel through the app delegate.
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { ChatAttachmentPreview.shared.acceptsControl }

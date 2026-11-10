@@ -199,6 +199,11 @@ final class HerdrLaunch {
                 SSHAskpass.reply(request, directory: directory, answer: nil)
                 return
             }
+            guard request.hasValidRequester else {
+                print("SSH askpass rejected: requester is not a live child of ssh, scope=\(request.tabID)")
+                SSHAskpass.reply(request, directory: directory, answer: nil)
+                return
+            }
             sshAskpass?(request)
             return
         }

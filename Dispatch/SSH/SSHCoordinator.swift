@@ -690,7 +690,8 @@ final class SSHCoordinator {
             let command = ([master.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
             Task { @MainActor in
                 do {
-                    let terminal = try await SSHReconnectLogin.Terminal.start(command: command, directory: recipe.shell.workingDirectory,
+                    let terminal = try await SSHReconnectLogin.Terminal.start(command: command, executable: master.executable,
+                                                                              directory: recipe.shell.workingDirectory,
                                                                               host: recipe.host, logged: false)
                     if login.done || connections[id] == nil { terminal.close() } else { login.terminal = terminal }
                 } catch { connections[id]?.launchFailure = error }

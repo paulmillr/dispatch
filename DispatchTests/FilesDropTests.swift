@@ -130,14 +130,68 @@ final class FilesDropTests: XCTestCase {
         XCTAssertEqual(fetched.text(url.path), "{}")
         XCTAssertEqual(remote.string(forType: .string), "/home/ivan/nightly/bench.json", "Still the host's path as text")
         XCTAssertEqual(FilesDragPayload.read(remote)?.endpoint, host.endpoint)
+        remote.clearContents()
+        remote.setString("copied elsewhere", forType: .string)
+        try await TestSupport.eventually { !System.exists(url.deletingLastPathComponent()) }
 
         controller(local: fetched).copyToClipboard(["/home/ivan/nightly/run.log"], in: remoteSession, pasteboard: remote)
-        fetched.directory(try XCTUnwrap(remoteSession.transfers.last?.targetPath))
+        let replacedFolder = try XCTUnwrap(remoteSession.transfers.last?.targetPath)
+        fetched.directory(replacedFolder)
         remote.clearContents()
         remote.setString("copied elsewhere", forType: .string)
         try await TestSupport.eventually { remoteSession.transfers.last?.stage == .done }
         XCTAssertEqual(remote.string(forType: .string), "copied elsewhere")
         XCTAssertEqual(FilesDragController.fileURLs(remote), [])
+        try await TestSupport.eventually { !System.exists(URL(fileURLWithPath: replacedFolder)) }
+    }
+
+    func testClipboardSweepRemovesOnlyStaleDispatchFolders() throws {
+        defer { FilesClipboardFolder.removeAll() }
+        let current = try FilesClipboardFolder.next()
+        let stale = System.temporary.appendingPathComponent(FilesClipboardFolder.prefix + "99999999-" + System.uuid().uuidString)
+        let unrelated = System.temporary.appendingPathComponent("not-" + FilesClipboardFolder.prefix + System.uuid().uuidString)
+        try System.directory(stale)
+        try System.directory(unrelated)
+        defer { try? System.remove(unrelated) }
+
+        FilesClipboardFolder.sweep()
+
+        XCTAssertTrue(System.exists(current), "a running Dispatch keeps its clipboard folder")
+        XCTAssertFalse(System.exists(stale), "a crashed Dispatch's clipboard folder is removed")
+        XCTAssertTrue(System.exists(unrelated))
+        FilesClipboardFolder.removeAll()
+        XCTAssertFalse(System.exists(current), "quit cleanup removes the clipboard backing folder")
+    }
+
+    func testDownloadReplacementIsBoundToTheApprovedObject() throws {
+        let root = System.temporary.appendingPathComponent("download-replacement-" + System.uuid().uuidString)
+        defer { try? System.remove(root) }
+        try System.directory(root)
+        let destination = root.appendingPathComponent("report.txt")
+        let approved = root.appendingPathComponent("approved.txt")
+        let firstDownload = root.appendingPathComponent("first-download.txt")
+        let secondDownload = root.appendingPathComponent("second-download.txt")
+        try Data("approved".utf8).write(to: destination)
+        let identity = try XCTUnwrap(System.identity(destination))
+        try Data("first".utf8).write(to: firstDownload)
+        try System.replace(firstDownload, at: destination, replacing: identity)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "first")
+        XCTAssertFalse(System.exists(firstDownload))
+
+        try System.move(destination, to: approved)
+        try Data("new occupant".utf8).write(to: destination)
+        try Data("second".utf8).write(to: secondDownload)
+        XCTAssertThrowsError(try System.replace(secondDownload, at: destination, replacing: identity))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "new occupant")
+        XCTAssertEqual(try String(contentsOf: secondDownload, encoding: .utf8), "second")
+
+        let newlyOccupied = root.appendingPathComponent("new-name.txt")
+        let thirdDownload = root.appendingPathComponent("third-download.txt")
+        try Data("raced in".utf8).write(to: newlyOccupied)
+        try Data("third".utf8).write(to: thirdDownload)
+        XCTAssertThrowsError(try System.move(thirdDownload, to: newlyOccupied))
+        XCTAssertEqual(try String(contentsOf: newlyOccupied, encoding: .utf8), "raced in")
+        XCTAssertEqual(try String(contentsOf: thirdDownload, encoding: .utf8), "third")
     }
 
     /// Download… into a folder: each item under its own name, or Finder's "name 2" beside one there or picked for an
