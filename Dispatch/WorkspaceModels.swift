@@ -394,12 +394,12 @@ indirect enum PaneLayout: Equatable, Codable {
         }
     }
 
-    /// Find the innermost split in this direction around the focused pane.
-    func splitPanes(containing pane: UUID, axis: SplitAxis) -> [UUID]? {
-        guard case .split(_, let direction, let first, let second) = self else { return nil }
+    /// The panes of the innermost split around `pane`, in reading order: what Merge Panes joins.
+    func splitPanes(containing pane: UUID) -> [UUID]? {
+        guard case .split(_, _, let first, let second) = self else { return nil }
         let child = first.paneIDs.contains(pane) ? first : second
         guard child.paneIDs.contains(pane) else { return nil }
-        return child.splitPanes(containing: pane, axis: axis) ?? (direction == axis ? paneIDs : nil)
+        return child.splitPanes(containing: pane) ?? paneIDs
     }
 
     func splitting(_ id: UUID, with newID: UUID, axis: SplitAxis, before: Bool = false) -> PaneLayout {

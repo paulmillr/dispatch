@@ -90,7 +90,7 @@ final class VerticalTabsTests: XCTestCase {
         XCTAssertEqual(workspace.sidebarTabs(in: space).map(\.id), [first, second])
         XCTAssertEqual(workspace.sidebarTabs.map(\.id), [first, second, other], "The radar's: every space's")
         workspace.selectTab(first)
-        workspace.toggleSplit(.columns)
+        workspace.splitPane(.columns)
         let split = try XCTUnwrap(workspace.current)
         XCTAssertEqual(split.panes.count, 2)
         let rows = workspace.sidebarTabs(in: split)
@@ -146,7 +146,7 @@ final class VerticalTabsTests: XCTestCase {
         workspace.verticalTabs = true
         workspace.newSpace()
         workspace.newTab()
-        workspace.toggleSplit(.columns)
+        workspace.splitPane(.columns)
         let space = try XCTUnwrap(workspace.current)
         let panes = SpaceTabsList.panes(of: space, tabs: workspace.sidebarTabs(in: space))
         XCTAssertEqual(panes.map(\.id), space.numberedPaneIDs)

@@ -137,6 +137,7 @@ extension AppDelegate {
         add(view, "Show One View", #selector(togglePreview), "P", [.command, .option], target: self)
         add(view, "Split Right", #selector(splitColumns), "d", target: self)
         add(view, "Split Down", #selector(splitRows), "D", [.command, .shift], target: self)
+        add(view, "Merge Panes", #selector(mergePanes), target: self)
         add(view, "Move Tab to Next Pane", #selector(moveTabToNextPane), target: self)
         view.addItem(.separator())
         add(view, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])

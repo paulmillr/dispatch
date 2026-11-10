@@ -78,7 +78,7 @@ final class HerdrLocalLayoutTests: XCTestCase {
         func windowCount() -> Int { workspace.current?.windows.count ?? 0 }
         for axis in [SplitAxis.columns, .rows] {
             workspace.selectTab(original.id)
-            workspace.toggleSplit(axis)
+            workspace.splitPane(axis)
             try await TestSupport.eventually {
                 windowCount() == (axis == .columns ? 2 : 3) && workspace.current?.tabs.allSatisfy { !$0.isConnecting } == true
             }
@@ -88,7 +88,7 @@ final class HerdrLocalLayoutTests: XCTestCase {
             XCTAssertEqual(workspace.current?.presentation?.groups.first?.selected, originalWindow)
             XCTAssertEqual(groups().first { $0.contains(createdInSplit) }, [createdInSplit])
             XCTAssertTrue(runtime.views[first.id] === view); XCTAssertTrue(view.surface === pty)
-            workspace.toggleSplit(axis)
+            workspace.mergeSplit()
             XCTAssertEqual(groups().count, 1)
             XCTAssertEqual(windowCount(), axis == .columns ? 2 : 3)
         }

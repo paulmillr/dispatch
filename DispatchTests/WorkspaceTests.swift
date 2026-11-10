@@ -29,12 +29,22 @@ final class WorkspaceTests: XCTestCase {
         press(17, "t")
         XCTAssertEqual(workspace.currentTabs.count, 3)
         XCTAssertEqual(workspace.spaces.count, 1)
-        for shift in [false, true] {
+        // ⌘D again splits again, as in iTerm and Ghostty; View › Merge Panes joins them, innermost split first.
+        let viewMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "View")?.submenu)
+        let merge = try XCTUnwrap(viewMenu.items.first { $0.action == #selector(AppDelegate.mergePanes) })
+        XCTAssertEqual(merge.keyEquivalent, "")
+        for (round, shift) in [false, true].enumerated() {
             press(2, shift ? "D" : "d", shift ? shifted : .command)
             XCTAssertEqual(workspace.current?.panes.count, 2)
             press(2, shift ? "D" : "d", shift ? shifted : .command)
-            XCTAssertEqual(workspace.current?.panes.count, 1)
-            XCTAssertEqual(workspace.currentTabs.count, shift ? 5 : 4)
+            XCTAssertEqual(workspace.current?.panes.count, 3)
+            for panes in [2, 1] {
+                XCTAssertTrue(controller.validateMenuItem(merge))
+                viewMenu.performActionForItem(at: viewMenu.index(of: merge))
+                XCTAssertEqual(workspace.current?.panes.count, panes)
+            }
+            XCTAssertFalse(controller.validateMenuItem(merge))
+            XCTAssertEqual(workspace.currentTabs.count, 5 + 2 * round)
         }
         press(18, "1")
         XCTAssertEqual(workspace.activeTab?.id, firstTab)
@@ -96,9 +106,9 @@ final class WorkspaceTests: XCTestCase {
         press(13, "w")
         XCTAssertEqual(workspace.spaces.count, 1)
         XCTAssertEqual(workspace.selectedSpace, firstSpace)
-        XCTAssertEqual(workspace.currentTabs.count, 5)
+        XCTAssertEqual(workspace.currentTabs.count, 7)
         press(13, "w")
-        XCTAssertEqual(workspace.currentTabs.count, 4)
+        XCTAssertEqual(workspace.currentTabs.count, 6)
         XCTAssertFalse(workspace.allTabIDs.contains(secondTab))
         var remote = Space(name: "remote", directory: "/tmp")
         remote.hostID = .authenticated("fixture")
@@ -132,8 +142,8 @@ final class WorkspaceTests: XCTestCase {
                 for _ in 1..<count { workspace.newTab() }
                 workspace.selectTab(original.id)
                 let pane = try XCTUnwrap(workspace.current?.activePane)
-                XCTAssertTrue(workspace.canToggleSplit(axis))
-                workspace.toggleSplit(axis)
+                XCTAssertTrue(workspace.canSplitPane())
+                workspace.splitPane(axis)
                 let created = try XCTUnwrap(workspace.activeTab)
                 let space = try XCTUnwrap(workspace.current)
                 XCTAssertNotEqual(created.id, original.id)
@@ -143,11 +153,32 @@ final class WorkspaceTests: XCTestCase {
                 XCTAssertEqual(space.panes.first(where: { $0.id == pane.id }), pane)
                 XCTAssertEqual(space.activePane?.tabs.map(\.id), [created.id])
                 XCTAssertEqual(space.tabs.count, count + 1)
-                workspace.toggleSplit(axis)
+                workspace.mergeSplit()
                 XCTAssertEqual(workspace.current?.panes.count, 1)
                 XCTAssertEqual(workspace.current?.tabs.count, count + 1)
                 XCTAssertEqual(workspace.activeTab?.id, created.id)
             }
+        }
+    }
+
+    /// ⌘D again splits again, as in iTerm and Ghostty; it never merges what it split.
+    func testRepeatedSplitsAddPanesUpToFour() throws {
+        for axis in [SplitAxis.columns, .rows] {
+            let workspace = Workspace()
+            workspace.defaultDirectory = "/tmp"
+            workspace.newLocalSpace()
+            for count in 2...4 {
+                XCTAssertTrue(workspace.canSplitPane())
+                workspace.splitPane(axis)
+                XCTAssertEqual(workspace.current?.panes.count, count)
+                XCTAssertEqual(workspace.current?.tabs.count, count)
+                XCTAssertEqual(workspace.current?.layout.paneIDs.last, workspace.current?.focusedPane)
+            }
+            XCTAssertFalse(workspace.canSplitPane())
+            let full = try XCTUnwrap(workspace.current)
+            workspace.splitPane(axis)
+            XCTAssertEqual(workspace.current?.layout, full.layout)
+            XCTAssertEqual(workspace.current?.tabs.map(\.id), full.tabs.map(\.id))
         }
     }
 
@@ -207,24 +238,24 @@ final class WorkspaceTests: XCTestCase {
             let workspace = Workspace()
             workspace.newLocalSpace(); workspace.newTab()
             let firstPane = try XCTUnwrap(workspace.current?.focusedPane)
-            workspace.onCloseTabs = { _ in XCTFail("Toggling a split must not close terminals") }
-            workspace.toggleSplit(axis)
+            workspace.onCloseTabs = { _ in XCTFail("Splitting or merging must not close terminals") }
+            workspace.splitPane(axis)
             XCTAssertEqual(workspace.current?.panes.count, 2)
             let outer = try XCTUnwrap(workspace.current?.layout)
             workspace.newTab()
             let otherAxis: SplitAxis = axis == .columns ? .rows : .columns
-            workspace.toggleSplit(otherAxis)
+            workspace.splitPane(otherAxis)
             let tabs = workspace.allTabIDs, selected = workspace.activeTab?.id
             XCTAssertEqual(workspace.current?.panes.count, 3)
-            XCTAssertTrue(workspace.canToggleSplit(otherAxis))
-            workspace.toggleSplit(otherAxis)
+            XCTAssertTrue(workspace.canMergeSplit())
+            workspace.mergeSplit()
             XCTAssertEqual(workspace.current?.layout, outer)
             XCTAssertEqual(workspace.activeTab?.id, selected)
             XCTAssertEqual(workspace.allTabIDs, tabs)
-            // The same shortcut also merges when focus moves to the other side.
+            // From the other side, Merge Panes joins the outer split.
             workspace.selectTab(try XCTUnwrap(workspace.current?.panes.first(where: { $0.id == firstPane })?.selected))
             let focused = workspace.activeTab?.id
-            workspace.toggleSplit(axis)
+            workspace.mergeSplit()
             XCTAssertEqual(workspace.current?.layout, .pane(firstPane))
             XCTAssertEqual(workspace.activeTab?.id, focused)
             XCTAssertEqual(workspace.allTabIDs, tabs)
@@ -239,8 +270,8 @@ final class WorkspaceTests: XCTestCase {
             workspace.spaces = [space]; workspace.selectSpace(space.id)
             workspace.split(axis)
             XCTAssertEqual(workspace.current?.windowPresentation?.groups.count, 2)
-            XCTAssertTrue(workspace.canToggleSplit(axis))
-            workspace.toggleSplit(axis)
+            XCTAssertTrue(workspace.canMergeSplit())
+            workspace.mergeSplit()
             XCTAssertEqual(workspace.current?.windowPresentation?.groups.count, 1)
             XCTAssertEqual(workspace.current?.windows, space.windows)
             XCTAssertEqual(workspace.current?.selectedContainer, space.selectedContainer)
@@ -1106,7 +1137,7 @@ final class WorkspaceTransactionTests: XCTestCase {
         let original = try XCTUnwrap(workspace.activeTab?.id)
         let pane = try XCTUnwrap(workspace.current?.focusedPane)
         let revision = workspace.layoutRevision
-        workspace.toggleSplit(.columns)
+        workspace.splitPane(.columns)
         XCTAssertEqual(workspace.layoutRevision, revision + 1)
         let split = try XCTUnwrap(workspace.current)
         XCTAssertEqual(split.panes.count, 2)
@@ -1161,7 +1192,7 @@ final class WorkspaceTransactionTests: XCTestCase {
         try herdr.pause()
         let revision = workspace.layoutRevision
 
-        workspace.toggleSplit(.columns)
+        workspace.splitPane(.columns)
 
         XCTAssertEqual(workspace.layoutRevision, revision + 1, "Optimistic creation, original selection and split placement commit together")
         let split = try XCTUnwrap(workspace.current), created = try XCTUnwrap(split.activeTab)
@@ -1186,7 +1217,7 @@ final class WorkspaceTransactionTests: XCTestCase {
         let originalWindow = try XCTUnwrap(workspace.current?.activeWindow)
         let revision = workspace.layoutRevision
 
-        workspace.toggleSplit(.columns)
+        workspace.splitPane(.columns)
 
         XCTAssertEqual(workspace.layoutRevision, revision + 1, "The pending server window first appears in its completed split")
         let split = try XCTUnwrap(workspace.current), created = try XCTUnwrap(split.activeTab)

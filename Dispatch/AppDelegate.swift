@@ -498,8 +498,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if let settingsWindow, NSApp.keyWindow === settingsWindow { settingsWindow.close(); return }
         if let id = workspace.selectedSpace { closeSpace(id) }
     }
-    @objc func splitColumns() { workspace.toggleSplit(.columns) }
-    @objc func splitRows() { workspace.toggleSplit(.rows) }
+    @objc func splitColumns() { workspace.splitPane(.columns) }
+    @objc func splitRows() { workspace.splitPane(.rows) }
+    @objc func mergePanes() { workspace.mergeSplit() }
     @objc func nextTab() { workspace.cycleTab(1) }
     @objc func previousTab() { workspace.cycleTab(-1) }
     @objc func nextSpace() { workspace.cycleSpace(1) }
@@ -663,7 +664,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             item.title = sidebarVisible ? "Hide Sidebar" : "Show Sidebar"
             return NSApp.keyWindow === window
         case #selector(splitColumns), #selector(splitRows):
-            return workspace.canToggleSplit(item.action == #selector(splitColumns) ? .columns : .rows)
+            return workspace.canSplitPane()
+        case #selector(mergePanes):
+            return workspace.canMergeSplit()
         case #selector(detachCurrent):
             return workspace.current?.structured == true
         case #selector(applyLayout(_:)):

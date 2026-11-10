@@ -110,8 +110,8 @@ final class TmuxPresentationTests: XCTestCase {
             app.workspace.newTab()
             try await app.wait { app.workspace.current?.windows.count == 2 && app.workspace.activeTab?.isConnecting == false }
             app.workspace.selectWindow(original.id)
-            XCTAssertTrue(app.workspace.canToggleSplit(axis))
-            app.workspace.toggleSplit(axis)
+            XCTAssertTrue(app.workspace.canSplitPane())
+            app.workspace.splitPane(axis)
             let created = try XCTUnwrap(app.workspace.current?.activeWindow?.id)
             XCTAssertNotEqual(created, original.id)
             try await app.wait { app.workspace.current?.windows.count == 3 && app.workspace.activeTab?.isConnecting == false }
@@ -122,7 +122,7 @@ final class TmuxPresentationTests: XCTestCase {
             XCTAssertEqual(presentation.groups.first(where: { $0.id == presentation.layout.paneIDs.first })?.selected, original.id)
             XCTAssertEqual(presentation.groups.first(where: { $0.id == presentation.layout.paneIDs.last })?.windows, [created])
             XCTAssertEqual(space.windows.first(where: { $0.id == original.id })?.terminals.map(\.id), original.terminals.map(\.id))
-            app.workspace.toggleSplit(axis)
+            app.workspace.mergeSplit()
             XCTAssertEqual(app.workspace.current?.windowPresentation?.groups.count, 1)
             XCTAssertEqual(app.workspace.current?.windows.count, 3)
             XCTAssertEqual(app.workspace.current?.activeWindow?.id, created)

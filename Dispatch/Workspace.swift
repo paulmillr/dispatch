@@ -403,31 +403,37 @@ final class Workspace {
         updateLayout { $0.spaces[index].splitRatios[id] = fraction }
     }
 
-    func splitToCollapse(_ axis: SplitAxis) -> [UUID]? {
+    /// The panes Merge Panes joins: the innermost split around the focused pane (or window group).
+    func splitToMerge() -> [UUID]? {
         guard let current else { return nil }
         if let presentation = current.presentation,
            let group = presentation.groups.first(where: {
                $0.windows.contains { $0 == current.selectedContainer }
            }) {
-            return presentation.layout.splitPanes(containing: group.id, axis: axis)
+            return presentation.layout.splitPanes(containing: group.id)
         }
-        return current.layout.splitPanes(containing: current.focusedPane, axis: axis)
+        return current.layout.splitPanes(containing: current.focusedPane)
     }
 
-    func canToggleSplit(_ axis: SplitAxis) -> Bool {
+    /// ⌘D and ⇧⌘D always split, as in iTerm and Ghostty, up to four panes.
+    func canSplitPane() -> Bool {
         guard canApplyLayout(.single), let current else { return false }
-        if splitToCollapse(axis) != nil { return true }
         if !current.containers.isEmpty { return (current.presentation?.groups.count ?? 1) < 4 }
         return current.panes.count < 4
     }
 
-    func toggleSplit(_ axis: SplitAxis) {
-        guard canToggleSplit(axis) else { return }
-        guard let ids = splitToCollapse(axis), let destination = ids.first,
-              let s = spaces.firstIndex(where: { $0.id == selectedSpace }) else {
-            createSplit(axis)
-            return
-        }
+    /// A new tab, in the focused tab's folder, in a new pane beside the focused one.
+    func splitPane(_ axis: SplitAxis) {
+        guard canSplitPane(), current != nil, activeTab != nil else { return }
+        newTab(placement: nil, splitting: axis == .columns ? .right : .bottom)
+    }
+
+    func canMergeSplit() -> Bool { canApplyLayout(.single) && splitToMerge() != nil }
+
+    /// Joins the innermost split around the focused pane into one pane holding all its tabs, focus unchanged.
+    func mergeSplit() {
+        guard canMergeSplit(), let ids = splitToMerge(), let destination = ids.first,
+              let s = spaces.firstIndex(where: { $0.id == selectedSpace }) else { return }
         if !spaces[s].containers.isEmpty, var presentation = spaces[s].presentation {
             let windows = ids.flatMap { id in presentation.groups.first { $0.id == id }?.windows ?? [] }
             guard let selected = spaces[s].selectedContainer,
@@ -499,11 +505,6 @@ final class Workspace {
             layout.spaces[s].panes[p].selected = originalTab
             return layout.splitTab(createdTab, beside: pane, edge: edge) != nil
         }
-    }
-
-    private func createSplit(_ axis: SplitAxis) {
-        guard current != nil, activeTab != nil else { return }
-        newTab(placement: nil, splitting: axis == .columns ? .right : .bottom)
     }
 
     func split(_ axis: SplitAxis) {
