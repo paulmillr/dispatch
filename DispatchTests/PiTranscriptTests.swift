@@ -149,6 +149,9 @@ final class PiTranscriptTests: XCTestCase {
         XCTAssertEqual(items(state).filter { $0.kind == .user }.map(\.text), ["tool check"])
         XCTAssertEqual(items(state).filter { $0.kind == .user }.flatMap(\.attachments).map(\.kind), [.image])
         XCTAssertEqual(items(state).filter { $0.kind == .reasoning }.map(\.text), ["Synthetic fixture trace"])
+        // Thinking reads in the thread as Claude's does, and folds into the steps of a turn that ended on a reply.
+        XCTAssertEqual(items(state).filter { $0.kind == .reasoning }.map(\.isNarration), [true])
+        XCTAssertTrue(ChatThinkingFold.folds(items(state), ended: state.turns.first?.ended))
         let tools = items(state).filter { $0.kind == .tool }
         XCTAssertEqual(tools.count, 1, "The call and its result are one tool card")
         XCTAssertEqual(tools.first?.output, "fixture"); XCTAssertEqual(tools.first?.completed, true)

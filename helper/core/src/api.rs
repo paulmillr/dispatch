@@ -863,7 +863,7 @@ pub struct State {
     /// the model id. c1654cc ChatModelPicker.swift:74-115.
     pub model_label: Option<String>,
     pub effort: Option<String>,
-    /// c1654cc ChatUsage: {info:{total_token_usage:{input_tokens,output_tokens},last_token_usage:{total_tokens},model_context_window,total_cost_usd}}; missing counters remain absent.
+    /// c1654cc ChatUsage: {info:{total_token_usage:{input_tokens,output_tokens},last_token_usage:{total_tokens},model_context_window,total_cost_usd,subscription}}; missing counters remain absent. Pi: the session's totals as its footer adds them up (input and output without cache reads and writes), `subscription` true when the model is used through one (the cost is then what the tokens would cost).
     pub usage: Option<crate::wire::body::Encoded>,
     /// The harness's goal {objective, status, tokensUsed, timeUsedSeconds, tokenBudget?}; None: no goal.
     pub goal: Option<crate::wire::body::Encoded>,

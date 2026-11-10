@@ -56,18 +56,6 @@ extension AgentProcess {
         return processEnvironmentValue(name)
     }
 
-    /// Forward only the provider's launch settings to its own child process.
-    /// Credentials stay in memory and are never included in diagnostics.
-    func sideEnvironment(agentID: String) -> [String: String] {
-        let names = agentID == "claude"
-            ? ["HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-               "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_AUTOUPDATER", "DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"]
-            : ["HOME", "CODEX_HOME", "OPENAI_BASE_URL", "OPENAI_API_KEY"]
-        return Dictionary(uniqueKeysWithValues: names.compactMap { name in
-            processEnvironmentValue(name).map { (name, $0) }
-        })
-    }
-
     private func processEnvironmentValue(_ name: String) -> String? { System.process("environment", [String(pid), name]) { () -> String? in
         guard alive else { return nil }
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]

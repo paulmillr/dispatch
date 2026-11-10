@@ -621,6 +621,10 @@ struct ChatView: View {
         case "/mcp": "list MCP tools"
         case "/recap": "summarize this conversation"
         case "/help": "show available commands"
+        case "/settings": "change the agent's settings"
+        case "/tree": "go to another branch of this conversation"
+        case "/reload": "reload extensions, skills and prompts · in terminal"
+        case "/exit", "/quit": "quit the agent"
         default: "open in terminal"
         }
     }
@@ -631,6 +635,19 @@ struct ChatSessionStats: View {
     let session: ChatSession
 
     var body: some View {
+        // Pi's footer shows what the session cost: a line of its own under the tokens (beside them, a long session's
+        // "$123.456 (sub)" would not fit the activity popover). The other agents' reports are not shown as a price.
+        VStack(alignment: .leading, spacing: 4) {
+            counters
+            if session.agentID == "pi", let usage = session.usage, let cost = Self.cost(usage) {
+                Text("Cost \(cost)")
+                    .help(usage.subscription ? "What the session's tokens would cost: the model is used through a subscription" : "What the session cost, as Pi reports it")
+                    .accessibilityIdentifier("chat-session-cost")
+            }
+        }.font(theme.typography.detail).foregroundStyle(theme.muted)
+            .fixedSize(horizontal: true, vertical: false).accessibilityIdentifier("chat-session-stats")
+    }
+    private var counters: some View {
         HStack(spacing: 10) {
             if let fraction = session.usage?.contextRemaining {
                 HStack(spacing: 6) {
@@ -646,10 +663,14 @@ struct ChatSessionStats: View {
                 Text("(\(count(usage.input)) in, \(count(usage.output)) out)")
                     .help("Cumulative session tokens")
             } else { Text("Usage unavailable").help("Waiting for agent-reported session usage") }
-        }.font(theme.typography.detail).foregroundStyle(theme.muted)
-            .fixedSize(horizontal: true, vertical: false).accessibilityIdentifier("chat-session-stats")
+        }
     }
     private func count(_ value: Int?) -> String { Self.count(value) }
+    /// "$0.042", as Pi's footer, "(sub)" for a subscription; nil without a cost or while nothing was spent on an API key.
+    static func cost(_ usage: ChatUsage) -> String? {
+        guard let cost = usage.costUSD, cost > 0 || usage.subscription else { return nil }
+        return String(format: "$%.3f", cost) + (usage.subscription ? " (sub)" : "")
+    }
     /// "980", "12.3K", "1.2M"; "—" when unknown.
     static func count(_ value: Int?) -> String {
         guard let value else { return "—" }

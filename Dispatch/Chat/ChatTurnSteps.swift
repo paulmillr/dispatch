@@ -101,7 +101,7 @@ struct ChatStep: Identifiable, Equatable {
     }
 
     /// A turn's steps, in order: its tools as the caption counts them, and its reasoning summaries in the live log
-    /// (Claude's thinking is a row of the thread itself until its turn folds: `thinking` lists it then).
+    /// (Claude's and Pi's thinking is a row of the thread itself until its turn folds: `thinking` lists it then).
     static func steps(_ turn: ChatTurn, directory: String?, reasoning: Bool, thinking: Bool = false) -> [ChatStep] {
         ChatTurnSummary.displayed(turn.items, turnID: turn.id)
             .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty
@@ -109,8 +109,8 @@ struct ChatStep: Identifiable, Equatable {
             .map { ChatStep($0, directory: directory) }
     }
 
-    /// The open turn's steps since the agent last wrote (a message or Claude's thinking), with reasoning summaries: the
-    /// Mac's live tool group, which its header counts. The working row's count and log.
+    /// The open turn's steps since the agent last wrote (a message or Claude's or Pi's thinking), with reasoning
+    /// summaries: the Mac's live tool group, which its header counts. The working row's count and log.
     static func current(_ turn: ChatTurn, directory: String?) -> [ChatStep] {
         let items = ChatTurnSummary.displayed(turn.items, turnID: turn.id)
         let start = items.lastIndex { $0.kind == .assistant || $0.kind == .reasoning && $0.isNarration && !$0.text.isEmpty }
@@ -125,8 +125,8 @@ extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
-/// When a turn's Claude thinking leaves the thread, on every surface: the Mac folds it into the turn's step group, the
-/// phone into message details' steps, and the watch leaves it out.
+/// When a turn's Claude or Pi thinking leaves the thread, on every surface: the Mac folds it into the turn's step group,
+/// the phone into message details' steps, and the watch leaves it out.
 enum ChatThinkingFold {
     /// The turn ended on a reply and has thinking to fold. One stopped or failed mid-work keeps it: the only account of it.
     static func folds(_ items: [ChatItem], ended: Date?) -> Bool {
@@ -212,11 +212,11 @@ struct ChatTurnSummary: Equatable {
             ?? (ToolPresentation.json(item.text) as? [String: Any])?["file_path"] as? String
     }
 
-    /// "5 steps · 1m 26s"; nil when there is neither (message details' heading).
+    /// "5 steps · 1m 26s" (the time from 5 s); nil when there is neither (message details' heading).
     var caption: String? {
         var parts: [String] = []
         if !steps.isEmpty { parts.append(Self.count(steps.count, "step")) }
-        if let duration { parts.append(Self.elapsed(duration)) }
+        if let time = ChatTranscript.summaryElapsed(duration) { parts.append(time) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

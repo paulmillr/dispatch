@@ -109,7 +109,7 @@ struct ChatThreadRow: Identifiable, Equatable {
         case user
         /// An agent message; `summary` is set on the last one of an ended turn.
         case agent(summary: ChatTurnSummary?)
-        /// Claude's thinking (`inline_reasoning`, `ChatItem.isNarration`): an agent bubble of its own.
+        /// Claude's and Pi's thinking (`inline_reasoning`, `ChatItem.isNarration`): an agent bubble of its own.
         case thinking
         case notice
     }

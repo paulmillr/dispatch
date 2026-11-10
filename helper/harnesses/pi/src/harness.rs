@@ -893,7 +893,7 @@ pub fn state(value: Value<'_>) -> Result<State, Error> {
             .and_then(|value| value.get("kind"))
             .and_then(Value::string)
             .map(str::to_owned),
-        usage: usage(value.get("usage")),
+        usage: usage(value.get("usage"), value.get("totals")),
         ..State::default()
     })
 }
@@ -930,17 +930,52 @@ pub fn commands(value: Option<Value<'_>>) -> Vec<String> {
     names
 }
 
-pub fn usage(value: Option<Value<'_>>) -> Option<dispatch_helper_core::wire::body::Encoded> {
-    let value = value.filter(|value| value.kind() == dispatch_helper_core::json::Kind::Object)?;
-    let mut fields = Vec::new();
-    if let Some(tokens) = value.get("tokens") {
-        fields.push((
-            "last_token_usage",
-            Data::Object(vec![("total_tokens", Data::Value(tokens))]),
-        ));
+/// The bridge's context usage (`getContextUsage`) and session totals (Pi's footer's sums: input and output tokens
+/// without cache reads and writes, cost in USD, whether the model is used through a subscription) as `ChatUsage`.
+pub fn usage(
+    context: Option<Value<'_>>,
+    totals: Option<Value<'_>>,
+) -> Option<dispatch_helper_core::wire::body::Encoded> {
+    fn object(value: Option<Value<'_>>) -> Option<Value<'_>> {
+        value.filter(|value| value.kind() == dispatch_helper_core::json::Kind::Object)
     }
-    if let Some(window) = value.get("contextWindow") {
-        fields.push(("model_context_window", Data::Value(window)));
+    let mut fields = Vec::new();
+    if let Some(context) = object(context) {
+        if let Some(tokens) = context.get("tokens") {
+            fields.push((
+                "last_token_usage",
+                Data::Object(vec![("total_tokens", Data::Value(tokens))]),
+            ));
+        }
+        if let Some(window) = context.get("contextWindow") {
+            fields.push(("model_context_window", Data::Value(window)));
+        }
+    }
+    if let Some(totals) = object(totals) {
+        let count = |key| {
+            totals
+                .get(key)
+                .and_then(Value::number)
+                .filter(|count| count.is_finite() && *count >= 0.0)
+                .map(|count| Data::Signed(count.round() as i64))
+        };
+        let counters: Vec<_> = [("input_tokens", "input"), ("output_tokens", "output")]
+            .into_iter()
+            .filter_map(|(name, key)| count(key).map(|count| (name, count)))
+            .collect();
+        if !counters.is_empty() {
+            fields.push(("total_token_usage", Data::Object(counters)));
+        }
+        if let Some(cost) = totals
+            .get("cost")
+            .and_then(Value::number)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        {
+            fields.push(("total_cost_usd", Data::Real(cost)));
+        }
+        if totals.get("subscription").and_then(Value::boolean) == Some(true) {
+            fields.push(("subscription", Data::Bool(true)));
+        }
     }
     if fields.is_empty() {
         return None;

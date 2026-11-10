@@ -52,12 +52,12 @@ struct ChatToolGroupHeader: View {
     /// The thoughts folded into this group (`ChatThinkingFold`), told apart from its tools.
     private var thoughts: Int { group.children.reduce(0) { $0 + ($1.item?.kind == .reasoning ? 1 : 0) } }
 
-    /// "6 steps · 47s", "4 steps, 1 thought · 47s"; the time only when every step's is known.
+    /// "6 steps · 47s", "4 steps, 1 thought · 47s"; the time only when every step's is known and it is 5 s or more.
     static func caption(count: Int, thoughts: Int = 0, elapsed: TimeInterval?, radio: Bool) -> String {
         var parts: [String] = []
         if count > 0 || thoughts == 0 { parts.append("\(count < 1000 ? String(count) : count.formatted()) \(noun(count, radio: radio))") }
         if thoughts > 0 { parts.append(ChatTurnSummary.count(thoughts, "thought")) }
-        return parts.joined(separator: ", ") + (elapsed.map { " · " + ChatTranscript.elapsed($0.rounded()) } ?? "")
+        return parts.joined(separator: ", ") + (ChatTranscript.summaryElapsed(elapsed).map { " · " + $0 } ?? "")
     }
 
     /// Nautical logs a tool run as a manoeuvre.

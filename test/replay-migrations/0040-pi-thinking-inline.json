@@ -1,0 +1,9 @@
+{
+  "kind": "rerecord",
+  "why": "Pi's thinking records carry inline_reasoning (helper/harnesses/pi records.rs, events.rs), as Claude's do, so it shows in the thread and folds into a finished turn's steps. Every chat.records and chat.archive reply that holds a Pi thinking record now differs in that flag; every other recorded answer holds. These are the tests whose helper captures no longer replay (3 captures; 410 others still do).",
+  "tests": [
+    "PiChatIntegrationTests/testHerdrPiChatTransport",
+    "PiTranscriptTests/testIdenticalNativeMessagesAroundToolsKeepTheirDistinctIDs",
+    "PiTranscriptTests/testNativeRecordShapesPreserveThinkingToolsResultsAndTurnCompletion"
+  ]
+}

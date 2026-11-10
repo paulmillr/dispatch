@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// One item of a thread page as the phone's thread draws it, at watch size: the user's message right-aligned in the
-/// pink bubble, the agent's in the grey one (its turn caption under it), Claude's thinking in an agent bubble of its
-/// own, a notice small and centred. Tools are not rows (`ThreadScreen.items` leaves them out).
+/// pink bubble, the agent's in the grey one (its turn caption under it), Claude's or Pi's thinking in an agent bubble
+/// of its own, a notice small and centred. Tools are not rows (`ThreadScreen.items` leaves them out).
 struct ThreadItemRow: View {
     let item: WatchItem
     /// "Claude Code", for VoiceOver.

@@ -205,6 +205,8 @@ pub fn project(root: Value<'_>, turn: &mut String, complete: bool) -> Vec<Record
                 output,
                 completed,
                 exit_code,
+                // Pi's thinking reads as the agent's progress notes, shown in the thread as Claude's is.
+                inline_reasoning: kind == RecordKind::Reasoning,
                 time_ms: time,
                 ..Record::default()
             });

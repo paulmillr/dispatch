@@ -1,0 +1,8 @@
+{
+  "kind": "resource",
+  "why": "Pi's bridge (helper/harnesses/pi/resources/bridge.js) adds the session's totals to its state (input and output tokens, cost, whether the model is used through a subscription), as Pi's footer adds them up, for the Chat activity details. The helper bundles it and writes it whole into every Pi installation reply and installation job, and its SHA-256 into the receipt, so every capture holding it holds the new copy and its hash instead. No recorded answer depends on the script's text.",
+  "resources": [
+    {"old": "0041-pi-bridge-session-totals/bridge.old.js", "new": "0041-pi-bridge-session-totals/bridge.new.js"}
+  ],
+  "fingerprints": {"pi-bridge": "283cd047d42f10b7b5db8ac4a9bc1948c4174da3aec1682e51ff40d25ce8af21"}
+}

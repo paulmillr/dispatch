@@ -177,6 +177,7 @@ pub fn publish(
                         } else {
                             String::new()
                         },
+                        inline_reasoning: field == "thinking",
                         time_ms: value.get("timestamp").and_then(Value::signed).or(Some(0)),
                         ..Record::default()
                     });

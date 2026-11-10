@@ -41,8 +41,8 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     /// Files a user message carries (`ChatAttachment`): the composer's while it is optimistic, the record's afterwards.
     var attachments: [ChatAttachment] = [] { didSet { presentationID = System.uuid() } }
     private(set) var presentationID = System.uuid()
-    /// Claude's summarized thinking reads as short progress notes, so it is
-    /// shown inline like a message instead of behind a disclosure.
+    /// Claude's and Pi's thinking reads as progress notes, so it is shown
+    /// inline like a message instead of behind a disclosure.
     var isNarration: Bool { kind == .reasoning && (source?.inline_reasoning ?? id.hasPrefix("claude-")) }
 
     static func == (lhs: ChatItem, rhs: ChatItem) -> Bool {
@@ -1138,8 +1138,8 @@ final class ChatSession: Identifiable {
 
     // MARK: Thinking fold
 
-    /// Whether a finished turn's Claude thinking folds into its step group (off while testing, as `readingHoldEnabled`:
-    /// recorded tests read the thinking rows; its own tests turn it on).
+    /// Whether a finished turn's Claude or Pi thinking folds into its step group (off while testing, as
+    /// `readingHoldEnabled`: recorded tests read the thinking rows; its own tests turn it on).
     static var foldsThinkingEnabled = !System.testing && System.environment("XCTestConfigurationFilePath") == nil
     /// How long a finished reply stands before its turn folds: its own landing motion ends first.
     static var thinkingFoldDelay: TimeInterval = 1.2
@@ -1867,6 +1867,8 @@ struct ChatUsage: Sendable, Equatable {
     var contextTokens: Int?
     var contextWindow: Int?
     var costUSD: Double?
+    /// The model is used through a subscription (Pi): the cost is what the tokens would have cost, not a charge.
+    var subscription = false
 
     init?(_ payload: [String: Any]) {
         guard let info = payload["info"] as? [String: Any] else { return nil }
@@ -1881,6 +1883,7 @@ struct ChatUsage: Sendable, Equatable {
         contextTokens = counter(last["total_tokens"])
         contextWindow = counter(info["model_context_window"])
         if let cost = info["total_cost_usd"] as? Double, cost.isFinite, cost >= 0 { costUSD = cost }
+        subscription = info["subscription"] as? Bool ?? false
         guard input != nil || output != nil || contextTokens != nil || contextWindow != nil || costUSD != nil else { return nil }
     }
     var contextRemaining: Double? {

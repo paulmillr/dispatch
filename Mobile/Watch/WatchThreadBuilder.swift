@@ -39,8 +39,8 @@ enum WatchThreadBuilder {
     }
 
     /// Per turn, its displayed items (`ChatTurnSummary.displayed`) as the thread's rows (`MobileTranscript.rows`): the
-    /// user's and the agent's messages, Claude's thinking until its turn ends on a reply (`ChatThinkingFold`), notices; no
-    /// tools. The turn's caption under its last agent message once it ended; the prompt being sent last.
+    /// user's and the agent's messages, Claude's or Pi's thinking until its turn ends on a reply (`ChatThinkingFold`),
+    /// notices; no tools. The turn's caption under its last agent message once it ended; the prompt being sent last.
     static func items(_ session: MobileChatSession, directory: String?) -> [WatchItem] {
         var result: [WatchItem] = []
         for turn in session.transcript.turns {

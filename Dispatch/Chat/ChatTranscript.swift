@@ -59,6 +59,13 @@ struct ChatTranscript {
 
     var isEmpty: Bool { turns.allSatisfy { $0.items.isEmpty } }
 
+    /// A steps summary's time ("2 steps · 47s"), or nil under 5 s: a time that short says nothing. A step's own time
+    /// still shows.
+    static func summaryElapsed(_ interval: TimeInterval?) -> String? {
+        guard let interval, interval.rounded() >= 5 else { return nil }
+        return elapsed(interval.rounded())
+    }
+
     /// How long a turn ran, as both apps print it: 52s, 1m 26s, 2h 5m.
     static func elapsed(_ interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval))

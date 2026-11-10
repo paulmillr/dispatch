@@ -99,6 +99,43 @@ export default function dispatchChat(pi) {
       thinkingLevels: getSupportedThinkingLevels(value),
     };
   }
+  // The session's tokens and cost as Pi's footer adds them up (every entry, every branch, compactions
+  // included), summed again only when the session or its entries change.
+  let totalsCache;
+  function totals() {
+    try {
+      return sumTotals();
+    } catch {
+      return null;
+    }
+  }
+  function sumTotals() {
+    const manager = context.sessionManager;
+    const entries = manager.getEntries();
+    const key = manager.getSessionId() + "\0" + entries.length + "\0" + manager.getLeafId();
+    if (totalsCache?.key !== key) {
+      const sum = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      const add = (usage) => {
+        if (!usage || typeof usage !== "object") return;
+        for (const field of ["input", "output", "cacheRead", "cacheWrite"])
+          if (Number.isFinite(usage[field]) && usage[field] > 0) sum[field] += usage[field];
+        const cost = usage.cost?.total;
+        if (Number.isFinite(cost) && cost > 0) sum.cost += cost;
+      };
+      for (const entry of entries) {
+        if (entry.type === "usage") add(entry.usage);
+        else if (entry.type === "message" && ["assistant", "toolResult"].includes(entry.message?.role))
+          add(entry.message.usage);
+        else if (entry.type === "branch_summary" || entry.type === "compaction") add(entry.usage);
+      }
+      totalsCache = { key, sum };
+    }
+    let subscription = false;
+    try {
+      subscription = !!context.model && !!context.modelRegistry?.isUsingOAuth?.(context.model);
+    } catch {}
+    return { ...totalsCache.sum, subscription };
+  }
   function state() {
     return {
       sessionId: context.sessionManager.getSessionId(),
@@ -115,6 +152,7 @@ export default function dispatchChat(pi) {
       effort: pi.getThinkingLevel(),
       commands: pi.getCommands(),
       usage: context.getContextUsage() ?? null,
+      totals: totals(),
       partial: partial ?? null,
     };
   }

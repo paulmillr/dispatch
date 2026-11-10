@@ -74,6 +74,9 @@ struct ChatSlashCommand: Identifiable, Equatable {
         case "/mcp": "List MCP tools"
         case "/recap": "What happened since you last looked"
         case "/help": "Show the available commands"
+        case "/settings": "Change \(agent)’s settings"
+        case "/tree": "Go to another branch of this conversation"
+        case "/reload": "Reload extensions, skills and prompts, in Terminal"
         case "/exit", "/quit": "Quit \(agent)"
         default: "Run in \(agent)"
         }

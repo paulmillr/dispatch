@@ -445,11 +445,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   and appear on a swipe (`ChatReveal`, below). A turn's last reply shows its step count above its time; changed files
   and line counts stay in message details. VoiceOver still reads the full summary (changed files, read files or steps, then when the turn
   ended) as the bubble's value (`ChatCorner.swiped`, `spokenOnly`); other replies read their own time, and Claude's
-  thinking has none. Once a turn ends on a reply its thinking leaves the thread (`ChatThinkingFold`, shared with the Mac and the watch) and message details list each thought as a `Think` step that pushes its whole text, counted apart from the tools ("4 · 1 thought"); a turn stopped or failed before a reply keeps it, and a side conversation, which has no details, keeps it too. A turn seen ending live holds its thoughts for 1.2 s, then they fade; a reader scrolled up holds them until they return to the end or the next turn starts. Message details keep "12 steps · 2m 4s". While a turn runs the
+  and Pi's thinking has none. Once a turn ends on a reply its thinking leaves the thread (`ChatThinkingFold`, shared with the Mac and the watch) and message details list each thought as a `Think` step that pushes its whole text, counted apart from the tools ("4 · 1 thought"); a turn stopped or failed before a reply keeps it, and a side conversation, which has no details, keeps it too. A turn seen ending live holds its thoughts for 1.2 s, then they fade; a reader scrolled up holds them until they return to the end or the next turn starts. Message details keep "12 steps · 2m 4s"; a steps summary's time under 5 s is left out ("2 steps", `ChatTranscript.summaryElapsed`), on the Mac's step groups and the watch too, while a step's own row keeps its time. While a turn runs the
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
-  agent last wrote (a message or Claude's thinking), as the Mac's live tool group counts them, and it holds Stop beside
-  the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware keyboard
-  still stops). Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
+  agent last wrote (a message or Claude's or Pi's thinking), as the Mac's live tool group counts them, and it holds Stop
+  beside the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware
+  keyboard still stops). Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
   Messages' Send Later (`ChatQueuedBubbles`; while the link is down the same bubbles, held): under the last, "3 queued ·
   sends after this turn" (with Resume after Stop), under one that waits for the user its status. A tap or long press
   on one is its menu, each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the

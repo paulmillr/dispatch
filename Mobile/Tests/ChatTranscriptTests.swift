@@ -60,7 +60,11 @@ final class ChatTranscriptTests: XCTestCase {
         let tool = ChatItem(id: "t", kind: .tool, text: "{}", title: "Read")
         XCTAssertEqual(ChatTurnSummary(steps: [tool], duration: 52).caption, "1 step · 52s")
         XCTAssertEqual(ChatTurnSummary(steps: Array(repeating: tool, count: 5), duration: 86).caption, "5 steps · 1m 26s")
-        XCTAssertEqual(ChatTurnSummary(steps: [], duration: 3).caption, "3s")
+        XCTAssertEqual(ChatTurnSummary(steps: [], duration: 30).caption, "30s")
+        // Under 5 s the time says nothing: the count alone.
+        XCTAssertNil(ChatTurnSummary(steps: [], duration: 3).caption)
+        XCTAssertEqual(ChatTurnSummary(steps: [tool, tool], duration: 4.4).caption, "2 steps")
+        XCTAssertEqual(ChatTurnSummary(steps: [tool, tool], duration: 4.6).caption, "2 steps · 5s")
         XCTAssertNil(ChatTurnSummary(steps: [], duration: nil).caption)
     }
 

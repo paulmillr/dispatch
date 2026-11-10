@@ -236,5 +236,9 @@ final class ThinkingFoldTests: XCTestCase {
         XCTAssertEqual(ChatToolGroupHeader.caption(count: 4, thoughts: 1, elapsed: 47, radio: false), "4 steps, 1 thought · 47s")
         XCTAssertEqual(ChatToolGroupHeader.caption(count: 0, thoughts: 2, elapsed: nil, radio: false), "2 thoughts")
         XCTAssertEqual(ChatToolGroupHeader.caption(count: 3, elapsed: nil, radio: false), "3 steps")
+        // A summary's time under 5 s says nothing (a step's own row still shows its time).
+        XCTAssertEqual(ChatToolGroupHeader.caption(count: 2, elapsed: 0.4, radio: false), "2 steps")
+        XCTAssertEqual(ChatToolGroupHeader.caption(count: 2, elapsed: 4.4, radio: false), "2 steps")
+        XCTAssertEqual(ChatToolGroupHeader.caption(count: 2, elapsed: 4.6, radio: false), "2 steps · 5s")
     }
 }

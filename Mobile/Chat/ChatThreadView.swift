@@ -411,7 +411,7 @@ struct ChatThreadView: View {
     }
 
     /// The corner of an agent reply (`ChatCorner.reply`): the ended turn's summary on its last one, else the reply's
-    /// time; none on Claude's thinking. While the turn runs the working row tells the work.
+    /// time; none on Claude's or Pi's thinking. While the turn runs the working row tells the work.
     private func corner(_ row: ChatThreadRow, summary: ChatTurnSummary?) -> ChatCorner? {
         guard case .agent = row.kind else { return nil }
         return ChatCorner.reply(time: row.time, summary: summary, now: today,
@@ -677,7 +677,7 @@ struct ChatThreadView: View {
                 }
             }
         case .thinking:
-            // Claude's thinking: an agent bubble of its own, in the same colours and font as its messages.
+            // Claude's or Pi's thinking: an agent bubble of its own, in the same colours and font as its messages.
             VStack(spacing: 5) {
                 agentBubble(row, summary: nil)
                 readingFootnote(row)

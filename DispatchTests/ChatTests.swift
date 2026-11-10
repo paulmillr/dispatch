@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import DispatchApp
 
@@ -938,6 +939,39 @@ final class ChatTests: XCTestCase {
         session.resetConversation()
         XCTAssertNil(session.usage)
         XCTAssertNil(ChatUsage(["info": ["total_token_usage": ["input_tokens": -1]]]))
+    }
+
+    /// The "no CLI found" warning offers every agent Dispatch installs hooks for, as Settings › Hosts does.
+    func testInstallGuideListsEveryAgent() {
+        XCTAssertEqual(LocalAgentsConsent.guide.map(\.1).sorted(), LocalAgentsConsent.installs.values.sorted())
+        XCTAssertEqual(LocalAgentsConsent.guide.map(\.0), ["Claude Code", "Codex", "Pi"])
+    }
+
+    /// Pi's activity details show what the session cost, as its footer does ("$0.042", "(sub)" through a subscription),
+    /// beside the tokens and in the 320-point popover; other agents show no price.
+    func testPiSessionCostShowsInActivityDetailsOnly() throws {
+        func usage(cost: Double?, subscription: Bool = false) -> ChatUsage? {
+            var info: [String: Any] = ["total_token_usage": ["input_tokens": 1_234_000, "output_tokens": 98_700],
+                                       "last_token_usage": ["total_tokens": 88_000], "model_context_window": 200_000]
+            if let cost { info["total_cost_usd"] = cost }
+            if subscription { info["subscription"] = true }
+            return ChatUsage(["info": info])
+        }
+        XCTAssertEqual(try ChatSessionStats.cost(XCTUnwrap(usage(cost: 0.04213))), "$0.042")
+        XCTAssertEqual(try ChatSessionStats.cost(XCTUnwrap(usage(cost: 12.5))), "$12.500")
+        XCTAssertEqual(try ChatSessionStats.cost(XCTUnwrap(usage(cost: 1.25, subscription: true))), "$1.250 (sub)")
+        XCTAssertNil(try ChatSessionStats.cost(XCTUnwrap(usage(cost: 0))), "Nothing spent on an API key shows no price")
+        XCTAssertNil(try ChatSessionStats.cost(XCTUnwrap(usage(cost: nil))))
+
+        let session = ChatSession(id: System.uuid())
+        session.usage = usage(cost: 123.456, subscription: true)
+        func size() -> CGSize { NSHostingView(rootView: ChatSessionStats(session: session)).fittingSize }
+        session.agentID = "codex"
+        let without = size()
+        session.agentID = "pi"
+        let with = size()
+        XCTAssertGreaterThan(with.height, without.height + 8, "Only Pi's stats carry the cost, on a line of its own")
+        XCTAssertLessThanOrEqual(with.width, 320 - 28, "The stats fit the activity popover (320 points, 14 of padding a side)")
     }
 
 }

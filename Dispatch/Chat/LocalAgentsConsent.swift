@@ -89,7 +89,7 @@ enum LocalAgentsConsent {
     ]
 
     /// The npm installs the warning shows when no CLI is found.
-    static let guide = [("Claude Code", installs["claude"] ?? ""), ("Codex", installs["codex"] ?? "")]
+    static let guide = [("Claude Code", installs["claude"] ?? ""), ("Codex", installs["codex"] ?? ""), ("Pi", installs["pi"] ?? "")]
 
     typealias Style = SSHIntegrationConsent
 
@@ -291,7 +291,7 @@ enum LocalAgentsConsent {
 
         /// No CLI found: what to install, as commands to copy.
         private static func warning(width: CGFloat) -> NSStackView {
-            let title = Style.label("⚠ No Claude Code or Codex CLI found on this Mac", size: 12, bold: true)
+            let title = Style.label("⚠ No Claude Code, Codex or Pi CLI found on this Mac", size: 12, bold: true)
             title.textColor = NSColor(Chrome.palette.warning)
             let detail = Style.label("Dispatch looked in your login shell’s PATH. Install one with npm, then check again:", size: 11)
             let commands = NSTextField(labelWithString: guide.map { $0.1 }.joined(separator: "\n"))

@@ -529,10 +529,11 @@ struct ThreadSummaryCard: View {
         .accessibilityLabel(ThreadItemRow.accessibilityLabel(item, agent: agent))
     }
 
-    /// "5 steps in 1m 26s", then " · 4 files" and the line counts when its patches changed files.
+    /// "5 steps in 1m 26s" (the time from 5 s, as the phone's), then " · 4 files" and the line counts when its patches
+    /// changed files.
     static func words(_ summary: WatchTurnSummary) -> String {
         var text = "\(summary.steps) \(summary.steps == 1 ? "step" : "steps")"
-        if let seconds = summary.seconds { text += " in " + WatchTime.elapsed(seconds) }
+        if let seconds = summary.seconds, seconds.rounded() >= 5 { text += " in " + WatchTime.elapsed(seconds.rounded()) }
         if summary.files > 0 { text += " · \(summary.files) \(summary.files == 1 ? "file" : "files")" }
         return text
     }
