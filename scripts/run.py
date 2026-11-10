@@ -433,7 +433,7 @@ def main():
     directory = ROOT / 'build/logs'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f'{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}.log'
-    display_path = os.path.relpath(path)
+    display_path = str(path)
     started = time.monotonic()
     with path.open('w', buffering=1) as log:
         # Atomic replacement keeps latest.log readable, including during simultaneous runs.
@@ -492,9 +492,9 @@ def main():
                 elif args.run:
                     launch_ios(ui, app, args, env, phone, simulator)
                 print(f'\n  {ui.style("Ready", "32")} in {time.monotonic() - started:.1f}s')
-                print(f'  App  {os.path.relpath(app)}' + ('' if args.watch else '\n'))
+                print(f'  App  {os.path.abspath(app)}' + ('' if args.watch else '\n'))
                 if args.watch:
-                    print(f'  Watch  {os.path.relpath(app / "Watch/DispatchWatch.app")}\n')
+                    print(f'  Watch  {os.path.abspath(app / "Watch/DispatchWatch.app")}\n')
                 return 0
             with tempfile.TemporaryDirectory(prefix='.progress-', dir=directory) as progress:
                 helper_complete = Path(progress) / 'helper-complete'
@@ -531,7 +531,7 @@ def main():
             print(f'\n  Full log: {display_path}', file=sys.stderr)
             return max(1, error.returncode) if isinstance(error, subprocess.CalledProcessError) else 1
         print(f'\n  {ui.style("Ready", "32")} in {time.monotonic() - started:.1f}s')
-        print(f'  App  {os.path.relpath(app)}\n')
+        print(f'  App  {os.path.abspath(app)}\n')
     return 0
 
 

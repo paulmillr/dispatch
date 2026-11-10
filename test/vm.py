@@ -38,7 +38,7 @@ IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
 # Every directory project.yml (the Mac app's project, all the guest builds) names: XcodeGen refuses the spec when a
 # target's sources or a local package are missing. The iPhone and Watch apps (project-mobile.yml) stay on the host.
 SOURCES = ["Dispatch", "DispatchTests", "Packages", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
-           "project.yml", "project-shared.yml", "build.sh", "run.sh"]
+           "project.yml", "project-shared.yml", "build.sh"]
 # The replay corpus (its own repository at replays/, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"

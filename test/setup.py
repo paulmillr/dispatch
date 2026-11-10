@@ -366,8 +366,7 @@ class BuildEntryPointTests(unittest.TestCase):
         for name in ('build.sh', 'run.py', 'ios_simulator.py', 'watch_simulator.py', 'generate-project.py',
                      'build-ssh-helper.sh', 'setup_consent.py', 'build.lock.json'):
             shutil.copyfile(source / name, scripts / name)
-        for name in ('build.sh', 'run.sh'):
-            shutil.copyfile(source.parent / name, self.root / name)
+        shutil.copyfile(source.parent / 'build.sh', self.root / 'build.sh')
         self.log = self.root / 'calls'
         (scripts / 'setup.sh').write_text(
             'echo "setup ${DISPATCH_SETUP_OFFLINE:-unset}" >> "$CALLS"\nexit "${SETUP_EXIT:-0}"\n')
@@ -401,7 +400,7 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def invoke(self, name, *args, input_text=None, **environment):
         self.log.write_text('')
-        entry = self.root / {'root': 'build.sh', 'old': 'run.sh'}.get(name, 'scripts/' + name)
+        entry = self.root / ('build.sh' if name == 'root' else 'scripts/' + name)
         self.result = subprocess.run(['bash', str(entry), *args], cwd=self.root.parent,
                                      env=dict(self.env, **environment), capture_output=True, text=True,
                                      input=input_text)
@@ -527,21 +526,6 @@ class BuildEntryPointTests(unittest.TestCase):
                 self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
                 self.assertNotIn('stop', calls)
                 self.assertFalse(any(line.startswith('open ') for line in calls))
-
-    def testOldRunScriptStillLaunchesUnlessJustBuild(self):
-        for args, configuration, launches in [((), 'Debug', True), (('--prod',), 'Release', True),
-                                              (('--just-build',), 'Debug', False),
-                                              (('--prod', '--just-build'), 'Release', False)]:
-            with self.subTest(args=args):
-                code, calls = self.invoke('old', *args)
-                self.assertEqual(code, 0, self.result.stderr)
-                self.assertTrue(any(f'-configuration {configuration}' in line for line in calls))
-                self.assertEqual(any(line.startswith('open ') for line in calls), launches)
-        tests = self.root / 'test'
-        tests.mkdir()
-        (tests / 'run.sh').write_text('echo "tests ${DISPATCH_TEST_SETUP:-unset} $*" >> "$CALLS"\nexit 7\n')
-        code, calls = self.invoke('old', '--test', 'ChatTests')
-        self.assertEqual((code, calls), (7, ['tests 1 ChatTests']))
 
     def testSuccessfulOutputIsCompactAndFullLogsAreRetained(self):
         for _ in range(2):
