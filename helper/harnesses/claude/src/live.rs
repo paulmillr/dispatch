@@ -37,6 +37,8 @@ impl Claude {
                 .filter(|_| {
                     self.waits.get(&key) == Some(&None)
                         && self.interactions.cards(binding).is_empty()
+                        // The panel of a `/usage` being read is Chat's own (`menu::Usage`).
+                        && !self.usages.contains_key(&key)
                 })
                 .map(str::to_owned);
         }

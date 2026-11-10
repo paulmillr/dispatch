@@ -221,12 +221,14 @@ impl Harness for Pi {
             "state",
             Vec::new(),
             Box::new(move |io, result| {
+                let mut path = None;
                 let mut result = result.and_then(|document| {
                     let value = document
                         .root()
                         .get("state")
                         .ok_or_else(|| bridge::fail("state", "Pi returned no session state."))?;
                     let state = state(value)?;
+                    path = value.get("transcriptPath").and_then(Value::string).map(PathBuf::from);
                     for interaction in crate::events::interactions(value) {
                         saved.borrow_mut().pages.push(Update::Interaction {
                             binding: binding.clone(),
@@ -234,7 +236,7 @@ impl Harness for Pi {
                         });
                     }
                     io.timer(io.now());
-                    saved.borrow_mut().states.insert(session, Rc::new(document));
+                    saved.borrow_mut().states.insert(session.clone(), Rc::new(document));
                     Ok(state)
                 });
                 if result.is_ok() {
@@ -242,7 +244,12 @@ impl Harness for Pi {
                         result = Err(error);
                     }
                 }
-                done(io, result);
+                match result {
+                    // Unnamed: its first prompt names it (history::titled), as Pi's session list does.
+                    Ok(state) => crate::history::titled(&saved, io, &session, path, state,
+                        Box::new(move |io, state| done(io, Ok(state)))),
+                    Err(error) => done(io, Err(error)),
+                }
             }),
         );
     }

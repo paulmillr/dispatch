@@ -492,8 +492,8 @@ final class MobileChatSession: Identifiable {
     }
 
     private func receive(live records: [HelperChat.Record]) {
-        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing, agentKey] row, completed in
-            typing.arrived(row, agent: agentKey, completed: completed)
+        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing, agentKey] row, completed, thought in
+            typing.arrived(row, agent: agentKey, completed: completed, thought: thought)
         }
         for change in applied {
             switch change {

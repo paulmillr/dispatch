@@ -377,16 +377,47 @@ class AdHocTests(unittest.TestCase):
             adhoc.profiles(str(self.folder), 'ZYXWV98764', self.PHONE, str(self.root / 'options.plist'))
         self.assertIn('no valid Apple Distribution identity of team ZYXWV98764', str(stopped.exception.code))
 
-    def test_the_manifest_and_page_name_their_final_addresses(self):
-        base = 'https://example.invalid/builds/pilot/1.2.3'
-        adhoc.page(str(self.root), base, self.PHONE, '1.2.3', '20260101.1200')
-        manifest = plistlib.loads((self.root / 'manifest.plist').read_bytes())['items'][0]
-        self.assertEqual(manifest['assets'], [{'kind': 'software-package', 'url': base + '/Dispatch.ipa'}])
-        self.assertEqual(manifest['metadata']['bundle-identifier'], self.PHONE)
-        page = (self.root / 'index.html').read_text()
-        self.assertIn(f'href="itms-services://?action=download-manifest&amp;url={base}/manifest.plist"', page)
-        self.assertIn('<title>Dispatch 1.2.3-20260101</title>', page)
-        self.assertEqual(adhoc.label('0.1.7', '20261110.0403'), '0.1.7-20261110')
+    def site(self, page='<div class="fine"><span>version 0.0.1</span><span>iOS 26+</span></div>', url=None):
+        folder = self.root / 'site'
+        folder.mkdir(exist_ok=True)
+        (folder / 'index.html').write_text(f'<h1>Fictional</h1>{page}')
+        (folder / 'manifest.plist').write_bytes(plistlib.dumps({'items': [{
+            'assets': [{'kind': 'software-package', 'url': url or 'https://example.invalid/hidden/Dispatch.ipa'},
+                       {'kind': 'display-image', 'url': 'https://example.invalid/hidden/icon.png'}],
+            'metadata': {'bundle-identifier': self.PHONE, 'bundle-version': '0.0.1', 'kind': 'software', 'title': 'Dispatch'}}]}))
+        return folder
+
+    def test_the_site_gets_the_build_and_keeps_its_addresses(self):
+        folder, ipa = self.site(), self.root / 'built.ipa'
+        ipa.write_bytes(b'fictional ipa')
+        before = plistlib.loads((folder / 'manifest.plist').read_bytes())
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            adhoc.site(str(folder), self.PHONE)
+        self.assertEqual(output.getvalue(), 'installs Dispatch.ipa, from 2 files\n')
+        adhoc.site(str(folder), self.PHONE, str(ipa), '1.2.3', adhoc.label('1.2.3', '20260101.1200'))
+        self.assertEqual((folder / 'Dispatch.ipa').read_bytes(), b'fictional ipa')
+        after = plistlib.loads((folder / 'manifest.plist').read_bytes())
+        self.assertEqual(after['items'][0]['metadata']['bundle-version'], '1.2.3')
+        self.assertEqual(after['items'][0]['assets'], before['items'][0]['assets'])
+        self.assertEqual((folder / 'index.html').read_text(),
+                         '<h1>Fictional</h1><div class="fine"><span>version 1.2.3-20260101.1200</span><span>iOS 26+</span></div>')
+        self.assertEqual(adhoc.label('0.1.7', '20261110.0403'), '0.1.7-20261110.0403')
+
+    def test_a_site_it_cannot_fill_in_stops_it(self):
+        for page, url, expected in [('<p>no version</p>', None, 'must say the version once'),
+                                    ('<span>version 1</span><span>version 2</span>', None, 'must say the version once'),
+                                    (None, 'http://example.invalid/Dispatch.ipa', 'an https:// address ending in .ipa'),
+                                    (None, 'https://example.invalid/Dispatch.zip', 'an https:// address ending in .ipa')]:
+            with self.subTest(expected=expected, page=page, url=url):
+                folder = self.site(**({'page': page} if page else {}), url=url)
+                with self.assertRaises(SystemExit) as stopped:
+                    adhoc.site(str(folder), self.PHONE)
+                self.assertIn(expected, str(stopped.exception.code))
+        with self.assertRaises(SystemExit) as stopped:
+            adhoc.site(str(self.site()), 'example.fictional.other')
+        self.assertIn('the bundle-identifier must be example.fictional.other', str(stopped.exception.code))
+        with self.assertRaises(SystemExit):
+            adhoc.site(str(self.root / 'nothing'), self.PHONE)
 
 
 class ReleaseBundleTests(unittest.TestCase):

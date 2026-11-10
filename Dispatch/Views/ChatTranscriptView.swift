@@ -736,7 +736,10 @@ private struct ChatTranscriptRowView: View {
                 if open { ChatMarkdown(text: item.text, color: theme.muted).foregroundStyle(theme.muted).padding(.leading, 23).padding(.bottom, 4) }
             }
         case .reasoning where item.isNarration:
-            ChatMarkdown(text: item.text, color: theme.muted).foregroundStyle(theme.muted)
+            // Thinking streamed in (Pi's) types out as a reply does; a posted thought (Claude Code's) shows at once.
+            ChatTypedMarkdown(text: item.text, rowID: row.id, reveals: session.typingReveals, live: streaming != nil,
+                              ended: item.completed || streaming != .newest, color: theme.muted)
+                .foregroundStyle(theme.muted)
         case .reasoning:
             VStack(alignment: .leading, spacing: 6) {
                 Button { expansion.wrappedValue.toggle() } label: {
@@ -979,11 +982,13 @@ struct ChatTypedMarkdown: View {
     let reveals: ChatTypingReveals
     let live: Bool
     let ended: Bool
+    /// The text's color when not the theme's ink (thinking's muted).
+    var color: Color?
     /// The reveal this view counts as shown (its clock runs only while one does).
     @State private var shown: ChatTypingReveal?
     var body: some View {
         let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, reduceMotion: reduceMotion)
-        ChatMarkdown(text: text, typing: typing)
+        ChatMarkdown(text: text, color: color, typing: typing)
             .onAppear { show(typing) }
             .onDisappear { show(nil) }
             .onChange(of: typing.map(ObjectIdentifier.init)) { _, _ in show(typing) }

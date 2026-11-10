@@ -664,10 +664,11 @@ final class ChatTypingReveal {
     static let arrivalWindow: TimeInterval = 2
 
     /// A reply of `agent` added to the live turn while its chat shows: a streaming agent's types from its start while
-    /// it streams, a posting agent's when it is short.
-    func arrived(_ rowID: String, agent: String?, completed: Bool) {
+    /// it streams, a posting agent's when it is short. `thought`: thinking shown in the thread (`ChatItem.isNarration`),
+    /// which types only as it streams in (Pi's `thinking_delta`); a posted thought (Claude Code's) shows at once.
+    func arrived(_ rowID: String, agent: String?, completed: Bool, thought: Bool = false) {
         guard let agent else { return }
-        if Self.postingAgents.contains(agent) { began(rowID, posted: true) }
+        if Self.postingAgents.contains(agent) { if !thought { began(rowID, posted: true) } }
         else if !completed, Self.streamingAgents.contains(agent) { began(rowID) }
     }
 

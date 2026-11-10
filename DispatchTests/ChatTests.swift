@@ -603,8 +603,10 @@ final class ChatTests: XCTestCase {
     }
 
     /// Pi's managed extension through installation.install (helper route of the old PiChatSetup cases):
-    /// a file the user changed or replaced is never overwritten (the install fails, its bytes stay),
-    /// linked files or directories are refused, and unrelated extensions are left alone.
+    /// a file the user changed or replaced is never overwritten (the install fails, its bytes stay), a linked
+    /// file is refused, a linked folder (dotfiles) is followed, every folder on the way must be one others cannot
+    /// write (the first that fails is named with its fix), Dispatch's own files others can write are repaired in
+    /// place, and unrelated extensions are left alone.
     func testPiExtensionNeverOverwritesForeignOrLinkedFiles() async throws {
         let fm = FileManager.default
         let extensions = System.home.appendingPathComponent(".pi/agent/extensions")
@@ -616,6 +618,25 @@ final class ChatTests: XCTestCase {
         defer { try? fm.removeItem(at: extensions) }
         _ = try await pi(true)
         XCTAssertTrue(System.exists(script), "Installing writes the managed extension")
+        // Dispatch's extension made group-writable is repaired in place: group and others lose write, reads stay. A
+        // receipt others can only read is fine as it is.
+        let receipt = System.home.appendingPathComponent(".pi/agent/dispatch/pi-chat-installation.json")
+        try System.permissions(script, 0o664)
+        try System.permissions(receipt, 0o644)
+        let repaired = try await pi(true)
+        XCTAssertEqual(try System.permissions(script), 0o644, "Only group and others' write is taken")
+        XCTAssertEqual(try System.permissions(receipt), 0o644, "A receipt others can read is left as it is")
+        XCTAssertFalse(repaired.restart, "The same extension: nothing for Pi to reload")
+        try System.permissions(script, 0o600)
+        // A real extensions folder others can write is refused, named with the command that fixes it.
+        try System.permissions(extensions, 0o775)
+        let open = await Task { try await pi(true) }.result
+        XCTAssertThrowsError(try open.get(), "A folder others can write is refused") {
+            XCTAssertTrue($0.localizedDescription.contains(
+                "is writable by its group or others (mode 775), so other accounts could change what Pi loads. Run chmod go-w"),
+                $0.localizedDescription)
+        }
+        try System.permissions(extensions, 0o700)
         let unrelated = extensions.appendingPathComponent("unrelated.js")
         let foreign = Data("// Dispatch's opt-in bridge for an existing interactive Pi session.\n// user modifications must survive\n".utf8)
         try System.write(foreign, to: unrelated)
@@ -633,17 +654,44 @@ final class ChatTests: XCTestCase {
         XCTAssertThrowsError(try linked.get(), "A symlinked extension is refused")
         XCTAssertEqual(try System.read(target), foreign)
         try System.remove(script)
-        // A linked extensions directory is refused and stays empty.
+        // A linked extensions folder that others can write is refused and stays empty: the folder behind a link is
+        // checked as Pi's own folders are.
         let directory = System.home.appendingPathComponent("linked-\(System.uuid())")
         defer { try? fm.removeItem(at: directory) }
         try System.remove(extensions)
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        try System.directory(directory)
+        try System.permissions(directory, 0o777)
         try System.link(extensions, to: directory)
-        let linkedDirectory = await Task { try await pi(true) }.result
-        XCTAssertThrowsError(try linkedDirectory.get(), "A symlinked extensions directory is refused")
+        let shared = await Task { try await pi(true) }.result
+        XCTAssertThrowsError(try shared.get(), "A link to a folder others can write is refused") {
+            XCTAssertTrue($0.localizedDescription.contains("is writable by its group or others (mode 777)"), $0.localizedDescription)
+        }
         XCTAssertTrue(try System.list(directory).isEmpty)
+        // So is a link to a private folder inside one others can write (they could rename it): that folder is named.
+        let parent = System.home.appendingPathComponent("shared-\(System.uuid())")
+        defer { try? fm.removeItem(at: parent) }
+        let nested = parent.appendingPathComponent("pi")
+        try System.directory(nested)
+        try System.permissions(parent, 0o775)
         try System.remove(extensions)
+        try System.link(extensions, to: nested)
+        let inside = await Task { try await pi(true) }.result
+        XCTAssertThrowsError(try inside.get(), "A link into a folder others can write is refused") {
+            XCTAssertTrue($0.localizedDescription.contains("\(parent.lastPathComponent) is writable by its group or others (mode 775)"),
+                          $0.localizedDescription)
+        }
+        XCTAssertTrue(try System.list(nested).isEmpty)
+        try System.remove(extensions)
+        try System.link(extensions, to: directory)
+        // The user's own private folder behind the link (dotfiles) is followed: the extension lands there, the link stays.
+        try System.permissions(directory, 0o755)
+        _ = try await pi(true)
+        XCTAssertTrue(System.exists(directory.appendingPathComponent("dispatch-chat.js")), "The extension is written in the linked folder")
+        XCTAssertTrue(System.exists(script), "and Pi reads it through the link")
+        // Turned off through the same link: the extension and its receipt go, the linked folder stays.
         _ = try await pi(false)
+        XCTAssertFalse(System.exists(directory.appendingPathComponent("dispatch-chat.js")))
+        try System.remove(extensions)
     }
 
     /// Installing merges into the user's hooks.json: their handlers and keys stay, a second install
@@ -697,12 +745,13 @@ final class ChatTests: XCTestCase {
     }
 
     /// The fresh-install answer (LocalAgentsConsent): no turns this Mac's agent hooks off without writing any agent
-    /// settings; yes installs the integrations of the agents found, leaving the others and the opt-in Pi alone.
+    /// settings; yes installs the integrations of the agents found, Pi's extension with them, leaving the others alone.
     func testLocalAgentsAnswerInstallsFoundAgentsOrTurnsHooksOff() async throws {
         let claude = System.home.appendingPathComponent(".claude/settings.json")
         let pi = System.home.appendingPathComponent(".pi/agent/extensions/dispatch-chat.js")
-        for file in [codexHooks, claude, pi] { try? FileManager.default.removeItem(at: file) }
-        defer { for file in [codexHooks, claude, pi] { try? FileManager.default.removeItem(at: file) } }
+        let receipt = System.home.appendingPathComponent(".pi/agent/dispatch/pi-chat-installation.json")
+        for file in [codexHooks, claude, pi, receipt] { try? FileManager.default.removeItem(at: file) }
+        defer { for file in [codexHooks, claude, pi, receipt] { try? FileManager.default.removeItem(at: file) } }
         let off = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         off.adoptLocalAgents(nil)
         try await TestSupport.eventually(timeout: .seconds(10)) {
@@ -716,7 +765,48 @@ final class ChatTests: XCTestCase {
         await on.integrationChanges?.value
         XCTAssertTrue(System.exists(claude))
         XCTAssertFalse(System.exists(codexHooks), "An agent not found is left alone")
-        XCTAssertFalse(System.exists(pi), "Pi's extension stays opt-in")
+        XCTAssertTrue(System.exists(pi), "Yes installs Pi's extension like the other agents' hooks")
+    }
+
+    /// Pi's extension on in Settings but never installed on this Mac (a Yes from a build that kept Pi opt-in, or an install
+    /// that failed) is installed at launch, once the agents answer was Yes and Pi runs here; unanswered, turned off or
+    /// without Pi, the launch leaves it alone.
+    func testLaunchInstallsPiThatAYesNeverInstalled() async throws {
+        let agent = System.home.appendingPathComponent(".pi/agent")
+        let pi = agent.appendingPathComponent("extensions/dispatch-chat.js")
+        let receipt = agent.appendingPathComponent("dispatch/pi-chat-installation.json")
+        for file in [pi, receipt] { try? FileManager.default.removeItem(at: file) }
+        defer { for file in [pi, receipt] { try? FileManager.default.removeItem(at: file) } }
+        let suite = "PiLaunchTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func launch(found: Set<String> = ["pi"]) async throws -> ChatCoordinator {
+            let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: defaults)
+            chat.localCLIs = found
+            chat.loadLaunches()
+            try await TestSupport.eventually(timeout: .seconds(10)) { chat.helperInstalls["pi"] != nil }
+            await chat.integrationChanges?.value
+            return chat
+        }
+        _ = try await launch()
+        XCTAssertFalse(System.exists(pi), "Unanswered, the launch installs nothing")
+        defaults.set("yes", forKey: LocalAgentsConsent.key)
+        defaults.set(["pi"], forKey: "disabledIntegrations")
+        _ = try await launch()
+        XCTAssertFalse(System.exists(pi), "Pi turned off stays off")
+        defaults.removeObject(forKey: "disabledIntegrations")
+        _ = try await launch(found: ["claude"])
+        XCTAssertFalse(System.exists(pi), "Without Pi on this Mac, nothing is written for it")
+        let chat = try await launch()
+        XCTAssertTrue(System.exists(pi), "Yes, on and found: the launch installs Pi's extension")
+        XCTAssertEqual(chat.hookStatus("pi"), .ready)
+        XCTAssertNil(chat.localInstallationFailure("pi"))
+        let digest = try System.read(pi)
+        let again = try await launch()
+        XCTAssertEqual(try System.read(pi), digest, "An installed extension is not installed again")
+        XCTAssertEqual(again.hookStatus("pi"), .ready)
+        again.setHelperIntegration("pi", enabled: false)
+        await again.integrationChanges?.value
+        XCTAssertFalse(System.exists(pi))
     }
 
     /// A hooks.json the integration cannot read as hooks is never rewritten: the install fails instead.

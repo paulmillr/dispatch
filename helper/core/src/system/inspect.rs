@@ -637,6 +637,27 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             let path = root.get("path").and_then(Data::path).ok_or_else(invalid)?;
             write(&metadata(&fs::symlink_metadata(path)?))
         }
+        "file.mode" => {
+            // Exact permission bits (fchmod: no umask) for the regular file `path` names, no link followed, only while
+            // it is still `device`/`inode` (else ESTALE): Pi's extension repaired in place, what it holds unchanged.
+            use std::os::unix::fs::PermissionsExt;
+            let path = root.get("path").and_then(Data::path).ok_or_else(invalid)?;
+            let field = |name| root.get(name).and_then(|v| v.unsigned()).ok_or_else(invalid);
+            let (mode, device, inode) = (field("mode")?, field("device")?, field("inode")?);
+            if mode > 0o777 {
+                return Err(invalid());
+            }
+            let file = os::private(path)?;
+            let before = file.metadata()?;
+            if !before.is_file() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            if before.dev() != device || before.ino() != inode {
+                return Err(io::Error::from_raw_os_error(os::ESTALE));
+            }
+            file.set_permissions(fs::Permissions::from_mode(mode as u32))?;
+            write(&metadata(&file.metadata()?))
+        }
         "file.private" => {
             let path = root.get("path").and_then(Data::path).ok_or_else(invalid)?;
             let limit = root

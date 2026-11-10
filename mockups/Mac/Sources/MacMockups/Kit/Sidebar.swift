@@ -163,13 +163,12 @@ struct SidebarTopRow: View {
     @ViewBuilder private func control(_ label: some View, lit: Bool) -> some View {
         if Mock.glass {
             let size = StripTab.glassTrackHeight(t)
+            // On: the accent, no fill (the capsule is the pointer's).
             label.font(.system(size: 14)).frame(width: size, height: size)
-                .foregroundStyle(lit ? Chrome.ink : p.detail)
-                .background(lit ? Chrome.ink.opacity(0.07) : .clear, in: Capsule())
+                .foregroundStyle(lit ? Chrome.accent : p.detail)
         } else {
             label.font(t.symbol(.body)).frame(width: 24, height: 24)
-                .foregroundStyle(lit ? Chrome.ink : p.detail)
-                .background(lit ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                .foregroundStyle(lit ? Chrome.accent : p.detail)
         }
     }
 }

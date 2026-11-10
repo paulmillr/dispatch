@@ -25,7 +25,7 @@ struct MobileTranscript {
     @discardableResult
     mutating func apply(_ records: [HelperChat.Record], historical: Bool, earlier: Bool = false,
                         now: Date = Date(), prepare: (ChatItem, String) -> ChatItem = { item, _ in item },
-                        arrived: (String, _ completed: Bool) -> Void = { _, _ in }) -> [Applied] {
+                        arrived: (String, _ completed: Bool, _ thought: Bool) -> Void = { _, _, _ in }) -> [Applied] {
         var applied: [Applied] = []
         var batch: [ChatRecord] = []
         func merge(_ item: ChatItem, from record: ChatRecord) {
@@ -34,8 +34,9 @@ struct MobileTranscript {
                                         fileOffset: record.fileOffset))
             } else {
                 let insertion = transcript.insert(item, turnID: record.turnID, at: record.date, fileOffset: record.fileOffset)
-                if insertion.added, item.kind == .assistant {
-                    arrived(item.rowID ?? "\(record.turnID.utf8.count):\(record.turnID):\(item.id)", item.completed)
+                if insertion.added, item.kind == .assistant || item.isNarration {
+                    arrived(item.rowID ?? "\(record.turnID.utf8.count):\(record.turnID):\(item.id)", item.completed,
+                            item.isNarration)
                 }
             }
         }

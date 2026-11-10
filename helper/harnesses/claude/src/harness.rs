@@ -90,6 +90,8 @@ pub struct Claude {
     /// Running subagents per session id (subagents.rs), SubagentStart until SubagentStop.
     /// Background agents keep running after their turn ends.
     subagents: subagents::Subagents,
+    /// A typed `/usage` whose panel is being read (`menu::Usage`), from its Enter until its result.
+    usages: BTreeMap<Key, crate::menu::Usage>,
 }
 
 fn finish<T: 'static>(io: &mut dyn Io, done: Done<T>, result: Result<T, Error>) {
@@ -244,6 +246,7 @@ impl Claude {
     }
     fn control(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Sent>) {
         self.walks.remove(&key(binding));
+        self.usages.remove(&key(binding));
         let expected = binding.clone();
         self.identify(
             io,
@@ -333,6 +336,7 @@ impl Claude {
     fn release(&mut self, io: &mut dyn Io, pid: u32) {
         self.interactions.exit(io, pid);
         self.walks.retain(|(owner, _, _), _| *owner != pid);
+        self.usages.retain(|(owner, _, _), _| *owner != pid);
         self.cache
             .retain(|source, _| !matches!(source, Source::Live((owner, _, _)) if *owner == pid));
         self.startup.retain(|(owner, _, _), _| *owner != pid);
@@ -642,9 +646,22 @@ impl Harness for Claude {
         let session = self.sessions.get(&key);
         let status = session.map_or("unknown", |session| session.status.as_str());
         let name = session.and_then(|session| session.name.clone());
+        // `/usage` is typed as any command; once its Enter is typed, its panel is read (`menu::Usage`).
+        let usage = matches!(goal, Goal::Send { text, command: true, .. } if text.trim() == crate::menu::USAGE);
+        if usage && let Some(reading) = self.usages.get_mut(&key) {
+            let step = reading.step(name.as_deref(), screen, settled);
+            if matches!(step, Step::Done(_) | Step::Fail(_)) {
+                self.usages.remove(&key);
+            }
+            return step;
+        }
         let walk = self.walks.entry(key.clone()).or_default();
         walk.settled = Some(settled);
         let step = walk.next(&binding.session, status, name.as_deref(), goal, screen);
+        if usage && let Step::Submit(keys) = step {
+            self.usages.insert(key, crate::menu::Usage::default());
+            return Step::Keys(keys);
+        }
         if let (Step::Done(menu), Goal::Select { model, effort }) = (&step, goal)
             && !walk.cancelled
         {

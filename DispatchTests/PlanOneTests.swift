@@ -86,11 +86,11 @@ final class PlanOneTests: XCTestCase {
         workspace.onCloseTabs = { _ in XCTFail("A layout must never terminate a shell") }
         XCTAssertTrue(workspace.applyLayout(.grid))
         let space = workspace.current!
-        XCTAssertEqual(space.panes.map { $0.tabs.map(\.id) }, [[tabs[0], tabs[4]], [tabs[1]], [tabs[2]], [tabs[3]]])
+        XCTAssertEqual(space.panes.map { $0.tabs.map(\.id) }, [[tabs[0], tabs[1]], [tabs[2]], [tabs[3]], [tabs[4]]])
         XCTAssertEqual(space.activeTab?.id, tabs[0])
         XCTAssertEqual(workspace.allTabIDs, Set(tabs))
         XCTAssertTrue(workspace.applyLayout(.single))
-        XCTAssertEqual(workspace.currentTabs.map(\.id), [tabs[0], tabs[4], tabs[1], tabs[2], tabs[3]])
+        XCTAssertEqual(workspace.currentTabs.map(\.id), tabs)
         for preset in LayoutPreset.allCases where preset.count <= tabs.count {
             XCTAssertTrue(workspace.applyLayout(preset))
             XCTAssertEqual(workspace.current?.panes.count, preset.count)

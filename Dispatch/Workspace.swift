@@ -521,17 +521,29 @@ final class Workspace {
         splitTab(pane.selected, beside: pane.id, edge: axis == .columns ? .right : .bottom)
     }
 
+    /// Moves the space's tabs (a structured space's windows) into the preset's panes (`LayoutPreset.arrange`). The
+    /// layout being left is remembered (`LayoutMemory`) and a layout chosen again gets its tabs and dividers back;
+    /// choosing the layout already shown evens its dividers.
     @discardableResult
     func applyLayout(_ preset: LayoutPreset) -> Bool {
         guard let current, hasRoom(for: preset) else { return false }
         guard let s = spaces.firstIndex(where: { $0.id == selectedSpace }) else { return false }
+        var memory = current.layoutMemory ?? LayoutMemory()
+        let shown = current.containers.isEmpty ? current.preset : current.presentation?.preset ?? .single
+        /// What the preset held when last left, after `leave`; none for the layout already shown.
+        func recalled() -> LayoutMemory.Arrangement? { preset == shown ? nil : memory.presets[preset.rawValue] }
+        func dividers(_ layout: PaneLayout) -> [UUID: Double] {
+            layout.evenFractions.merging(recalled()?.dividers(of: layout) ?? [:]) { _, remembered in remembered }
+        }
         if !current.containers.isEmpty {
             let windows = current.presentation?.orderedWindows ?? current.containers.map(\.id)
             guard windows.count >= preset.count, let selected = current.selectedContainer else { return false }
             var presentation = current.presentation ?? TabPresentation(windows: windows, selected: selected, preset: .single)
             let groups = presentation.groups.map { LayoutPreset.TabGroup(id: $0.id, tabs: $0.windows, selected: $0.selected) }
-            let arranged = preset.arrange(groups, in: presentation.layout, fractions: current.splitRatios.mapValues { CGFloat($0) },
-                                          selected: selected)
+            let fractions = current.splitRatios.mapValues { CGFloat($0) }
+            memory.leave(groups, preset: shown, layout: presentation.layout, fractions: fractions)
+            let arranged = preset.arrange(groups, in: presentation.layout, fractions: fractions, selected: selected,
+                                          remembered: recalled())
             // Merged groups append their windows; each strip keeps the server's order, as its ⌘ digits number them.
             let order = Dictionary(uniqueKeysWithValues: current.containers.enumerated().map { ($1.id, $0) })
             presentation.groups = arranged.map { group in
@@ -539,9 +551,12 @@ final class Workspace {
                       selected: group.selected)
             }
             presentation.layout = preset.layout(arranged.map(\.id)); presentation.preset = preset
+            memory.record(arranged)
+            let ratios = dividers(presentation.layout)
             updateLayout { next in
                 next.spaces[s].presentation = presentation
-                next.spaces[s].splitRatios = presentation.layout.evenFractions
+                next.spaces[s].splitRatios = ratios
+                next.spaces[s].layoutMemory = memory
             }
             focusRequest = System.uuid()
             return true
@@ -550,14 +565,20 @@ final class Workspace {
         guard tabs.count >= preset.count, let selected = activeTab?.id else { return false }
         let byID = Dictionary(uniqueKeysWithValues: tabs.map { ($0.id, $0) })
         let groups = current.panes.map { LayoutPreset.TabGroup(id: $0.id, tabs: $0.tabs.map(\.id), selected: $0.selected) }
-        let panes = preset.arrange(groups, in: current.layout, fractions: current.paneFractions, selected: selected).map { group in
+        memory.leave(groups, preset: shown, layout: current.layout, fractions: current.paneFractions)
+        let arranged = preset.arrange(groups, in: current.layout, fractions: current.paneFractions, selected: selected,
+                                      remembered: recalled())
+        let panes = arranged.map { group in
             Pane(id: group.id, tabs: group.tabs.compactMap { byID[$0] }, selected: group.selected)
         }
         let layout = preset.layout(panes.map(\.id))
+        memory.record(arranged)
+        let ratios = dividers(layout)
         updateLayout { next in
             next.spaces[s].layout = layout
             next.spaces[s].panes = panes; next.spaces[s].preset = preset
-            next.spaces[s].splitRatios = layout.evenFractions
+            next.spaces[s].splitRatios = ratios
+            next.spaces[s].layoutMemory = memory
             next.selectTab(selected)
         }
         selectSpace(spaces[s].id)

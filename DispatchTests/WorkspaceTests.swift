@@ -233,6 +233,83 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
+    /// A layout's first arrangement: panes split their tabs off in runs and join back in order, a pane never goes
+    /// where it was not (the top right of a grid joins the top row), and a third's rounding never moves the focused
+    /// pane off the top left.
+    func testLayoutsSplitAndJoinPanesWhereTheyShow() {
+        let top = (0..<3).map { _ in System.uuid() }, bottom = (0..<3).map { _ in System.uuid() }
+        let upper = LayoutPreset.TabGroup(id: System.uuid(), tabs: top, selected: top[0])
+        let lower = LayoutPreset.TabGroup(id: System.uuid(), tabs: Array(bottom.prefix(2)), selected: bottom[0])
+        let rows = LayoutPreset.rows.layout([upper.id, lower.id])
+        let grid = LayoutPreset.grid.arrange([upper, lower], in: rows, selected: top[0])
+        XCTAssertEqual(grid.map(\.tabs), [[top[0], top[1]], [top[2]], [bottom[0]], [bottom[1]]])
+        XCTAssertEqual(grid.map(\.selected), [top[0], top[2], bottom[0], bottom[1]])
+        let back = LayoutPreset.rows.arrange(grid, in: LayoutPreset.grid.layout(grid.map(\.id)), selected: top[0])
+        XCTAssertEqual(back.map(\.tabs), [top, Array(bottom.prefix(2))])
+        XCTAssertEqual(back.map(\.id), [upper.id, lower.id])
+        let full = LayoutPreset.TabGroup(id: lower.id, tabs: bottom, selected: bottom[0])
+        let six = LayoutPreset.six.arrange([upper, full], in: rows, selected: top[0])
+        XCTAssertEqual(six.map(\.tabs), (top + bottom).map { [$0] })
+        XCTAssertEqual(six.first?.id, upper.id)
+    }
+
+    /// Rows → grid → rows, or a longer way back, puts every tab back in its pane in its order, each pane showing what
+    /// it showed and the divider where it was; choosing the shown layout again evens it. Native tabs and a server's
+    /// windows alike.
+    func testALayoutChosenAgainPutsEveryTabBack() throws {
+        func panes(_ space: Space) -> [[UUID]] {
+            if let presentation = space.presentation, !space.containers.isEmpty {
+                return presentation.layout.paneIDs.compactMap { id in
+                    presentation.groups.first { $0.id == id }.map { [$0.selected] + $0.windows }
+                }
+            }
+            return space.layout.paneIDs.compactMap { id in space.panes.first { $0.id == id }.map { [$0.selected] + $0.tabs.map(\.id) } }
+        }
+        func divider(_ space: Space) -> UUID? {
+            (space.containers.isEmpty ? space.layout : space.presentation?.layout)?.splitOrder.first
+        }
+        for tmux in [false, true] {
+            for detour in [[LayoutPreset.grid], [.grid, .single], [.twoAbove, .grid, .columns]] {
+                let workspace = Workspace()
+                workspace.newLocalSpace()
+                for _ in 0..<6 { workspace.newTab() }
+                if tmux { workspace.spaces[0].structure(workspace.current!.tabs, selected: 1) }
+                else { workspace.selectTab(workspace.current!.tabs[1].id) }
+                XCTAssertTrue(workspace.applyLayout(.rows))
+                XCTAssertTrue(workspace.applyLayout(.grid))
+                XCTAssertTrue(workspace.applyLayout(.rows))
+                workspace.spaces[0].splitRatios[try XCTUnwrap(divider(workspace.spaces[0]))] = 0.3
+                let before = panes(workspace.spaces[0]), focused = workspace.activeTab?.id
+                XCTAssertEqual(before.count, 2)
+                for preset in detour + [.rows] { XCTAssertTrue(workspace.applyLayout(preset)) }
+                XCTAssertEqual(panes(workspace.spaces[0]), before, "tmux: \(tmux), by \(detour)")
+                XCTAssertEqual(workspace.activeTab?.id, focused)
+                XCTAssertEqual(workspace.spaces[0].splitRatios[try XCTUnwrap(divider(workspace.spaces[0]))], 0.3)
+                XCTAssertTrue(workspace.applyLayout(.rows))
+                XCTAssertEqual(panes(workspace.spaces[0]), before)
+                XCTAssertNil(workspace.spaces[0].splitRatios[try XCTUnwrap(divider(workspace.spaces[0]))])
+            }
+        }
+    }
+
+    /// A tab the user moves to another pane is not moved back by the next layout: the rows put it where it went.
+    func testATabMovedByHandStaysWhereItWasPut() throws {
+        let workspace = Workspace()
+        workspace.newLocalSpace()
+        for _ in 0..<4 { workspace.newTab() }
+        workspace.selectTab(workspace.current!.tabs[0].id)
+        XCTAssertTrue(workspace.applyLayout(.rows))
+        XCTAssertTrue(workspace.applyLayout(.grid))
+        let grid = try XCTUnwrap(workspace.current)
+        let topRight = try XCTUnwrap(grid.panes.first { $0.id == grid.layout.paneIDs[1] })
+        let bottomLeft = grid.layout.paneIDs[2]
+        let moved = topRight.tabs[0].id
+        XCTAssertTrue(workspace.moveTab(moved, to: bottomLeft))
+        XCTAssertTrue(workspace.applyLayout(.rows))
+        let rows = try XCTUnwrap(workspace.current)
+        XCTAssertEqual(rows.panes.first { $0.tabs.contains { $0.id == moved } }?.id, rows.layout.paneIDs[1])
+    }
+
     func testSplitTogglesPreserveTabsFocusAndUnrelatedBranches() throws {
         for axis in [SplitAxis.columns, .rows] {
             let workspace = Workspace()

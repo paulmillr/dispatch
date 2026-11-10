@@ -6,12 +6,14 @@
                                                 watch ones, made for this Mac's Apple Distribution certificate of
                                                 TEAM); installed where Xcode looks, and export options OPTIONS that name
                                                 them. Prints one line: until when, how many devices
-  adhoc.py label VERSION NUMBER                 the build's name, 0.1.7-20261110
-  adhoc.py page FOLDER BASE BUNDLE VERSION NUMBER
-                                                FOLDER/manifest.plist, the manifest itms-services reads, and
-                                                FOLDER/index.html, the install page with its link; both name their
-                                                final addresses, BASE/Dispatch.ipa and BASE/manifest.plist. The build
-                                                is named VERSION-<date>, the date of the build NUMBER (label)"""
+  adhoc.py label VERSION NUMBER                 the build's name, 0.1.7-20261110.1432: the version and the build
+                                                number (the commit's UTC time)
+  adhoc.py site SITE PHONE [IPA VERSION LABEL]  the install site SITE, the maintainer's own (index.html, manifest.plist
+                                                and what they show), checked: the manifest installs PHONE from an https
+                                                address ending in .ipa, and the page says the version once
+                                                (<span>version …</span>). With IPA, the build goes in: the .ipa under
+                                                that name, the manifest's bundle-version VERSION, the page's LABEL; the
+                                                addresses stay as the site has them"""
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -87,40 +89,48 @@ def profiles(folder, team, phone, options):
 
 
 def label(version, number):
-    """0.1.7-20261110: the version and the version commit's UTC date, the build number's first half."""
-    return f'{version}-{number.partition(".")[0]}'
+    """0.1.7-20261110.1432: the version and the build number, the commit's UTC time; builds of one version differ."""
+    return f'{version}-{number}'
 
 
-def page(folder, base, bundle, version, number):
+VERSION = re.compile(r'(<span>version )[^<]*(</span>)')
+
+
+def site(folder, phone, ipa=None, version=None, name=None):
     folder = Path(folder)
-    name = html.escape(label(version, number))
-    (folder / 'manifest.plist').write_bytes(plistlib.dumps({'items': [{
-        'assets': [{'kind': 'software-package', 'url': f'{base}/Dispatch.ipa'}],
-        'metadata': {'bundle-identifier': bundle, 'bundle-version': version, 'kind': 'software', 'title': 'Dispatch'},
-    }]}))
-    link = html.escape(f'itms-services://?action=download-manifest&url={base}/manifest.plist')
-    (folder / 'index.html').write_text(f'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dispatch {name}</title>
-<style>body{{font-family:-apple-system,system-ui,sans-serif;max-width:32em;margin:3em auto;padding:0 1em;line-height:1.5}}
-a.install{{display:inline-block;padding:.8em 1.4em;border-radius:.8em;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600}}</style>
-</head><body>
-<h1>Dispatch for iPhone</h1>
-<p>{name}</p>
-<p><a class="install" href="{link}">Install</a></p>
-<p>Open this page in Safari on your iPhone. It installs only on iPhones registered for this build; the Apple Watch app
-installs on registered watches too.</p>
-</body></html>
-''')
+    manifest_path, page_path = folder / 'manifest.plist', folder / 'index.html'
+    if not manifest_path.is_file() or not page_path.is_file():
+        sys.exit(f'{folder} needs index.html and manifest.plist (docs/releasing.md, Ad Hoc builds)')
+    manifest = plistlib.loads(manifest_path.read_bytes())
+    try:
+        item, = manifest['items']
+        package, = [asset for asset in item['assets'] if asset.get('kind') == 'software-package']
+    except (KeyError, TypeError, ValueError):
+        sys.exit(f'{manifest_path} must list one item with one software-package asset')
+    address = package.get('url', '')
+    if not re.fullmatch(r'https://[^\s/]+/\S*\.ipa', address):
+        sys.exit(f'{manifest_path}: the software-package must be an https:// address ending in .ipa')
+    if item.get('metadata', {}).get('bundle-identifier') != phone:
+        sys.exit(f'{manifest_path}: the bundle-identifier must be {phone}')
+    page = page_path.read_text()
+    if len(VERSION.findall(page)) != 1:
+        sys.exit(f'{page_path} must say the version once, as <span>version …</span>')
+    if ipa is None:
+        print(f'installs {address.rsplit("/", 1)[1]}, from {len(list(folder.iterdir()))} files')
+        return
+    shutil.copyfile(ipa, folder / address.rsplit('/', 1)[1])
+    item['metadata']['bundle-version'] = version
+    manifest_path.write_bytes(plistlib.dumps(manifest))
+    page_path.write_text(VERSION.sub(lambda match: match[1] + html.escape(name) + match[2], page))
 
 
 if __name__ == '__main__':
     command, arguments = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ('', [])
     if command == 'profiles' and len(arguments) == 4:
         profiles(*arguments)
-    elif command == 'page' and len(arguments) == 5:
-        page(*arguments)
     elif command == 'label' and len(arguments) == 2:
         print(label(*arguments))
+    elif command == 'site' and len(arguments) in (2, 5):
+        site(*arguments)
     else:
         sys.exit(__doc__)

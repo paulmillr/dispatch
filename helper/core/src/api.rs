@@ -281,6 +281,8 @@ pub enum Job {
     ///   pinned fd, metadata includes uid/mode/links/kind/size/device/inode/mtime_ns/ctime_ns.
     /// - "file.lstat": {path} -> same metadata (also socket/character-device kinds, tty).
     /// - "file.realpath": {path} -> {path}; canonical absolute path, symlinks resolved.
+    /// - "file.mode": {path,mode,device,inode} -> metadata; sets a no-follow regular file's permission bits
+    ///   exactly (fchmod, `mode` at most 0o777) while it is still device/inode, else ESTALE.
     /// - "file.json.references": {paths:[path],keys:[string],env:[string]} -> {names:[string],
     ///   env:{name:string}}; of each readable JSON file (at most 1 MB) only the variables the
     ///   string values of `keys` expand (`$NAME`, `${NAME…}`) and the `env` object's `env`

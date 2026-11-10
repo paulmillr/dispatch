@@ -1743,10 +1743,11 @@ final class ChatSession: Identifiable {
                 scrollPosition.expectArrival()
             }
         }
-        // A streamed reply that starts while the chat shows, or a short posted one, types out from its first word.
-        if result.added, !historical, showChat, !loadingHistory, item.kind == .assistant {
+        // A streamed reply or thought that starts while the chat shows, or a short posted reply, types out from its
+        // first word.
+        if result.added, !historical, showChat, !loadingHistory, item.kind == .assistant || item.isNarration {
             typingReveals.arrived(item.rowID ?? "\(turnID.utf8.count):\(turnID):\(item.id)", agent: agentID,
-                                  completed: item.completed)
+                                  completed: item.completed, thought: item.isNarration)
         }
         // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
         // no revision, so no transcript pass and no follow scroll for it.

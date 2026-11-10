@@ -369,6 +369,100 @@ pub fn permission(s: &str) -> Option<Confirmation> {
             .join("\n"),
     })
 }
+/// The command whose report Chat reads from Claude's screen (`Usage`).
+pub const USAGE: &str = "/usage";
+/// A usage bar's glyphs (Claude Code 2.1.321 draws `██████▌   13% used`).
+const BAR: [char; 11] = ['█', '▉', '▊', '▋', '▌', '▍', '▎', '▏', '░', '▒', '▓'];
+/// A row of key hints ('f to fix 1 of 4 · d to day · w to week'): keys for the terminal, not the report.
+fn hints(line: &str) -> bool {
+    line.split('·').all(|part| {
+        part.trim().split_once(" to ").is_some_and(|(key, action)| {
+            !key.is_empty() && key.chars().count() <= 7 && !key.contains(' ') && !action.trim().is_empty()
+        })
+    })
+}
+/// Claude's settings panel on any tab (`Settings  Status   Config   Usage   Stats` over the tab's rows, 'Esc to …'
+/// under them): the report its rows make, its bars down to their percentages, its white space collapsed, without
+/// key hints; and whether a row still says it is loading.
+pub fn usage(s: &str) -> Option<(String, bool)> {
+    let all: Vec<&str> = lines(s)?.collect();
+    let tabs = all.iter().rposition(|line| {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        words.first() == Some(&"Settings") && ["Status", "Config", "Usage"].iter().all(|tab| words.contains(tab))
+    })?;
+    let footer = all.iter().rposition(|line| !line.is_empty())?;
+    if footer <= tabs || !all[footer].starts_with("Esc to ") {
+        return None;
+    }
+    let mut report: Vec<String> = Vec::new();
+    let mut loading = false;
+    for line in &all[tabs + 1..footer] {
+        loading |= line.starts_with("Loading");
+        if !line.is_empty() && hints(line) {
+            continue;
+        }
+        let text = line.replace(BAR, " ").split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() || report.last().is_some_and(|last| !last.is_empty()) {
+            report.push(text);
+        }
+    }
+    while report.last().is_some_and(String::is_empty) {
+        report.pop();
+    }
+    (!report.is_empty()).then(|| (report.join("\n"), loading))
+}
+/// Settled screens a typed `/usage` waits for its panel before it counts as a command like any other.
+const OPENING: u8 = 2;
+/// Settled screens a loading report waits before it is read as it stands.
+const LOADING: u8 = 5;
+/// `/usage` (Claude Code 2.1.321 opens its settings panel on the Usage tab, writes nothing to the transcript and
+/// leaves nothing once closed): after the walk typed it and Enter, the panel's report is read once the screen
+/// settled and nothing loads, Escape closes the panel, and the report is the command's result once the composer is
+/// back. Only Escape is typed: the panel's letters act ('f to fix'). A panel that never opens leaves the command
+/// as one typed (its output, if any, comes from the transcript).
+#[derive(Default)]
+pub struct Usage {
+    report: Option<String>,
+    waited: u8,
+    escaped: u8,
+}
+impl Usage {
+    pub fn step(&mut self, name: Option<&str>, screen: &Screen, settled: bool) -> Step {
+        let escape = || Step::Keys(vec![Input::Key(Key::Escape)]);
+        if let Some(report) = &self.report {
+            let panel = usage(&screen.text).is_some();
+            // Closed (the composer is back, or the settled screen shows no panel), or Escape no longer closes it.
+            if !panel && (settled || ready(screen, true, name)) || settled && self.escaped >= 3 {
+                return Step::Done(Menu {
+                    result: Some(("Usage".into(), report.clone())),
+                    ..Menu::default()
+                });
+            }
+            if !settled {
+                return Step::Wait;
+            }
+            self.escaped += 1;
+            return escape();
+        }
+        match usage(&screen.text) {
+            _ if !settled => Step::Wait,
+            Some((_, true)) if self.waited < LOADING => {
+                self.waited += 1;
+                Step::Wait
+            }
+            Some((report, _)) => {
+                self.report = Some(report);
+                self.escaped = 1;
+                escape()
+            }
+            None if self.waited < OPENING => {
+                self.waited += 1;
+                Step::Wait
+            }
+            None => Step::Done(Menu::default()),
+        }
+    }
+}
 /// The permission panel as a chat card (codex menu::interaction shape; answered by Goal::Choose).
 pub fn prompt(screen: &Screen) -> Option<Interaction> {
     let panel = permission(&screen.text)?;
@@ -1532,5 +1626,104 @@ mod tests {
         walk.scope = Some(malformed());
         walk.decision = 1;
         assert!(matches!(step(&mut walk, &goal, &switch(true), true), Step::Fail(_)));
+    }
+
+    /// Claude Code 2.1.321's `/usage` panel at 72 columns (figures made up), under the conversation's banner.
+    fn panel(loading: bool) -> Screen {
+        let limits = if loading {
+            "   Loading usage…\n".to_owned()
+        } else {
+            [
+                "   Current week (all models)",
+                "   ████▌                                              9% used",
+                "   Resets Jan 4 at 9am (Etc/UTC)",
+                "",
+                "   Current week (Example)",
+                "   ██                                                 4% used",
+                "   Resets Jan 4 at 9am (Etc/UTC)",
+                "",
+                "   What's contributing to your usage?",
+                "   Approximate · sessions on this machine only",
+                "",
+                "   61%  Start fresh when you switch tasks · run /clear",
+                "",
+                "   f to fix 1 of 1 · d to day · w to week",
+                "",
+                "   Usage credits",
+                "   Usage credits are off · /usage-credits to turn them on",
+                "",
+            ]
+            .join("\n")
+        };
+        Screen {
+            text: format!(
+                " ▐▛███▜▌   Claude Code v2.1.321\n\n   Settings  Status   Config   Usage   Stats\n\n   Session\n\n   \
+                 Total cost:            $0.0000\n   Total duration (API):  0s\n\n{limits}\n   Esc to cancel\n\n\n"
+            ),
+            cursor: (0, 0),
+            faint_tail: false,
+        }
+    }
+
+    #[test]
+    fn usage_panel_reads_as_its_report() {
+        let (report, loading) = usage(&panel(false).text).expect("the usage panel");
+        assert!(!loading);
+        assert_eq!(
+            report,
+            "Session\n\nTotal cost: $0.0000\nTotal duration (API): 0s\n\nCurrent week (all models)\n9% used\n\
+             Resets Jan 4 at 9am (Etc/UTC)\n\nCurrent week (Example)\n4% used\nResets Jan 4 at 9am (Etc/UTC)\n\n\
+             What's contributing to your usage?\nApproximate · sessions on this machine only\n\n\
+             61% Start fresh when you switch tasks · run /clear\n\nUsage credits\n\
+             Usage credits are off · /usage-credits to turn them on"
+        );
+        assert!(usage(&panel(true).text).is_some_and(|(_, loading)| loading));
+        // A composer, or a permission panel (its footer is Esc's too), is no settings panel.
+        assert_eq!(usage(&screen("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents").text), None);
+        assert!(hints("f to fix 1 of 4 · d to day · w to week"));
+        assert!(!hints("Approximate · sessions on this machine only"));
+        assert!(!hints("Usage credits are off · /usage-credits to turn them on"));
+    }
+
+    /// After Enter: the settled, loaded panel is read, Escape closes it (the only key), and the report is the
+    /// result once the composer is back; a frame between changes waits.
+    #[test]
+    fn usage_is_read_then_closed() {
+        let composer = screen("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents");
+        let escape = Step::Keys(vec![Input::Key(Key::Escape)]);
+        let mut reading = Usage::default();
+        assert_eq!(reading.step(None, &panel(false), false), Step::Wait);
+        assert_eq!(reading.step(None, &panel(true), true), Step::Wait, "loading");
+        assert_eq!(reading.step(None, &panel(false), true), escape);
+        assert_eq!(reading.step(None, &panel(false), false), Step::Wait, "Escape not drawn yet");
+        assert_eq!(reading.step(None, &panel(false), true), escape, "Escape again on a settled panel");
+        let Step::Done(menu) = reading.step(None, &composer, false) else { panic!("done once the composer is back") };
+        let (title, text) = menu.result.expect("the report");
+        assert_eq!(title, "Usage");
+        assert!(text.starts_with("Session\n\nTotal cost: $0.0000") && text.contains("9% used"));
+        // Escape that never closes it: the report is the result all the same, after three.
+        let mut stuck = Usage::default();
+        assert_eq!(stuck.step(None, &panel(false), true), escape);
+        assert_eq!(stuck.step(None, &panel(false), true), escape);
+        assert_eq!(stuck.step(None, &panel(false), true), escape);
+        assert!(matches!(stuck.step(None, &panel(false), true), Step::Done(Menu { result: Some(_), .. })));
+        // Still loading after five settled screens: read as it stands.
+        let mut slow = Usage::default();
+        for _ in 0..LOADING {
+            assert_eq!(slow.step(None, &panel(true), true), Step::Wait);
+        }
+        assert_eq!(slow.step(None, &panel(true), true), escape);
+    }
+
+    /// A `/usage` that opens no panel (another version, a command of its own) is a typed command like any other.
+    #[test]
+    fn usage_without_its_panel_is_a_typed_command() {
+        let composer = screen("⏵⏵ auto mode on (shift+tab to cycle) · ← for agents");
+        let mut reading = Usage::default();
+        assert_eq!(reading.step(None, &composer, false), Step::Wait);
+        for _ in 0..OPENING {
+            assert_eq!(reading.step(None, &composer, true), Step::Wait);
+        }
+        assert_eq!(reading.step(None, &composer, true), Step::Done(Menu::default()));
     }
 }

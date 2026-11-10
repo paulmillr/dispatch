@@ -262,6 +262,23 @@ import XCTest
         XCTAssertNil(store.reveal("codex", text: text, live: true, ended: true, reduceMotion: false))
     }
 
+    /// Thinking shown in the thread types as it streams in (Pi's `thinking_delta`), as a reply does; a posted thought
+    /// (Claude Code's), however short, shows at once.
+    func testStreamedThinkingTypesAndPostedThinkingShowsAtOnce() throws {
+        let previous = ChatTypingReveals.enabled
+        ChatTypingReveals.enabled = true
+        defer { ChatTypingReveals.enabled = previous }
+        let time: TimeInterval = 50
+        let store = ChatTypingReveals()
+        store.now = { time }
+        store.drivesItself = false
+        store.arrived("pi", agent: "pi", completed: false, thought: true)
+        let reveal = try XCTUnwrap(store.reveal("pi", text: "Checking the", live: true, ended: false, reduceMotion: false))
+        XCTAssertLessThanOrEqual(reveal.current.shown, 1, "types from its first character")
+        store.arrived("claude", agent: "claude", completed: true, thought: true)
+        XCTAssertNil(store.reveal("claude", text: "Short thought.", live: true, ended: true, reduceMotion: false))
+    }
+
     /// While testing the reveal is off, so recorded tests that wait on a reply's text see it as it arrives.
     func testRevealIsOffWhileTesting() {
         XCTAssertFalse(ChatTypingReveals.enabled)

@@ -231,7 +231,9 @@ struct StripActionHover: ViewModifier {
 }
 
 /// A control inside a glass panel (the sidebar header's): an SF Symbol at the sidebar toggle's size in the secondary
-/// color, brightening with a faint capsule under the pointer, and keeping a steady capsule while `active`.
+/// color, brightening with a faint capsule under the pointer. While `active` (a toggle that is on, a sheet it shows) the
+/// symbol takes the accent, as Liquid Glass marks a toggled control, with no fill of its own: the capsule stays the
+/// pointer's, so a click under the pointer always changes the symbol's color and on never reads as hover.
 struct GlassPanelControl: ViewModifier {
     var active = false
     @Environment(\.appTypography) private var typography
@@ -241,8 +243,8 @@ struct GlassPanelControl: ViewModifier {
         let size = StripTab.glassTrackHeight(typography)
         content.font(.system(size: 14))
             .frame(width: size, height: size)
-            .foregroundStyle(active || hovering ? Chrome.ink : Chrome.palette.detail)
-            .background(active ? Chrome.ink.opacity(0.07) : hovering ? Chrome.palette.hover : .clear, in: Capsule())
+            .foregroundStyle(active ? Chrome.accent : hovering ? Chrome.ink : Chrome.palette.detail)
+            .background(hovering ? Chrome.palette.hover : .clear, in: Capsule())
             .contentShape(Capsule())
             .onHover { hovering = $0 }
     }

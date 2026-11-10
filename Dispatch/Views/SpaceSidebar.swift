@@ -308,9 +308,7 @@ struct SpaceSidebar: View {
         label()
             .font(typography.symbol(.body))
             .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
-            .foregroundStyle(active ? Chrome.ink : Chrome.palette.detail)
-            .background(active ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
-            .contentShape(Rectangle())
+            .modifier(FlatHeaderControl(active: active))
     }
 
     private var shortcutsButton: some View {
@@ -318,7 +316,7 @@ struct SpaceSidebar: View {
                                                set: { controller.windowState.shortcutsPresented = $0 }),
                             keyFont: typography.shortcut(), ink: Chrome.ink, muted: Chrome.palette.detail,
                             label: "Keyboard shortcuts", identifier: "sidebar-shortcuts",
-                            symbol: "keyboard") { WorkspaceShortcutSheet() }
+                            symbol: "keyboard", accent: Chrome.accent) { WorkspaceShortcutSheet() }
     }
 
     private var windowRow: some View {
@@ -1086,6 +1084,22 @@ private struct SpaceRowFrames: PreferenceKey {
     static let defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+/// A flat header control (GlassPanelControl's flat counterpart): the detail color, brightening on a faint square under
+/// the pointer as the shortcuts button beside it does; while `active` the accent, with no fill of its own, so on never
+/// reads as hover.
+private struct FlatHeaderControl: ViewModifier {
+    let active: Bool
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(active ? Chrome.accent : hovering ? Chrome.ink : Chrome.palette.detail)
+            .background(hovering ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
     }
 }
 

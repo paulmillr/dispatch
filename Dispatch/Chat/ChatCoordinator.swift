@@ -42,6 +42,8 @@ final class ChatCoordinator {
     }
     private var localHooksInMemory: [String: Bool] = [:]
     func localHooksAllowed(_ key: String) -> Bool { localHooks[key] != false }
+    /// The first launch's answer to whether agents run on this Mac (`LocalAgentsConsent.key`); nil unanswered.
+    var localAgentsAnswer: String? { defaults?.string(forKey: LocalAgentsConsent.key) }
     /// Integration changes run one after another, so rapid toggles end in the last choice everywhere.
     /// All coordinators install into shared profiles; teardown joins the same queue.
     var integrationChanges: Task<Void, Never>? { Self.integrationTail }

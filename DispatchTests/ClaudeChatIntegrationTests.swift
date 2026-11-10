@@ -250,6 +250,15 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             try await command("/mcp") { session.commandResult?.title == "/mcp" }
             XCTAssertTrue(session.commandResult?.text.hasPrefix("No MCP servers configured") == true)
             XCTAssertTrue(session.showChat); XCTAssertNil(session.terminalAttention)
+            // /usage opens Claude's settings panel and writes nothing: its report is read, the panel closed, and the
+            // report is the command's result (an API key's panel has the session's figures only).
+            try await command("/usage") {
+                session.commandResult?.title == "Usage" && session.commandResult?.text.hasPrefix("Session\n\nTotal cost:") == true
+            }
+            XCTAssertTrue(session.showChat); XCTAssertNil(session.terminalAttention)
+            XCTAssertFalse(screen().contains("Esc to cancel"), screen())
+            try await TestSupport.eventually(diagnostic: screen()) { !session.busy && ClaudeModelMenu.isEmptyComposer(screen()) }
+            XCTAssertEqual(userTexts(), ["new conversation", "/init"])
             // Compaction waits on the model; its command and summary are not prompts.
             // The title shows at once; Claude's output and the compaction notice follow.
             try await command("/compact") {

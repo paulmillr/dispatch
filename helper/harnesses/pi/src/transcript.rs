@@ -3,7 +3,7 @@ use crate::{
     bridge::{self, Shared},
     records::text,
 };
-use dispatch_helper_core::api::*;
+use dispatch_helper_core::{api::*, json::Value};
 use std::rc::Rc;
 
 pub fn start(runtime: &Shared, io: &mut dyn Io, binding: &Binding) -> Result<(), Error> {
@@ -89,33 +89,46 @@ fn refresh(runtime: &Shared, io: &mut dyn Io, binding: &Binding) {
                 finish(&saved, io, &binding);
                 return;
             }
-            if let Ok(state) = crate::harness::state(value) {
-                saved.borrow_mut().pages.push(Update::State {
-                    binding: binding.clone(),
-                    state,
-                });
-            }
+            let state = crate::harness::state(value).ok();
+            let path = value.get("transcriptPath").and_then(Value::string).map(std::path::PathBuf::from);
             saved
                 .borrow_mut()
                 .states
                 .insert(binding.session.clone(), Rc::new(document));
             let next = saved.clone();
-            crate::history::read(
-                &saved,
-                io,
-                &binding.clone(),
-                None,
-                Box::new(move |io, result| {
-                    if let Ok(page) = result {
-                        next.borrow_mut().pages.push(Update::Records {
-                            binding: binding.clone(),
-                            records: page.records,
-                        });
-                        io.timer(io.now());
-                    }
-                    finish(&next, io, &binding);
-                }),
-            );
+            let session = binding.session.clone();
+            // The state (titled by its first prompt when unnamed: a new session's first prompt names it here), then
+            // the page.
+            let read = move |io: &mut dyn Io, state: Option<State>| {
+                if let Some(state) = state {
+                    next.borrow_mut().pages.push(Update::State {
+                        binding: binding.clone(),
+                        state,
+                    });
+                }
+                let after = next.clone();
+                crate::history::read(
+                    &next,
+                    io,
+                    &binding.clone(),
+                    None,
+                    Box::new(move |io, result| {
+                        if let Ok(page) = result {
+                            after.borrow_mut().pages.push(Update::Records {
+                                binding: binding.clone(),
+                                records: page.records,
+                            });
+                            io.timer(io.now());
+                        }
+                        finish(&after, io, &binding);
+                    }),
+                );
+            };
+            match state {
+                Some(state) => crate::history::titled(&saved, io, &session, path, state,
+                    Box::new(move |io, state| read(io, Some(state)))),
+                None => read(io, None),
+            }
         }),
     );
 }

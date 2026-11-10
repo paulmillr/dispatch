@@ -350,6 +350,14 @@ enum System {
         }
     }
 
+    /// A file's or folder's permission bits (a test checking what an install left).
+    static func permissions(_ url: URL) throws -> Int {
+        try observe("file.mode", url.path) {
+            try ((FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue)
+                ?? { throw CocoaError(.fileReadUnknown) }()
+        }
+    }
+
     /// A directory another process changes: its entries' names.
     static func list(_ url: URL) throws -> [String] {
         try observe("file.list", url.path) { try FileManager.default.contentsOfDirectory(atPath: url.path) }
@@ -431,6 +439,15 @@ enum System {
     static func directory(_ url: URL) throws {
         _ = try act("file.directory", url.path) {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return true
+        }
+    }
+
+    /// A file's or folder's mode (a test's file or folder others can write, then made private again).
+    static func permissions(_ url: URL, _ mode: Int) throws {
+        struct Input: Encodable { let path: String; let permissions: Int }
+        _ = try act("file.permissions", Input(path: url.path, permissions: mode)) {
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
             return true
         }
     }

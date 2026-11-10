@@ -1214,11 +1214,22 @@ struct SettingsView: View {
 
     private func agentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
-        return cardOption(launch.label) {
+        return cardOption(launch.label, detail: localGap(launch.key)) {
             settingToggle(launch.label, isOn: Binding(get: { !chat.disabledIntegrations.contains(launch.key) },
                                                       set: { chat.setHelperIntegration(launch.key, enabled: $0) }), compact: true)
                 .accessibilityIdentifier("settings-agent-toggle-\(launch.key)")
         }.accessibilityIdentifier("settings-agent-\(launch.key)")
+    }
+
+    /// An agent's switch is its choice everywhere (this Mac and SSH hosts). On while this Mac runs its CLI without its
+    /// hooks (none found when the first launch asked, an install that failed before), the row says so rather than
+    /// look set up; Hosts › This Mac installs it. Known once a launch or This Mac asked the login shell (`localCLIs`).
+    private func localGap(_ key: String) -> String? {
+        let chat = TerminalRuntime.shared.chat
+        guard chat.enabled, !chat.disabledIntegrations.contains(key), chat.localHooksAllowed(key), chat.helperInstalls[key] != nil,
+              chat.hookStatus(key) == .off, chat.localCLIs?.contains(key) == true, chat.localInstallationFailure(key) == nil
+        else { return nil }
+        return "not set up on this Mac"
     }
 
     private var chatEnabled: Binding<Bool> {

@@ -1,18 +1,24 @@
 # The signing machine's first step, of scripts/release-publish.sh and scripts/release/iphone.sh; sourced, defines
 # functions only (docs/releasing.md, Signing machine). The script sets SELF (the scripts folder), REPOSITORY, CONFIG,
-# version and arguments, and sources release/ui.sh first. signed_commit is also scripts/release/verify.sh --reproduce's
-# (with its own clone and key).
+# version (or, for signed_ref, ref) and arguments, and sources release/ui.sh first. signed_commit is also
+# scripts/release/verify.sh --reproduce's (with its own clone and key).
 #
 #   source_start FOLDER        the work folder, CONFIG/work/FOLDER; quiet in the clone's copy of the script
 #   source_checks TOOL...      the tools; the commit key pinned in CONFIG; the version commit of X.Y.Z signed by that
-#                              key alone (signed_commit). Sets commit and number (the build number); stops with every
-#                              problem listed
+#                              key alone (signed_commit), or, with version empty, the commit ref names (signed_ref;
+#                              no key need be pinned).
+#                              Sets commit and number (the build number); stops with every problem listed
 #   signed_commit GNUPGHOME KEY URL MAIN_REF [COMMIT]
 #                              fetches main from URL into MAIN_REF of $clone; finds the version commit of $version on it
 #                              (scripts/release/config.py version-commit: the newest commit setting the app to $version;
 #                              it must be COMMIT when given), signed by KEY (a primary key's fingerprint) from the keyring
 #                              GNUPGHOME alone; a tag $version on URL, once published, must be it. One checklist line;
 #                              sets commit and number (the build number), empty on a problem
+#   signed_ref GNUPGHOME KEY REF
+#                              fetches origin's branches; REF is one of them or a commit on one. Not signed by KEY (as
+#                              above; or no KEY) is only a warning, for now: the iPhone's Ad Hoc builds are internal. One
+#                              checklist line; sets commit, number and version (the version files' there), empty on a
+#                              problem
 #   source_hand_over           the clone's copy: exports the commit's tree to the work folder and runs the same script
 #                              (the same path under scripts/) from there (what touches the keys comes from a commit you signed); the commit's copy:
 #                              returns
@@ -31,22 +37,24 @@ source_checks() {
   local missing="" tool key="" apps
   for tool in "$@"; do command -v "$tool" > /dev/null || missing+=" $tool"; done
   if [[ -z "$missing" ]]; then ok "$(printf '%s, ' "$@" | sed 's/, $//')"
-  else bad "not on PATH:$missing"; note "over SSH, run it in a login shell: ssh -t signer zsh -lc '$(script_name) $version'"; fi
+  else bad "not on PATH:$missing"; note "over SSH, run it in a login shell: ssh -t signer zsh -lc '$(script_name) ${version:-$ref}'"; fi
 
   if [[ -f "$CONFIG/release.env" && -d "$CONFIG/gnupg" ]]; then
     # RELEASE_COMMIT_KEY, and optionally RELEASE_TAP (the tap's clone).
     source "$CONFIG/release.env"
     key="${RELEASE_COMMIT_KEY:-}"
     [[ "$key" =~ ^[0-9A-F]{40}$ ]] || { bad "RELEASE_COMMIT_KEY in $CONFIG/release.env is not a 40-digit fingerprint"; key=""; }
-  else
+  elif [[ -n "$version" ]]; then
     bad "no commit key pinned; run: scripts/release/signer-setup.sh trust"
   fi
 
   commit="" number=""
   if [[ -z "$clone" ]] || ! [[ "$(git -C "$clone" config --get remote.origin.url)" =~ github\.com[:/]$REPOSITORY(\.git)?$ ]]; then
     bad "not run from a clone of $REPOSITORY"
-  elif [[ -n "$key" ]]; then
+  elif [[ -n "$key" && -n "$version" ]]; then
     signed_commit "$CONFIG/gnupg" "$key" origin refs/remotes/origin/main
+  elif [[ -z "$version" ]]; then
+    signed_ref "$CONFIG/gnupg" "$key" "$ref"
   fi
   [[ -z "$failed" ]] || die "stopped; nothing was built or signed"
 }
@@ -74,6 +82,38 @@ signed_commit() {
   fi
 }
 
+signed_ref() {
+  local home="$1" key="$2" name="$3" found="" signed=""
+  commit="" number=""
+  pending "commit $name"
+  if ! git -C "$clone" fetch --quiet --no-tags origin '+refs/heads/*:refs/remotes/origin/*' 2> /dev/null; then
+    bad "cannot fetch the branches of origin"
+    return
+  fi
+  if git -C "$clone" rev-parse --quiet --verify "refs/remotes/origin/$name^{commit}" > /dev/null; then
+    found="$(git -C "$clone" rev-parse "refs/remotes/origin/$name^{commit}")"
+  elif [[ "$name" =~ ^[0-9a-f]{7,40}$ ]] && git -C "$clone" rev-parse --quiet --verify "$name^{commit}" > /dev/null &&
+       [[ -n "$(git -C "$clone" for-each-ref --contains "$name" refs/remotes/origin/)" ]]; then
+    found="$(git -C "$clone" rev-parse "$name^{commit}")"
+  fi
+  [[ -z "$found" || -z "$key" ]] || ! grep -qw "$key" <<< "$(signer_of "$home" commit "$found")" || signed=1
+  if [[ -z "$found" ]]; then
+    bad "$name is no branch of origin, nor a commit on one (push it first)"
+  elif ! version="$(cd "$clone" && python3 -I "$SELF/release/config.py" version-at "$found" 2>&1)"; then
+    bad "commit ${found:0:8}: $version"
+    version=""
+  else
+    commit="$found"
+    number="$(TZ=UTC git -C "$clone" show -s --format=%cd --date=format-local:%Y%m%d.%H%M "$commit")"
+    # The commit's copy gets the commit itself: the branch is named only in the clone's (quiet) checks.
+    [[ "$name" =~ ^[0-9a-f]{7,40}$ ]] && name="" || name=" ($name)"
+    if [[ -n "$signed" ]]; then ok "commit signed" "${commit:0:8}$name, version $version, key …${key: -16}"
+    elif [[ -z "${quiet:-}" ]]; then
+      warn "commit not signed" "${commit:0:8}$name, version $version: not by the commit key; its scripts run here, with your keys"
+    fi
+  fi
+}
+
 # gpg's status lines: VALIDSIG <signing key> … <primary key>. Only the pinned key, from its own keyring, counts.
 signer_of() {
   GNUPGHOME="$1" git -C "$clone" "verify-$2" --raw "$3" 2>&1 > /dev/null |
@@ -88,9 +128,9 @@ source_hand_over() {
     fi
     # Its own scripts take over: a commit from before these (no scripts/release/) has others, which this cannot run.
     git -C "$clone" cat-file -e "$commit:scripts/release/source.sh" 2> /dev/null ||
-      die "the version commit of $version, ${commit:0:8}, predates scripts/release/: these scripts cannot release it"
+      die "commit ${commit:0:8} predates scripts/release/: these scripts cannot release it"
     git -C "$clone" cat-file -e "$commit:$(script_name)" 2> /dev/null ||
-      die "the version commit of $version, ${commit:0:8}, has no $(script_name): it cannot release this way"
+      die "commit ${commit:0:8} has no $(script_name): it cannot release this way"
     mkdir -p "$work"
     echo "$commit" > "$work/commit"
     rm -rf "$work/source"

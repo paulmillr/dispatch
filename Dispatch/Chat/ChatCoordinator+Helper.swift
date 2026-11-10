@@ -778,6 +778,8 @@ extension ChatCoordinator {
                 session.command = nil
                 if let result {
                     session.commandResult = result
+                    // Its screen was read and closed (Claude's /usage): a dialog reported after it is not its own.
+                    session.typedCommandAt = nil
                     session.observedCommand = nil
                     session.awaitingPromptAck = false
                     session.promptBoundary = nil
@@ -1173,14 +1175,39 @@ extension ChatCoordinator {
         integrationWork { chat in
             let launches = (try? await HelperClient(HelperApp.shared.connection()).launches()) ?? []
             chat.helperLaunches = launches
+            var missing: [String] = []
             for launch in launches {
                 // A new helper starts with every integration enabled: repeat the user's turned-off ones.
                 let off = chat.disabledIntegrations.contains(launch.key) || !chat.enabled || !chat.localHooksAllowed(launch.key)
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed
+                } else if !off, install.optional == true, install.installed == true, install.restart {
+                    // Dispatch's own Pi extension that an install would change (an update brought a new one, or others
+                    // can write it) is installed again, so it never stays behind or open; Pi shows "run /reload" if
+                    // its bytes changed. Claude's and Codex's configs are shared files, changed only when asked.
+                    do {
+                        if let updated = try await HelperChat.setup(.local, key: launch.key, enabled: true, terminal: nil) { install = updated }
+                        chat.installed(launch.key, endpoint: .local, error: nil)
+                    } catch { chat.installed(launch.key, endpoint: .local, error: error) }
+                } else if !off, install.optional == true, install.installed == false {
+                    missing.append(launch.key)
                 }
                 chat.helperInstalls[launch.key] = install
+            }
+            // Pi's extension installs with the other agents' hooks (the first launch's Yes, or This Mac's Install). One
+            // that is on but was never installed here (an older build kept Pi opt-in, or the install failed, say through
+            // a folder others can write) is installed at launch once Pi runs here; Settings shows why if it fails again.
+            let wanted = missing.filter { chat.localAgentsAnswer == "yes" || chat.localHooks[$0] == true }
+            guard !wanted.isEmpty else { return }
+            if chat.localCLIs == nil, let found = await LocalAgentsConsent.installedAgents() { chat.localCLIs = found }
+            for key in wanted where chat.localCLIs?.contains(key) == true {
+                do {
+                    if let installed = try await HelperChat.setup(.local, key: key, enabled: true, terminal: nil) {
+                        chat.helperInstalls[key] = installed
+                    }
+                    chat.installed(key, endpoint: .local, error: nil)
+                } catch { chat.installed(key, endpoint: .local, error: error) }
             }
         }
     }

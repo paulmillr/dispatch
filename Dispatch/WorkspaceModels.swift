@@ -264,50 +264,137 @@ extension LayoutPreset {
         let selected: UUID
     }
 
-    /// `fractions`: the old layout's divider positions, so each pane is matched where it shows.
-    func arrange(_ groups: [TabGroup], in oldLayout: PaneLayout, fractions: [UUID: CGFloat] = [:], selected: UUID) -> [TabGroup] {
+    /// Moves the panes' tabs into this layout's panes. `fractions`: the old layout's divider positions, so each pane is
+    /// matched where it shows. Each old pane goes into the new pane it overlaps most (the focused one first), or joins
+    /// the one it overlaps most once none it overlaps is free; joined panes keep their reading order and their tabs'.
+    /// A pane left empty takes the last hidden tab of the pane that covered its place, the last in reading order first,
+    /// so a pane's tabs split off in runs and join back in their order. `remembered`: what this layout held when last
+    /// left (`LayoutMemory`), whose tabs go back to their panes in their order.
+    func arrange(_ groups: [TabGroup], in oldLayout: PaneLayout, fractions: [UUID: CGFloat] = [:], selected: UUID,
+                 remembered: LayoutMemory.Arrangement? = nil) -> [TabGroup] {
         precondition(groups.reduce(0) { $0 + $1.tabs.count } >= count)
+        // Thirds don't add up exactly: overlaps this close are equal.
+        let tolerance: CGFloat = 1e-9
         func frames(_ layout: PaneLayout, _ fractions: [UUID: CGFloat]) -> [UUID: CGRect] {
             Dictionary(layout.paneFrames(fractions: fractions).map { ($0.id, $0.frame) }) { first, _ in first }
         }
         let oldFrames = frames(oldLayout, fractions)
         let slots = (0..<count).map { _ in System.uuid() }
         let newLayout = layout(slots)
-        let newFrames = frames(newLayout, newLayout.evenFractions.mapValues { CGFloat($0) })
-        func overlap(_ group: TabGroup, _ index: Int) -> CGFloat {
-            let intersection = oldFrames[group.id]!.intersection(newFrames[slots[index]]!)
+        let newFractions = newLayout.evenFractions.mapValues { CGFloat($0) }
+        let newFrames = frames(newLayout, newFractions)
+        func overlap(_ group: UUID, _ index: Int) -> CGFloat {
+            guard let old = oldFrames[group] else { return 0 }
+            let intersection = old.intersection(newFrames[slots[index]]!)
             return intersection.isNull ? 0 : intersection.width * intersection.height
+        }
+        /// The new pane among `indices` the old pane overlaps most, the first on a tie; none it overlaps at all.
+        func closest(_ group: UUID, among indices: [Int]) -> Int? {
+            indices.filter { overlap(group, $0) > tolerance }.min { a, b in
+                let x = overlap(group, a), y = overlap(group, b)
+                return abs(x - y) <= tolerance ? a < b : x > y
+            }
         }
         // Focus wins when two old panes need the same position. Ties use visual
         // order, so splitting a single pane keeps it at the top left.
-        let ordered = oldLayout.paneIDs.compactMap { id in groups.first { $0.id == id } }
-        let priority = ordered.filter { $0.tabs.contains(selected) } + ordered.filter { !$0.tabs.contains(selected) }
-        var placed = [TabGroup?](repeating: nil, count: count)
+        let reading = oldLayout.paneIDsInReadingOrder(fractions: fractions).compactMap { id in groups.first { $0.id == id } }
+        let rank = Dictionary(reading.enumerated().map { ($1.id, $0) }) { first, _ in first }
+        let priority = reading.filter { $0.tabs.contains(selected) } + reading.filter { !$0.tabs.contains(selected) }
+        var owners = [TabGroup?](repeating: nil, count: count)
+        var joined = [[TabGroup]](repeating: [], count: count)
         var merged: [TabGroup] = []
         for group in priority {
-            let available = placed.indices.filter { placed[$0] == nil }
-            guard let index = available.sorted(by: {
-                let a = overlap(group, $0), b = overlap(group, $1)
-                return a == b ? $0 < $1 : a > b
-            }).first else { merged.append(group); continue }
-            placed[index] = group
+            if let index = closest(group.id, among: owners.indices.filter { owners[$0] == nil }) {
+                owners[index] = group; joined[index] = [group]
+            } else { merged.append(group) }
         }
         for group in merged {
-            let index = placed.indices.filter { placed[$0] != nil }.sorted {
-                let a = overlap(group, $0), b = overlap(group, $1)
-                return a == b ? $0 < $1 : a > b
-            }[0]
-            placed[index]!.tabs += group.tabs
+            let taken = owners.indices.filter { owners[$0] != nil }
+            guard let index = closest(group.id, among: taken) ?? taken.first else {
+                owners[0] = group; joined[0] = [group]; continue
+            }
+            joined[index].append(group)
         }
-        // Populate additional panes using hidden tabs, retaining every visible
-        // selection and the order of the tabs left in each original pane.
-        for index in placed.indices where placed[index] == nil {
-            let source = placed.indices.first { (placed[$0]?.tabs.count ?? 0) > 1 }!
-            let tabIndex = placed[source]!.tabs.firstIndex { $0 != placed[source]!.selected }!
+        var placed: [TabGroup?] = owners.indices.map { index in
+            owners[index].map { owner in
+                TabGroup(id: owner.id, tabs: joined[index].sorted { rank[$0.id, default: .max] < rank[$1.id, default: .max] }
+                    .flatMap(\.tabs), selected: owner.selected)
+            }
+        }
+        if let remembered, remembered.panes.count == count {
+            placed = recall(remembered, into: placed, slots: slots, selected: selected)
+        }
+        // Populate additional panes using hidden tabs, retaining every visible selection.
+        let order = newLayout.paneIDsInReadingOrder(fractions: newFractions).compactMap { slots.firstIndex(of: $0) }
+        for index in order.reversed() where placed[index] == nil {
+            let donors = placed.indices.filter { (placed[$0]?.tabs.count ?? 0) > 1 }
+            let source = donors.min { a, b in
+                let x = overlap(placed[a]!.id, index), y = overlap(placed[b]!.id, index)
+                return abs(x - y) <= tolerance ? a < b : x > y
+            }!
+            let tabIndex = placed[source]!.tabs.lastIndex { $0 != placed[source]!.selected }!
             let tab = placed[source]!.tabs.remove(at: tabIndex)
             placed[index] = TabGroup(id: slots[index], tabs: [tab], selected: tab)
         }
         return placed.compactMap { $0 }
+    }
+
+    /// The remembered tabs back in their panes, in their order, before the others the placement put there; the
+    /// focused tab stays shown, else each pane shows the tab it showed. A pane left empty is filled after.
+    private func recall(_ remembered: LayoutMemory.Arrangement, into placed: [TabGroup?], slots: [UUID],
+                        selected: UUID) -> [TabGroup?] {
+        let present = Set(placed.flatMap { $0?.tabs ?? [] })
+        let known = Set(remembered.panes.joined()).intersection(present)
+        return placed.indices.map { index in
+            let base = placed[index]
+            let tabs = remembered.panes[index].filter(present.contains) + (base?.tabs ?? []).filter { !known.contains($0) }
+            guard let first = tabs.first else { return nil }
+            let shown = tabs.contains(selected) ? selected
+                : [index < remembered.selected.count ? remembered.selected[index] : nil, base?.selected].compactMap { $0 }.first(where: tabs.contains) ?? first
+            return TabGroup(id: base?.id ?? slots[index], tabs: tabs, selected: shown)
+        }
+    }
+}
+
+/// What each layout of a space held when the user last left it, so going back puts every tab where it was: the
+/// panes' tabs (a structured space's windows) in the preset's pane order, the tab each showed and the dividers. A tab
+/// the user moves to another pane meanwhile is forgotten (`leave` sees it away from where the last layout placed it);
+/// tabs gone since are dropped. Kept with the space.
+struct LayoutMemory: Equatable, Codable {
+    struct Arrangement: Equatable, Codable {
+        var panes: [[UUID]]
+        var selected: [UUID]
+        /// The dividers' positions in the layout's split order (`PaneLayout.splitOrder`); nil at the middle.
+        var fractions: [Double?]
+
+        func dividers(of layout: PaneLayout) -> [UUID: Double] {
+            Dictionary(zip(layout.splitOrder, fractions).compactMap { id, fraction in fraction.map { (id, $0) } }) { first, _ in first }
+        }
+    }
+
+    /// By `LayoutPreset.rawValue`.
+    var presets: [String: Arrangement] = [:]
+    /// The pane each tab had when a layout last placed it.
+    var placed: [UUID: UUID] = [:]
+
+    /// Before another layout: tabs the user moved to another pane since are forgotten, then the layout being left (a
+    /// preset's, not one the user split by hand) is remembered.
+    mutating func leave(_ groups: [LayoutPreset.TabGroup], preset: LayoutPreset?, layout: PaneLayout, fractions: [UUID: CGFloat]) {
+        let pane = Dictionary(groups.flatMap { group in group.tabs.map { ($0, group.id) } }) { first, _ in first }
+        let kept = Set(pane.compactMap { tab, id in (placed[tab].map { $0 == id } ?? true) ? tab : nil })
+        for key in presets.keys {
+            presets[key]!.panes = presets[key]!.panes.map { $0.filter(kept.contains) }
+        }
+        placed = [:]
+        let ordered = layout.paneIDs.compactMap { id in groups.first { $0.id == id } }
+        guard let preset, ordered.count == preset.count, ordered.count == groups.count else { return }
+        presets[preset.rawValue] = Arrangement(panes: ordered.map(\.tabs), selected: ordered.map(\.selected),
+                                               fractions: layout.splitOrder.map { fractions[$0].map(Double.init) })
+    }
+
+    /// After a layout placed them.
+    mutating func record(_ groups: [LayoutPreset.TabGroup]) {
+        placed = Dictionary(groups.flatMap { group in group.tabs.map { ($0, group.id) } }) { first, _ in first }
     }
 }
 
@@ -385,6 +472,14 @@ indirect enum PaneLayout: Equatable, Codable {
         }
         visit(self, in: CGRect(x: 0, y: 0, width: 1, height: 1))
         return frames
+    }
+
+    /// The splits, each before its halves': the same place in two layouts a preset made.
+    var splitOrder: [UUID] {
+        switch self {
+        case .pane: []
+        case .split(let id, _, let first, let second): [id] + first.splitOrder + second.splitOrder
+        }
     }
 
     var splitIDs: Set<UUID> {
@@ -485,6 +580,8 @@ struct Space: Identifiable, Equatable, Codable {
     }
     var selectedContainer: UUID?
     var presentation: TabPresentation?
+    /// What its layouts held when last left (`Workspace.applyLayout`).
+    var layoutMemory: LayoutMemory?
     private var local: PaneArrangement
     var arrangement: PaneArrangement {
         get {

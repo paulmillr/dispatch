@@ -38,13 +38,17 @@ pub fn publish(
     let value = root.get("value").unwrap_or(root);
     match text(root, "event").as_str() {
         "state" => {
-            let state = match crate::harness::state(value) {
+            let mut state = match crate::harness::state(value) {
                 Ok(state) => state,
                 Err(_) => {
                     invalid(ui, binding);
                     return;
                 }
             };
+            // Unnamed: the first prompt the state op or a transcript read found (history::titled).
+            if state.title.is_none() {
+                state.title = runtime.borrow().firsts.get(&binding.session).cloned();
+            }
             runtime
                 .borrow_mut()
                 .states

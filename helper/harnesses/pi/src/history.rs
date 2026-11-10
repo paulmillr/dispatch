@@ -51,7 +51,90 @@ struct Scan {
     state: State,
     activity: bool,
     archive: bool,
+    /// The newest `session_info` entry's name (Pi's `/name`), once one is seen: `Some(None)` when it cleared the name.
+    name: Option<Option<String>>,
+    /// The first user message (`first_prompt`), the title of a session without a name.
+    first: Option<String>,
     done: Option<Done<Read>>,
+}
+
+/// The longest title the helper sends, in characters; a longer one ends in "…" at a word.
+const TITLE: usize = 100;
+
+/// Text as a one-line title: control characters and runs of white space become one space, at most `TITLE` characters.
+fn title(text: &str) -> Option<String> {
+    let line = text
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    if line.chars().count() <= TITLE {
+        return Some(line);
+    }
+    let cut: String = line.chars().take(TITLE).collect();
+    let head = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    Some(format!("{}…", head.trim_end()))
+}
+
+/// The bytes of a transcript's start that may hold its first prompt (the header read takes as many).
+const HEAD: u64 = 65536;
+
+/// A live state's title (the tab's while Chat shows): Pi's name (`/name`), else the session's first prompt, the label
+/// Pi's own session list shows. The prompt is cached per session; when not known yet it is read once from the start of
+/// `path` (the state's `transcriptPath`). A session with no prompt yet stays untitled and is read again next time.
+pub(crate) fn titled(
+    runtime: &Shared,
+    io: &mut dyn Io,
+    session: &str,
+    path: Option<std::path::PathBuf>,
+    mut state: State,
+    done: Box<dyn FnOnce(&mut dyn Io, State)>,
+) {
+    if state.title.is_some() {
+        return done(io, state);
+    }
+    // Copied out first: `done` borrows the runtime mutably (it pushes the state), so no borrow may span it.
+    let cached = runtime.borrow().firsts.get(session).cloned();
+    if let Some(first) = cached {
+        state.title = Some(first);
+        return done(io, state);
+    }
+    let Some(path) = path else {
+        return done(io, state);
+    };
+    let saved = runtime.clone();
+    let session = session.to_owned();
+    bridge::job(
+        runtime,
+        io,
+        Job::Read { path, offset: 0, length: HEAD },
+        Box::new(move |io, result| {
+            if let Ok(Output::Read { bytes, .. }) = result
+                && let Some(first) = first_prompt(&bytes)
+            {
+                saved.borrow_mut().firsts.insert(session, first.clone());
+                state.title = Some(first);
+            }
+            done(io, state);
+        }),
+    );
+}
+
+/// The session's first user message, the label Pi's own session list shows for an unnamed session: found in the
+/// transcript's first bytes (read for its header anyway).
+fn first_prompt(bytes: &[u8]) -> Option<String> {
+    bytes.split(|byte| *byte == b'\n').find_map(|line| {
+        let document = Json::parse(line).ok()?;
+        let root = document.root();
+        let message = root.get("message").filter(|_| text(root, "type") == "message")?;
+        if text(message, "role") != "user" {
+            return None;
+        }
+        title(&records::content(message.get("content")))
+    })
 }
 
 pub fn read(
@@ -369,7 +452,7 @@ fn file(
                 Job::Read {
                     path: source.path.clone(),
                     offset: 0,
-                    length: metadata.size.min(65536),
+                    length: metadata.size.min(HEAD),
                 },
                 Box::new(move |io, result| {
                     let bytes = match result {
@@ -414,6 +497,10 @@ fn file(
                         return;
                     }
                     let hash = digest(&header);
+                    let first = first_prompt(&bytes[end + 1..]);
+                    if let Some(first) = &first {
+                        after.borrow_mut().firsts.insert(source.session.clone(), first.clone());
+                    }
                     let previous = previous.filter(|saved| {
                         saved.metadata.device == metadata.device
                             && saved.metadata.inode == metadata.inode
@@ -484,6 +571,8 @@ fn file(
                         state: State::default(),
                         activity: false,
                         archive,
+                        name: None,
+                        first,
                         done: Some(done),
                     }));
                     block(&after, io, scan);
@@ -564,7 +653,13 @@ impl Scan {
             self.incremental = false;
             self.state = State::default();
             self.activity = false;
+            self.name = None;
             return;
+        }
+        // Lines come newest first: the first `session_info` seen names the session, as Pi's getSessionName reads it
+        // (every entry, not only the branch's).
+        if self.name.is_none() && text(root, "type") == "session_info" {
+            self.name = Some(root.get("name").and_then(Value::string).and_then(title));
         }
         let Some((id, parent)) = records::entry(root) else {
             return;
@@ -717,6 +812,17 @@ fn finish(io: &mut dyn Io, scan: Rc<RefCell<Scan>>, error: Option<Error>) {
     {
         scan.incremental = true;
     }
+    // The title: the name a page saw, else the one an incremental read kept, else the first prompt. A name older than
+    // the page is still the live state's (`State.title` from the bridge), which the app prefers.
+    let kept = scan
+        .previous
+        .as_ref()
+        .filter(|_| scan.incremental)
+        .and_then(|saved| saved.state.title.clone());
+    scan.state.title = match scan.name.take() {
+        Some(name) => name.or_else(|| scan.first.clone()),
+        None => kept.or_else(|| scan.first.clone()),
+    };
     let turn = records
         .iter()
         .rev()
@@ -815,3 +921,6 @@ fn details(
         }),
     );
 }
+#[cfg(test)]
+#[path = "history.test.rs"]
+mod tests;

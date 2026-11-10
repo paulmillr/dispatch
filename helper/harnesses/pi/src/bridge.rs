@@ -34,6 +34,8 @@ pub struct Runtime {
     watches: BTreeMap<u64, Binding>,
     pub transcripts: BTreeMap<u64, Binding>,
     pub refreshing: BTreeMap<String, bool>,
+    /// Each session's first prompt as a title (`history::titled`), read once from its transcript.
+    pub firsts: BTreeMap<String, String>,
 }
 pub struct Channel {
     process: Process,
@@ -81,6 +83,7 @@ impl Default for Runtime {
             watches: BTreeMap::new(),
             transcripts: BTreeMap::new(),
             refreshing: BTreeMap::new(),
+            firsts: BTreeMap::new(),
         }
     }
 }

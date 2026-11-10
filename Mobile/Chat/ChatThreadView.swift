@@ -742,9 +742,10 @@ struct ChatThreadView: View {
     }
 
     /// Whether a reply is in the live turn, and whether it may still stream there (its turn's newest item, not
-    /// complete): such a reply types out (`ChatTypingReveals`). Thinking never does.
+    /// complete): such a reply types out (`ChatTypingReveals`), and so does thinking that streams in (Pi's).
     private func streaming(_ row: ChatThreadRow) -> (live: Bool, ended: Bool) {
-        guard case .agent = row.kind, let open = session.transcript.openTurn, open.id == row.turnID else { return (false, true) }
+        let typed = switch row.kind { case .agent, .thinking: true; default: false }
+        guard typed, let open = session.transcript.openTurn, open.id == row.turnID else { return (false, true) }
         return (true, row.item.completed || open.items.last?.id != row.item.id)
     }
 

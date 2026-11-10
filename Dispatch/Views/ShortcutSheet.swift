@@ -156,6 +156,9 @@ struct ShortcutSheetButton<Sheet: View>: View {
     var symbol: String? = nil
     /// The chip's minimum square: the chat composer matches its paperclip and microphone.
     var side: CGFloat = 24
+    /// While the sheet shows: the chip in this color with no fill (the sidebar's header controls, as GlassPanelControl);
+    /// nil keeps it `ink` on its hover fill (the chat composer, in the chat theme's colors).
+    var accent: Color? = nil
     @ViewBuilder let sheet: () -> Sheet
     @State private var hovering = false
     @State private var hoverFocus: (window: NSWindow, responder: NSResponder)?
@@ -169,8 +172,9 @@ struct ShortcutSheetButton<Sheet: View>: View {
                     if let symbol { Image(systemName: symbol) } else { Text("⌘/") }
                 }.font(keyFont)
                     .frame(minWidth: side, minHeight: side)
-                    .foregroundStyle(presented || hovering ? ink : muted)
-                    .background(presented || hovering ? ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundStyle(presented ? accent ?? ink : hovering ? ink : muted)
+                    .background(hovering || (presented && accent == nil) ? ink.opacity(0.07) : .clear,
+                                in: RoundedRectangle(cornerRadius: 4))
                     .contentShape(Rectangle())
             }
         }.buttonStyle(.plain)
