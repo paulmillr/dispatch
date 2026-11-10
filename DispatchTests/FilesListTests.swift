@@ -313,17 +313,15 @@ final class FilesListTests: XCTestCase {
 
         // Under 900 pt: a tall view stacks the list (its own height, at most 40%) over the detail; a short one keeps
         // one column. Half a laptop's window stacks, a quarter keeps one column.
-        func shape(_ width: CGFloat, _ height: CGFloat, one: Bool? = nil, off: Bool = false, ideal: CGFloat? = nil,
+        func shape(_ width: CGFloat, _ height: CGFloat, one: Bool? = nil, ideal: CGFloat? = nil,
                    many: Bool = false, preference: CGFloat? = nil) -> FilesSplitShape {
-            FilesView.shape(width: width, height: height, preference: preference, oneView: one, off: off, listIdeal: ideal,
+            FilesView.shape(width: width, height: height, preference: preference, oneView: one, listIdeal: ideal,
                             oneAtATime: many)
         }
         XCTAssertEqual(shape(1_180, 400), .columns(FilesSplitColumns(list: 620, preview: 560)), "wide enough: side by side")
         XCTAssertEqual(shape(602, 840), .stacked(list: 336))
         XCTAssertEqual(shape(602, 840, ideal: 190.5), .stacked(list: 191), "a short list keeps its own height")
         XCTAssertEqual(shape(602, 840, ideal: 900), .stacked(list: 336), "a long one at most 40%")
-        XCTAssertEqual(shape(602, 840, off: true), .columns(FilesSplitColumns(list: 602, preview: nil)),
-                       "previews off in Settings: the list alone")
         XCTAssertEqual(shape(602, 386), .single)
         XCTAssertEqual(shape(899, 559), .single)
         XCTAssertEqual(shape(899, 560), .stacked(list: 224))
@@ -356,10 +354,10 @@ final class FilesListTests: XCTestCase {
         let rows = session.rows(root: root, settingHidden: true)
         let readme = try row("README.md", in: rows), package = try row("package.json", in: rows)
         let src = try row("src", in: rows)
-        XCTAssertFalse(session.previewOff, "Files starts with the pane, as the git tabs do")
+        XCTAssertTrue(session.paneShown, "Files starts with the pane, as the git tabs do")
         XCTAssertNil(session.oneView, "the layout decides until the tab chooses")
         session.tab = .changes
-        XCTAssertFalse(session.previewOff, "the git tabs' diffs show from the start")
+        XCTAssertTrue(session.paneShown, "the git tabs' diffs show from the start")
         session.tab = .files
         XCTAssertNil(session.previewWidth)
 
@@ -928,28 +926,31 @@ final class FilesListTests: XCTestCase {
 }
 
 extension FilesListTests {
-    /// Settings › Files › Disable file previews: the Files tab keeps no pane (so nothing is read for one) whatever asks
-    /// for it, ⌥⌘P included; the git tabs' details still show.
-    func testDisabledPreviewsKeepTheFilesTabToItsList() async throws {
+    /// Settings › Files › Disable file previews: the Files tab keeps its pane and its Single view toggle, and a file
+    /// opened there is named from its listing entry, never read; previews turned back on read it.
+    func testDisabledPreviewsNameAFileWithoutReadingIt() async throws {
         let runtime = TerminalRuntime.shared, preferences = runtime.preferences
         defer { runtime.preferences = preferences }
         runtime.preferences.filesPreviews = false
-        let session = await session(FakeFilesSource.mockupAPI())
+        let source = FakeFilesSource.mockupAPI()
+        let session = await session(source)
         let readme = try row("README.md", in: session.rows(root: root, settingHidden: true))
+        XCTAssertTrue(session.paneShown, "the pane stays")
         session.toggleViews()
-        XCTAssertTrue(session.previewOff, "⌥⌘P brings no preview")
-        XCTAssertNil(session.oneView)
-        XCTAssertFalse(session.hasPane)
+        XCTAssertEqual(session.oneView, true, "⌥⌘P switches to one view as on the git tabs")
+        session.oneView = nil
         session.open(readme)
-        XCTAssertTrue(session.previewOff, "nor does opening a file")
+        let preview = try XCTUnwrap(session.preview)
+        XCTAssertEqual(preview.path, readme.id)
+        XCTAssertNotNil(preview.entry, "the entry the pane names it from")
+        await FilePreviewLoader.load(preview, from: source)
+        guard case .loading = preview.kind else { return XCTFail("nothing is read: \(preview.kind)") }
+        XCTAssertFalse(source.calls.contains { $0.hasPrefix("read ") }, "no file is read")
         session.splitNarrow = true
         session.open(readme)
-        XCTAssertFalse(session.narrowDetail, "on one column the list stays")
-        session.splitNarrow = false
-        session.tab = .changes
-        XCTAssertFalse(session.previewOff, "Review's diffs still show")
+        XCTAssertTrue(session.narrowDetail, "on one column the file opens in the list's place")
         runtime.preferences.filesPreviews = true
-        session.tab = .files
-        XCTAssertFalse(session.previewOff, "the preview comes back with the setting")
+        await FilePreviewLoader.load(preview, from: source)
+        guard case .markdown = preview.kind else { return XCTFail("the setting back on reads it: \(preview.kind)") }
     }
 }

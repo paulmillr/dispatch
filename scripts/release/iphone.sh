@@ -9,16 +9,17 @@
 #    then, run from that commit's tree (exported to the work folder, work/<variant>/iphone/<commit>): <variant>.env's
 #    team, the keychain, the Apple Distribution identity, the Ad Hoc profiles in <variant>-adhoc-profiles/
 #    (scripts/release/adhoc.py), the release record (<cask>-release, a private clone next to this one; RELEASE_RECORD
-#    in release.env moves it) and its install site, adhoc-site/ there, the deploy command (RELEASE_ADHOC_DEPLOY in
-#    <variant>-adhoc.env), the pinned Xcode and the build user.
+#    in release.env moves it) and its install site, adhoc-site/ there, the folder it is served from and the deploy
+#    command (RELEASE_ADHOC_SITE and RELEASE_ADHOC_DEPLOY in <variant>-adhoc.env), the pinned Xcode and the build user.
 # 2. The build: scripts/release/builder.sh --platform ios, as you or, with --build-as-user, as a macOS user without
 #    keys: an .xcarchive signed ad hoc with each target's entitlements. The version is the commit's (the Mac app's), the
 #    build number its UTC time, and the build's name both: 0.1.7-20261110.1432. One build: GitHub builds no iPhone
 #    app, and nobody can check an Ad Hoc build against one (its .ipa lists the testers' devices).
 # 3. On yes: the archive exported with Apple Distribution and the profiles (Dispatch.ipa, checked). Then the build goes
 #    into the record: the site's .ipa, its manifest's version and its page's (adhoc.py site; the addresses stay as the
-#    site has them), and <variant>/<name>/ with the .ipa and build.json, committed and pushed; then the deploy
-#    command runs in the site's folder. Nothing goes to Apple.
+#    site has them), and <variant>/<name>/ with the .ipa and build.json, committed and pushed; then the site copied
+#    into the folder it is served from, if it has one (pushed, if a clone), and the deploy command run there (or in
+#    adhoc-site/). Nothing goes to Apple.
 #
 # --no-push: everything but the record and the deploy. Rerun after a failure: finished steps are skipped (markers in the
 # work folder).
@@ -78,8 +79,23 @@ fi
 
 # Where the build goes: the release record, a private clone next to this one, and its install site (docs/releasing.md,
 # Ad Hoc builds).
+# The .ipa lists the testers' UDIDs: never into a repository anyone can read.
+public() {
+  [[ "$1" =~ github\.com[:/]([^/]+)/([^/]+)$ ]] &&
+    [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}")" == 200 ]]
+}
 record="${RELEASE_RECORD:-$(dirname "$clone")/$CASK-release}"
-site="$record/adhoc-site"
+site="$record/adhoc-site" page=""
+# Where it goes online, from <variant>-adhoc.env (docs/releasing.md, Ad Hoc builds; the old flow's DISPATCH_ADHOC_*
+# count too): RELEASE_ADHOC_URL, the address it is served at, written into the manifest (without it, the manifest's own
+# addresses stay); RELEASE_ADHOC_SITE, the folder served there, when not adhoc-site/ itself: a plain one, or in a clone
+# of a private repository; RELEASE_ADHOC_DEPLOY, the command that puts it online, run in that clone (or folder).
+[[ ! -f "$CONFIG/$variant-adhoc.env" ]] || source "$CONFIG/$variant-adhoc.env"
+url="${RELEASE_ADHOC_URL:-${DISPATCH_ADHOC_URL:-}}"
+served="${RELEASE_ADHOC_SITE:-${DISPATCH_ADHOC_SITE:-}}" served_root=""
+deploy="${RELEASE_ADHOC_DEPLOY:-${DISPATCH_ADHOC_DEPLOY:-}}"
+moved=()
+[[ -z "$url" ]] || moved=(--url "$url")
 pending "release record"
 origin="$(git -C "$record" remote get-url origin 2> /dev/null || true)"
 if [[ ! -d "$record" || "$(git -C "$record" rev-parse --show-toplevel 2> /dev/null || true)" != "$(cd "$record" && pwd -P)" ]]; then
@@ -88,24 +104,38 @@ elif [[ -z "$(git -C "$record" branch --show-current)" || -n "$(git -C "$record"
   bad "$record: not on a branch, or uncommitted changes"
 elif [[ -z "$(git -C "$record" config user.name)" || -z "$(git -C "$record" config user.email)" ]]; then
   bad "git has no user.name or user.email to commit to $record with"
-elif [[ "$origin" =~ github\.com[:/]([^/]+)/([^/]+)$ ]] &&
-     [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}")" == 200 ]]; then
-  # The .ipa lists the testers' UDIDs: never into a repository anyone can read.
+elif public "$origin"; then
   bad "$record's origin is a public GitHub repository, and the .ipa lists your testers' devices: use a private one"
 elif [[ -n "$push" ]] && ! git -C "$record" push --dry-run --quiet origin HEAD:refs/heads/release-push-check > /dev/null 2>&1; then
   bad "git cannot push to $record's origin"
-elif ! result="$(adhoc site "$site" "$phone" 2>&1)"; then
+elif ! result="$(adhoc site "$site" "$phone" ${moved[@]+"${moved[@]}"} 2>&1)"; then
   bad "the install site, $site"
   note "$result"
 else
   ok "release record and install site" "$site: $result"
+  page="$(adhoc address "$site" ${moved[@]+"${moved[@]}"})"
 fi
 
-deploy=""
-[[ ! -f "$CONFIG/$variant-adhoc.env" ]] || source "$CONFIG/$variant-adhoc.env"
-deploy="${RELEASE_ADHOC_DEPLOY:-${DISPATCH_ADHOC_DEPLOY:-}}"
+if [[ -n "$served" ]]; then
+  pending "served folder"
+  served_root="$(git -C "$served" rev-parse --show-toplevel 2> /dev/null || true)"
+  if [[ ! -d "$served" ]]; then
+    bad "no folder $served (RELEASE_ADHOC_SITE in $CONFIG/$variant-adhoc.env)"
+  elif [[ -n "$served_root" ]] &&
+       [[ -z "$(git -C "$served_root" branch --show-current)" || -n "$(git -C "$served_root" status --porcelain)" ]]; then
+    bad "$served_root: not on a branch, or uncommitted changes"
+  elif [[ -n "$served_root" ]] && public "$(git -C "$served_root" remote get-url origin 2> /dev/null || true)"; then
+    bad "$served_root's origin is a public GitHub repository, and the .ipa lists your testers' devices: use a private one"
+  elif [[ -n "$served_root" && -n "$push" ]] &&
+       ! git -C "$served_root" push --dry-run --quiet origin HEAD:refs/heads/release-push-check > /dev/null 2>&1; then
+    bad "git cannot push to $served_root's origin"
+  else
+    ok "served from" "$served${served_root:+, a clone (committed and pushed)}"
+  fi
+fi
 if [[ -n "$deploy" ]]; then ok "deploy command" "$deploy"
-else warn "deploy command" "no RELEASE_ADHOC_DEPLOY in $CONFIG/$variant-adhoc.env: deploy $site yourself"; fi
+elif [[ -n "$served_root" ]]; then ok "deploy command" "none: pushing $served_root deploys it"
+else warn "deploy command" "no RELEASE_ADHOC_DEPLOY in $CONFIG/$variant-adhoc.env: deploy ${served:-$site} yourself"; fi
 
 # Signing over SSH needs the login keychain unlocked, and macOS cannot ask in a dialog there: asked now, not later.
 keychain="$HOME/Library/Keychains/login.keychain-db"
@@ -153,7 +183,9 @@ plan="sign $phone $label (build $number) with Apple Distribution and the Ad Hoc 
 if [[ -z "$push" ]]; then plan+=$'\n'"recorded and deployed nowhere (--no-push)"
 else
   plan+=$'\n'"into $site and $record/$variant/$label, committed and pushed"
-  [[ -z "$deploy" ]] || plan+=$'\n'"then, in $site: $deploy"
+  [[ -z "$served" ]] || plan+=$'\n'"copied into $served${served_root:+, committed and pushed}"
+  [[ -z "$deploy" ]] || plan+=$'\n'"then, in ${served_root:-${served:-$site}}: $deploy"
+  plan+=$'\n'"installed from $page"
 fi
 block "plan" "$plan"
 ask "$([[ -n "$push" ]] && echo ship || echo sign)" "$label for iPhone" || die "stopped; nothing was signed"
@@ -194,26 +226,54 @@ fi
 # A new commit, never an amended one; already made by an interrupted run, it is only pushed.
 publish_record() {
   git -C "$record" pull --ff-only --quiet
-  adhoc site "$site" "$phone" "$ipa" "$version" "$label"
+  adhoc site "$site" "$phone" ${moved[@]+"${moved[@]}"} "$ipa" "$version" "$label"
   mkdir -p "$record/$variant/$label"
   cp "$ipa" "$work/build/build.json" "$record/$variant/$label/"
   git -C "$record" add -A -- adhoc-site "$variant/$label"
   git -C "$record" diff --cached --quiet || TZ=UTC git -C "$record" commit --quiet -m "$NAME for iPhone $label"
   git -C "$record" push --quiet
 }
+# The served folder gets the site's files over its own; the old flow's <variant>/<build>/ folders go. A clone gets one
+# commit with no parent, force-pushed: the site's history would keep every .ipa.
+serve_site() {
+  # A rerun after a failed push holds the commit already, which no longer fast-forwards: the push then replaces it.
+  [[ -z "$served_root" ]] || git -C "$served_root" pull --ff-only --quiet || true
+  rm -rf "${served:?}/$variant"
+  cp -R "$site/." "$served/"
+  [[ -n "$served_root" ]] || return 0
+  local branch old new
+  branch="$(git -C "$served_root" branch --show-current)"
+  git -C "$served" add -A .
+  old="$(git -C "$served_root" rev-parse HEAD)"
+  if ! git -C "$served_root" diff --cached --quiet; then
+    new="$(TZ=UTC git -C "$served_root" commit-tree "$(git -C "$served_root" write-tree)" -m "Site, with $NAME for iPhone $label")"
+    git -C "$served_root" update-ref "refs/heads/$branch" "$new" "$old"
+    git -C "$served_root" reset --quiet
+  fi
+  git -C "$served_root" push --quiet --force-with-lease="$branch" origin "$branch"
+}
 if [[ -z "$push" ]]; then
   skipped "recorded, deployed" "--no-push"
 else
   if [[ -f "$work/record.done" ]]; then skipped "recorded" "done earlier"
   else step "recorded" "$work/record.log" publish_record; touch "$work/record.done"; fi
-  if [[ -z "$deploy" ]]; then skipped "deployed" "no deploy command: deploy $site yourself"
+  if [[ -z "$served" ]]; then :
+  elif [[ -f "$work/served.done" ]]; then skipped "served" "done earlier"
+  else step "copied into $served" "$work/served.log" serve_site; touch "$work/served.done"; fi
+  if [[ -z "$deploy" ]]; then [[ -n "$served_root" ]] || skipped "deployed" "no deploy command: deploy ${served:-$site} yourself"
   elif [[ -f "$work/deploy.done" ]]; then skipped "deployed" "done earlier"
-  else step "deployed" "$work/deploy.log" bash -c 'cd "$1" && bash -c "$2"' _ "$site" "$deploy"; touch "$work/deploy.done"; fi
+  else
+    step "deployed" "$work/deploy.log" bash -c 'cd "$1" && bash -c "$2"' _ "${served_root:-${served:-$site}}" "$deploy"
+    touch "$work/deploy.done"
+  fi
 fi
 
 summary="$ipa
 SHA-256 $(shasum -a 256 "$ipa" | cut -d' ' -f1)"
 [[ ! -f "$work/record.done" ]] || summary+=$'\n'"record: $record/$variant/$label, $(git -C "$record" log -1 --format=%h)"
-[[ ! -f "$work/deploy.done" ]] || summary+=$'\n'"deployed from $site"
-block "$label $([[ -f "$work/deploy.done" ]] && echo published || echo "signed, not published")" "$summary"
+online=""
+[[ ! -f "$work/deploy.done" ]] && [[ -z "$served_root" || ! -f "$work/served.done" ]] || online=1
+if [[ -n "$online" ]]; then summary+=$'\n'"online from ${served:-$site}"$'\n'"install: $page"
+elif [[ -f "$work/record.done" ]]; then summary+=$'\n'"install, once ${served:-$site} is deployed: $page"; fi
+block "$label $([[ -n "$online" ]] && echo published || echo "signed, not published")" "$summary"
 printf '\n  %sdone in %s%s\n\n' "$gray" "$(since "$started")" "$reset"

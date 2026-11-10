@@ -8,12 +8,17 @@
                                                 them. Prints one line: until when, how many devices
   adhoc.py label VERSION NUMBER                 the build's name, 0.1.7-20261110.1432: the version and the build
                                                 number (the commit's UTC time)
-  adhoc.py site SITE PHONE [IPA VERSION LABEL]  the install site SITE, the maintainer's own (index.html, manifest.plist
+  adhoc.py site SITE PHONE [--url URL] [IPA VERSION LABEL]
+                                                the install site SITE, the maintainer's own (index.html, manifest.plist
                                                 and what they show), checked: the manifest installs PHONE from an https
                                                 address ending in .ipa, and the page says the version once
                                                 (<span>version …</span>). With IPA, the build goes in: the .ipa under
-                                                that name, the manifest's bundle-version VERSION, the page's LABEL; the
-                                                addresses stay as the site has them"""
+                                                that name, the manifest's bundle-version VERSION, the page's LABEL. URL,
+                                                the https address the site is served at, replaces the folder of every
+                                                address in the manifest; without it they stay as the site has them
+  adhoc.py address SITE [--url URL]             the install page's web address: URL, or the folder the manifest serves
+                                                the .ipa from (the page, the manifest and the .ipa are served
+                                                together)"""
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -96,20 +101,36 @@ def label(version, number):
 VERSION = re.compile(r'(<span>version )[^<]*(</span>)')
 
 
-def site(folder, phone, ipa=None, version=None, name=None):
-    folder = Path(folder)
-    manifest_path, page_path = folder / 'manifest.plist', folder / 'index.html'
-    if not manifest_path.is_file() or not page_path.is_file():
+def package(folder, url=None):
+    """The manifest, its one item and the .ipa's address in it, checked; with url, every address moved there."""
+    manifest_path = Path(folder) / 'manifest.plist'
+    if not manifest_path.is_file() or not (Path(folder) / 'index.html').is_file():
         sys.exit(f'{folder} needs index.html and manifest.plist (docs/releasing.md, Ad Hoc builds)')
     manifest = plistlib.loads(manifest_path.read_bytes())
     try:
         item, = manifest['items']
-        package, = [asset for asset in item['assets'] if asset.get('kind') == 'software-package']
+        asset, = [asset for asset in item['assets'] if asset.get('kind') == 'software-package']
     except (KeyError, TypeError, ValueError):
         sys.exit(f'{manifest_path} must list one item with one software-package asset')
-    address = package.get('url', '')
+    if url is not None:
+        if not re.fullmatch(r'https://[^\s/]+(/\S*)?', url):
+            sys.exit(f'the site\'s address must be an https:// address, not {url!r}')
+        for each in item['assets']:
+            each['url'] = url.rstrip('/') + '/' + each.get('url', '').rsplit('/', 1)[-1]
+    address = asset.get('url', '')
     if not re.fullmatch(r'https://[^\s/]+/\S*\.ipa', address):
         sys.exit(f'{manifest_path}: the software-package must be an https:// address ending in .ipa')
+    return manifest, item, address
+
+
+def address(folder, url=None):
+    return package(folder, url)[2].rsplit('/', 1)[0] + '/'
+
+
+def site(folder, phone, ipa=None, version=None, name=None, url=None):
+    folder = Path(folder)
+    manifest_path, page_path = folder / 'manifest.plist', folder / 'index.html'
+    manifest, item, address = package(folder, url)
     if item.get('metadata', {}).get('bundle-identifier') != phone:
         sys.exit(f'{manifest_path}: the bundle-identifier must be {phone}')
     page = page_path.read_text()
@@ -126,11 +147,18 @@ def site(folder, phone, ipa=None, version=None, name=None):
 
 if __name__ == '__main__':
     command, arguments = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ('', [])
+    url = None
+    if '--url' in arguments[:-1]:
+        at = arguments.index('--url')
+        url = arguments.pop(at + 1)
+        arguments.pop(at)
     if command == 'profiles' and len(arguments) == 4:
         profiles(*arguments)
     elif command == 'label' and len(arguments) == 2:
         print(label(*arguments))
     elif command == 'site' and len(arguments) in (2, 5):
-        site(*arguments)
+        site(*arguments, url=url)
+    elif command == 'address' and len(arguments) == 1:
+        print(address(*arguments, url=url))
     else:
         sys.exit(__doc__)

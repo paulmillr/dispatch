@@ -87,6 +87,8 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
     var haloAccent: Color = .accentColor
     /// Whether a lapping halo's bubble intersects the view (true otherwise), on change.
     var haloInView: ((Bool) -> Void)? = nil
+    /// The session's typed reveals, whose display link is made from the transcript's view (`ChatTypingReveals.shows`).
+    var typing: ChatTypingReveals? = nil
     let row: (String, CGFloat) -> AnyView
 
     func makeNSView(context: Context) -> TranscriptScrollView {
@@ -101,6 +103,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
                         revision: revision, row: row)
         document.haloInView = haloInView
         document.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
+        document.typing = typing
         return scroll
     }
 
@@ -116,6 +119,7 @@ struct ChatTranscriptScrollView: NSViewRepresentable {
         document?.update(ids: ids, topInset: topInset, bottomInset: bottomInset, context: self.context, revision: revision, row: row)
         document?.haloInView = haloInView
         document?.setHalo(halo, maxWidth: haloMaxWidth, accent: haloAccent)
+        document?.typing = typing
     }
 
     final class TranscriptScrollView: NSScrollView {
@@ -173,6 +177,15 @@ final class ChatTranscriptDocument: NSView {
     private var startsDirty = true
     private var hosts: [String: RowHost] = [:]
     private var row: ((String, CGFloat) -> AnyView)?
+    /// The typed reveals of the rows shown here: while this view is in a window their display link is made from it,
+    /// so the link stays with the window from display to display (`ChatTypingReveals.shows(in:)`).
+    weak var typing: ChatTypingReveals? {
+        didSet {
+            guard typing !== oldValue else { return }
+            oldValue?.left(self)
+            if window != nil { typing?.shows(in: self) }
+        }
+    }
     private var revision: ((String) -> ChatTranscriptRowRevision?)?
     private var context: ChatTranscriptRowRevision.Context?
     private var contextGeneration = 0
@@ -262,7 +275,8 @@ final class ChatTranscriptDocument: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { stopLookahead(); finishThinkingFold(); return }
+        guard window != nil else { typing?.left(self); stopLookahead(); finishThinkingFold(); return }
+        typing?.shows(in: self)
         mountedAt = CACurrentMediaTime()
         // Where the clip was before is no movement: placing it here would otherwise count as one and start the
         // lookahead at once.
@@ -675,10 +689,12 @@ final class ChatTranscriptDocument: NSView {
         addSubview(clip, positioned: .above, relativeTo: nil)
         foldClip = clip; foldImage = imageView
         setThinkingFoldProgress(0)
-        guard fold.autoplay, let screen = window?.screen ?? NSScreen.main else { return }
+        guard fold.autoplay else { return }
         foldStart = CACurrentMediaTime()
-        let link = screen.displayLink(target: self, selector: #selector(foldTick(_:)))
-        link.preferredFrameRateRange = MotionRate.range(on: screen)
+        // The view's own link, not a screen's: it stays with the window if its display changes or goes, where a
+        // screen's would fall silent and leave the fold half way.
+        let link = displayLink(target: self, selector: #selector(foldTick(_:)))
+        link.preferredFrameRateRange = MotionRate.range(on: window?.screen)
         link.add(to: .main, forMode: .common)
         foldLink = link
     }

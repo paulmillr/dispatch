@@ -321,7 +321,7 @@ final class FilesPresentationTests: XCTestCase {
         // folder while it has room, else its name).
         let crumbs = try await frame("files-crumbs", in: window)
         XCTAssertEqual(crumbs.minX, (location ?? name).minX, accuracy: 1, "what follows the tab's name starts at one place")
-        // 480 pt tall has room for both: the views button shows (unlit) and stacks the preview under the list.
+        // 480 pt tall has room for both: the Single view toggle shows (lit) and stacks the preview under the list.
         try await says("Show list and preview", "files-views-toggle", in: window)
         let views = try await frame("files-views-toggle", in: window)
         try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: views.midX, y: views.midY))

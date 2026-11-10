@@ -93,17 +93,15 @@ struct FilesView: View {
         return FilesSplitColumns(list: width - preview, preview: preview)
     }
 
-    /// How a split `width` × `height` shows its list and its detail. With no pane (`off`: Files with previews off in
-    /// Settings), the list alone. Where the two do not fit (`fitsBoth`), one view: a row chosen shows its detail in the
+    /// How a split `width` × `height` shows its list and its detail. Where the two do not fit (`fitsBoth`), one view: a row chosen shows its detail in the
     /// list's place (`FilesSession.narrowDetail`). Otherwise as the tab chose (`oneView`, the views button and ⌥⌘P), or
     /// by default one view in a space of `oneAtATimePanes` panes or more (`oneAtATime`: the layout decides, the same on
     /// every display) or where the view is narrower than `columnsWidth` and shorter than `stackHeight`. Two views: from
     /// `columnsWidth` side by side (`layout`); narrower, the list over the detail where it is `minimumStack` tall, each
     /// the view's width, the list at its own height (`listIdeal`) up to 40% of the view's, else at 40%; shorter still,
     /// side by side at the minima.
-    static func shape(width: CGFloat, height: CGFloat, preference: CGFloat?, oneView: Bool? = nil, off: Bool = false,
+    static func shape(width: CGFloat, height: CGFloat, preference: CGFloat?, oneView: Bool? = nil,
                       listIdeal: CGFloat? = nil, oneAtATime: Bool = false) -> FilesSplitShape {
-        if off { return .columns(FilesSplitColumns(list: width, preview: nil)) }
         guard fitsBoth(width: width, height: height) else { return .single }
         if oneView ?? (oneAtATime || (width < columnsWidth && height < stackHeight)) { return .single }
         if width >= columnsWidth { return .columns(layout(width: width, preference: preference, hidden: false)) }
@@ -183,9 +181,9 @@ struct FilesSplit<List: View, Detail: View>: View {
             let size = geometry.size
             let preference = TerminalRuntime.shared.files.previewPreference(for: session)
             let shape = FilesView.shape(width: size.width, height: size.height, preference: preference,
-                                        oneView: session.oneView, off: session.previewOff, listIdeal: listIdeal,
+                                        oneView: session.oneView, listIdeal: listIdeal,
                                         oneAtATime: oneAtATime)
-            let fits = !session.previewOff && FilesView.fitsBoth(width: size.width, height: size.height)
+            let fits = FilesView.fitsBoth(width: size.width, height: size.height)
             let single = shape == .single
             let drilled = single && session.narrowDetail
             // The list stays the layout's first child whatever the pane does, so its outline keeps its identity (and its

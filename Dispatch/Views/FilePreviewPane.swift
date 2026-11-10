@@ -16,6 +16,8 @@ struct FilePreviewPane: View {
     private struct LoadKey: Hashable {
         let preview: ObjectIdentifier?
         let source: ObjectIdentifier?
+        /// Previews turned back on read the file the pane only named.
+        let previews: Bool
     }
 
     var body: some View {
@@ -39,7 +41,8 @@ struct FilePreviewPane: View {
         .tint(theme.blue)
         .environment(\.chatTheme, theme)
         // Keyed by the state and the source: a new selection (or the source arriving) cancels the read in flight.
-        .task(id: LoadKey(preview: session.preview.map(ObjectIdentifier.init), source: source.map { ObjectIdentifier($0) })) {
+        .task(id: LoadKey(preview: session.preview.map(ObjectIdentifier.init), source: source.map { ObjectIdentifier($0) },
+                          previews: FilesSession.previews)) {
             guard let preview = session.preview, let source else { return }
             await FilePreviewLoader.load(preview, from: source)
         }
@@ -193,8 +196,8 @@ private struct FilePreviewDetail: View {
                     .accessibilityIdentifier("file-preview-notice")
             }
             if find.open { findField }
-            // The buttons keep their room before the folder takes any.
-            controls.fixedSize().layoutPriority(1)
+            // The buttons keep their room before the folder takes any; with previews off there is no content to set.
+            if !infoOnly { controls.fixedSize().layoutPriority(1) }
         }
         .padding(.leading, bar ? 12 : 14).padding(.trailing, 14)
         // The list's column header beside it is as tall (FilesColumns.headerHeight); as the bar, the files header is.
@@ -301,7 +304,11 @@ private struct FilePreviewDetail: View {
         }
     }
 
-    private var findable: Bool { preview.findable }
+    private var findable: Bool { preview.findable && !infoOnly }
+
+    /// Settings › Files › Disable file previews: a file shows what its listing entry says of it (its kind, size and
+    /// date), never its contents, whatever was read before the setting changed. A folder still shows its summary.
+    private var infoOnly: Bool { !FilesSession.previews && !isFolder }
 
     private var editable: Bool {
         switch preview.kind {
@@ -325,6 +332,43 @@ private struct FilePreviewDetail: View {
     }
 
     @ViewBuilder private var content: some View {
+        if infoOnly { infoBody } else { kindBody }
+    }
+
+    /// Previews off: the file's kind, size and date, and Download…; nothing of it is read to show this.
+    private var infoBody: some View {
+        let video = FilePreviewVideo.isVideo(preview.name)
+        let image = FilePreviewLoader.isImageName(preview.name)
+        let kind = FilesFormatting.kindName(preview.name) ?? (video ? "Video" : image ? "Image" : "File")
+        let facts = [preview.entry.map { FilesFormatting.size($0.size) },
+                     (preview.entry?.modified).map { FilesFormatting.modified($0, at: System.date()) }].compactMap { $0 }
+        return VStack(spacing: 10) {
+            Image(systemName: video ? "film" : image ? "photo" : "doc")
+                .font(.system(size: 24, weight: .ultraLight)).foregroundStyle(theme.muted)
+            Text(kind)
+                .font(typography, .label)
+                .foregroundStyle(theme.ink.opacity(0.85))
+                .accessibilityIdentifier("file-preview-info")
+            if !facts.isEmpty {
+                Text(facts.joined(separator: " · "))
+                    .font(typography, .body)
+                    .foregroundStyle(theme.muted)
+                    .accessibilityIdentifier("file-preview-info-facts")
+            }
+            Text("Previews are off in Settings › Files.")
+                .font(typography, .body)
+                .foregroundStyle(theme.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Download…", action: download)
+                .buttonStyle(FilePreviewButtonStyle(prominent: false))
+                .accessibilityIdentifier("file-preview-download")
+        }
+        .padding(.horizontal, 30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var kindBody: some View {
         let owner = ObjectIdentifier(preview)
         switch preview.kind {
         case .loading:

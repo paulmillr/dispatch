@@ -248,7 +248,7 @@ extension FilesSession {
         case .preview(let path):
             showPreview(path, entry: row.entry)
             // Asking for a file's preview is asking to see it: on one view, in the list's place.
-            if splitNarrow, hasPane { narrowDetail = true }
+            if splitNarrow { narrowDetail = true }
         case nil: break
         }
     }
@@ -257,7 +257,7 @@ extension FilesSession {
     /// there is room for both. One view opens on the list. The detail keeps `previewWidth` for when it returns; a preview
     /// that had the keyboard is unmounted with it, so the list takes the keyboard rather than leaving none.
     func toggleViews() {
-        guard hasPane, !previewOff, canShowBoth else { return }
+        guard canShowBoth else { return }
         let one = !splitNarrow
         oneView = one
         if one {

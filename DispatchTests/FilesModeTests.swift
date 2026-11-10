@@ -594,7 +594,7 @@ final class FilesModeTests: XCTestCase {
         XCTAssertNil(files.previewPreference(for: earlier))
         XCTAssertEqual(files.previewPreference(for: first), 420)
         XCTAssertNil(files.session(for: System.uuid()).oneView, "the views choice is per tab")
-        XCTAssertFalse(files.session(for: System.uuid()).previewOff, "and each tab's Files starts with its pane")
+        XCTAssertTrue(files.session(for: System.uuid()).paneShown, "and each tab's Files starts with its pane")
     }
 
     /// The Commits filter: another branch (only with the branch scope), the tagged commits, and back; each choice starts

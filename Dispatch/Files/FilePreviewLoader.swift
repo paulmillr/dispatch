@@ -49,7 +49,8 @@ import ImageIO
 
     /// Loads `preview` once; an already loaded state is left as it is (switching modes remounts the pane, and a
     /// reload there would blank content the user is reading). A folder whose count a cancelled load left unfinished
-    /// counts again.
+    /// counts again. With previews off in Settings (`FilesSession.previews`) a file is not read at all: it stays
+    /// `.loading`, and the pane shows what its listing entry says of it.
     static func load(_ preview: FilePreviewState, from source: any FilesSource) async {
         switch preview.kind {
         case .loading, .error, .folder(nil): break
@@ -62,6 +63,7 @@ import ImageIO
                 return
             }
         }
+        guard FilesSession.previews else { return }
         // A file that changes between the first window and the rest is read again from the start once; a file
         // that keeps changing says so rather than showing a mix of two versions.
         for attempt in 0..<2 {

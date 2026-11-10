@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: the tab's name, where you are, then (on
 /// Review, once it holds comments) Create review with their count; at the trailing end the search, on Commits the
-/// filter (`GitLogFilterButton`), and the views button (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
+/// filter (`GitLogFilterButton`), and the Single view toggle (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
 /// Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the follow-the-shell link
 /// after it, the host first), and on Review and Commits the repository and its branch. The Files tab shows nothing of
 /// git. The files tabs are not here: the strip's mode button names the one shown and its menu switches (and ⌃⌘1–3).
@@ -64,8 +64,8 @@ struct FilesHeader: View {
             HStack(spacing: glass ? 2 : 12) {
                 searchSlot
                 if session.tab == .commits { GitLogFilterButton(session: session) }
-                // Nothing to switch on Files with its previews off in Settings, nor where two views do not fit.
-                if session.hasPane && !session.previewOff && session.canShowBoth { viewsToggle }
+                // Nothing to switch where two views do not fit.
+                if session.canShowBoth { viewsToggle }
             }
             .glassControlGroup()
             .layoutPriority(1)
@@ -496,23 +496,24 @@ struct FilesHeader: View {
         DispatchQueue.main.async { filterFocused = true }
     }
 
-    /// ⌥⌘P: one view at a time, or the list with its detail (the preview, the change's diff, the commit's detail)
-    /// beside or under it; lit while both show. Its glyph is the arrangement it gives: two panes side by side or one
-    /// over the other where the view stacks them, one pane alone.
+    /// ⌥⌘P: Single view, one view at a time, or the list with its detail (the preview, the change's diff, the commit's
+    /// detail) beside or under it. Arrows drawn in while one view shows (lit), drawn out while both do, on every tab.
     private var viewsToggle: some View {
-        let both = !session.splitNarrow
+        let single = session.splitNarrow
+        let both = !single
         let pane = session.tab == .files ? "preview" : session.showsLog ? "details" : "diff"
         return Button {
             session.toggleViews()
         } label: {
-            Image(systemName: both ? (session.stackedViews ? "rectangle.split.1x2" : "rectangle.split.2x1") : "rectangle")
+            Image(systemName: single ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                 .font(typography.symbol(.body))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(FilesHeaderButtonStyle(on: both))
-        .help(both ? "One view at a time · ⌥⌘P" : "List and \(pane) together · ⌥⌘P")
+        .buttonStyle(FilesHeaderButtonStyle(on: single))
+        .help("Single view · ⌥⌘P")
         .accessibilityLabel(both ? "Show one view" : "Show list and \(pane)")
+        .accessibilityValue(single ? "on" : "off")
         .accessibilityIdentifier("files-views-toggle")
     }
 }

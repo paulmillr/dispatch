@@ -341,7 +341,7 @@ struct Preferences: Codable, Equatable {
     /// The file preview's line numbers.
     var filesLineNumbers = true
     /// The file preview wraps long lines; each tab's wrap button overrides it for that tab (FilesSession.previewWrap).
-    var filesWrapLines = false
+    var filesWrapLines = true
     /// The file preview shows Markdown rendered rather than as its source; each tab's eye button overrides it for that
     /// tab (FilesSession.previewRendered).
     var filesRenderMarkdown = true

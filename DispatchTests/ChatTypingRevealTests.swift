@@ -251,9 +251,18 @@ import XCTest
         XCTAssertLessThanOrEqual(zip(shown, shown.dropFirst()).map { $1 - $0 }.max() ?? 0, 6, "no frame jumps ahead")
         XCTAssertFalse(store.running)
         XCTAssertNil(store.reveal("post", text: text, live: false, ended: true, reduceMotion: false))
+        // Its row is never marked complete (Claude Code's), so it stays the live turn's newest: no caret waits there
+        // for a stream that never comes, as one would for a streaming agent's reply.
+        XCTAssertTrue(ChatTypingReveals.posts("claude"))
+        XCTAssertFalse(ChatTypingReveals.posts("codex"))
+        XCTAssertFalse(ChatTypingReveals.posts(nil))
+        XCTAssertNil(store.reveal("post", text: text, live: true, ended: false, posts: true, reduceMotion: false))
+        XCTAssertNotNil(store.reveal("stream", text: text, live: true, ended: false, reduceMotion: false))
 
         store.arrived("long", agent: "claude", completed: true)
-        XCTAssertNil(store.reveal("long", text: String(repeating: text + " ", count: 4), live: true, ended: false, reduceMotion: false))
+        let long = String(repeating: text + " ", count: 4)
+        XCTAssertNil(store.reveal("long", text: long, live: true, ended: false, posts: true, reduceMotion: false))
+        XCTAssertNil(store.reveal("long", text: long, live: true, ended: false, posts: true, reduceMotion: false), "drawn again")
         store.arrived("late", agent: "claude", completed: false)
         time += ChatTypingReveals.arrivalWindow + 0.1
         XCTAssertNil(store.reveal("late", text: text, live: true, ended: false, reduceMotion: false))
@@ -317,6 +326,104 @@ import XCTest
         XCTAssertEqual(reveal.needs(at: time), .nothing)
         XCTAssertTrue(reveal.done(at: time))
     }
+
+    /// A posted message that left while it typed (its row scrolled away, its tab switched) and is shown again shows
+    /// whole, with no caret and no frame to wait for; a streaming one shows what arrived with its own caret, not the
+    /// one it left with.
+    func testRevealShownAgainDrawsNoStaleCaret() throws {
+        let previous = ChatTypingReveals.enabled
+        ChatTypingReveals.enabled = true
+        defer { ChatTypingReveals.enabled = previous }
+        var time: TimeInterval = 30
+        let store = ChatTypingReveals()
+        store.now = { time }
+        store.drivesItself = false
+        let text = "Fixed: the drawable resize now lands in the same transaction."
+        store.arrived("post", agent: "claude", completed: false)
+        let posted = try XCTUnwrap(store.reveal("post", text: text, live: true, ended: false, posts: true, reduceMotion: false))
+        store.appeared(posted)
+        XCTAssertEqual(posted.current, ChatTypingFrame(shown: 1, caret: 1))
+        store.disappeared(posted)
+        time += 5
+        XCTAssertNil(store.reveal("post", text: text, live: true, ended: false, posts: true, reduceMotion: false))
+        XCTAssertEqual(posted.current, ChatTypingFrame(shown: posted.layout.total, caret: 0))
+
+        store.began("stream")
+        let streamed = try XCTUnwrap(store.reveal("stream", text: "Typing out a reply", live: true, ended: false, reduceMotion: false))
+        store.appeared(streamed)
+        XCTAssertEqual(streamed.current.caret, 1)
+        store.disappeared(streamed)
+        time += 5
+        XCTAssertTrue(store.reveal("stream", text: "Typing out a reply that grew", live: true, ended: false, reduceMotion: false) === streamed)
+        XCTAssertEqual(streamed.current, ChatTypingFrame(shown: streamed.layout.total, caret: 0.9), "caught up: the blink's")
+    }
+
+    #if canImport(AppKit)
+    /// On the Mac the link is made from the view the reveals show in, while it is in a window: AppKit keeps that link
+    /// on the display its window is on. (One made from a screen stays silent for good once that display's id is gone,
+    /// and a store that kept it typed nothing more.) With no such view it steps on the timer; a view that leaves its
+    /// window, saying so or not, never keeps the link.
+    func testLinkIsMadeFromTheViewShowingTheReveals() throws {
+        let previous = ChatTypingReveals.enabled
+        ChatTypingReveals.enabled = true
+        defer { ChatTypingReveals.enabled = previous }
+        let before = ChatTypingLink.running
+        let time: TimeInterval = 10
+        let store = typingStore { time }
+        defer { store.reset() }
+        store.began("row")
+        let reveal = try XCTUnwrap(store.reveal("row", text: "Typing a reply", live: true, ended: false, reduceMotion: false))
+        store.appeared(reveal)
+        XCTAssertTrue(store.running)
+        XCTAssertFalse(store.synced, "no view: the timer")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        store.shows(in: view)
+        XCTAssertNil(store.hostView, "not in a window")
+        XCTAssertFalse(store.synced)
+        window.contentView = view
+        store.shows(in: view)
+        XCTAssertTrue(store.hostView === view)
+        XCTAssertTrue(store.synced, "the view's link")
+        XCTAssertEqual(ChatTypingLink.running, before + 1, "the timer's link stopped")
+        // In a window again (it changed windows): the link is made again, still one.
+        store.shows(in: view)
+        XCTAssertTrue(store.synced)
+        XCTAssertEqual(ChatTypingLink.running, before + 1)
+
+        // A second view showing the same session takes the link; when it leaves, the first has it back.
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.borderless],
+                             backing: .buffered, defer: true)
+        other.isReleasedWhenClosed = false
+        let second = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        other.contentView = second
+        store.shows(in: second)
+        XCTAssertTrue(store.hostView === second)
+        store.left(second)
+        XCTAssertTrue(store.hostView === view)
+        XCTAssertTrue(store.synced)
+
+        // It left its window: the timer steps what still shows.
+        window.contentView = NSView()
+        store.left(view)
+        XCTAssertNil(store.hostView)
+        XCTAssertTrue(store.running)
+        XCTAssertFalse(store.synced)
+
+        // A view that leaves without saying so is found out when the next reveal asks for frames.
+        window.contentView = view
+        store.shows(in: view)
+        XCTAssertTrue(store.synced)
+        window.contentView = NSView()
+        _ = store.reveal("row", text: "Typing a reply and more", live: true, ended: false, reduceMotion: false)
+        XCTAssertTrue(store.running)
+        XCTAssertFalse(store.synced, "a link whose view left its window is not kept")
+        XCTAssertEqual(ChatTypingLink.running, before + 1)
+    }
+    #endif
 
     /// A real display link drives the store while a reveal types, and stops when it is done: an idle chat runs none.
     func testDisplayLinkStopsWhenIdle() throws {

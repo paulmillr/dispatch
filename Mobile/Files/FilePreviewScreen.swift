@@ -36,7 +36,7 @@ struct FilePreviewScreen: View {
     private let fonts: CodeFontStore
     @State private var fontSize: Double
     @State private var pinchBase: Double?
-    @State private var wrap = false
+    @State private var wrap = true
     @State private var showsSource = false
     @State private var finding = false
     @State private var find = FileFind()

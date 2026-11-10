@@ -140,7 +140,7 @@ struct StripTab: View {
     }
 }
 
-/// The close cross, on a small rounded square while the pointer is over it, as in Terminal's tabs.
+/// The close cross, on a small circle while the pointer is over it.
 struct CloseGlyph: View {
     @Environment(\.appTypography) private var typography
     @State private var hovered = false
@@ -148,7 +148,7 @@ struct CloseGlyph: View {
         let size = typography.expanded(16)
         Image(systemName: "xmark").font(AppFont.ui(size: 8))
             .frame(width: size, height: size)
-            .background(Chrome.ink.opacity(hovered ? (Chrome.palette.isDark ? 0.16 : 0.1) : 0), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .background(Chrome.ink.opacity(hovered ? (Chrome.palette.isDark ? 0.16 : 0.1) : 0), in: Circle())
             .onHover { hovered = $0 }
     }
 }

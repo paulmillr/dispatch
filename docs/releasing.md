@@ -398,10 +398,20 @@ the app from Safari on a registered iPhone (and the watch app on a registered wa
 `release/adhoc.py site` fills in each build: the `.ipa` under the name the manifest gives it, the manifest's
 `bundle-version`, and the page's `<span>version …</span>`; the addresses, the design and the rest stay as they are.
 The record also keeps each build in `<variant>/<name>/`, `Dispatch.ipa` and `build.json`; the build is committed
-(`Dispatch for iPhone 0.1.7-20261110.1432`) and pushed. Then `RELEASE_ADHOC_DEPLOY`, a shell command in
-`~/.config/dispatch-release/<variant>-adhoc.env`, runs in `adhoc-site/` to put it online; without one, deploy it
-yourself. One build is online at a time. Serve it only where nobody can list or browse it, and share the link only
-with the testers.
+(`Dispatch for iPhone 0.1.7-20261110.1432`) and pushed. Then it goes online, as
+`~/.config/dispatch-release/<variant>-adhoc.env` on the signing machine says (the old flow's `DISPATCH_ADHOC_URL`,
+`DISPATCH_ADHOC_SITE` and `DISPATCH_ADHOC_DEPLOY` count too):
+
+- `RELEASE_ADHOC_URL`: the https address the site is served at, the only place it is set: each build writes it into
+  the manifest's addresses. Without it the manifest's own addresses stay.
+- `RELEASE_ADHOC_SITE`: the folder served at that address, when it is not `adhoc-site/` itself; a plain one, or in a
+  clone of a private repository. The site's files are copied over it (an old flow's `<variant>/` folder there goes),
+  and a clone gets one commit with no parent, force-pushed, so that its history keeps no old `.ipa`.
+- `RELEASE_ADHOC_DEPLOY`: a shell command that puts it online, run in that clone (or folder, or `adhoc-site/`).
+  Without one, pushing the clone has to deploy it, or you deploy it yourself.
+
+The last lines name the install page's address. One build is online at a time. Serve it only where nobody can list or
+browse it, under a path nobody can guess, and share the link only with the testers.
 
 ## Builds that are not notarized
 

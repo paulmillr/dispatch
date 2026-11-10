@@ -728,7 +728,7 @@ struct ChatThreadView: View {
         return ChatRevealReceived(reveal: reveal, time: time) {
             ChatBubble(side: .agent) {
                 MobileTypedMarkdown(text: row.item.text, corner: corner, rowID: row.id, reveals: session.typing,
-                                    live: stream.live, ended: stream.ended)
+                                    live: stream.live, ended: stream.ended, posts: ChatTypingReveals.posts(session.agentKey))
             }
                 .environment(\.openURL, MobileChatMarkdown.openURL)
                 .onTapGesture { details = row }

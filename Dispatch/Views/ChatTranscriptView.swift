@@ -66,7 +66,7 @@ struct ChatTranscriptView: View {
             haloMaxWidth: theme.typography.characterWidth * 80, haloAccent: theme.accent,
             haloInView: { [weak session] inView in
                 if session?.replyBubbleInView != inView { session?.replyBubbleInView = inView }
-            }) { id, width in
+            }, typing: session.typingReveals) { id, width in
             let content: AnyView
             if id == "earlier" { content = AnyView(earlierMessages) }
             else if id == "radio-header" { content = AnyView(ChatRadioLogHeader(surface: session.id)) }
@@ -709,7 +709,7 @@ private struct ChatTranscriptRowView: View {
                             hidden: session.sendFlight?.to == .prompt(row.id))
         case .assistant:
             ChatTypedMarkdown(text: item.text, rowID: row.id, reveals: session.typingReveals, live: streaming != nil,
-                              ended: item.completed || streaming != .newest)
+                              ended: item.completed || streaming != .newest, posts: ChatTypingReveals.posts(session.agentID))
                 .foregroundStyle(theme.ink)
         case .notice:
             Text(ChatSearchHighlight.text(AttributedString(item.text), query: query, theme: theme) + AttributedString(ChatNoticeFold.count(row.repeats)))
@@ -738,7 +738,8 @@ private struct ChatTranscriptRowView: View {
         case .reasoning where item.isNarration:
             // Thinking streamed in (Pi's) types out as a reply does; a posted thought (Claude Code's) shows at once.
             ChatTypedMarkdown(text: item.text, rowID: row.id, reveals: session.typingReveals, live: streaming != nil,
-                              ended: item.completed || streaming != .newest, color: theme.muted)
+                              ended: item.completed || streaming != .newest, posts: ChatTypingReveals.posts(session.agentID),
+                              color: theme.muted)
                 .foregroundStyle(theme.muted)
         case .reasoning:
             VStack(alignment: .leading, spacing: 6) {
@@ -982,12 +983,14 @@ struct ChatTypedMarkdown: View {
     let reveals: ChatTypingReveals
     let live: Bool
     let ended: Bool
+    /// Its agent posts whole messages (`ChatTypingReveals.posts`): nothing streams into the row.
+    var posts = false
     /// The text's color when not the theme's ink (thinking's muted).
     var color: Color?
     /// The reveal this view counts as shown (its clock runs only while one does).
     @State private var shown: ChatTypingReveal?
     var body: some View {
-        let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, reduceMotion: reduceMotion)
+        let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, posts: posts, reduceMotion: reduceMotion)
         ChatMarkdown(text: text, color: color, typing: typing)
             .onAppear { show(typing) }
             .onDisappear { show(nil) }

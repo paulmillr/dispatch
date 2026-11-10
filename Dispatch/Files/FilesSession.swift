@@ -84,12 +84,10 @@ import Foundation
     var canShowBoth = true
     /// Both views show one over the other (`FilesSplitShape.stacked`), as `FilesSplit` last laid them out.
     var stackedViews = false
-    /// The pane is off for the tab shown: on Files with previews off in Settings, the list alone with no button.
-    var previewOff: Bool { tab == .files && !Self.previews }
-    /// Settings › Features › Files › Disable file previews, inverted: off, the Files tab never mounts its preview.
+    /// Settings › Features › Files › Disable file previews, inverted: off, the Files tab's preview still shows and
+    /// names the selected file, its kind, size and date from the listing, but reads none of it (`FilePreviewLoader`):
+    /// no text, image, video or bytes.
     static var previews: Bool { TerminalRuntime.shared.preferences.filesPreviews }
-    /// The tab shown has a pane to show: the git tabs always, Files unless its previews are off.
-    var hasPane: Bool { tab != .files || Self.previews }
     /// A view too narrow for two columns and too short to stack them has room for one (`splitNarrow`, as `FilesSplit`
     /// last laid it out, `FilesSplitShape.single`): a row chosen there (a git row's click or ⏎, a file's ⏎ or double
     /// click) shows its detail or preview in the list's place, the header's tab name turned into a button back to the
@@ -108,7 +106,7 @@ import Foundation
         if drilledFile { narrowFile = false } else { narrowDetail = false }
     }
     /// The pane shows: beside the list, or on one column in its place.
-    var paneShown: Bool { splitNarrow ? narrowDetail : !previewOff }
+    var paneShown: Bool { splitNarrow ? narrowDetail : true }
 
     // Transfers under the list (F2b, F2c).
     var transfers: [FileTransfer] = []

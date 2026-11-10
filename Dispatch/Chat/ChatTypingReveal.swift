@@ -608,15 +608,20 @@ final class ChatTypingReveal {
         clock.resume(at: now, available: arrived, ended: ended && arrived == layout.total)
     }
 
-    /// Shows what has arrived at once (a reveal shown again after it left), caught up: it types what comes next.
+    /// Shows what has arrived at once (a reveal shown again after it left), caught up: it types what comes next. A
+    /// complete message is done, as of two fades ago: nothing of it is left to draw, so it needs no frame and no caret.
     private func snap(_ text: String, ended: Bool, at now: TimeInterval) {
         left = false
         postedAt = nil
         self.text = text
         self.ended = ended
         layout = ChatTypingLayout(text, ended: ended)
-        clock = ChatTypingClock(position: Double(layout.total), at: now)
-        clock.advance(to: now, costs: layout.costs, ended: ended)
+        let since = ended ? now - 2 * ChatTypingClock.fade : now
+        clock = ChatTypingClock(position: Double(layout.total), at: since)
+        clock.advance(to: since, costs: layout.costs, ended: ended)
+        // Its caret too: the one it left with (a typing reveal's solid one) is not this clock's.
+        let next = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
+        if next != frame { frame = next }
     }
 
     func step(to now: TimeInterval) {
@@ -647,7 +652,8 @@ final class ChatTypingReveal {
 /// message's reveal as it draws (`reveal`): a message that is complete, not in the live turn, or first seen with its
 /// text already there shows at once; one that arrived while the chat was shown (`began`, just now) types from its
 /// start, and so does a short whole message just posted (`began(posted:)`). One display link advances them all, and
-/// runs only while one is typing, blinking or fading.
+/// runs only while one is typing, blinking or fading. On the Mac the link is the transcript view's own (`shows(in:)`),
+/// which AppKit moves from display to display with its window.
 @MainActor final class ChatTypingReveals {
     /// Off while testing: recorded tests wait on text and replay with no display time, so every message shows at once
     /// (`DISPATCH_TESTING`, or an XCTest host on the iPhone). A test of the reveal turns it on.
@@ -658,6 +664,8 @@ final class ChatTypingReveal {
     /// The agents that post whole messages (Claude Code): a short one types out as if it streamed in
     /// (`ChatTypingReveal.postedRate`); a longer one shows as it comes.
     static let postingAgents: Set<String> = ["claude"]
+    /// Whether `agent` posts whole messages: nothing streams into one of its rows.
+    static func posts(_ agent: String?) -> Bool { agent.map(postingAgents.contains) ?? false }
     /// The longest a posted message may take to type, in seconds; a longer one shows at once.
     static let postedLimit: TimeInterval = 2
     /// How long after its arrival a new message first drawn still types from its start; later it shows at once.
@@ -694,8 +702,10 @@ final class ChatTypingReveal {
     }
 
     /// The reveal row `rowID` draws `text` through; nil draws it at once. `live`: the message belongs to the live turn;
-    /// `ended`: nothing more will stream into it.
-    func reveal(_ rowID: String, text: String, live: Bool, ended: Bool, reduceMotion: Bool) -> ChatTypingReveal? {
+    /// `ended`: nothing more will stream into it; `posts`: its agent posts whole messages (`posts(_:)`), so one that
+    /// is not typing as it arrived shows at once, with no caret waiting on a stream that never comes.
+    func reveal(_ rowID: String, text: String, live: Bool, ended: Bool, posts: Bool = false,
+                reduceMotion: Bool) -> ChatTypingReveal? {
         guard Self.enabled, !reduceMotion else { reveals[rowID] = nil; return nil }
         let now = time
         if let reveal = reveals[rowID] {
@@ -714,7 +724,7 @@ final class ChatTypingReveal {
             schedule()
             return reveal
         }
-        guard live, !ended else { return nil }
+        guard live, !ended, !posts else { return nil }
         let arrived = arrivals.removeValue(forKey: rowID).map { now - $0.time < Self.arrivalWindow } ?? false
         let reveal = ChatTypingReveal(id: rowID, text: text, ended: false, fromStart: arrived, at: now)
         guard !reveal.layout.truncated else { return nil }
@@ -749,64 +759,160 @@ final class ChatTypingReveal {
         reveals.removeAll(); arrivals.removeAll()
     }
 
+    #if canImport(AppKit)
+    /// The views the reveals show in, the newest last: a session's transcript, while it is in a window.
+    private struct Host { weak var view: NSView? }
+    private var hosts: [Host] = []
+    private var host: NSView? { hosts.last { $0.view?.window != nil }?.view }
+
+    /// The reveals show in `view`, which is in a window now (again, when it changed windows): the link is made from
+    /// it. A link made from a screen instead follows that one display, and falls silent for good once the display
+    /// goes (a monitor that comes back from sleep under another id), with nothing left to step the reveals.
+    func shows(in view: NSView) {
+        hosts.removeAll { $0.view == nil || $0.view === view }
+        hosts.append(Host(view: view))
+        rehost(moved: view)
+    }
+
+    /// `view` left its window: the link goes to another view showing the reveals, or to the timer.
+    func left(_ view: NSView) {
+        hosts.removeAll { $0.view == nil || $0.view === view }
+        rehost()
+    }
+
+    private func rehost(moved: NSView? = nil) {
+        guard let link else { return }
+        if link.view === host, link.hosted {
+            if moved === host { link.relink() }
+        } else {
+            link.stop(); self.link = nil
+            schedule()
+        }
+    }
+    /// The view the link would be made from now, and whether the link is that view's (the timer's otherwise): tests.
+    var hostView: NSView? { host }
+    var synced: Bool { link?.synced ?? false }
+    #endif
+
     /// A session closed while a reply typed (its tab closed) takes its display link with it.
     isolated deinit { link?.stop() }
 
     private func schedule() {
-        guard drivesItself, link == nil else { return }
+        guard drivesItself else { return }
+        #if canImport(AppKit)
+        // A link whose view went without saying so (released with its window) gets no more frames: never kept.
+        if let link, !link.hosted { link.stop(); self.link = nil }
+        #endif
+        guard link == nil else { return }
         let now = time
         guard reveals.values.contains(where: { $0.needs(at: now) != .nothing }) else { return }
         // A link outliving its store (released before its next frame) stops itself.
-        link = ChatTypingLink { [weak self] time in
+        let action: (TimeInterval) -> Bool = { [weak self] time in
             guard let self else { return false }
             self.step(to: self.now?() ?? time)
             return true
         }
+        #if canImport(AppKit)
+        link = ChatTypingLink(in: host, action)
+        #else
+        link = ChatTypingLink(action)
+        #endif
     }
 }
 
 /// The display link that steps the reveals: while one types or fades, every frame the motion policy allows (`range`,
-/// followed while it runs: 60 on a Mac's battery, 30 in Low Power Mode), about ten a second while one only blinks. It follows the main
-/// screen's refresh. A Mac without a screen to sync to steps on a timer at the same paces.
+/// followed while it runs: 60 on a Mac's battery, 30 in Low Power Mode), about ten a second while one only blinks. On
+/// the Mac it is made from the view the reveals show in (`NSView.displayLink`), so AppKit keeps it on the display its
+/// window is on and pauses it while the window is off screen; it is made again when that window changes screens or
+/// the screens wake, as a terminal's is (`TerminalView`). Never from an `NSScreen`: that link belongs to one display
+/// id and stays silent, unpaused, once the id is gone. With no view in a window (tests, a Mac without a screen) it
+/// steps on a timer at the same paces.
 @MainActor final class ChatTypingLink: NSObject {
     /// Steps to the given time; false once there is nothing left to step (its store is gone): the link stops.
     private let action: (TimeInterval) -> Bool
     private var link: CADisplayLink?
     private var timer: Timer?
     private var paced: ChatTypingClock.Needs = .frames
+    private var stopped = false
     /// Links running now, for tests.
     private(set) static var running = 0
 
+    #if canImport(AppKit)
+    /// The view it was made from; nil for the timer's.
+    private(set) weak var view: NSView?
+    /// Whether what it was made from still gives it frames: its view is in a window, or it steps on the timer.
+    var hosted: Bool { link == nil ? timer != nil : view?.window != nil }
+    /// Whether the display paces it (tests); otherwise the timer.
+    var synced: Bool { link != nil }
+
+    init(in view: NSView?, _ action: @escaping (TimeInterval) -> Bool) {
+        self.action = action
+        self.view = view
+        super.init()
+        Self.running += 1
+        start()
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(rateChanged), name: MotionRate.changed, object: nil)
+        center.addObserver(self, selector: #selector(screenChanged(_:)), name: NSWindow.didChangeScreenNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(screensWoke),
+                                                          name: NSWorkspace.screensDidWakeNotification, object: nil)
+    }
+
+    private func start() {
+        guard let view, view.window != nil else { startTimer(); return }
+        let link = view.displayLink(target: self, selector: #selector(fire(_:)))
+        link.preferredFrameRateRange = range(paced)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    /// Makes the link again from its view, as it is now: on another screen, or after the screens woke.
+    func relink() {
+        guard !stopped else { return }
+        link?.invalidate(); link = nil
+        timer?.invalidate(); timer = nil
+        start()
+    }
+
+    @objc private func screenChanged(_ notification: Notification) {
+        guard let window = view?.window, notification.object as? NSWindow === window else { return }
+        relink()
+    }
+    @objc private func screensWoke() { relink() }
+
+    private func range(_ needs: ChatTypingClock.Needs) -> CAFrameRateRange { Self.range(needs, on: view?.window?.screen) }
+    #else
     init(_ action: @escaping (TimeInterval) -> Bool) {
         self.action = action
         super.init()
         Self.running += 1
-        #if canImport(AppKit)
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { startTimer(); return }
-        let link = screen.displayLink(target: self, selector: #selector(fire(_:)))
-        #else
         let link = CADisplayLink(target: self, selector: #selector(fire(_:)))
-        #endif
-        link.preferredFrameRateRange = Self.range(paced)
+        link.preferredFrameRateRange = range(paced)
         link.add(to: .main, forMode: .common)
         self.link = link
         NotificationCenter.default.addObserver(self, selector: #selector(rateChanged), name: MotionRate.changed, object: nil)
     }
 
-    /// While one types or fades: on the Mac the motion policy's rate (the screen's own on the adapter with Dispatch in
-    /// front, 60 on battery or behind another app, 30 in Low Power Mode), on the phone every frame (30 in Low Power
-    /// Mode); the blink's ten either way.
+    private func range(_ needs: ChatTypingClock.Needs) -> CAFrameRateRange { Self.range(needs) }
+    #endif
+
+    /// While one types or fades: on the Mac the motion policy's rate for `screen` (the link's window's; its own on the
+    /// adapter with Dispatch in front, 60 on battery or behind another app, 30 in Low Power Mode), on the phone every
+    /// frame (30 in Low Power Mode); the blink's ten either way.
+    #if canImport(AppKit)
+    static func range(_ needs: ChatTypingClock.Needs, on screen: NSScreen? = nil) -> CAFrameRateRange {
+        if needs == .blink { return CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) }
+        return MotionRate.range(on: screen ?? NSScreen.main ?? NSScreen.screens.first)
+    }
+    #else
     static func range(_ needs: ChatTypingClock.Needs) -> CAFrameRateRange {
         if needs == .blink { return CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) }
-        #if canImport(AppKit)
-        return MotionRate.range(on: NSScreen.main ?? NSScreen.screens.first)
-        #else
         return MotionRate.lowPower ? CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30) : .default
-        #endif
     }
+    #endif
 
     @objc private func rateChanged() {
-        if let link { link.preferredFrameRateRange = Self.range(paced) } else if timer != nil { startTimer() }
+        if let link { link.preferredFrameRateRange = range(paced) } else if timer != nil { startTimer() }
     }
 
     private func startTimer() {
@@ -824,14 +930,19 @@ final class ChatTypingReveal {
         guard needs != paced, link != nil || timer != nil else { return }
         paced = needs
         if let link {
-            link.preferredFrameRateRange = Self.range(needs)
+            link.preferredFrameRateRange = range(needs)
         } else { startTimer() }
     }
 
     func stop() {
-        guard link != nil || timer != nil else { return }
+        guard !stopped else { return }
+        stopped = true
         link?.invalidate(); link = nil
         timer?.invalidate(); timer = nil
+        NotificationCenter.default.removeObserver(self)
+        #if canImport(AppKit)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        #endif
         Self.running -= 1
     }
 }

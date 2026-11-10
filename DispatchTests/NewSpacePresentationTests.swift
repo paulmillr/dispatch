@@ -518,7 +518,7 @@ final class NewSpacePresentationTests: XCTestCase {
     }
 
     /// The backend menu is the secondary click's: a right-click or control-click opens it without making a space, and a
-    /// click makes one without it.
+    /// click makes one without it. A held press opens it too, under the button, and makes nothing.
     func testSecondaryClickRequestsMenuWithoutCreatingSpace() async throws {
         try DesktopTestSupport.requireUnlocked()
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 120, height: 60),
@@ -528,11 +528,11 @@ final class NewSpacePresentationTests: XCTestCase {
         window.contentView = button
         window.makeKeyAndOrderFront(nil)
         defer { window.close(); window.contentView = nil }
-        var created = 0, menus = 0
+        var created = 0, menus = 0, points: [NSPoint] = []
         button.create = { created += 1 }
         button.options = { menus += 1; return [] }
         button.presentMenu = { menu, _, point in
-            XCTAssertEqual(point, NSPoint(x: 30, y: 30))
+            points.append(point)
             XCTAssertEqual(menu.items.first?.title, "New space here")
         }
         let point = NSPoint(x: 30, y: 30)
@@ -548,6 +548,13 @@ final class NewSpacePresentationTests: XCTestCase {
         try PresentationTestSupport.click(window, at: point)
         try await TestSupport.eventually { created == 1 }
         XCTAssertEqual(menus, 2, "A click makes a space without the menu")
+        // A press with no release: the hold opens the menu under the button (the options at hand, so it opens at once).
+        button.immediateOptions = { [] }
+        points = []
+        window.sendEvent(try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: point))
+        XCTAssertEqual(points.count, 1, "the hold opened the menu")
+        XCTAssertEqual(points.last, NSPoint(x: 0, y: button.isFlipped ? button.bounds.maxY + 4 : button.bounds.minY - 4))
+        XCTAssertEqual(created, 1, "A held press opens the menu without making a space")
     }
 
     func testRightClickPresentsCachedMenuWhileDiscoveryIsPending() async throws {

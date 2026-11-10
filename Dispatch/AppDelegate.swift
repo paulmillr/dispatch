@@ -692,8 +692,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
             item.title = files?.splitNarrow == true ? "Show List and Detail" : "Show One View"
-            return NSApp.keyWindow === window && files?.visible == true && files?.hasPane == true
-                && files?.previewOff == false && files?.canShowBoth == true
+            return NSApp.keyWindow === window && files?.visible == true && files?.canShowBoth == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1
         case #selector(moveTabToNextPane):

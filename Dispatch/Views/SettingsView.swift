@@ -674,7 +674,8 @@ struct SettingsView: View {
                     settingToggle("Show hidden files", isOn: $draft.filesShowHidden)
                         .accessibilityIdentifier("settings-files-show-hidden")
                 }
-                cardOption("Disable file previews", detail: "the list only: no file is opened to show it", detailBelow: true) {
+                cardOption("Disable file previews", detail: "a file shows its kind, size and date; none is opened to show it",
+                           detailBelow: true) {
                     settingToggle("Disable file previews", isOn: Binding(get: { !draft.filesPreviews }, set: { draft.filesPreviews = !$0 }))
                         .accessibilityIdentifier("settings-files-disable-previews")
                 }

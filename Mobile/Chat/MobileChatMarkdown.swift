@@ -317,10 +317,12 @@ struct MobileTypedMarkdown: View {
     let reveals: ChatTypingReveals
     let live: Bool
     let ended: Bool
+    /// Its agent posts whole messages (`ChatTypingReveals.posts`): nothing streams into the row.
+    var posts = false
     /// The reveal this view counts as shown (its clock runs only while one does).
     @State private var shown: ChatTypingReveal?
     var body: some View {
-        let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, reduceMotion: reduceMotion)
+        let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, posts: posts, reduceMotion: reduceMotion)
         MobileChatMarkdownView(text: text, corner: corner, typing: typing)
             .onAppear { show(typing) }
             .onDisappear { show(nil) }

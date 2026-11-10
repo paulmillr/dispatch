@@ -383,6 +383,8 @@ final class FilePreviewPresentationTests: XCTestCase {
         let path = base + "/long.ts"
         source.file(path, "export const long = '" + String(repeating: "abcdefghij ", count: 40) + "'\nconst short = 1\n")
         let (window, session) = try host(source, preview: path)
+        // Settings wraps by default; the tab's wrap button turns it off first.
+        session.previewWrap = false
         try await TestSupport.eventually { if case .text = session.preview?.kind { return true }; return false }
         try await TestSupport.eventually { line(2, in: window) != nil }
         let width = try XCTUnwrap(window.contentView).bounds.width

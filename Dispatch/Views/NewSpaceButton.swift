@@ -148,7 +148,7 @@ struct NewSpaceButton: View {
             }
             // The control's own view takes the pointer: the circle's hover is tracked over it.
             .glassHover(LiquidGlassStore.shared.active ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 4)))
-            .help("New space (⌘N) · Right-click for options")
+            .help("New space (⌘N) · Right-click or hold for options")
     }
 }
 
@@ -188,7 +188,7 @@ struct NewSpaceListButton: View {
                 .accessibilityIdentifier(identifier)
         }
         .onHover { hovered = $0 }
-        .help(title + " (\(shortcut)) · Right-click for options")
+        .help(title + " (\(shortcut)) · Right-click or hold for options")
     }
 
     /// Compact flat list: a row like a space's, the icon in the status column.
@@ -434,10 +434,30 @@ final class NewSpaceNativeButton: NSButton {
         choices[sender.tag]?()
     }
 
-    /// A click makes a space; the backend menu is the secondary click's, as a context menu (control-click too).
+    /// A click makes a space; the backend menu is the secondary click's, as a context menu (control-click too), and a
+    /// held press's: one held `ModeSwitchPressTracker.TrackerView.holdDelay` opens it under the button and makes nothing.
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.control) { showOptions(at: convert(event.locationInWindow, from: nil)); return }
-        super.mouseDown(with: event)
+        guard let window else { return super.mouseDown(with: event) }
+        // Periodic events time the hold inside AppKit's own tracking loop, as the mode switch's do.
+        NSEvent.startPeriodicEvents(afterDelay: ModeSwitchPressTracker.TrackerView.holdDelay, withPeriod: 0.1)
+        defer { NSEvent.stopPeriodicEvents() }
+        highlight(true)
+        defer { highlight(false) }
+        while let next = window.nextEvent(matching: [.leftMouseUp, .leftMouseDragged, .periodic]) {
+            switch next.type {
+            case .periodic:
+                NSEvent.stopPeriodicEvents()
+                highlight(false)
+                showOptions(at: NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : bounds.minY - 4))
+                return
+            case .leftMouseUp:
+                if isEnabled, bounds.contains(convert(next.locationInWindow, from: nil)) { create() }
+                return
+            default:
+                continue
+            }
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) { showOptions(at: convert(event.locationInWindow, from: nil)) }

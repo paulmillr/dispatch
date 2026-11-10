@@ -244,7 +244,7 @@ struct TabCell: View {
             HStack(spacing: 0) {
                 Group {
                     if tab.hovered {
-                        // CloseGlyph: its square shows only under the pointer itself.
+                        // CloseGlyph: its circle shows only under the pointer itself.
                         Image(systemName: "xmark").font(AppFont.ui(size: 8)).frame(width: t.expanded(16), height: t.expanded(16))
                     } else {
                         tab.activity.glyph(frame: 10)

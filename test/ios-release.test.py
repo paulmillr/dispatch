@@ -402,6 +402,20 @@ class AdHocTests(unittest.TestCase):
         self.assertEqual((folder / 'index.html').read_text(),
                          '<h1>Fictional</h1><div class="fine"><span>version 1.2.3-20260101.1200</span><span>iOS 26+</span></div>')
         self.assertEqual(adhoc.label('0.1.7', '20261110.0403'), '0.1.7-20261110.0403')
+        self.assertEqual(adhoc.address(str(folder)), 'https://example.invalid/hidden/')
+
+    def test_the_configured_address_replaces_the_manifests(self):
+        folder, ipa = self.site(), self.root / 'built.ipa'
+        ipa.write_bytes(b'fictional ipa')
+        elsewhere = 'https://example.invalid/elsewhere'
+        self.assertEqual(adhoc.address(str(folder), elsewhere + '/'), elsewhere + '/')
+        adhoc.site(str(folder), self.PHONE, str(ipa), '1.2.3', '1.2.3-20260101.1200', elsewhere)
+        after = plistlib.loads((folder / 'manifest.plist').read_bytes())
+        self.assertEqual([asset['url'] for asset in after['items'][0]['assets']],
+                         [elsewhere + '/Dispatch.ipa', elsewhere + '/icon.png'])
+        with self.assertRaises(SystemExit) as stopped:
+            adhoc.site(str(folder), self.PHONE, url='http://example.invalid/elsewhere')
+        self.assertIn('must be an https:// address', str(stopped.exception.code))
 
     def test_a_site_it_cannot_fill_in_stops_it(self):
         for page, url, expected in [('<p>no version</p>', None, 'must say the version once'),
