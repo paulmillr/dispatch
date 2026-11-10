@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,6 +34,7 @@ runner = load('run_script', 'scripts/run.py')
 simulators = load('ios_simulator', 'scripts/ios_simulator.py')
 watches = load('watch_simulator', 'scripts/watch_simulator.py')
 setup_mobile = load('setup_mobile', 'scripts/setup_mobile.py')
+adhoc = load('release_adhoc', 'scripts/release/adhoc.py')
 
 
 class SigningConfigTests(unittest.TestCase):
@@ -284,6 +286,107 @@ class EngineFrameworkTests(unittest.TestCase):
 
 def elf(machine):
     return b'\x7fELF\x02\x01\x01' + bytes(11) + machine.to_bytes(2, 'little') + bytes(40)
+
+
+class AdHocTests(unittest.TestCase):
+    """scripts/release/adhoc.py: the Ad Hoc profiles release/iphone.sh signs with, and the install page."""
+    TEAM, PHONE = 'ABCDE12345', 'example.fictional.mobile'
+    CERTIFICATE = b'fictional distribution certificate'
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.folder = self.root / 'profiles'
+        self.folder.mkdir()
+        self.decoded = {}
+        xcode = [self.root / 'xcode-new', self.root / 'xcode-old']
+        patcher = unittest.mock.patch.object(adhoc, 'XCODE', xcode)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = unittest.mock.patch.object(adhoc.subprocess, 'run', self.run_tool)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_tool(self, command, **_):
+        if command[:2] == ['security', 'find-identity']:
+            digest = hashlib.sha1(self.CERTIFICATE).hexdigest().upper()
+            return subprocess.CompletedProcess(command, 0, f'  1) {digest} "Apple Distribution: Fictional Person ({self.TEAM})"\n', '')
+        return subprocess.CompletedProcess(command, 0, plistlib.dumps(self.decoded[command[-1]]), b'')
+
+    def profile(self, bundle, name=None, **changes):
+        from datetime import datetime, timedelta
+        entitlements = {'application-identifier': f'{self.TEAM}.{bundle}'}
+        if bundle != self.PHONE:
+            entitlements['com.apple.security.application-groups'] = ['group.' + self.PHONE]
+        profile = {'Name': f'Fictional {bundle}', 'UUID': f'UUID-{bundle}', 'TeamIdentifier': [self.TEAM],
+                   'Entitlements': entitlements, 'ProvisionedDevices': ['fictional-udid-1', 'fictional-udid-2'],
+                   'DeveloperCertificates': [self.CERTIFICATE], 'CreationDate': datetime(2026, 1, 1),
+                   'ExpirationDate': datetime.now() + timedelta(days=200)}
+        profile.update(changes)
+        path = self.folder / f'{name or bundle}.mobileprovision'
+        path.write_bytes(b'signed')
+        self.decoded[str(path)] = profile
+
+    def check(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            adhoc.profiles(str(self.folder), self.TEAM, self.PHONE, str(self.root / 'options.plist'))
+        return output.getvalue()
+
+    def test_profiles_are_installed_and_named_in_the_export_options(self):
+        bundles = [self.PHONE, self.PHONE + '.watchkitapp', self.PHONE + '.watchkitapp.widgets']
+        for bundle in bundles:
+            self.profile(bundle)
+        self.assertRegex(self.check(), r'^3 profiles, until \d{4}-\d\d-\d\d, 2 devices\n$')
+        options = plistlib.loads((self.root / 'options.plist').read_bytes())
+        self.assertEqual(options['provisioningProfiles'], {bundle: f'UUID-{bundle}' for bundle in bundles})
+        self.assertEqual((options['method'], options['signingStyle'], options['teamID']), ('release-testing', 'manual', self.TEAM))
+        for folder in adhoc.XCODE:
+            self.assertEqual(sorted(path.name for path in folder.iterdir()),
+                             sorted(f'UUID-{bundle}.mobileprovision' for bundle in bundles))
+
+    def test_the_newest_usable_profile_of_a_bundle_wins(self):
+        from datetime import datetime
+        for bundle in [self.PHONE, self.PHONE + '.watchkitapp', self.PHONE + '.watchkitapp.widgets']:
+            self.profile(bundle)
+        self.profile(self.PHONE, name='newer', UUID='UUID-newer', CreationDate=datetime(2026, 6, 1))
+        self.check()
+        options = plistlib.loads((self.root / 'options.plist').read_bytes())
+        self.assertEqual(options['provisioningProfiles'][self.PHONE], 'UUID-newer')
+
+    def test_names_what_is_wrong_with_each_profile(self):
+        from datetime import datetime
+        self.profile(self.PHONE, ProvisionedDevices=[])
+        self.profile(self.PHONE, name='expired', ExpirationDate=datetime(2025, 1, 1))
+        self.profile(self.PHONE + '.watchkitapp', Entitlements={'application-identifier': f'{self.TEAM}.{self.PHONE}.watchkitapp'})
+        self.profile(self.PHONE + '.watchkitapp.widgets', DeveloperCertificates=[b'another certificate'])
+        self.profile(self.PHONE + '.watchkitapp.widgets', name='managed', IsXcodeManaged=True)
+        with self.assertRaises(SystemExit) as stopped:
+            self.check()
+        message = str(stopped.exception.code)
+        for expected in ('not a Distribution, Ad Hoc profile', 'expired on 2025-01-01', 'no App Group group.' + self.PHONE,
+                         'made for another certificate', 'Xcode-managed',
+                         f'no usable Ad Hoc profile for {self.PHONE}, {self.PHONE}.watchkitapp, {self.PHONE}.watchkitapp.widgets'):
+            self.assertIn(expected, message)
+        self.assertFalse((self.root / 'options.plist').exists())
+
+    def test_another_teams_identity_signs_nothing(self):
+        self.TEAM = 'ZYXWV98765'
+        with self.assertRaises(SystemExit) as stopped:
+            adhoc.profiles(str(self.folder), 'ZYXWV98764', self.PHONE, str(self.root / 'options.plist'))
+        self.assertIn('no valid Apple Distribution identity of team ZYXWV98764', str(stopped.exception.code))
+
+    def test_the_manifest_and_page_name_their_final_addresses(self):
+        base = 'https://example.invalid/builds/pilot/1.2.3'
+        adhoc.page(str(self.root), base, self.PHONE, '1.2.3', '20260101.1200')
+        manifest = plistlib.loads((self.root / 'manifest.plist').read_bytes())['items'][0]
+        self.assertEqual(manifest['assets'], [{'kind': 'software-package', 'url': base + '/Dispatch.ipa'}])
+        self.assertEqual(manifest['metadata']['bundle-identifier'], self.PHONE)
+        page = (self.root / 'index.html').read_text()
+        self.assertIn(f'href="itms-services://?action=download-manifest&amp;url={base}/manifest.plist"', page)
+        self.assertIn('<title>Dispatch 1.2.3-20260101</title>', page)
+        self.assertEqual(adhoc.label('0.1.7', '20261110.0403'), '0.1.7-20261110')
 
 
 class ReleaseBundleTests(unittest.TestCase):

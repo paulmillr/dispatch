@@ -3,8 +3,8 @@
 A WatchConnectivity companion of [Dispatch for iPhone](ios.md). The phone keeps every SSH connection and helper; the
 watch shows what the phone has (Agents, approvals, Spaces, host stats) and sends actions back. No Rust and no SSH on
 the watch; the link carries no host connection settings, SSH credentials, helper node ids or helper protocol frames.
-watchOS 26+, embedded in the phone app (`DispatchMobile.app/Watch`) for local device installs (no published release
-for now: [releasing](releasing.md#iphone)). Sources are in `Watch/`; the phone's side of the link is in `Mobile/Watch`.
+watchOS 26+, embedded in the phone app (`DispatchMobile.app/Watch`) for local device installs and the phone's Ad Hoc
+releases ([releasing](releasing.md#iphone)). Sources are in `Watch/`; the phone's side of the link is in `Mobile/Watch`.
 Mirrored names and conversation text can still contain sensitive information, including
 addresses or credentials a user or agent put in them. What crosses the link, and the consent model, are in
 [security](security.md#dispatch-for-iphone) (Apple Watch).

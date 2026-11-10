@@ -343,7 +343,7 @@ These can appear on the lock screen, depending on your macOS notification settin
 
 ## Dispatch for iPhone
 
-The iPhone app ([docs/ios.md](ios.md)) is sandboxed like every iOS app. Local device installs use your Apple development team; there is no published release for now ([releasing](releasing.md#iphone)). It runs nothing on the phone but itself; on each host it runs the same helper as the Mac, with one grant narrowed by two per-host switches, unless the host goes without it (plain SSH, below, and [docs/ios.md](ios.md#plain-ssh)): then it installs nothing and opens only login shells.
+The iPhone app ([docs/ios.md](ios.md)) is sandboxed like every iOS app. Local device installs use your Apple development team; releases are Ad Hoc, signed for registered devices only and served from a private address, never a public one ([releasing](releasing.md#iphone)). It runs nothing on the phone but itself; on each host it runs the same helper as the Mac, with one grant narrowed by two per-host switches, unless the host goes without it (plain SSH, below, and [docs/ios.md](ios.md#plain-ssh)): then it installs nothing and opens only login shells.
 
 **Network.**
 

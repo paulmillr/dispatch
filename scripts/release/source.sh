@@ -1,7 +1,7 @@
-# The signing machine's first step, of scripts/release-publish.sh (and any other script of the signing machine's); sourced, defines
-# functions only (docs/releasing.md, Signing machine). The script sets SELF, REPOSITORY, CONFIG, version and arguments,
-# and sources release/ui.sh first. signed_commit is also scripts/release/verify.sh --reproduce's (with its own clone and
-# key).
+# The signing machine's first step, of scripts/release-publish.sh and scripts/release/iphone.sh; sourced, defines
+# functions only (docs/releasing.md, Signing machine). The script sets SELF (the scripts folder), REPOSITORY, CONFIG,
+# version and arguments, and sources release/ui.sh first. signed_commit is also scripts/release/verify.sh --reproduce's
+# (with its own clone and key).
 #
 #   source_start FOLDER        the work folder, CONFIG/work/FOLDER; quiet in the clone's copy of the script
 #   source_checks TOOL...      the tools; the commit key pinned in CONFIG; the version commit of X.Y.Z signed by that
@@ -14,7 +14,7 @@
 #                              GNUPGHOME alone; a tag $version on URL, once published, must be it. One checklist line;
 #                              sets commit and number (the build number), empty on a problem
 #   source_hand_over           the clone's copy: exports the commit's tree to the work folder and runs the same script
-#                              from there (what touches the keys comes from a commit you signed); the commit's copy:
+#                              (the same path under scripts/) from there (what touches the keys comes from a commit you signed); the commit's copy:
 #                              returns
 
 source_start() {
@@ -89,12 +89,14 @@ source_hand_over() {
     # Its own scripts take over: a commit from before these (no scripts/release/) has others, which this cannot run.
     git -C "$clone" cat-file -e "$commit:scripts/release/source.sh" 2> /dev/null ||
       die "the version commit of $version, ${commit:0:8}, predates scripts/release/: these scripts cannot release it"
+    git -C "$clone" cat-file -e "$commit:$(script_name)" 2> /dev/null ||
+      die "the version commit of $version, ${commit:0:8}, has no $(script_name): it cannot release this way"
     mkdir -p "$work"
     echo "$commit" > "$work/commit"
     rm -rf "$work/source"
     mkdir "$work/source"
     git -C "$clone" archive "$commit" | tar -x -C "$work/source"
-    RELEASE_SOURCE_CLONE="$clone" exec bash "$work/source/scripts/$(basename "$0")" "${arguments[@]}"
+    RELEASE_SOURCE_CLONE="$clone" exec bash "$work/source/$(script_name)" "${arguments[@]}"
   fi
   [[ "$(cat "$work/commit")" == "$commit" ]] || die "the version commit of $version changed to ${commit:0:8} while this ran; find out why"
 }

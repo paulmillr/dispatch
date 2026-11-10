@@ -15,7 +15,8 @@ Two commands: `scripts/release.sh X.Y.Z` on the commit machine pushes the versio
 rest. The commit machine has no way into the signing machine. No tag exists before its release does: a version that
 fails on the way leaves a version commit on `main` and nothing else; fix the problem and run the same command again.
 
-The iPhone app has no published release for now ([iPhone](#iphone)).
+The iPhone app is released Ad Hoc, to registered devices only, by a third command on the signing machine,
+`scripts/release/iphone.sh X.Y.Z` ([iPhone](#iphone)).
 
 The maintainer's everyday Mac takes no part: it builds nothing that ships and holds no key. Anyone can check a
 published release afterwards with `scripts/release/verify.sh`, and with `--reproduce` rebuild it byte for byte
@@ -320,7 +321,7 @@ holds, and `git archive` leaves submodules out). The two at the top are the two 
 machine) and `release-publish.sh` (the signing machine). In `scripts/release/`: `source.sh` (the signed version
 commit, then its own scripts), `build.sh` (with `normalize.py` and `zip.py`), `builder.sh` and `rebuild.sh` (the second
 build and the comparison, `compare.py`), `notarize.sh`, `verify.sh` (also `--reproduce`), `config.py` (reads
-`app.json`), `ui.sh` (the checklist) and `signer-setup.sh`. The app's own:
+`app.json`), `ui.sh` (the checklist), `signer-setup.sh`, and for an iPhone app `iphone.sh` with `adhoc.py`. The app's own:
 
 - **`scripts/release/app.json`**: `name` (the `.app`, the DMG `<name>-X.Y.Z.dmg`), `repository`, `tap` and `cask`
   (`Casks/<cask>.rb` there: one tap holds every app's cask), `version_files` (where `MARKETING_VERSION` is set),
@@ -338,10 +339,59 @@ updating itself reads the cask the way Dispatch does ([Mac automatic updates](#m
 
 ## iPhone
 
-The iPhone app has no published release for now: a build Apple re-signs (Ad Hoc) or re-signs and encrypts (the App
-Store, TestFlight) is no build anyone could check against GitHub's attested one the way `release/verify.sh` checks the
-DMG. iPhones get local device installs ([ios.md](ios.md), Signing and a device). The last flow that published it
-(Ad Hoc, TestFlight) is commit f2a66190 (`scripts/release-publish.sh`).
+The iPhone app is released Ad Hoc: signed with Apple Distribution for the iPhones (and Apple Watches) registered in
+the developer portal, installed from Safari, with no App Store, TestFlight or Apple review. It is published nowhere
+public: the `.ipa` lists every registered device's UDID (each app in it carries its profile,
+`embedded.mobileprovision`, which anyone holding the file can read). Nobody can check it against GitHub's attested
+build the way `release/verify.sh` checks the DMG, so GitHub builds no iPhone app; the signing machine builds it once,
+from the signed version commit.
+
+On the signing machine, after `release-publish.sh` or apart from it:
+`scripts/release/iphone.sh X.Y.Z [--variant NAME] [--no-push] [--build-as-user USER]`, in the same checklist style.
+
+1. **Checks.** The version commit of X.Y.Z signed by the pinned key, then the commit's own scripts (in the work
+   folder's `iphone/source/`), as `release-publish.sh` does. Then: the team in `<variant>.env`, `<variant>-adhoc.env`
+   (below), the login keychain, the Apple Distribution identity, the Ad Hoc profiles (`release/adhoc.py`: the three
+   bundle ids, Ad Hoc, unexpired, the App Group on the two watch ones, made for this machine's certificate; it names
+   what is wrong), the site's clone (clean, on a branch, not a public GitHub repository), the pinned Xcode and the
+   build user.
+2. **Build.** `release/builder.sh --platform ios`, as you or as the build user: an `.xcarchive` built unsigned and
+   signed ad hoc with each target's entitlements (`release/app.sh`).
+3. **Ship.** It shows the plan and asks `ship X.Y.Z for iPhone? [y/N]`. The archive is exported with Apple
+   Distribution and the profiles (manual signing) into `Dispatch.ipa`, checked (signature, profile, bundle id,
+   version, build), with `manifest.plist` and `index.html`, an install page whose `itms-services://` link installs it
+   from Safari on a registered iPhone (and the watch app on a registered watch). Then published (below).
+
+`--no-push` checks, builds and signs, but publishes nothing. After a failure, run it again: a finished step is skipped
+(markers in `work/<variant>/X.Y.Z/iphone/`).
+
+### Ad Hoc builds
+
+Each iPhone, and each Apple Watch that should get the watch app, is registered by UDID (Finder: the phone, click the
+line under its name; at most 100 iPhones per membership year, a removed one frees its slot only at renewal). Ad Hoc
+profiles last a year or until the certificate expires; an installed build stops launching then, and does not update
+itself.
+
+Once, and again when the certificate expires, a capability changes or a device is added, in the developer portal
+(Certificates, Identifiers & Profiles):
+
+1. Identifiers: the App Group `group.yachts.dispatch.pilot.mobile`, and the App IDs `yachts.dispatch.pilot.mobile`,
+   `….mobile.watchkitapp` and `….mobile.watchkitapp.widgets` (the two watch ones with App Groups, that group).
+2. Profiles, +, Distribution: Ad Hoc, one per App ID, certificate Apple Distribution, all the devices. Download them
+   into `~/.config/dispatch-release/<variant>-adhoc-profiles/` on the signing machine, replacing the old ones.
+
+Signing is manual: automatic signing from the command line needs an Admin API key, and Xcode refuses its own profiles
+("iOS Team …", Xcode-managed) for manual signing.
+
+Where the build goes is in `~/.config/dispatch-release/<variant>-adhoc.env` on the signing machine only, never in a
+repository: `RELEASE_ADHOC_URL`, the HTTPS address the files are served at (a valid certificate: an iPhone installs over
+nothing else), and optionally `RELEASE_ADHOC_SITE`, the folder that address serves, and `RELEASE_ADHOC_DEPLOY`, a shell
+command run after the copy (a host deployed from a folder). The three files go to the site's top, replacing the
+previous build's: one build is online at a time, and the page names it by its version and the version commit's UTC date,
+`0.1.7-20261110`. A git clone's branch is
+rewritten to one commit and pushed with `--force-with-lease`, so no older `.ipa` stays in its history. Without either,
+serve the work folder's `adhoc/` at that address yourself. Serve it only where nobody can list or browse it, and share
+the link only with the testers. Testers open `RELEASE_ADHOC_URL` in Safari on their iPhone and tap Install.
 
 ## Builds that are not notarized
 

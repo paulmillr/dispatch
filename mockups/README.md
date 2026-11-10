@@ -97,6 +97,16 @@ release notes' first five items (the version commit's body before its first `---
 text` giving a coloured tag), one line each; U4a downloading (a ring round the tile and the footer's edge fill), U4b
 verifying, U1 ready; U1b a short list, U2 the list in the terminal's colours, U3 the list in Settings › Updates.
 
+The `ladder` group (`Screens/ModelLadder.swift`) explores the model and effort picker for an agent whose models are all
+rungs of one family in a known order (haiku, sonnet, opus, fable; luna, terra, astra), in place of the two lists: E1
+the popover over the composer's footer, model and effort as two tracks (a recessed groove filled up to a raised thumb,
+a stop per choice), the family's security model (mythos, daybreak-blue) a switch under them, for this chat only; E2
+today's lists beside it; E3 the popover's states (pointing, dragging, switching, a model without the effort's level,
+the security model on, a failed switch, opened by keyboard, the other family); E4 the footer's model and effort, with
+the security model's shield; E5 one track frame by frame: point, click, the choice translucent until the agent
+confirms, the thumb held as a lens and dragged, arrow keys, a hatched stop the model lacks. A stroked `Capsule` comes
+out offscreen with a flat nub at each end: `PillStroke` there draws the outline in a canvas instead.
+
 ## Screens
 
 **iPhone** (`Sources/`). A tab's header is B7, as the app ships it: Back with the needs-you count and the host's

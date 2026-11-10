@@ -2,8 +2,8 @@
 
 A thin client for SSH hosts. The device has no shell and starts no processes: the Rust helper on each host does the
 work, and the app speaks the helper protocol (`helper/PROTOCOL.md`) over one in-process SSH connection per host.
-iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), with local device installs (no published
-release for now: [releasing](releasing.md#iphone)). Sources are in `Mobile/`; privacy, trust, keys and the helper's
+iOS and iPadOS 26+, one app for iPhone and iPad ([iPad](#ipad)), with local device installs and Ad Hoc
+releases to registered devices ([releasing](releasing.md#iphone)). Sources are in `Mobile/`; privacy, trust, keys and the helper's
 grant are in [security](security.md#dispatch-for-iphone); the Apple Watch companion in [watch](watch.md).
 
 **Hosts need** SSH (password, key or keyboard-interactive), macOS 14+ on Apple silicon or Linux arm64/x86-64, and
@@ -79,7 +79,7 @@ builds Release for simulator and device, checks the helpers' architectures and v
 privacy manifest, and that every required-reason API the executable imports is declared in
 `Mobile/App/PrivacyInfo.xcprivacy`; the same for the embedded watch app. The fast suite cannot run against Release
 (`@testable`, Debug-only demos). `./build.sh --archive` builds Release for any iPhone without signing
-(`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team); there is no published iPhone release for now
+(`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team); the Ad Hoc release signs and exports it
 ([releasing.md](releasing.md#iphone)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
 code.
 

@@ -3,8 +3,8 @@
 # builders). For RELEASE_VARIANT (pilot, the only one), with CFBundleVersion RELEASE_BUILD_NUMBER, it leaves in
 # RELEASE_PRODUCTS:
 #   RELEASE_PLATFORM=mac   Dispatch.app and Dispatch.app.dSYM, the Mac app
-#   RELEASE_PLATFORM=ios   DispatchMobile.xcarchive, the iPhone app with its watch app (no flow publishes it
-#                          for now), built unsigned and signed ad hoc here with each target's
+#   RELEASE_PLATFORM=ios   DispatchMobile.xcarchive, the iPhone app with its watch app (release/iphone.sh's
+#                          Ad Hoc release), built unsigned and signed ad hoc here with each target's
 #                          entitlements: Xcode signs iOS code only with a team, and the signing machine's export keeps
 #                          them (the watch's App Group)
 # Another app has its own release/app.sh; the rest of the release scripts are the same.

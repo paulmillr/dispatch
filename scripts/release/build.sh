@@ -11,7 +11,7 @@
 # and packs them byte-reproducibly (scripts/release/zip.py): the same commit and Xcode build make the same
 # <name>-<variant>-unsigned.zip on any Mac, SHA-256 included. OUT gets it, <name>.app.dSYM.zip (packed the same way, but
 # its DWARF differs between builds) and build.json: variant, version, build number, commit, builder, the Xcode and macOS
-# builds, the app's bundle id and the zips' SHA-256. With --platform ios (an iPhone build; no flow publishes one for now), release/app.sh leaves one
+# builds, the app's bundle id and the zips' SHA-256. With --platform ios (the iPhone build, scripts/release/iphone.sh's), release/app.sh leaves one
 # .xcarchive instead, its apps signed ad hoc with their entitlements; OUT gets it zipped, and build.json its app's
 # bundle id (the variant's ios_bundle_id) and SHA-256. Nothing here holds a key or talks to Apple.
 set -euo pipefail
