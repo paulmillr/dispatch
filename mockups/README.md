@@ -92,6 +92,11 @@ the tab's name (no Files | Review | Commits there) and the strip's mode button s
 The `onboarding` group draws the first-launch setup sheet as it ships (LocalAgentsConsent, OnboardingPages.swift): O1
 Chat, O2 Tabs, O3 Prefs, over a fresh install's window.
 
+The `updates` group (`Screens/Updates.swift`) explores the updater's sheet in place of the "is ready" NSAlert: the
+release notes' first five items (the version commit's body before its first `---` line, `* ` or `- ` items, `Area:
+text` giving a coloured tag), one line each; U4a downloading (a ring round the tile and the footer's edge fill), U4b
+verifying, U1 ready; U1b a short list, U2 the list in the terminal's colours, U3 the list in Settings › Updates.
+
 ## Screens
 
 **iPhone** (`Sources/`). A tab's header is B7, as the app ships it: Back with the needs-you count and the host's
