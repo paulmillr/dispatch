@@ -141,8 +141,8 @@ enum WatchThreadBuilder {
     /// `ChatThreadView.notices` but the paused reason and the failure (the page's own `reason` and `failure`).
     static func notes(_ session: MobileChatSession) -> [String] {
         var notes: [String] = []
-        if session.needsHookTrust, session.phase == .verified {
-            notes.append("Codex sends approvals here only after you pick Trust all under “Hooks need review” in its terminal. Until then they wait in the Terminal tab.")
+        if session.approvalInTerminal, session.phase == .verified {
+            notes.append("Codex is asking for approval in its terminal. To get its approvals here, pick Trust all under “Hooks need review” there.")
         }
         if session.phase == .verified, !session.terminalAttached {
             notes.append("Attaching the terminal… messages wait in the queue until it shows.")

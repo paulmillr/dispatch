@@ -119,6 +119,12 @@ final class UIWalkthroughTests: XCTestCase {
         defer { app.close() }
         let workspace = app.controller.workspace
         let originalSpace = try XCTUnwrap(workspace.selectedSpace)
+        // A shell still starting counts as running work (`runningPrograms`): close only what would not ask.
+        func settled() async throws {
+            try await TestSupport.eventually(diagnostic: "The current space's shells are still starting") {
+                !app.controller.needsCloseConfirmation(workspace.currentTabs.map(\.id))
+            }
+        }
         try app.shortcut("t", keyCode: 17)
         XCTAssertEqual(workspace.spaces.count, 1)
         XCTAssertEqual(workspace.currentTabs.count, 2)
@@ -126,6 +132,7 @@ final class UIWalkthroughTests: XCTestCase {
         XCTAssertEqual(workspace.spaces.count, 2)
         XCTAssertEqual(workspace.currentTabs.count, 1)
         XCTAssertEqual(workspace.current?.hostID, .local)
+        try await settled()
         try app.shortcut("W", keyCode: 13, modifiers: [.command, .shift])
         XCTAssertEqual(workspace.spaces.count, 1)
         XCTAssertEqual(workspace.currentTabs.count, 2)
@@ -133,10 +140,12 @@ final class UIWalkthroughTests: XCTestCase {
         XCTAssertEqual(workspace.spaces.count, 2)
         XCTAssertEqual(workspace.currentTabs.count, 1)
         try app.shortcut("t", keyCode: 17)
+        try await settled()
         try app.shortcut("w", keyCode: 13)
         XCTAssertEqual(workspace.spaces.count, 2)
         XCTAssertEqual(workspace.currentTabs.count, 1)
         try app.shortcut("t", keyCode: 17)
+        try await settled()
         try app.shortcut("W", keyCode: 13, modifiers: [.command, .shift])
         XCTAssertEqual(workspace.spaces.map(\.id), [originalSpace])
         XCTAssertEqual(workspace.currentTabs.count, 2)

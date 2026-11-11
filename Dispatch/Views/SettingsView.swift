@@ -299,13 +299,6 @@ struct SettingsView: View {
             }
             settingsGroup("Terminal") {
                 launchRow
-                // A program's BEL: in the tab you look at, the alert sound or a flash; a tab elsewhere gets a bell mark.
-                row("Bell", detail: draft.bell == .off ? "programs' bells are ignored" : "other tabs show a bell mark") {
-                    dropdown("Bell", selection: Binding(get: { draft.bell.title }, set: { title in
-                        if let bell = TerminalBell.allCases.first(where: { $0.title == title }) { draft.bell = bell }
-                    }), choices: TerminalBell.allCases.map(\.title))
-                    .accessibilityIdentifier("settings-bell")
-                }
                 tabsAndSpacesOptions
                 securityOptions
             }
@@ -362,6 +355,11 @@ struct SettingsView: View {
                 settingToggle("Slow connection mode", isOn: $draft.outputWindow)
                     .accessibilityIdentifier("settings-output-window")
                     .help("Off: output streams as fast as the connection takes it. On: at most 256 KB in flight per connection.")
+            }
+            row("Model sliders", detail: "Chat's model and effort as two sliders, when an agent's models allow it · Claude and Codex") {
+                settingToggle("Model sliders", isOn: $draft.modelTracks)
+                    .accessibilityIdentifier("settings-model-tracks")
+                    .help("Off: Chat's model picker is two lists. On: two sliders, which apply when the picker closes.")
             }
         }
     }
@@ -880,13 +878,13 @@ struct SettingsView: View {
 
     /// Terminal's row above Security, folded; its title opens it too: what a new tab starts (folder, shell, startup
     /// command, scrollback), then how tabs and spaces are listed (git branches, the sidebar with one space, tab names,
-    /// vertical tabs). The detail summarizes the launch settings and says "vertical tabs" while they are on; the badge
+    /// vertical tabs), and a program's bell. The detail summarizes the launch settings and says "vertical tabs" while they are on; the badge
     /// counts the choices that differ from defaults. How the window looks is under Theme › Appearance.
     @ViewBuilder private var tabsAndSpacesOptions: some View {
         // A switch that can't be changed here (git off) isn't counted.
         let fold = Fold(title: "Tabs & spaces", changed: changed {
             [$0.startingDirectory, $0.shell, $0.startupCommand, $0.scrollback.rawValue,
-             $0.hideSingleSpace, $0.automaticTabNames, $0.verticalTabs] + (draft.gitEnabled ? [$0.showGitBranches] : [])
+             $0.hideSingleSpace, $0.automaticTabNames, $0.verticalTabs, $0.bell.rawValue] + (draft.gitEnabled ? [$0.showGitBranches] : [])
         }, isExpanded: $tabsAndSpacesExpanded)
         let folder = draft.startingDirectory == "/" ? "/" : draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~")
         let shell = draft.shellProgram.map { ($0 as NSString).lastPathComponent } ?? "login shell"
@@ -928,6 +926,14 @@ struct SettingsView: View {
                     settingToggle("Vertical tabs", isOn: $draft.verticalTabs)
                         .accessibilityIdentifier("settings-vertical-tabs")
                         .help("Shows a space's tabs in the sidebar instead of tab strips. Choosing a space goes into it; Back returns to the spaces.")
+                }
+                // A program's BEL: in the tab you look at, the alert sound or a flash; a tab elsewhere gets a bell mark.
+                cardOption("Bell", detail: draft.bell == .off ? "programs' bells are ignored" : "other tabs show a bell mark",
+                           detailBelow: true) {
+                    dropdown("Bell", selection: Binding(get: { draft.bell.title }, set: { title in
+                        if let bell = TerminalBell.allCases.first(where: { $0.title == title }) { draft.bell = bell }
+                    }), choices: TerminalBell.allCases.map(\.title))
+                    .accessibilityIdentifier("settings-bell")
                 }
             }
         }
@@ -1370,6 +1376,7 @@ struct SettingsView: View {
             .init(title: "Show sidebar with one space", tab: .general, place: "Terminal › Tabs & spaces", open: tabs),
             .init(title: "Automatic tab names", tab: .general, place: "Terminal › Tabs & spaces", words: "title", open: tabs),
             .init(title: "Vertical tabs", tab: .general, place: "Terminal › Tabs & spaces", open: tabs),
+            .init(title: "Bell", tab: .general, place: "Terminal › Tabs & spaces", words: "beep alert sound flash", open: tabs),
             .init(title: "Programs can copy", tab: .general, place: "Terminal › Security", words: "clipboard osc 52", open: security),
             .init(title: "Automatically approve unsafe pastes", tab: .general, place: "Terminal › Security", words: "paste", open: security),
             .init(title: "Secure keyboard entry", tab: .general, place: "Terminal › Security", words: "keystrokes password", open: security),
@@ -1415,6 +1422,7 @@ struct SettingsView: View {
             .init(title: "Import", tab: .extra, place: "Extra", words: "ghostty iterm2 terminal dispatch settings"),
             .init(title: "Export settings", tab: .extra, place: "Extra"),
             .init(title: "Slow connection mode", tab: .extra, place: "Experimental"),
+            .init(title: "Model sliders", tab: .extra, place: "Experimental", words: "chat picker tracks effort daybreak"),
             .init(title: "Diagnostics", tab: .extra, place: "Troubleshooting", words: "logs"),
             .init(title: "Reset Dispatch", tab: .extra, place: "Troubleshooting"),
             .init(title: "This Mac", tab: .hosts, place: "Hosts", words: "agent hooks install remove codex claude pi",

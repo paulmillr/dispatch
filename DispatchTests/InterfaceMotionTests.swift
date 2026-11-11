@@ -600,7 +600,14 @@ final class InterfaceMotionTests: XCTestCase {
         func capture(_ name: String) async throws -> PresentationTestSupport.Snapshot {
             try await PresentationTestSupport.capture(window, named: name, in: "motion-validation")
         }
-        func click(_ x: CGFloat) throws {
+        /// A click opens the modes menu (`ModeSwitchPressTracker`): `title` is picked from it as it opens, rather than
+        /// running the menu's modal loop.
+        func click(_ x: CGFloat, choose title: String) throws {
+            for tracker in PresentationTestSupport.views(of: ModeSwitchPressTracker.TrackerView.self, in: try XCTUnwrap(window.contentView)) {
+                tracker.presentMenu = { menu, _, _ in
+                    if let index = menu.items.firstIndex(where: { $0.title == title }) { menu.performActionForItem(at: index) }
+                }
+            }
             try PresentationTestSupport.click(window, at: NSPoint(x: x, y: 120))
         }
         window.contentView = NSHostingView(rootView: ChatModeSwitch(session: session, coordinator: coordinator, floating: true)
@@ -609,13 +616,13 @@ final class InterfaceMotionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(200))
         let terminal = try await capture("switch-terminal").text(separator: " ")
         XCTAssertFalse(terminal.contains("terminal")); XCTAssertFalse(terminal.contains("chat"), "The switch is an icon in either mode")
-        try click(250)
+        try click(250, choose: "Chat")
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertTrue(session.showChat); XCTAssertTrue(session.manualViewChoice)
         let snapshot1 = try await capture("switch-chat").text()
         XCTAssertFalse(snapshot1.contains("chat"))
         // From chat the click returns to the terminal; files is ⇧⌘F's step, and its glyph is an icon too.
-        try click(250)
+        try click(250, choose: "Terminal")
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertFalse(session.showChat); XCTAssertEqual(files.mode(for: session.id), .terminal)
         XCTAssertEqual(session.draft, "Retain this draft")
@@ -624,13 +631,13 @@ final class InterfaceMotionTests: XCTestCase {
         XCTAssertEqual(files.mode(for: session.id), .files)
         let filesSnapshot = try await capture("switch-files").text()
         XCTAssertFalse(filesSnapshot.contains("files"), "The files glyph is an icon too")
-        try click(250)
+        try click(250, choose: "Terminal")
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertEqual(files.mode(for: session.id), .terminal)
         window.contentView = NSHostingView(rootView: ChatModeSwitch(session: session, coordinator: coordinator)
             .frame(maxWidth: .infinity, maxHeight: .infinity).background(Chrome.terminal))
         try await Task.sleep(for: .milliseconds(100))
-        try click(250); try await Task.sleep(for: .milliseconds(30))
+        try click(250, choose: "Chat"); try await Task.sleep(for: .milliseconds(30))
         XCTAssertTrue(session.showChat)
         _ = try await capture("switch-compact")
 

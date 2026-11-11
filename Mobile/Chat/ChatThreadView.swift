@@ -107,9 +107,11 @@ struct ChatThreadView: View {
                 ChatGoalStrip(session: session, goal: goal)
             }
             scroller(rows)
-                // The thread runs on under the composer, its glass over the last rows as the system's bars (the side
-                // conversation's too); the jump pill is laid out inside the bar's inset.
-                .scrollEdgeEffectStyle(.soft, for: .bottom)
+                // The thread runs on under the header and the composer, the rows fading under their glass as under the
+                // system's bars (the side conversation's too); the jump pill is laid out inside the bar's inset. Soft at
+                // the top too, as Messages has it: left to the system, an iPhone drew the header's edge as the hard one,
+                // an opaque band ending in a line, where the simulator drew the soft one.
+                .scrollEdgeEffectStyle(.soft, for: .all)
                 .safeAreaBar(edge: .bottom, spacing: 0) { bottomBar }
         }
         .environment(\.chatOpenAttachment, { previewing = $0 })
@@ -778,8 +780,8 @@ struct ChatThreadView: View {
     }
 
     @ViewBuilder private var notices: some View {
-        if session.needsHookTrust, session.phase == .verified {
-            ChatNote(text: "Codex sends approvals here only after you pick Trust all under “Hooks need review” in its terminal. Until then they wait in the Terminal tab.")
+        if session.approvalInTerminal, session.phase == .verified {
+            ChatNote(text: "Codex is asking for approval in its terminal. To get its approvals here, pick Trust all under “Hooks need review” there.")
         }
         if session.phase == .verified, !session.terminalAttached {
             ChatNote(text: "Attaching the terminal… messages wait in the queue until it shows.")

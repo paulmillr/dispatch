@@ -59,7 +59,7 @@ extension MobileComposition {
         }
         if route.detail == FilesRoute.directory { return folder() }
         let tab = tabs.tab(ref)
-        let actions = FilesPreviewActions(agent: tab.flatMap(filesAgentName), ask: tab.flatMap(filesAsk),
+        let actions = FilesPreviewActions(ask: tab.flatMap(filesAsk),
                                           openInTerminal: tab.flatMap { filesOpenInTerminal($0, folder: FilesPath.parent(path) ?? "/") },
                                           back: back, pop: pop)
         let preview = FilePreview(path: path, host: host.name) { browsers.source(ref.host) }
@@ -81,15 +81,7 @@ extension MobileComposition {
         }
     }
 
-    /// "claude", "codex", "pi": the tab's agent as its conversation names it, else as the tab's program does.
-    private func filesAgentName(_ tab: MobileTab) -> String? {
-        guard let pane = tab.agentPane else { return nil }
-        let key = ChatConversationKey(host: tab.ref.host, node: pane.key)
-        return FilesAsk.agentName(key: conversations.sessions[key]?.agentKey, program: tab.program,
-                                  executable: pane.agent?.executable)
-    }
-
-    /// Ask: back to the tab on its Chat segment, the file on its way into the composer as an attachment (read through
+    /// Attach to chat: back to the tab on its Chat segment, the file on its way into the composer as an attachment (read through
     /// `files.read`, stored with `attachments.put` as any attachment) once the conversation takes one.
     private func filesAsk(_ tab: MobileTab) -> ((FilePreview) -> Void)? {
         guard let pane = tab.agentPane else { return nil }
@@ -191,7 +183,7 @@ extension TabSegment {
 /// Files' ways into the tab's other segments.
 @MainActor
 enum FilesAsk {
-    /// Ask: the tab shows Chat, the Files screens over it go, and the file follows into the composer.
+    /// Attach to chat: the tab shows Chat, the Files screens over it go, and the file follows into the composer.
     static func ask(_ preview: FilePreview, session: MobileChatSession, tab: TabRef, navigator: SpacesNavigator) {
         let kind: ChatAttachment.Kind = if case .image = preview.content { .image } else { .file }
         let source = MobileAttachmentSource(name: preview.name, kind: kind) {
@@ -225,15 +217,6 @@ enum FilesAsk {
         var path = navigator.path
         while case .files(let tab, _)? = path.last, tab == ref { path.removeLast() }
         if path != navigator.path { navigator.path = path }
-    }
-
-    /// The agent's name for "Ask claude": the conversation's agent key, else the tab's program unless it is a shell,
-    /// else the agent's executable's name.
-    static func agentName(key: String?, program: String?, executable: String?) -> String {
-        if let key, !key.isEmpty { return key }
-        if let program, !program.isEmpty, !MobileTab.isShell(program) { return program }
-        if let executable, let name = executable.split(separator: "/").last, !name.isEmpty { return String(name) }
-        return "agent"
     }
 
     /// A folder Open in Terminal may type: no C0 or C1 control character, DEL or line break, which a shell's line editor

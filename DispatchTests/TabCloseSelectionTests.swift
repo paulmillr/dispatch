@@ -58,8 +58,8 @@ final class TabCloseSelectionTests: XCTestCase {
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("JOBS_DONE") && app.controller.runningPrograms([id]) == nil }
     }
 
-    /// Right-click's menu: the edit items, Clear Screen and splitting, then the modes the tab offers; Clear Screen is
-    /// off while a full-screen program shows.
+    /// Right-click's menu: the edit items, Clear Screen and splitting, and no modes (the strip's mode button has them);
+    /// Clear Screen is off while a full-screen program shows.
     func testTerminalContextMenuOffersEditingClearAndModes() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
         let id = try XCTUnwrap(app.workspace.activeTab?.id)
@@ -68,9 +68,13 @@ final class TabCloseSelectionTests: XCTestCase {
         TerminalTestSupport.send("printf 'MENU_%s\\n' READY", to: terminal)
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("MENU_READY") }
         let titles = terminal.contextMenu().items.map(\.title)
-        for title in ["Copy", "Paste", "Select All", "Clear Screen", "Split Right", "Split Down", "Terminal"] {
+        for title in ["Copy", "Paste", "Select All", "Clear Screen", "Split Right", "Split Down"] {
             XCTAssertTrue(titles.contains(title), "\(title) in \(titles)")
         }
+        for title in ["Terminal", "Chat", "Files", "Review", "Commits"] {
+            XCTAssertFalse(titles.contains(title), "\(title) in \(titles)")
+        }
+        XCTAssertFalse(terminal.contextMenu().allowsContextMenuPlugIns, "No Services")
         XCTAssertTrue(terminal.canClearScreen)
         TerminalTestSupport.send("printf '\\033[?1049h'; sleep 30", to: terminal)
         try await app.wait { terminal.surface?.alternateScreen == true }

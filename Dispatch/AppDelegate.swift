@@ -84,10 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         self.hostSessionStore = hostSessionStore
         super.init()
         HelperSession.outputWindow = settings.values.outputWindow
+        ChatModelPicker.tracksEnabled = settings.values.modelTracks
         settings.onSave = { [weak self] preferences in
             self?.updater.setAutomaticUpdates(preferences.automaticUpdates == true)
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
             HelperSession.outputWindow = preferences.outputWindow
+            ChatModelPicker.tracksEnabled = preferences.modelTracks
             self?.applyKeyGroups(preferences.keyGroups)
             if !preferences.rememberHosts { self?.persistHostSession() }
             if !preferences.restoreTerminalOutput {

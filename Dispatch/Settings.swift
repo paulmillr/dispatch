@@ -299,6 +299,9 @@ struct Preferences: Codable, Equatable {
     /// flight to this app (`terminals.window`, HelperOutputWindow), so a keystroke or a reply never waits behind megabytes
     /// parked in SSH and TCP buffers on a slow link. Off: output streams as before.
     var outputWindow = false
+    /// Settings › Experimental › Model sliders: Chat's model picker as two tracks when the agent's models allow it
+    /// (`ChatModelPicker.tracksEnabled`). Off: the two lists.
+    var modelTracks = false
     var hideSingleSpace = true
     /// Vertical tabs: no tab strips. The sidebar goes into the shown space and lists its tabs (a tmux or herdr space's
     /// windows, their panes a line each), with Back to the spaces; each pane keeps a title row for its tab.
@@ -413,7 +416,7 @@ struct Preferences: Codable, Equatable {
         // Stored under the key of the mode it replaced (tabs only, "Vertical tabs, no spaces"): a choice made there carries over.
         case verticalTabs = "tabsOnly"
         case hideSingleSpace, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
-        case enableDiagnostics, outputWindow
+        case enableDiagnostics, outputWindow, modelTracks
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case textContrast, colorVision, typicalTheme, typicalLightTheme, terminalOpacity
         case spaces, enableKittyGraphics
@@ -489,6 +492,7 @@ struct Preferences: Codable, Equatable {
         restoreTerminalOutput = try fields.decodeIfPresent(Bool.self, forKey: .restoreTerminalOutput) ?? restoreTerminalOutput
         enableDiagnostics = try fields.decodeIfPresent(Bool.self, forKey: .enableDiagnostics) ?? false
         outputWindow = try fields.decodeIfPresent(Bool.self, forKey: .outputWindow) ?? false
+        modelTracks = try fields.decodeIfPresent(Bool.self, forKey: .modelTracks) ?? false
         hideSingleSpace = try fields.decodeIfPresent(Bool.self, forKey: .hideSingleSpace) ?? hideSingleSpace
         verticalTabs = try fields.decodeIfPresent(Bool.self, forKey: .verticalTabs) ?? verticalTabs
         spaces = try fields.decodeIfPresent([String: Bool].self, forKey: .spaces) ?? [:]

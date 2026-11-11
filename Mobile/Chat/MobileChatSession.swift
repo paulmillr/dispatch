@@ -157,7 +157,8 @@ final class MobileChatSession: Identifiable {
     private(set) var approvals: [Approval] = []
     private(set) var questions: [ChatSideQuestion] = []
     /// A helper approval arrived in this conversation (for Codex: its hooks are trusted).
-    private(set) var receivedApproval = false
+    /// The agent's own dialog that owns its terminal (`chat.state`'s `dialog`): "approval" while Codex asks one itself.
+    private(set) var dialog: String?
 
     /// The helper's queue snapshot (`chat.queue`, `queue.list`); what the phone shows is `queueRows`.
     private(set) var queue: [HelperChat.Queued] = []
@@ -314,9 +315,10 @@ final class MobileChatSession: Identifiable {
         guard let presence else { return true }
         return terminal != nil && client != nil && presence.attached(key)
     }
-    /// Codex runs Dispatch's hooks only after "Trust all" in its own terminal; until an approval has come through,
-    /// the thread says so (docs/ios.md, Helper contract: "Surface native trust steps").
-    var needsHookTrust: Bool { agentKey == "codex" && !receivedApproval }
+    /// Codex asks an approval in its own terminal (the helper's `dialog` "approval"): its hooks are not trusted yet (or
+    /// off, or fell back), so the thread says where it waits and how to bring the next ones here (docs/ios.md, Helper
+    /// contract: "Surface native trust steps"). Never a guess: a Codex chat with nothing to approve says nothing.
+    var approvalInTerminal: Bool { agentKey == "codex" && dialog == "approval" }
 
     private func open() {
         guard let client, let terminal, binding != nil else { return }
@@ -453,7 +455,7 @@ final class MobileChatSession: Identifiable {
             queue = []
             optimisticPrompt = nil
             earlier = nil
-            receivedApproval = false
+            dialog = nil
         }
         if let named { conversation = named }
         agentKey = history.key
@@ -570,6 +572,7 @@ final class MobileChatSession: Identifiable {
             effort = state.effort
         }
         attention = state.attention
+        dialog = state.dialog
         if let title = state.title { self.title = title }
         compacting = state.compacting
         // Core's State.usage is ChatUsage's object; State.goal the harness's goal, nil without one (the Mac's reading,
@@ -621,7 +624,6 @@ final class MobileChatSession: Identifiable {
         guard !approvals.contains(where: { $0.interaction.id == interaction.id && $0.pending.pending }),
               !questions.contains(where: { $0.id == interaction.id }) else { return }
         if case .permission(let permission) = interaction.presentation {
-            receivedApproval = true
             let pending = PendingApproval(key: interaction.key ?? interaction.id, interaction: interaction.id,
                                           operation: permission.operation, item: interaction.tool(in: transcript.turns),
                                           turnID: interaction.turn, toolItemID: interaction.record) { [weak self] approval in

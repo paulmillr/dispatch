@@ -237,13 +237,9 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(find.position, "No matches")
     }
 
-    // MARK: Ask and Open in Terminal
+    // MARK: Attach to chat and Open in Terminal
 
     func testAskAndTerminalWords() {
-        XCTAssertEqual(FilesAsk.agentName(key: "claude", program: "node", executable: nil), "claude")
-        XCTAssertEqual(FilesAsk.agentName(key: nil, program: "codex", executable: nil), "codex")
-        XCTAssertEqual(FilesAsk.agentName(key: nil, program: "zsh", executable: "/opt/bin/pi"), "pi")
-        XCTAssertEqual(FilesAsk.agentName(key: nil, program: nil, executable: nil), "agent")
         XCTAssertEqual(FilesAsk.typing("/Users/sam/src/web", bracketed: false), Data("\u{15}cd '/Users/sam/src/web'\r".utf8),
                        "The line cleared, the cd, Return")
         XCTAssertEqual(FilesAsk.typing("/tmp/it's here", bracketed: false), Data("\u{15}cd '/tmp/it'\\''s here'\r".utf8))
@@ -305,21 +301,21 @@ final class FilePreviewTests: XCTestCase {
 
     // MARK: Screen
 
-    /// The header names the file with its folder, size, age and kind; Ask names the tab's agent and shows only with
-    /// one; Find counts the matches.
+    /// The header names the file with its folder, size, age and kind; no Ask button under it (Attach to chat is in "…");
+    /// Find counts the matches.
     func testTheScreensControls() async throws {
         AccessibilityLabelTests.enableAccessibility()
         let files = Files(["/Users/sam/src/web/src/theme.ts": Data(FilesSample.themeSource.utf8)])
         let host = TabsHost(id: FilesListingTests.ref.host, name: "mba2", tint: .blue, system: nil, home: "/Users/sam", order: 0)
-        var asked = 0
         let screen = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/src/theme.ts", files), host: host, root: "/Users/sam/src/web",
-                              actions: FilesPreviewActions(agent: "claude", ask: { _ in asked += 1 }), fonts: .memory())
+                              actions: FilesPreviewActions(ask: { _ in }), fonts: .memory())
         }
         let (window, view) = try show(screen)
         defer { window.isHidden = true }
-        try await TestSupport.eventually { labels(view.view).contains("Ask claude") }
+        try await TestSupport.eventually { labels(view.view).contains("Find in file") }
         let all = labels(view.view)
+        XCTAssertFalse(all.contains { $0.hasPrefix("Ask") }, "No Ask button: \(all)")
         let modified = Date(timeIntervalSince1970: 1_800_000_000)
         let revision = FileRevision(kind: .file, size: 1_800, device: 1, inode: 1, modifiedNs: "1800000000000000000", changedNs: "1")
         XCTAssertEqual(FilePreviewScreen.subtitle(path: "/Users/sam/src/web/src/theme.ts", root: "/Users/sam/src/web", home: "/Users/sam",
@@ -328,19 +324,16 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(FilePreviewScreen.subtitle(path: "/Users/sam/notes/todo", root: nil, home: "/Users/sam", revision: nil, now: modified),
                        "~/notes", "Outside the root: the folder with ~")
         XCTAssertTrue(all.contains("Line 1, import { useEffect, useState } from \"react\";"), "\(all)")
-        try tap("Ask claude", in: view.view)
-        XCTAssertEqual(asked, 1)
         try tap("Find in file", in: view.view)
         try await TestSupport.eventually { labels(view.view).contains("Next match") }
 
         let bare = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/src/theme.ts", files), host: host, root: nil,
-                              actions: FilesPreviewActions(agent: nil, ask: nil), fonts: .memory())
+                              actions: FilesPreviewActions(ask: nil), fonts: .memory())
         }
         let (other, otherView) = try show(bare)
         defer { other.isHidden = true }
         try await TestSupport.eventually { labels(otherView.view).contains("Find in file") }
-        XCTAssertFalse(labels(otherView.view).contains { $0.hasPrefix("Ask") }, "No agent, no Ask")
     }
 
     /// An image keeps the screen: no Ask or Find below it.
@@ -352,7 +345,7 @@ final class FilePreviewTests: XCTestCase {
         let host = TabsHost(id: FilesListingTests.ref.host, name: "mba2", tint: .blue, system: nil, home: "/Users/sam", order: 0)
         let screen = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/logo.png", files), host: host, root: "/Users/sam/src/web",
-                              actions: FilesPreviewActions(agent: "claude", ask: { _ in }), fonts: .memory())
+                              actions: FilesPreviewActions(ask: { _ in }), fonts: .memory())
         }
         let (window, view) = try show(screen)
         defer { window.isHidden = true }

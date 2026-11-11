@@ -80,7 +80,8 @@ struct ChatSideScreen: View {
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .gesture(ChatRevealPan(reveal: reveal, width: revealWidth + ChatRevealDetail.gap, reduceMotion: reduceMotion))
-        .scrollEdgeEffectStyle(.soft, for: .bottom)
+        // Soft at both edges, as the thread's (`ChatThreadView`): left to the system, an iPhone drew the top as the hard one.
+        .scrollEdgeEffectStyle(.soft, for: .all)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
         .environment(\.chatColumnWidth, column)
         .environment(\.chatMeasure, measure)

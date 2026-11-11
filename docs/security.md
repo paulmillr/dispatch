@@ -84,7 +84,7 @@ Any process running as you can read these values, but the tokens are not enough 
 
 **Kitty graphics.** Kitty's terminal image protocol is off by default. Turning on **Kitty graphics** in Settings → General → Security lets terminal programs display images. Only trusted local tabs may ask the Swift engine to read a regular file or shared-memory object; remote tabs can send inline image bytes but cannot name resources on the Mac. File reads exclude `/proc`, `/sys`, and `/dev`. The Swift engine caps decoded image storage at 64 MiB per terminal, individual decoded images at 32 MiB, and placements at 1,024.
 
-**Escape-sequence notifications.** OSC 9 and OSC 777 are parsed and then dropped; they never become desktop notifications. The bell (BEL), at most ten a second, follows Settings › General › Bell: in the tab on screen while Dispatch is active, the system alert sound (Sound, the default) or a flash over the terminal (Flash); in any other tab a bell mark on the tab until you type in it (it counts as unread). Off ignores it. A bell never notifies or bounces the Dock.
+**Escape-sequence notifications.** OSC 9 and OSC 777 are parsed and then dropped; they never become desktop notifications. The bell (BEL), at most ten a second, follows Settings › General › Terminal › Tabs & spaces › Bell: in the tab on screen while Dispatch is active, the system alert sound (Sound, the default) or a flash over the terminal (Flash); in any other tab a bell mark on the tab until you type in it (it counts as unread). Off ignores it. A bell never notifies or bounces the Dock.
 
 **Replies to terminal queries.**
 

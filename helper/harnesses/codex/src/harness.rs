@@ -24,6 +24,9 @@ use std::{
     rc::Rc,
 };
 
+/// How long a confirmed switch outranks Codex's stored thread, which was seen to trail it by up to 20 seconds.
+const SELECTION_HOLD: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Default)]
 pub struct Codex {
     jobs: Jobs,
@@ -39,6 +42,9 @@ pub struct Codex {
     archives: crate::paging::Archives,
     bindings: BTreeMap<String, Binding>,
     states: Rc<RefCell<BTreeMap<String, State>>>,
+    /// The model and effort a menu walk saw Codex confirm, and until when they hold: Codex's stored thread trails a
+    /// switch by many seconds, and a read in between would report the model the user left.
+    selected: BTreeMap<String, (String, Option<String>, std::time::Instant)>,
     forms: Rc<RefCell<BTreeMap<String, questions::Pending>>>,
     live: Rc<RefCell<BTreeMap<String, crate::live::Live>>>,
     rows: Rc<RefCell<BTreeMap<String, Vec<queue::Row>>>>,
@@ -909,6 +915,19 @@ impl Harness for Codex {
         }
         if matches!(step, Step::Done(_) | Step::Fail(_)) {
             walks.remove(&key);
+        }
+        // The walk has just read Codex's own "Model changed to" line.
+        if let (Goal::Select { model, effort }, Step::Done(_)) = (goal, &step) {
+            let mut states = self.states.borrow_mut();
+            let state = states.entry(binding.session.clone()).or_default();
+            if state.model.as_ref() != Some(model) || state.effort != *effort {
+                state.model = Some(model.clone());
+                state.effort = effort.clone();
+                self.updates.borrow_mut().push(Update::State { binding: binding.clone(), state: state.clone() });
+                let now = io.now();
+                self.selected.insert(binding.session.clone(), (model.clone(), effort.clone(), now + SELECTION_HOLD));
+                io.timer(now);
+            }
         }
         if matches!(step, Step::Keys(_)) {
             self.keyed.insert(key, selected(&screen.text));

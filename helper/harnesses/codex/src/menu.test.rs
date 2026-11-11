@@ -204,3 +204,39 @@ fn status_of_codex_0_166_is_read() {
     assert_eq!(status.mode.as_deref(), Some("default"));
     assert!(status.text.starts_with("Model:               Model-A (reasoning high)"));
 }
+
+fn walked(walk: &mut Walk, model: &str, body: &str) -> Step {
+    let binding = Binding {
+        session: "019a0000-0000-7000-8000-000000000001".into(),
+        transcript: None,
+        process: dispatch_helper_core::api::Process { pid: 42, parent: 1, group: 42, foreground: 42, tty: 7, start: [5, 6],
+            executable: "/opt/codex/bin/codex".into(), arguments: vec![], files: vec![] },
+    };
+    let goal = Goal::Select { model: model.into(), effort: Some("low".into()) };
+    step(&binding, &goal, &Screen { text: body.into(), cursor: (0, 0), faint_tail: false }, walk)
+}
+
+#[test]
+fn a_model_below_the_window_is_scrolled_to() {
+    let scrolled = "
+  Select Model and Effort
+
+  2. Model-B            Demanding work.
+› 3. Model-C            Security work.
+
+  enter select · esc back
+";
+    let mut walk = Walk::default();
+    assert_eq!(walked(&mut walk, "Model-C", MODEL), Step::Keys(vec![Input::Key(Key::Down)]));
+    assert_eq!(walked(&mut walk, "Model-C", scrolled), Step::Keys(vec![Input::Key(Key::Enter)]));
+}
+
+#[test]
+fn a_model_codex_does_not_list_closes_the_menu_before_failing() {
+    let whole = MODEL.replace("↓\n", "");
+    let mut walk = Walk::default();
+    assert_eq!(walked(&mut walk, "Model-Z", &whole), Step::Keys(vec![Input::Key(Key::Escape)]));
+    // Until the composer is back the menu is still closing.
+    assert_eq!(walked(&mut walk, "Model-Z", &whole), Step::Keys(vec![Input::Key(Key::Escape)]));
+    assert!(matches!(walked(&mut walk, "Model-Z", COMPOSER), Step::Fail(Error { code: "menu", .. })));
+}

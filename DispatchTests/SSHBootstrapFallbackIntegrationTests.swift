@@ -58,13 +58,14 @@ final class SSHBootstrapFallbackIntegrationTests: XCTestCase {
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
 
         TerminalTestSupport.send("ssh " + arguments.map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
-        // Count a second diagnostic so the prior explicit-command fallback
-        // cannot satisfy readiness for this new interactive shell.
-        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
-            TerminalTestSupport.screen(terminal: terminal).components(separatedBy: "Dispatch SSH integration unavailable").count >= 3
-        }
+        // The login is remembered as having no helper for its platform: plain SSH at once, without trying (and saying
+        // so) again. Typed ahead, the command waits for the remote shell.
         TerminalTestSupport.send("printf 'FALLBACK_SHELL_%s\\n' ALIVE", to: terminal)
-        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("FALLBACK_SHELL_ALIVE") }
+        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
+            TerminalTestSupport.screen(terminal: terminal).contains("FALLBACK_SHELL_ALIVE")
+        }
+        XCTAssertEqual(TerminalTestSupport.screen(terminal: terminal).components(separatedBy: "Dispatch SSH integration unavailable").count, 2,
+                       "Only the first login says the helper is unavailable")
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
         try await app.attach()
         XCTAssertEqual(app.workspace.current?.shows("tmux"), true, "Ordinary tmux control mode still renders when auxiliary setup fails")

@@ -14,6 +14,8 @@ pub(crate) struct Walk {
     scope: Option<Interaction>,
     decision: Option<usize>,
     submitted: bool,
+    /// Why the walk gave up, reported once the menu it opened is closed.
+    failure: Option<Error>,
 }
 
 impl Walk {
@@ -537,6 +539,9 @@ pub(crate) fn step(binding: &Binding, goal: &Goal, screen: &Screen, walk: &mut W
             || *line == "Apply reasoning change"
     });
     let Some(title) = title else {
+        if let Some(failure) = walk.failure.take() {
+            return Step::Fail(failure);
+        }
         if (walk.submitted || walk.before.is_none())
             && let Goal::Select { model, effort } = goal
         {
@@ -586,6 +591,10 @@ pub(crate) fn step(binding: &Binding, goal: &Goal, screen: &Screen, walk: &mut W
             }
         };
     };
+    // A failed walk closes what it opened, level by level, before it reports.
+    if walk.failure.is_some() {
+        return Step::Keys(vec![Input::Key(Key::Escape)]);
+    }
     walk.before.get_or_insert_with(|| screen.text.clone());
     if !lines[title + 1..].iter().any(|line| {
         line.contains("esc to go back")
@@ -736,7 +745,12 @@ pub(crate) fn step(binding: &Binding, goal: &Goal, screen: &Screen, walk: &mut W
                 .position(|choice| Some(&choice.id) == menu.current.as_ref())
                 .unwrap();
             let Some(target) = target else {
-                return Step::Fail(failure("menu", "The selected Codex option is unavailable."));
+                // A list taller than its window marks more below with an arrow; only a row on screen can be chosen.
+                if lines[title + 1..].iter().any(|line| line.starts_with('↓')) {
+                    return Step::Keys(vec![Input::Key(Key::Down)]);
+                }
+                walk.failure = Some(failure("menu", "The selected Codex option is unavailable."));
+                return Step::Keys(vec![Input::Key(Key::Escape)]);
             };
             let key = match target.cmp(&selected) {
                 std::cmp::Ordering::Equal => {

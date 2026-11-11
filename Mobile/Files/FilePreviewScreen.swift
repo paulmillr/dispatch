@@ -3,12 +3,10 @@ import Photos
 import SwiftUI
 import UIKit
 
-/// What F2 can do beyond showing the file, from the tab it was opened in: Ask (attach the file to the tab's chat
-/// composer, naming the tab's agent; nil without one), Open in terminal (a cd in the tab's shell; nil when the tab's pane
-/// is not at a shell), and Back.
+/// What F2 can do beyond showing the file, from the tab it was opened in: Attach to chat (the file into the tab's chat
+/// composer; nil without an agent), Open in terminal (a cd in the tab's shell; nil when the tab's pane is not at a
+/// shell), and Back.
 struct FilesPreviewActions {
-    /// The tab's agent ("claude"), for "Ask claude".
-    var agent: String?
     var ask: ((FilePreview) -> Void)?
     /// Types the `cd` and, once the helper took it, shows the tab's terminal; returns why it did not ("The terminal is
     /// busy."), nil when it did.
@@ -22,8 +20,7 @@ struct FilesPreviewActions {
 /// screen it returns to; the title is the file's name, the subtitle its folder, size, age and kind; "…" holds Wrap lines
 /// (or Markdown's source), Copy path, Copy contents, Share, Save to Photos (an image's), Attach to chat and Open in
 /// terminal. Code has line numbers and the syntax palette, scrolls both ways and zooms with a pinch (kept as the diff
-/// viewer's, `CodeFontSize`); Find counts and steps through matches; Ask attaches the file to the tab's chat (not shown
-/// under an image). Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…";
+/// viewer's, `CodeFontSize`); Find counts and steps through matches. Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…";
 /// images zoom with a pinch or a double tap, a binary shows its kind and size with Share, a long text its head with Load
 /// all.
 struct FilePreviewScreen: View {
@@ -306,42 +303,26 @@ struct FilePreviewScreen: View {
 
     // MARK: Bars
 
-    /// Ask (with the tab's agent) on the leading side and Find on the trailing one; Find's field in their place. An image
-    /// keeps the whole screen (Attach to chat is in "…").
+    /// Find at the trailing end of a text, its field in its place; anything else keeps the whole screen.
     @ViewBuilder private var bottomBar: some View {
         if finding {
             findBar
-        } else if hasText || (actions.ask != nil && asksBelow) {
+        } else if hasText {
             HStack(spacing: 10) {
-                if let ask = actions.ask, let agent = actions.agent, asksBelow {
-                    Button { ask(preview) } label: {
-                        Label("Ask \(agent)", systemImage: "paperclip")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 16)
-                            .frame(height: 44)
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Capsule())
-                    .accessibilityHint("Attaches \(preview.name) to the chat")
-                }
                 Spacer(minLength: 0)
-                if hasText {
-                    Button {
-                        finding = true
-                        findFocused = true
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Circle())
-                    .accessibilityLabel("Find in file")
+                Button {
+                    finding = true
+                    findFocused = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel("Find in file")
             }
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .padding(.horizontal, 16)
@@ -349,16 +330,13 @@ struct FilePreviewScreen: View {
         }
     }
 
-    /// Ask and Attach to chat: for what has loaded and is not a binary (which offers Share only).
+    /// Attach to chat: for what has loaded and is not a binary (which offers Share only).
     private var asks: Bool {
         switch preview.content {
         case .loading, .binary, .failed, .folder: false
         default: true
         }
     }
-
-    /// The bar's Ask: what asks, except an image.
-    private var asksBelow: Bool { asks && !isImage }
 
     private var isImage: Bool {
         if case .image = preview.content { return true }

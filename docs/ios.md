@@ -293,7 +293,8 @@ they let the helper do on the host is in [security](security.md#dispatch-for-iph
   Chat on installs Claude Code's and Codex's hooks and Pi's extension (inert outside the terminals Dispatch can show:
   [security](security.md#agent-chat)); New chat installs a missing one before it starts. A per-host refusal given on the Mac stays on the Mac; the phone's consent is its Chat switch.
 - **Surface native trust steps.** Codex shows "Hooks need review" after the helper installs hooks; until the user picks
-  "Trust all" in its terminal, approvals stay in Codex's TUI.
+  "Trust all" in its terminal, approvals stay in Codex's TUI. While one waits there (the helper's `chat.state`
+  `dialog` "approval") the thread and the watch say so and how to bring the next ones to the phone; otherwise nothing.
 - **Keep the outbox.** A Claude Code or Pi queue of a named conversation lives in the host's queue store and survives
   the helper; after reconnecting the device matches its items by id, and an item the host no longer holds was sent
   or removed there. Only a queue of a conversation the agent has not named yet dies with its helper; the device
@@ -427,14 +428,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   no answer or an uncertain one that it may have; neither is retried. The phone checks the screen the helper had sent
   when it answered: a program that takes the pane after that (a command typed just before) still gets the `cd`, a
   window only the helper could close. A binary shows what its first bytes say it is (`FileFormat`, the Mac's: "ELF
-  64-bit LSB pie executable, arm64"), else its kind by name, and its size. Share, Save to Photos and Ask take
+  64-bit LSB pie executable, arm64"), else its kind by name, and its size. Share, Save to Photos and Attach to chat take
   only the whole revision the preview read, with the helper's metadata (off while loading, failed, offline or a
   folder): a file past the limit, a short read or a file changed since fail instead of sharing part of it. Share and
   Save to Photos copy it to the phone first (`FilePreview.download`: up to 4 GB, in 8 MB reads of that revision, the
   More button spinning meanwhile, cancelled by leaving the preview, the copy removed after); Save to Photos is offered
   for images and for videos by name (`.mp4`, `.mov`, `.m4v`), which Photos imports from the copy. Such a video shows
   its name and size with Play: nothing is read until it is tapped, then the same copy is made and plays in the system
-  player (`VideoPlayer`); leaving the preview stops it and removes the copy. Ask reads the file
+  player (`VideoPlayer`); leaving the preview stops it and removes the copy. Attach to chat reads the file
   into memory (up to its attachment limit). A path that
   turns out to be a folder (the helper's `is_directory`) shows its listing. A folder row's item count waits while the
   host is offline and is asked again when it reconnects, for every row still on screen in their order (four at a
@@ -525,7 +526,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   reads background when `willEnterForeground` arrives). A row scrolled under the translucent composer counts as shown. As `TimelineView(.animation)` loops they cost about 12% of a core in the app and as
   much in the render server at 60 Hz. With Reduce Motion they stand still; tests draw a chosen instant
   (`animationDateOverride`) in SwiftUI, the frame the loops show then.
-  The thread runs on under the composer (a bottom `safeAreaBar` with the soft scroll edge, as the side conversation's).
+  The thread runs on under the header and the composer (a bottom `safeAreaBar`), with the soft scroll edge at both,
+  as the side conversation's: left to the system, an iPhone drew the header's edge as the hard one (an opaque band
+  ending in a line) where the simulator drew the soft one.
   Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
   (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Read Aloud, in a
   message's long press and in message details' ⋯, reads that one message in the system's voice

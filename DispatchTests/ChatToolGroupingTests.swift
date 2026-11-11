@@ -696,11 +696,12 @@ extension ChatToolGroupingTests {
         let disclosure = session.groupDisclosure(group, turnID: grouped.turnID)
         // Beside a group's steps, and under a reply of its own.
         for row in [grouped, final] {
-            // The bubble's identifier is its controls' too, so the time is found by its label.
+            // The bubble is an element of its own (VoiceOver names its author first), so the time is found by its label
+            // alone: the two replies are a minute apart.
             let label = "Reply time " + (try XCTUnwrap(row.replyTime)).formatted(.dateTime.hour().minute())
             var time: NSRect?
             try await TestSupport.eventually(diagnostic: "No clickable time for \(row.id)") {
-                time = PresentationTestSupport.accessibilityFrames("chat-message-" + row.id, label: label, in: window).first
+                time = PresentationTestSupport.accessibilityFrames(label: label, in: window).first
                 return time != nil
             }
             try await click(x: time!.midX, y: time!.midY, window: window)

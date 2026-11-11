@@ -665,6 +665,18 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
     }
 
+    func testModelSlidersDefaultOffAndPersistExplicitChoice() throws {
+        XCTAssertFalse(Preferences().modelTracks)
+        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).modelTracks)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
+        var preferences = Preferences()
+        preferences.modelTracks = true
+        try store.save(preferences)
+        XCTAssertTrue(SettingsStore(file: file).values.modelTracks)
+    }
+
     /// The icons style grouped by host puts the host's disc in its group's heading: rows keep their height and lead
     /// with a 16-point activity column (at 14), the heading grows to hold the disc, and Liquid Glass's nesting keeps
     /// all of it. The host picker's icons metrics keep the disc on every row.

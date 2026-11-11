@@ -880,8 +880,10 @@ extension ChatCoordinator {
                 session.confirmConfiguration(model: model, effort: effort)
             }, finished: { [weak session] interrupted in
                 guard let session, session.helper === helper else { return }
+                // A change sent as the popover closed has nowhere else to say why it failed.
+                let reason = session.modelPicker?.error
                 session.modelPicker = nil
-                if interrupted { session.submissionFailure = "Check Terminal before changing the model again." }
+                if interrupted { session.submissionFailure = reason ?? "Check Terminal before changing the model again." }
             })
         session.modelPicker = picker
         picker.start(cycle: cycle)
@@ -1190,8 +1192,7 @@ extension ChatCoordinator {
             let channel = HarbourRadio.channel(for: session.id)
             return session.active ? "Transmit on \(channel)…" : "Hail \(agents) on \(channel)…"
         }
-        // Commands are found by typing "/": the empty composer says so.
-        if session.active { return session.helperCommands.isEmpty ? "Reply…" : "Reply… · / for commands" }
+        if session.active { return "Reply…" }
         // Chat shows this conversation, not the terminal: what is left to do there.
         if session.agentExited { return "Read-only · Open in Terminal to start \(agents) again" }
         if session.sessionID != nil { return "Read-only · sending is paused" }

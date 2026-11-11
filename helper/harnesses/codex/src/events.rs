@@ -29,14 +29,18 @@ impl Codex {
             let mut states = self.states.borrow_mut();
             let state = states.entry(binding.session.clone()).or_default();
             let before = state.clone();
-            state.model = thread
-                .get("model")
-                .and_then(Value::string)
-                .map(str::to_owned);
-            state.effort = thread
-                .get("reasoningEffort")
-                .and_then(Value::string)
-                .map(str::to_owned);
+            let model = thread.get("model").and_then(Value::string).map(str::to_owned);
+            let effort = thread.get("reasoningEffort").and_then(Value::string).map(str::to_owned);
+            let held = self.selected.get(&binding.session).filter(|held| {
+                (Some(&held.0) != model.as_ref() || held.1 != effort) && io.now() < held.2
+            }).cloned();
+            if held.is_none() {
+                self.selected.remove(&binding.session);
+            }
+            (state.model, state.effort) = match held {
+                Some((model, effort, _)) => (Some(model), effort),
+                None => (model, effort),
+            };
             state.title = crate::native::title(thread);
             // A thread without a rollout has no history read to publish its state.
             if !rollout && *state != before {

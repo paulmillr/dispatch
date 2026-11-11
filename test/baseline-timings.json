@@ -1521,18 +1521,8 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/ComposerEditingTests/testQueueHoverEnablesEditSendAndDeleteShortcuts",
-      "seconds": 0.0054819583892822266,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/ComposerEditingTests/testQueueSelectionDoesNotCaptureDraftNavigationOrSending",
       "seconds": 0.005449056625366211,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ComposerEditingTests/testQueueShortcutsFollowHoverAndRespectDisabledActions",
-      "seconds": 0.006082057952880859,
       "outcome": "Passed"
     },
     {
@@ -1868,11 +1858,6 @@
     {
       "identifier": "DispatchTests/HostPlacementTests/testSSHIdentityGraceSkipsProvisionalHostButKeepsRoutingAndSlowFallback",
       "seconds": 0.6125149726867676,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/HostRegistryTests/testIdentityMergesAliasesAndUsersWithoutMergingNames",
-      "seconds": 0.0024759769439697266,
       "outcome": "Passed"
     },
     {

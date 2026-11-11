@@ -90,9 +90,6 @@ struct FilePreviewScreen: View {
             }
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 10) {
-                    Label("Ask claude", systemImage: "paperclip")
-                        .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).frame(height: 44)
-                        .glassEffect(.regular.interactive(), in: Capsule())
                     Spacer()
                     Image(systemName: "magnifyingglass").font(.body.weight(.semibold)).frame(width: 44, height: 44)
                         .glassEffect(.regular.interactive(), in: Circle())

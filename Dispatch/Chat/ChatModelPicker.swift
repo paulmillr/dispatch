@@ -11,6 +11,14 @@ final class ChatModelPicker: Identifiable {
     var selectedModel: String
     var highlightedModel: String
     var highlightedEffort = ""
+    /// Narrows a long model list (`showsModelSearch`). Typing is about models, so it brings the model column back.
+    var modelQuery = "" {
+        didSet {
+            guard modelQuery != oldValue else { return }
+            column = .model
+            if !shownModels.contains(where: { $0.name == highlightedModel }), let first = shownModels.first { highlightedModel = first.name }
+        }
+    }
     var loading = false
     var error: String?
     var presented = true
@@ -57,12 +65,11 @@ final class ChatModelPicker: Identifiable {
     @ObservationIgnored private let structured: StructuredOperations?
     @ObservationIgnored private var structuredModels: [StructuredModel] = []
     @ObservationIgnored private var helper: HelperChat?
-    /// How the picker reaches the agent through the helper; tests hand in their own, and step the pause.
+    /// How the picker reaches the agent through the helper; tests hand in their own.
     struct HelperOperations {
         let catalog: () async throws -> HelperChat.Menu
         let efforts: (String) async throws -> HelperChat.Menu
         let select: (String, String?) async throws -> (model: String, effort: String?)
-        var pause: () async throws -> Void = { try await System.sleep(for: .milliseconds(600), "model track pause") }
         var command: (String) async throws -> Void = { _ in }
     }
     @ObservationIgnored private var transport: HelperOperations?
@@ -80,6 +87,9 @@ final class ChatModelPicker: Identifiable {
         /// Where the thumb is, in stops (1.5: halfway from the second stop to the third).
         var place: Double
     }
+    /// Settings › Experimental › Model sliders, as the helper's pickers read it. Off: always the lists.
+    static var tracksEnabled = false
+    @ObservationIgnored private var tracksAllowed = false
     /// Nil shows the lists. Before the catalog is known, one stop for a current model of a known family.
     private(set) var ladder: ChatModelLadder?
     private(set) var ladderKnown = false
@@ -103,7 +113,6 @@ final class ChatModelPicker: Identifiable {
     var keyboardFocus = false
     /// Whether the agent's change applies to this chat alone, as Claude's `s` does.
     @ObservationIgnored private var trackChatOnly = false
-    @ObservationIgnored private var trackPause: Task<Void, Never>?
     @ObservationIgnored private var trackInFlight: TrackChoice?
     /// The level asked for, which a model without it brings down without forgetting it while the keys still move.
     @ObservationIgnored private var trackWantedEffort: String?
@@ -177,18 +186,19 @@ final class ChatModelPicker: Identifiable {
                 input.command = true
                 let outcome: HelperChat.Outcome = try await helper.call("chat.command", input: input)
                 try outcome.confirmed()
-            }), lastRung: lastRung, chatOnly: chatOnly, rememberRung: rememberRung, confirmed: confirmed, finished: finished)
+            }), tracks: Self.tracksEnabled, lastRung: lastRung, chatOnly: chatOnly, rememberRung: rememberRung, confirmed: confirmed, finished: finished)
         self.helper = helper
     }
 
     convenience init(model: String, effort: String?, column: Column, cache: ChatModelChoicesCache, transport: HelperOperations,
-                     lastRung: String? = nil, chatOnly: Bool = false, rememberRung: @escaping (String) -> Void = { _ in },
+                     tracks: Bool = true, lastRung: String? = nil, chatOnly: Bool = false, rememberRung: @escaping (String) -> Void = { _ in },
                      confirmed: @escaping (String, String?) -> Void, finished: @escaping (Bool) -> Void) {
         self.init(agentID: "", model: model, effort: effort, column: column, cache: cache,
                   screen: { "" }, send: { _ in }, confirmed: confirmed, finished: finished)
         self.transport = transport
         trackReturnRung = lastRung
         trackChatOnly = chatOnly
+        tracksAllowed = tracks
         self.rememberRung = rememberRung
     }
 
@@ -242,6 +252,8 @@ final class ChatModelPicker: Identifiable {
     }
 
     func ask(_ value: HelperChat.Interaction) -> Bool {
+        // Closed with its change on the way: the agent's question is the chat's to show, and a No to it is no failure.
+        if closing, trackSending { trackAnswered = true; return false }
         guard transport != nil, presented, task != nil, value.questions.count == 1,
               let question = value.questions.first, !question.multiple, !question.custom else { return false }
         interaction = value
@@ -368,7 +380,7 @@ final class ChatModelPicker: Identifiable {
     }
 
     func move(_ delta: Int) {
-        let rows = !scope.isEmpty ? scope : column == .model ? models : efforts
+        let rows = !scope.isEmpty ? scope : column == .model ? shownModels : efforts
         guard !loading, !rows.isEmpty else { return }
         let name = !scope.isEmpty ? highlightedScope : column == .model ? highlightedModel : highlightedEffort
         let index = rows.firstIndex(where: { $0.name == name }) ?? 0
@@ -379,8 +391,22 @@ final class ChatModelPicker: Identifiable {
 
     func chooseHighlighted() {
         if !scope.isEmpty, let choice = scope.first(where: { $0.name == highlightedScope }) { selectScope(choice) }
-        else if column == .model { selectModel(highlightedModel) }
+        else if column == .model { if shownModels.contains(where: { $0.name == highlightedModel }) { selectModel(highlightedModel) } }
         else if let choice = efforts.first(where: { $0.name == highlightedEffort }) { selectEffort(choice) }
+    }
+
+    /// A list this long gets a search field (Pi's can run to hundreds).
+    static let modelSearchThreshold = 15
+    var showsModelSearch: Bool { models.count > Self.modelSearchThreshold }
+
+    /// The models the search leaves: each word found in a model's name or description, in any order.
+    var shownModels: [AgentModelMenu.Choice] {
+        let words = modelQuery.lowercased().split(whereSeparator: \.isWhitespace)
+        guard showsModelSearch, !words.isEmpty else { return models }
+        return models.filter { choice in
+            let text = "\(choice.name) \(displayName(choice)) \(choice.detail)".lowercased()
+            return words.allSatisfy { text.contains($0) }
+        }
     }
 
     func cycleEffort() {
@@ -433,19 +459,17 @@ final class ChatModelPicker: Identifiable {
         task = nil
         answerTask?.cancel()
         answerTask = nil
-        trackPause?.cancel()
-        trackPause = nil
         presented = false
     }
 
     func close() {
         guard !closing, presented else { return }
         if transport != nil {
-            // A change the thumb already shows goes through; the picker finishes with its readback.
+            // Closing is what sends the change the thumbs show; the picker finishes with its readback.
             if interaction == nil, trackTarget != nil || trackSending {
                 closing = true
                 presented = false
-                if trackPause != nil { trackPause?.cancel(); trackPause = nil; pumpTrack() }
+                sendWaitingChange()
                 return
             }
             let interrupted = loading || interaction != nil
@@ -944,6 +968,7 @@ extension ChatModelPicker {
         if loading { return "Reading agent choices…" }
         if let command = securityCommandRunning { return "Sending \(command)…" }
         guard let target = trackTarget else { return nil }
+        guard trackSending else { return "Applies when closed" }
         if target.rung != trackConfirmed?.rung, let rung = ladder?.rung(family: target.rung) { return "Switching to \(rung.label)…" }
         return target.effort.map { "Setting effort to \($0)…" }
     }
@@ -1011,7 +1036,7 @@ extension ChatModelPicker {
         if trackRow != .security { column = trackRow == .model ? .model : .effort }
     }
 
-    /// An arrow key or VoiceOver: the thumb moves at once, the change goes after a pause without a key.
+    /// An arrow key or VoiceOver: the thumb moves; like every change, it goes when the popover closes.
     func stepTrack(_ delta: Int, row: TrackRow? = nil) {
         if row == nil { keyboardFocus = true }
         let row = row ?? trackRow
@@ -1021,16 +1046,16 @@ extension ChatModelPicker {
         var index = current + delta
         while state.stops.indices.contains(index), !state.stops[index].available { index += delta }
         guard state.stops.indices.contains(index) else { return }
-        moveTrack(row, to: state.stops[index].id, pause: true)
+        moveTrack(row, to: state.stops[index].id)
     }
 
-    /// A click: the change goes at once. The chosen stop and a hatched one do nothing.
+    /// A click. The chosen stop and a hatched one do nothing.
     func chooseTrackStop(_ row: TrackRow, at index: Int) {
         keyboardFocus = false
         guard trackReady, row != .security else { return }
         let state = trackState(row)
         guard !state.disabled, state.stops.indices.contains(index), state.stops[index].available, index != state.current else { return }
-        moveTrack(row, to: state.stops[index].id, pause: false)
+        moveTrack(row, to: state.stops[index].id)
     }
 
     func pressTrack(_ row: TrackRow, at place: Double) {
@@ -1043,7 +1068,7 @@ extension ChatModelPicker {
 
     func dragTrack(to place: Double) { trackHeld?.place = place }
 
-    /// Release applies the nearest stop the model has; a press that did not move is a click. Never sent mid-drag.
+    /// Release picks the nearest stop the model has; a press that did not move is a click.
     func releaseTrack(_ row: TrackRow, at place: Double, moved: Bool) {
         let held = trackHeld
         trackHeld = nil
@@ -1056,8 +1081,8 @@ extension ChatModelPicker {
 
     func toggleSecurity() {
         guard trackReady, let security = ladder?.security else { return }
-        guard securityOn else { moveTrack(.model, to: security.family, pause: false); return }
-        if let back = trackReturnRung { moveTrack(.model, to: back, pause: false) }
+        guard securityOn else { moveTrack(.model, to: security.family); return }
+        if let back = trackReturnRung { moveTrack(.model, to: back) }
     }
 
     /// Whether the security command's button can act: nothing else is on its way to the agent's menus.
@@ -1088,9 +1113,7 @@ extension ChatModelPicker {
     /// Esc: puts a held thumb back, then a change still waiting; with nothing waiting it closes.
     func escapeTrack() {
         if trackHeld != nil { trackHeld = nil; return }
-        guard trackPause != nil else { close(); return }
-        trackPause?.cancel()
-        trackPause = nil
+        guard trackTarget != nil else { close(); return }
         trackTarget = trackInFlight
         if trackInFlight == nil { trackWantedEffort = trackConfirmed?.effort; trackBroughtFrom = nil }
     }
@@ -1109,7 +1132,7 @@ extension ChatModelPicker {
     }
 
     private func showProvisionalTracks() {
-        guard let found = ChatModelLadder.provisional(model: currentModel), let rung = found.all.first else { return }
+        guard tracksAllowed, let found = ChatModelLadder.provisional(model: currentModel), let rung = found.all.first else { return }
         ladder = found
         trackConfirmed = TrackChoice(rung: rung.family, effort: currentEffort)
         trackWantedEffort = currentEffort
@@ -1117,7 +1140,7 @@ extension ChatModelPicker {
 
     /// Whether the catalog is a ladder holding the current model: the choice between tracks and lists.
     private func adoptLadder() -> Bool {
-        guard transport != nil, let found = ChatModelLadder(models),
+        guard tracksAllowed, transport != nil, let found = ChatModelLadder(models),
               let rung = found.rung(reported: currentModel) ?? found.rung(reported: currentModelID) else {
             ladder = nil; ladderKnown = false; trackConfirmed = nil
             return false
@@ -1173,7 +1196,7 @@ extension ChatModelPicker {
     }
 
     /// Moves a thumb. A model keeps the effort if it has that level and brings it down otherwise, so both go together.
-    private func moveTrack(_ row: TrackRow, to stop: String, pause: Bool) {
+    private func moveTrack(_ row: TrackRow, to stop: String) {
         guard var next = shownChoice else { return }
         error = nil; trackFailedRow = nil; trackChangedRow = row; securityCommandSent = nil
         if row == .effort {
@@ -1183,12 +1206,8 @@ extension ChatModelPicker {
             next.rung = stop
             next = broughtDown(next)
         }
-        trackPause?.cancel()
-        trackPause = nil
         // Back where it started, with nothing on its way: nothing to send.
         trackTarget = next == trackConfirmed && !trackSending ? nil : next
-        guard trackTarget != nil else { return }
-        if pause { startTrackPause() } else { pumpTrack() }
     }
 
     private func broughtDown(_ choice: TrackChoice) -> TrackChoice {
@@ -1202,18 +1221,8 @@ extension ChatModelPicker {
         return next
     }
 
-    private func startTrackPause() {
-        let pause = transport?.pause
-        trackPause = Task { [weak self] in
-            do { try await pause?() } catch { return }
-            guard let self, !Task.isCancelled else { return }
-            trackPause = nil
-            pumpTrack()
-        }
-    }
-
     /// One request at a time: a change made during one waits for its readback, and the latest wins.
-    private func pumpTrack() {
+    func sendWaitingChange() {
         guard transport != nil, !trackSending, trackTarget != nil else { return }
         trackSending = true
         task = Task { [weak self] in await self?.sendTrack() }
@@ -1221,7 +1230,7 @@ extension ChatModelPicker {
 
     private func sendTrack() async {
         do {
-            while let wanted = trackTarget, trackPause == nil {
+            while let wanted = trackTarget {
                 guard let transport, let rung = ladder?.rung(family: wanted.rung) else { break }
                 let levels = ChatModelLadder.levels(try await levelChoices(rung))
                 try Task.checkCancellation()
@@ -1258,7 +1267,6 @@ extension ChatModelPicker {
             }
             let asked = sent.rung == trackConfirmed?.rung ? "set effort to \(sent.effort ?? "default")" : "switch to \(rung.label)"
             trackTarget = nil; trackWantedEffort = trackConfirmed?.effort; trackBroughtFrom = nil
-            trackPause?.cancel(); trackPause = nil
             // A question the user answered no to is no failure.
             if !trackAnswered { report("Couldn't \(asked).") }
             return
@@ -1277,7 +1285,6 @@ extension ChatModelPicker {
     private func failTrack(_ message: String) {
         cache.invalidate()
         trackInFlight = nil; trackTarget = nil; trackWantedEffort = trackConfirmed?.effort; trackBroughtFrom = nil
-        trackPause?.cancel(); trackPause = nil
         report(message)
     }
 

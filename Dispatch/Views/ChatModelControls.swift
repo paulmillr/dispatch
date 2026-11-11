@@ -25,7 +25,7 @@ struct ChatModelControls: View {
     var body: some View {
         let currentPicker = session.modelPicker
         return HStack(spacing: 7) {
-            if ChatModelLadder.isSecurity(model: session.model) {
+            if ChatModelPicker.tracksEnabled, ChatModelLadder.isSecurity(model: session.model) {
                 Image(systemName: "shield.lefthalf.filled").font(.system(size: 11, weight: .medium)).foregroundStyle(theme.cyan)
                     .padding(.trailing, -2).accessibilityHidden(true)
             }
@@ -126,6 +126,7 @@ struct ChatModelPickerView: View {
     let close: () -> Void
     let terminal: () -> Void
     @FocusState private var keyboardFocus: Bool
+    @FocusState private var searchFocus: Bool
 
     var body: some View {
         Group {
@@ -175,8 +176,9 @@ struct ChatModelPickerView: View {
                     }.buttonStyle(.plain).disabled(picker.loading)
                 }
             } else {
+                if picker.showsModelSearch { modelSearch }
                 HStack(alignment: .top, spacing: 6) {
-                    column("MODEL", rows: picker.models, highlight: picker.highlightedModel, active: picker.column == .model) {
+                    column("MODEL", rows: picker.shownModels, highlight: picker.highlightedModel, active: picker.column == .model) {
                         picker.selectModel($0.name)
                     }
                     Rectangle().fill(theme.border).frame(width: 1)
@@ -201,6 +203,23 @@ struct ChatModelPickerView: View {
         }.padding(6).frame(width: 470)
     }
 
+    /// Keeps the lists' keys while it has the focus: ↑ ↓ move, Tab changes column, Return chooses, Esc clears it first.
+    private var modelSearch: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(theme.muted).accessibilityHidden(true)
+            TextField("Search models", text: $picker.modelQuery, prompt: Text("Search models").foregroundStyle(theme.muted))
+                .textFieldStyle(.plain).focused($searchFocus)
+                .onSubmit { if !picker.loading { picker.chooseHighlighted() } }
+                .onKeyPress(.upArrow) { picker.move(-1); return .handled }
+                .onKeyPress(.downArrow) { picker.move(1); return .handled }
+                .onKeyPress(.tab) { picker.showColumn(picker.column == .model ? .effort : .model); return .handled }
+                .onKeyPress(.escape) { guard !picker.modelQuery.isEmpty else { return .ignored }; picker.modelQuery = ""; return .handled }
+                .accessibilityIdentifier("chat-model-search")
+        }.padding(.horizontal, 8).padding(.vertical, 5)
+            .background(theme.ink.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+            .task { searchFocus = true }
+    }
+
     private func column(_ title: String, rows: [AgentModelMenu.Choice], highlight: String, active: Bool,
                         choose: @escaping (AgentModelMenu.Choice) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -213,7 +232,7 @@ struct ChatModelPickerView: View {
                                       choose: choose)
                         }
                         if rows.isEmpty && !picker.loading {
-                            Text("Choose a model to see its effort levels.").font(theme.typography.detail).foregroundStyle(theme.muted).padding(8)
+                            Text(title == "MODEL" ? "No models match." : "Choose a model to see its effort levels.").font(theme.typography.detail).foregroundStyle(theme.muted).padding(8)
                         }
                     }
                 }.onChange(of: highlight) { _, name in scroll.scrollTo(name) }
@@ -292,7 +311,7 @@ private struct ChatModelTracksView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             if let status = picker.trackStatus {
-                ProgressView().controlSize(.mini)
+                if picker.loading || picker.trackSending || picker.securityCommandRunning != nil { ProgressView().controlSize(.mini) }
                 Text(status).lineLimit(1).truncationMode(.middle)
             } else {
                 Text("← → step")

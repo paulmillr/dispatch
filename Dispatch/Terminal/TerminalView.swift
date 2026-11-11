@@ -444,7 +444,7 @@ extension TerminalView {
         label.frame = NSRect(x: 6, y: 6, width: min(size.width, max(40, bounds.width - 12)), height: size.height)
     }
 
-    /// A program rang the bell (Settings › General › Bell): on screen with Dispatch in front, the alert sound or a flash
+    /// A program rang the bell (Settings › General › Tabs & spaces › Bell): on screen with Dispatch in front, the alert sound or a flash
     /// over the terminal; otherwise its tab is marked with a bell until you type in it (`ProgramStatusStore.rang`).
     func ringBell() {
         let runtime = TerminalRuntime.shared, style = runtime.preferences.bell

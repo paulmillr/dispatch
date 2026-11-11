@@ -319,6 +319,8 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertEqual(stops(picker, .model), ["luna", "terra", "sol", "astra"])
 
         picker.toggleSecurity()
+        XCTAssertEqual(agent.selects, [])
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["gpt-daybreak-blue-latest high"] }
         agent.replies.append(.success(("gpt-daybreak-blue-latest", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -357,15 +359,13 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertEqual(ChatModelLadder.levels([.init(number: 1, name: "Default", detail: "", current: true, isDefault: true, effortValue: "default")]), [])
     }
 
-    /// An agent whose replies, level reads and key pause the test steps.
+    /// An agent whose replies and level reads the test steps.
     @MainActor private final class TrackAgent {
         typealias Observed = (model: String, effort: String?)
         var selects: [String] = []
         var replies: [Result<Observed, Error>] = []
         var reads: [String] = []
         var catalogHeld = false
-        var pauseElapsed = false
-        var pausing = 0
         var confirmed: [String] = []
         var finished: [Bool] = []
         var remembered: [String] = []
@@ -388,7 +388,7 @@ final class ChatModelPickerTests: XCTestCase {
             }
         }
 
-        func picker(model: String = "claude-fable-5-2", effort: String? = "high", column: ChatModelPicker.Column = .model, lastRung: String? = nil) -> ChatModelPicker {
+        func picker(model: String = "claude-fable-5-2", effort: String? = "high", column: ChatModelPicker.Column = .model, lastRung: String? = nil, tracks: Bool = true) -> ChatModelPicker {
             let picker = ChatModelPicker(model: model, effort: effort, column: column, cache: cache, transport: .init(
                 catalog: {
                     while self.catalogHeld { try await Task.sleep(for: .milliseconds(5)) }
@@ -400,14 +400,10 @@ final class ChatModelPickerTests: XCTestCase {
                     self.selects.append("\(name) \(level ?? "nil")")
                     while self.replies.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
                     return try self.replies.removeFirst().get()
-                }, pause: {
-                    self.pausing += 1
-                    while !self.pauseElapsed { try await Task.sleep(for: .milliseconds(5)) }
-                    self.pauseElapsed = false
                 }, command: { text in
                     if let failure = self.commandFailure { throw failure }
                     self.commands.append(text)
-                }), lastRung: lastRung, chatOnly: true, rememberRung: { self.remembered.append($0) },
+                }), tracks: tracks, lastRung: lastRung, chatOnly: true, rememberRung: { self.remembered.append($0) },
                 confirmed: { self.confirmed.append("\($0) \($1 ?? "nil")") }, finished: { self.finished.append($0) })
             picker.start()
             return picker
@@ -430,7 +426,9 @@ final class ChatModelPickerTests: XCTestCase {
         picker.chooseTrackStop(.model, at: 2)
         let pending = picker.trackState(.model)
         XCTAssertEqual(pending.current, 2); XCTAssertEqual(pending.ghost, 3); XCTAssertTrue(pending.unconfirmed)
-        XCTAssertEqual(pending.value, "opus-5.5"); XCTAssertEqual(picker.trackStatus, "Switching to opus-5.5…")
+        XCTAssertEqual(pending.value, "opus-5.5"); XCTAssertEqual(picker.trackStatus, "Applies when closed")
+        XCTAssertEqual(agent.selects, [], "Nothing is sent while the popover is open")
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-opus-5-5 high"] }
         XCTAssertTrue(agent.confirmed.isEmpty, "Only the agent's state confirms a choice")
 
@@ -450,12 +448,14 @@ final class ChatModelPickerTests: XCTestCase {
         let agent = TrackAgent(); agent.cacheCatalog()
         let picker = agent.picker()
         picker.chooseTrackStop(.model, at: 2)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 1 }
         picker.chooseTrackStop(.model, at: 1)
         picker.chooseTrackStop(.model, at: 0)
         picker.chooseTrackStop(.effort, at: 0)
         XCTAssertEqual(agent.selects.count, 1, "A change made in flight waits for the readback")
         agent.replies.append(.success(("claude-opus-5-5", "high")))
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 2 }
         XCTAssertEqual(agent.selects.last, "claude-haiku-5-5 low")
         agent.replies.append(.success(("claude-haiku-5-5", "low")))
@@ -465,7 +465,7 @@ final class ChatModelPickerTests: XCTestCase {
         picker.close()
     }
 
-    func testTrackKeysApplyAfterAPause() async throws {
+    func testTrackKeysWaitForTheClose() async throws {
         let agent = TrackAgent(); agent.cacheCatalog()
         let picker = agent.picker()
         picker.stepTrack(1)
@@ -474,21 +474,11 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertTrue(picker.keyboardFocus)
         XCTAssertEqual(picker.trackState(.model).current, 0, "The thumb moves at once")
         XCTAssertEqual(picker.trackState(.effort).current, 2)
-        try await TestSupport.eventually { agent.pausing > 0 }
         XCTAssertEqual(agent.selects, [])
 
         picker.escapeTrack()
-        XCTAssertNil(picker.trackTarget); XCTAssertTrue(picker.presented, "Esc inside the pause puts the thumb back")
+        XCTAssertNil(picker.trackTarget); XCTAssertTrue(picker.presented, "Esc puts the thumb back")
         XCTAssertEqual(picker.trackState(.model).current, 3)
-
-        picker.stepTrack(-1); picker.stepTrack(-1)
-        picker.stepTrack(1)
-        try await TestSupport.eventually { agent.pausing > 1 }
-        agent.pauseElapsed = true
-        try await TestSupport.eventually { agent.selects.count == 1 }
-        XCTAssertEqual(agent.selects, ["claude-opus-5-5 high"], "← ← → is one switch")
-        agent.replies.append(.success(("claude-opus-5-5", "high")))
-        try await TestSupport.eventually { !picker.trackSending }
 
         picker.moveTrackRow(1)
         XCTAssertEqual(picker.trackRow, .effort)
@@ -498,13 +488,22 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertEqual(picker.trackRow, .security, "↑ ↓ stop at the ends")
         picker.moveTrackRow(1, wrapping: true)
         XCTAssertEqual(picker.trackRow, .model, "Tab goes round")
+
+        picker.stepTrack(-1); picker.stepTrack(-1)
+        picker.stepTrack(1)
+        XCTAssertEqual(agent.selects, [])
         picker.close()
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        XCTAssertEqual(agent.selects, ["claude-opus-5-5 high"], "← ← → is one switch")
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { agent.finished == [false] }
     }
 
     func testTrackFailureReturnsTheThumbAndSaysSo() async throws {
         let agent = TrackAgent(); agent.cacheCatalog()
         let picker = agent.picker()
         picker.chooseTrackStop(.model, at: 2)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 1 }
         agent.replies.append(.success(("claude-sonnet-5-5", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -517,6 +516,7 @@ final class ChatModelPickerTests: XCTestCase {
 
         picker.chooseTrackStop(.effort, at: 0)
         XCTAssertNil(picker.error, "A new change clears it")
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 2 }
         agent.replies.append(.failure(HerdrFailure("The agent is gone")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -534,6 +534,7 @@ final class ChatModelPickerTests: XCTestCase {
         let effort = picker.trackState(.effort)
         XCTAssertEqual(effort.value, "high"); XCTAssertEqual(effort.note, "was xhigh"); XCTAssertEqual(effort.ghost, 3)
         XCTAssertEqual(effort.stops.map(\.available), [true, true, true, false, false])
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 high"] }
         agent.replies.append(.success(("claude-haiku-5-5", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -560,8 +561,7 @@ final class ChatModelPickerTests: XCTestCase {
         picker.stepTrack(1); picker.stepTrack(1)
         XCTAssertEqual(picker.trackState(.effort).value, "xhigh")
         XCTAssertNil(picker.trackState(.effort).note)
-        try await TestSupport.eventually { agent.pausing > 0 }
-        agent.pauseElapsed = true
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-opus-5-5 xhigh"] }
         agent.replies.append(.success(("claude-opus-5-5", "xhigh")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -573,6 +573,7 @@ final class ChatModelPickerTests: XCTestCase {
         let picker = agent.picker(effort: "xhigh")
         XCTAssertEqual(agent.reads, [], "The current model's levels are cached")
         picker.chooseTrackStop(.model, at: 0)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 1 }
         XCTAssertEqual(agent.reads, ["claude-haiku-5-5"])
         XCTAssertEqual(agent.selects, ["claude-haiku-5-5 high"])
@@ -586,6 +587,7 @@ final class ChatModelPickerTests: XCTestCase {
         let agent = TrackAgent(); agent.levels["claude-haiku-5-5"] = ["default"]; agent.cacheCatalog()
         let picker = agent.picker()
         picker.chooseTrackStop(.model, at: 0)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 nil"] }
         agent.replies.append(.success(("claude-haiku-5-5", nil)))
         try await TestSupport.eventually { !picker.trackSending }
@@ -599,6 +601,7 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertEqual(stops(picker, .model), ["haiku", "sonnet", "opus", "fable"], "The security model is no stop")
         XCTAssertEqual(picker.securityLine, "For security work. This chat only.")
         picker.toggleSecurity()
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-mythos-5-2 high"] }
         agent.replies.append(.success(("claude-mythos-5-2", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -616,16 +619,19 @@ final class ChatModelPickerTests: XCTestCase {
         XCTAssertNil(picker.trackHeld, "Dragging never reaches it")
 
         picker.toggleSecurity()
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
         agent.replies.append(.success(("claude-opus-5-5", "high")))
         try await TestSupport.eventually { !picker.trackSending }
         XCTAssertFalse(picker.securityOn)
 
         picker.toggleSecurity()
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 3 }
         agent.replies.append(.success(("claude-mythos-5-2", "high")))
         try await TestSupport.eventually { !picker.trackSending }
         picker.releaseTrack(.model, at: 1, moved: false)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 4 }
         XCTAssertEqual(agent.selects.last, "claude-sonnet-5-5 high", "A stop on the dimmed track turns it off in one request")
         agent.replies.append(.success(("claude-sonnet-5-5", "high")))
@@ -666,6 +672,7 @@ final class ChatModelPickerTests: XCTestCase {
         picker.dragTrack(to: 1.25)
         picker.releaseTrack(.model, at: 1.25, moved: true)
         XCTAssertNil(picker.trackHeld)
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-sonnet-5-5 high"] }
         agent.replies.append(.success(("claude-sonnet-5-5", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -687,7 +694,7 @@ final class ChatModelPickerTests: XCTestCase {
         let agent = TrackAgent(); agent.cacheCatalog()
         let picker = agent.picker()
         picker.stepTrack(-1)
-        try await TestSupport.eventually { agent.pausing > 0 }
+        XCTAssertEqual(agent.selects, [])
         picker.close()
         XCTAssertFalse(picker.presented)
         XCTAssertEqual(agent.finished, [], "The picker finishes with the readback")
@@ -699,10 +706,105 @@ final class ChatModelPickerTests: XCTestCase {
         let failing = TrackAgent(); failing.cacheCatalog()
         let declined = failing.picker()
         declined.chooseTrackStop(.model, at: 0)
-        try await TestSupport.eventually { failing.selects.count == 1 }
         declined.close()
+        try await TestSupport.eventually { failing.selects.count == 1 }
         failing.replies.append(.failure(HerdrFailure("No")))
         try await TestSupport.eventually { failing.finished == [true] }
+    }
+
+    func testAQuestionAfterClosingIsTheChatsAndANoIsNoFailure() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.chooseTrackStop(.model, at: 2)
+        picker.close()
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        let question = HelperChat.Interaction(id: "menu:session", key: nil, approval: false, blocking: true,
+            questions: [.init(id: "confirmation", header: "Switch model?", text: "Your next response will use more tokens", secret: false,
+                options: [.init(id: "1", label: "Yes", detail: nil), .init(id: "2", label: "No", detail: nil)],
+                multiple: false, custom: false, blocks: nil)], turn: nil, record: nil)
+        XCTAssertFalse(picker.ask(question), "The popover is gone: the chat shows the question")
+        agent.replies.append(.success(("claude-fable-5-2", "high")))
+        try await TestSupport.eventually { agent.finished == [false] }
+        XCTAssertNil(picker.error)
+    }
+
+    func testTracksStayOffUnlessTheSettingIsOn() {
+        XCTAssertFalse(ChatModelPicker.tracksEnabled, "Experimental: off by default")
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker(tracks: false)
+        XCTAssertFalse(picker.showsTracks); XCTAssertNil(picker.ladder)
+        XCTAssertEqual(picker.models.map(\.name), TrackAgent.ids, "A list the tracks could draw is still the lists")
+        picker.close()
+    }
+
+    /// A catalog of `count` models the lists draw, every one with its levels known.
+    private func longList(_ agent: TrackAgent, count: Int) -> [String] {
+        let names = (1...count).map { "provider/model-\($0)" }
+        agent.cache.store(models: names.map { .init(number: 1, name: $0, detail: $0.hasSuffix("-\(count)") ? "Fast one" : "", current: false, isDefault: false) }, quickModels: [])
+        for name in names { agent.cache.store(efforts: [.init(number: 1, name: "low", detail: "", current: false, isDefault: false, effortValue: "low")], for: name) }
+        return names
+    }
+
+    func testALongModelListIsSearchable() {
+        let agent = TrackAgent(), names = longList(agent, count: 16)
+        let picker = agent.picker(model: names[0], effort: "low", tracks: false)
+        XCTAssertTrue(picker.showsModelSearch)
+        XCTAssertEqual(picker.shownModels.count, 16)
+        picker.modelQuery = "model-1 PROVIDER"
+        XCTAssertEqual(picker.shownModels.map(\.name), [names[0]] + names[9...], "Every word, in any order, any case")
+        XCTAssertEqual(picker.highlightedModel, names[0], "A highlight the search keeps stays")
+
+        picker.modelQuery = "fast"
+        XCTAssertEqual(picker.shownModels.map(\.name), [names[15]], "The description counts")
+        XCTAssertEqual(picker.highlightedModel, names[15], "A highlight the search hides moves to the first left")
+        picker.move(1)
+        XCTAssertEqual(picker.highlightedModel, names[15], "Keys stay inside what the search left")
+        picker.chooseHighlighted()
+        XCTAssertEqual(picker.selectedModel, names[15]); XCTAssertEqual(picker.column, .effort)
+
+        picker.modelQuery = "nothing like this"
+        XCTAssertEqual(picker.column, .model, "Typing is about models")
+        XCTAssertEqual(picker.shownModels, [])
+        picker.chooseHighlighted()
+        XCTAssertEqual(picker.selectedModel, names[15], "Return chooses nothing the search hid")
+        picker.close()
+
+        let short = TrackAgent(), fifteen = longList(short, count: 15)
+        let few = short.picker(model: fifteen[0], effort: "low", tracks: false)
+        XCTAssertFalse(few.showsModelSearch)
+        few.modelQuery = "fast"
+        XCTAssertEqual(few.shownModels.count, 15)
+        few.close()
+    }
+
+    func testTheSearchFieldTakesTypingAndTheListsKeys() async throws {
+        let agent = TrackAgent(), names = longList(agent, count: 20)
+        let picker = agent.picker(model: names[0], effort: "low", tracks: false)
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 520, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatModelPickerView(picker: picker, close: { picker.close() }, terminal: {}))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(600))
+        func key(_ code: UInt16, _ text: String) { NSApp.sendEvent(TerminalTestSupport.keyEvent(code, text, in: window)) }
+        let rest = try await PresentationTestSupport.capture(window, named: "lists-search", in: "chat-model-validation").text().lowercased()
+        XCTAssertTrue(rest.contains("search models"), rest)
+
+        for (code, text) in [(UInt16(46), "m"), (31, "o"), (2, "d"), (14, "e"), (37, "l"), (27, "-"), (19, "2")] { key(code, text) }
+        try await TestSupport.eventually { picker.modelQuery == "model-2" }
+        XCTAssertEqual(picker.shownModels.map(\.name), [names[1], names[19]])
+        key(125, "\u{f701}")
+        XCTAssertEqual(picker.highlightedModel, names[19], "↓ moves the list from the field")
+        _ = try await PresentationTestSupport.capture(window, named: "lists-search-typed", in: "chat-model-validation")
+        key(36, "\r")
+        try await TestSupport.eventually { picker.selectedModel == names[19] }
+        XCTAssertEqual(picker.column, .effort, "Return chooses from the field")
+
+        key(53, "\u{1b}")
+        try await TestSupport.eventually { picker.modelQuery.isEmpty }
+        XCTAssertTrue(picker.presented, "Esc clears the search first")
+        picker.close()
     }
 
     func testTracksFollowChangesMadeElsewhere() async throws {
@@ -717,6 +819,7 @@ final class ChatModelPickerTests: XCTestCase {
         picker.chooseTrackStop(.model, at: 2)
         picker.followSession(model: "claude-haiku-5-5", effort: "low")
         XCTAssertEqual(picker.trackState(.model).current, 2, "A change on its way is not overtaken")
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.count == 1 }
         agent.replies.append(.success(("claude-opus-5-5", "low")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -787,11 +890,12 @@ final class ChatModelPickerTests: XCTestCase {
         key(53, "\u{1b}")
         XCTAssertNil(picker.trackTarget); XCTAssertTrue(picker.presented)
 
-        // The pointer: a click on a stop sends it; a drag follows and applies on release.
+        // The pointer: a click on a stop chooses it; a drag follows and chooses on release.
         let track = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("chat-model-track", in: window).first)
         func stop(_ place: CGFloat) -> NSPoint { NSPoint(x: track.minX + (place + 0.5) * track.width / 4, y: track.midY) }
         try mouse(.leftMouseDown, stop(0))
         try mouse(.leftMouseUp, stop(0))
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 high"] }
         let hatched = try await shot("brought-down")
         XCTAssertTrue(hatched.contains("was xhigh"), hatched)
@@ -805,6 +909,7 @@ final class ChatModelPickerTests: XCTestCase {
         _ = try await shot("held")
         try mouse(.leftMouseDragged, stop(2.2))
         try mouse(.leftMouseUp, stop(2.2))
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
         agent.replies.append(.success(("claude-opus-5-5", "high")))
         try await TestSupport.eventually { !picker.trackSending }
@@ -813,12 +918,14 @@ final class ChatModelPickerTests: XCTestCase {
         key(48, "\t"); key(48, "\t")
         XCTAssertEqual(picker.trackRow, .security)
         key(49, " ")
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.last == "claude-mythos-5-2 high" }
         agent.replies.append(.success(("claude-mythos-5-2", "high")))
         try await TestSupport.eventually { !picker.trackSending }
         let security = try await shot("security")
         XCTAssertTrue(security.contains("off the ladder"), security)
         key(49, " ")
+        picker.sendWaitingChange()
         try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
         agent.replies.append(.failure(HerdrFailure("Couldn't switch to opus-5.5.")))
         try await TestSupport.eventually { !picker.trackSending }

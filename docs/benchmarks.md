@@ -442,6 +442,23 @@ Halving the reveal's rate, measured by pinning Low Power Mode on the 60 Hz scree
 passes each): a followed stream at 30 frames instead of 60 took 2.4–2.8 W down to 1.2–1.7 W (CPU 56% to 45%); the
 same stream while reading did not change (69 mW), since the reading hold already presents it in batches.
 
+Where a followed stream's power goes, switching off one thing at a time (Debug, 60 Hz, the same benchmark, CPU only;
+each run reproduced the baseline within 0.02 W):
+
+| Followed 20 Hz stream | Power | Main CPU |
+|---|---:|---:|
+| Typed reveal, markdown, a message growing to 9 KB | 2.4–2.9 W | 55% |
+| No typed reveal (deltas land at 20 Hz) | 0.5–0.6 W | 30% |
+| Typed reveal, same length, plain text | 0.5–0.6 W | 32% |
+| Typed reveal, markdown, message kept under 600 characters | 0.26 W | 28% |
+| No reveal, plain or short | 0.19–0.20 W | 23% |
+| The same stream while reading 60 rows up | 0.07 W | 13% |
+
+The cost is not additive: it is reveal frames × markdown × message length, and removing any one takes away about 80%.
+Draws and layouts barely differ between the first and third rows, so the cost is not pixels but what each frame runs
+over the whole message. The benchmark exaggerates length (real Codex replies were a median 259 characters) and
+understates rate (20 deltas a second against an estimated 50–150).
+
 ## SSH traffic of a remote host
 
 Measured on the SSH host, not the Mac (the app cannot be sampled from there): `nettop -P -x -L 12 -s 5 -J

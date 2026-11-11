@@ -201,3 +201,26 @@ fn closing_a_side_or_its_parent_forgets_the_sides_agents() {
         assert_eq!(world.state(FIRST).agents.len(), 1);
     }
 }
+
+#[test]
+fn a_confirmed_switch_outranks_the_stored_thread_until_it_catches_up() {
+    let mut world = World::default();
+    let binding = binding(FIRST);
+    let goal = Goal::Select { model: "model-b".into(), effort: Some("low".into()) };
+    let screen = Screen { text: "• Model changed to model-b low\n".into(), cursor: (0, 0), faint_tail: false };
+    world.codex.states.borrow_mut().entry(FIRST.into()).or_default().model = Some("model-a".into());
+    assert!(matches!(world.codex.menu(&mut world.io, &binding, &goal, &screen, false), Step::Done(_)));
+    let model = |world: &World| world.codex.states.borrow()[FIRST].model.clone();
+    assert_eq!(model(&world).as_deref(), Some("model-b"));
+
+    let thread = |name: &str| Json::parse(format!(r#"{{"thread":{{"model":"{name}","reasoningEffort":"low"}}}}"#).as_bytes()).unwrap();
+    let (stale, caught) = (thread("model-a"), thread("model-b"));
+    world.codex.resumed(&mut world.io, &mut world.ui, binding.clone(), stale.root(), false);
+    assert_eq!(model(&world).as_deref(), Some("model-b"), "A read from before the switch");
+
+    world.codex.resumed(&mut world.io, &mut world.ui, binding.clone(), caught.root(), false);
+    assert_eq!(model(&world).as_deref(), Some("model-b"));
+    // Caught up, the thread speaks for itself again: a later change made in the terminal.
+    world.codex.resumed(&mut world.io, &mut world.ui, binding.clone(), stale.root(), false);
+    assert_eq!(model(&world).as_deref(), Some("model-a"));
+}

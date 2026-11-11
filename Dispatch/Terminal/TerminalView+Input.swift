@@ -148,7 +148,7 @@ extension TerminalView {
         if window?.makeFirstResponder(self) == true { select() }
         // ⌃-click opens the terminal's menu, as in Terminal and iTerm2, unless the program reads the mouse.
         if event.modifierFlags.intersection([.control, .option, .shift, .command]) == .control, !surface.mouseCaptured {
-            NSMenu.popUpContextMenu(contextMenu(), with: event, for: self)
+            showContextMenu(event)
             return
         }
         reportMousePosition(event)
@@ -170,7 +170,7 @@ extension TerminalView {
         // The menu takes the release: the engine gets it now, so its button is not left held.
         _ = surface.mouseButton(.release, .right, mods: mouseModifiers(event))
         if window?.makeFirstResponder(self) == true { select() }
-        NSMenu.popUpContextMenu(contextMenu(), with: event, for: self)
+        showContextMenu(event)
     }
 
     override func rightMouseUp(with event: NSEvent) {
@@ -445,12 +445,19 @@ extension TerminalView: @preconcurrency NSTextInputClient {
 // MARK: - Context menu
 
 extension TerminalView {
+    /// The terminal's menu at the pointer, its own items alone: a context menu (`popUpContextMenu`) for a view that
+    /// takes text input gets the system's AutoFill and Services items added, which mean nothing in a terminal.
+    func showContextMenu(_ event: NSEvent) {
+        contextMenu().popUp(positioning: nil, at: convert(event.locationInWindow, from: nil), in: self)
+    }
+
     /// The terminal's right-click (and ⌃-click) menu: Copy, Paste and Select All; the link under the pointer; Clear
-    /// Screen; splitting; and the modes the tab's switch offers (Terminal, Chat, Files, Review, Commits). Its items act
-    /// on this terminal, which the click selected.
+    /// Screen; splitting. Its items act on this terminal, which the click selected. The modes are the strip's mode
+    /// button's.
     func contextMenu() -> NSMenu {
         let menu = NSMenu(title: "Terminal")
         menu.autoenablesItems = false
+        menu.allowsContextMenuPlugIns = false
         func add(_ title: String, enabled: Bool = true, checked: Bool = false, _ action: @escaping @MainActor () -> Void) {
             let item = TerminalMenuItem(title: title, run: action)
             item.isEnabled = enabled
@@ -480,21 +487,6 @@ extension TerminalView {
         if presentation == .workspace, let workspace {
             add("Split Right", enabled: workspace.canSplitPane()) { workspace.splitPane(.columns) }
             add("Split Down", enabled: workspace.canSplitPane()) { workspace.splitPane(.rows) }
-        }
-        if presentation == .workspace, let workspace {
-            let files = TerminalRuntime.shared.files, id = id
-            let modes = ModeSwitchMenuItem.items(files.switchState(id), files: files, id: id) { target in
-                workspace.selectSurface(id)
-                switch target {
-                case .mode(let mode): files.switchMode(id, to: mode)
-                case .files(let tab): files.showFiles(id, tab: tab)
-                }
-            }.filter(\.enabled)
-            // Only the terminal itself: nothing to switch to.
-            if modes.count > 1 {
-                menu.addItem(.separator())
-                for mode in modes { add(mode.title, checked: mode.checked) { mode.choose() } }
-            }
         }
         return menu
     }

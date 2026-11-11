@@ -892,15 +892,21 @@ final class ChatSessionTests: XCTestCase {
                       ChatFixture.history(session: "", key: "codex", state: ChatFixture.state(busy: false), binding: provisional))
         try await TestSupport.eventually { chat.phase == .verified }
         XCTAssertNil(chat.conversation)
-        XCTAssertTrue(chat.needsHookTrust)
+        XCTAssertFalse(chat.approvalInTerminal, "A Codex chat with nothing to approve says nothing")
         // The first prompt names the thread: the topology's binding changes and the chat reopens on it.
         chat.update(terminal: 7, binding: ChatFixture.topologyBinding)
         try await TestSupport.eventually { helper.requests("chat.open").count == 2 }
         helper.notify(helper.subscription("chat.open")!, "chat.history",
                       ChatFixture.history(key: "codex", records: try ChatFixture.records("codex-formatting-0.154.0")))
         try await TestSupport.eventually { chat.conversation == self.conversation && !chat.transcript.isEmpty }
-        helper.notify(helper.subscription("chat.open")!, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval()])
-        try await TestSupport.eventually { !chat.needsHookTrust }
+        // Codex asks an approval in its own terminal (its hooks untrusted): the thread says so, and no longer once it
+        // has been answered there.
+        var asking = ChatFixture.state(busy: true, attention: "Codex needs approval in Terminal.")
+        asking["dialog"] = "approval"
+        helper.notify(helper.subscription("chat.open")!, "chat.state", ["terminal": 7, "session": conversation, "state": asking])
+        try await TestSupport.eventually { chat.approvalInTerminal }
+        helper.notify(helper.subscription("chat.open")!, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: true)])
+        try await TestSupport.eventually { !chat.approvalInTerminal }
     }
 
     func testModelsEffortsAndSettingsGoThroughTheHelpersMenus() async throws {

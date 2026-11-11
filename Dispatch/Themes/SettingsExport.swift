@@ -136,7 +136,7 @@ enum SettingsExport {
         "cursor": "Cursor", "cursorBlink": "Blinking cursor", "lineSpacing": "Line spacing", "scrollback": "Scrollback",
         "keyGroups": "Number keys", "tabsOnly": "Vertical tabs", "hideSingleSpace": "Hide the sidebar with one space",
         "startingDirectory": "Starting folder", "shell": "Shell", "startupCommand": "Startup command", "rememberHosts": "Reopen spaces",
-        "restoreTerminalOutput": "Reopen history", "enableDiagnostics": "Diagnostics", "outputWindow": "Slow connection mode",
+        "restoreTerminalOutput": "Reopen history", "enableDiagnostics": "Diagnostics", "outputWindow": "Slow connection mode", "modelTracks": "Model sliders",
         "sidebarStyle": "Space size", "showGitBranches": "Show git branch in spaces", "liquidGlass": "Liquid Glass",
         "hostColors": "Host colors", "showHostColors": "Color-code remote hosts", "textContrast": "Improve text contrast",
         "colorVision": "Colorblind-friendly", "terminalOpacity": "Terminal opacity", "spaces": "Tmux & herdr sessions as spaces",
