@@ -43,7 +43,6 @@ it's quite bad. There is no native scrolling (with history & search). No native 
 - Classic themes & OKLCH+P3 theme creator
 - Bundled coding fonts
 - Disabled-by-default Kitty graphics protocol
-- Zero-dependency Swift port of libghostty. Original requires 23-39 deps (depending on how you count; including Zig compiler).
 
 ### Architecture & security
 
