@@ -36,8 +36,8 @@ struct SettingsExtraPage: View {
             terminalProfile = terminal.flatMap { TerminalAppImport.profiles(in: $0).first }
         }
         .sheet(item: Binding(get: { plan.map(PlanBox.init) }, set: { plan = $0?.plan })) { box in
-            ImportReviewSheet(plan: box.plan, cancel: { plan = nil }) { changes in
-                apply(box.plan, changes: changes)
+            ImportReviewSheet(plan: box.plan, cancel: { plan = nil }) { changes, schemes in
+                apply(box.plan, changes: changes, schemes: schemes)
                 plan = nil
             }
             .environment(\.appTypography, typography)
@@ -105,18 +105,20 @@ struct SettingsExtraPage: View {
         panel.canChooseFiles = true
         panel.message = "Choose a folder made by Export, or its dispatch-settings.json."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { review(try SettingsExport.plan(from: url)) } catch { message = "Could not read \(url.lastPathComponent): \(error.localizedDescription)" }
+        do { review(try SettingsExport.plan(from: url, current: draft)) } catch { message = "Could not read \(url.lastPathComponent): \(error.localizedDescription)" }
     }
 
-    /// Saves the plan's themes, points the schemes at them by role, then applies the chosen changes.
-    private func apply(_ plan: ImportPlan, changes: Set<UUID>) {
+    /// Saves the plan's themes, points the schemes at those chosen (`schemes`, by index) by role, then applies the
+    /// chosen changes.
+    private func apply(_ plan: ImportPlan, changes: Set<UUID>, schemes: Set<Int>) {
         var next = draft
         for change in plan.changes where changes.contains(change.id) { change.apply(&next) }
         var saved: [String] = [], failed: [String] = []
-        for theme in plan.themes {
+        for (index, theme) in plan.themes.enumerated() {
             let name: String
             do { name = try ColorSchemeGallery.save(theme) } catch { failed.append(error.localizedDescription); continue }
             saved.append(name)
+            guard schemes.contains(index) else { continue }
             switch theme.role {
             case .light: next.lightTheme = name
             case .dark: next.theme = name
@@ -183,14 +185,17 @@ struct ThemeSwatch: View {
     static func color(_ c: ThemeColor) -> Color { Color(.sRGB, red: c.components.0, green: c.components.1, blue: c.components.2) }
 }
 
-/// What an import would change, each setting with its own checkbox; themes are always saved (they change nothing
-/// until chosen), and what can't come along is listed so nothing silently goes missing.
+/// What an import would change, each setting with its own checkbox, those that run a command or loosen security apart
+/// and unchecked; themes are always saved (they change nothing until chosen), each that would become a scheme with its
+/// own checkbox for that; and what can't come along is listed so nothing silently goes missing.
 struct ImportReviewSheet: View {
     @Environment(\.appTypography) private var typography
     let plan: ImportPlan
     let cancel: () -> Void
-    let apply: (Set<UUID>) -> Void
+    /// The chosen changes, and the themes (by index) to use as the schemes their roles name.
+    let apply: (Set<UUID>, Set<Int>) -> Void
     @State private var chosen: Set<UUID> = []
+    @State private var schemes: Set<Int> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -201,26 +206,27 @@ struct ImportReviewSheet: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    if !plan.changes.isEmpty {
-                        section("Settings") {
-                            ForEach(plan.changes) { change in
-                                Toggle(isOn: Binding(get: { chosen.contains(change.id) },
-                                                     set: { if $0 { chosen.insert(change.id) } else { chosen.remove(change.id) } })) {
-                                    HStack(spacing: 6) {
-                                        Text(change.setting)
-                                        Text(change.value).foregroundStyle(SettingsControlStyle.detail).lineLimit(1).truncationMode(.middle)
-                                    }
-                                }.toggleStyle(.checkbox)
-                            }
-                        }
+                    let plain = plan.changes.filter { $0.caution == nil }, cautious = plan.changes.filter { $0.caution != nil }
+                    if !plain.isEmpty {
+                        section("Settings") { ForEach(plain) { changeRow($0) } }
+                    }
+                    if !cautious.isEmpty {
+                        section("Commands and security · check to import") { ForEach(cautious) { changeRow($0) } }
                     }
                     if !plan.themes.isEmpty {
                         section("Color schemes") {
-                            ForEach(Array(plan.themes.enumerated()), id: \.offset) { _, theme in
+                            ForEach(Array(plan.themes.enumerated()), id: \.offset) { index, theme in
                                 HStack(spacing: 10) {
                                     ThemeSwatch(theme: theme.theme).frame(width: 74, height: 18)
                                     Text(theme.name).lineLimit(1)
-                                    Text(role(theme.role)).foregroundStyle(SettingsControlStyle.detail)
+                                    if theme.role == .none {
+                                        Text(theme.note ?? "saved").foregroundStyle(SettingsControlStyle.detail)
+                                    } else {
+                                        Toggle(role(theme.role), isOn: Binding(get: { schemes.contains(index) },
+                                                                               set: { if $0 { schemes.insert(index) } else { schemes.remove(index) } }))
+                                            .toggleStyle(.checkbox).foregroundStyle(SettingsControlStyle.detail)
+                                            .accessibilityIdentifier("import-use-scheme-\(index)")
+                                    }
                                 }
                             }
                         }
@@ -235,7 +241,7 @@ struct ImportReviewSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
-                Button("Import") { apply(chosen) }.keyboardShortcut(.defaultAction)
+                Button("Import") { apply(chosen, schemes) }.keyboardShortcut(.defaultAction)
                     .disabled(chosen.isEmpty && plan.themes.isEmpty)
                     .accessibilityIdentifier("import-apply")
             }
@@ -245,7 +251,10 @@ struct ImportReviewSheet: View {
         .background(Chrome.window)
         .foregroundStyle(Chrome.ink)
         .font(typography.font(.label))
-        .onAppear { chosen = Set(plan.changes.map(\.id)) }
+        .onAppear {
+            chosen = Set(plan.changes.filter { $0.caution == nil }.map(\.id))
+            schemes = Set(plan.themes.indices.filter { plan.themes[$0].role != .none })
+        }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -255,11 +264,26 @@ struct ImportReviewSheet: View {
         }
     }
 
+    private func changeRow(_ change: ImportPlan.Change) -> some View {
+        Toggle(isOn: Binding(get: { chosen.contains(change.id) },
+                             set: { if $0 { chosen.insert(change.id) } else { chosen.remove(change.id) } })) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(change.setting)
+                    Text(change.value).foregroundStyle(SettingsControlStyle.detail).lineLimit(1).truncationMode(.middle)
+                }
+                if let caution = change.caution {
+                    Text(caution).font(typography, .body).foregroundStyle(Chrome.palette.warning)
+                }
+            }
+        }.toggleStyle(.checkbox)
+    }
+
     private func role(_ role: ImportPlan.Theme.Role) -> String {
         switch role {
-        case .light: "becomes the light scheme"
-        case .dark: "becomes the dark scheme"
-        case .both: "becomes the color scheme"
+        case .light: "Use as the light scheme"
+        case .dark: "Use as the dark scheme"
+        case .both: "Use as the color scheme"
         case .none: "saved"
         }
     }

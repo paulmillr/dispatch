@@ -235,7 +235,7 @@ struct TabsTabMenu: View {
     @ViewBuilder private var multiplexerItems: some View {
         Button("Rename…", systemImage: "pencil") { actions.rename(.tab(tab)) }
         Divider()
-        Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }
         Button("Detach", systemImage: "eject") { actions.close(.tab(tab), .detach) }
+        Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }
     }
 }

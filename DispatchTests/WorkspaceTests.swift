@@ -656,6 +656,20 @@ final class WorkspaceTests: XCTestCase {
         }
     }
 
+    /// One title-case name per layout everywhere, and a layout key that cannot apply says why.
+    func testLayoutNamesAndRefusals() throws {
+        XCTAssertEqual(LayoutPreset.allCases.map(\.title),
+                       ["Single", "Side by Side", "Stacked", "Two Above One", "Grid", "Grid of Six", "Grid of Eight"])
+        XCTAssertEqual(ShortcutRow.splitDigits, "Single · Side by Side · Two Above One · Grid · Grid of Six · Grid of Eight")
+        let workspace = Workspace()
+        workspace.newLocalSpace()
+        workspace.newTab()
+        XCTAssertNil(workspace.layoutRefusal(.columns))
+        XCTAssertEqual(workspace.layoutRefusal(.grid), "Grid needs 4 tabs. This space has 2 tabs.")
+        XCTAssertFalse(workspace.applyLayout(.grid))
+        XCTAssertTrue(workspace.applyLayout(.columns))
+    }
+
     func testSinglePaneTabShortcutsFollowReorderingAndLayoutChanges() throws {
         for tmux in [false, true] {
             let workspace = Workspace()
@@ -673,12 +687,16 @@ final class WorkspaceTests: XCTestCase {
                 XCTAssertTrue(workspace.moveTab(before[2], to: workspace.current!.focusedPane, relativeTo: before[0]))
             }
             let expected = [before[2], before[0], before[1]] + Array(before.dropFirst(3))
-            for index in 0..<9 {
+            for index in 0..<8 {
                 workspace.selectNumberedItem(at: index)
                 XCTAssertEqual(tmux ? workspace.current?.selectedContainer : workspace.activeTab?.id, expected[index])
                 XCTAssertEqual(workspace.current?.tabShortcutNumber(for: expected[index]), index + 1)
             }
-            XCTAssertNil(workspace.current?.tabShortcutNumber(for: expected[9]))
+            // ⌘9 is the last of the ten tabs, as in Safari and Terminal; the ninth has no number.
+            workspace.selectNumberedItem(at: 8)
+            XCTAssertEqual(tmux ? workspace.current?.selectedContainer : workspace.activeTab?.id, expected[9])
+            XCTAssertEqual(workspace.current?.tabShortcutNumber(for: expected[9]), 9)
+            XCTAssertNil(workspace.current?.tabShortcutNumber(for: expected[8]))
             let selected = workspace.activeTab?.id
             workspace.selectNumberedItem(at: 9)
             workspace.selectNumberedItem(at: -1)
@@ -760,7 +778,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(decoded.theme, "Catppuccin Mocha")
         XCTAssertEqual(decoded.lightTheme, "Default")
         XCTAssertEqual(decoded.fontSize, 15)
-        XCTAssertEqual(decoded.optionAsAlt, .both)
+        XCTAssertEqual(decoded.optionAsAlt, .left, "the removed key leaves the default: Left only")
         let previousDefault = try JSONDecoder().decode(Preferences.self, from: Data(#"{"theme":"Default"}"#.utf8))
         XCTAssertEqual(previousDefault.theme, "Default")
         XCTAssertEqual(previousDefault.resolvedTheme(systemIsDark: true), "dispatch-black")

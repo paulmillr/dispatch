@@ -13,8 +13,11 @@ struct ChatCommandControls: View {
                     .font(theme.typography.detail).foregroundStyle(theme.muted)
             }
             if let question = session.questions.first {
-                ChatSideQuestionForm(request: question, agent: session.agentTitle) { skip in coordinator.answerQuestion(question, skip: skip, session: session) }
-                    .frame(height: 270)
+                // As tall as the question needs, up to 270 pt; a longer one scrolls inside.
+                ChatSideQuestionForm(request: question, agent: session.agentTitle,
+                                     submit: { skip in coordinator.answerQuestion(question, skip: skip, session: session) },
+                                     openTerminal: { coordinator.showTerminal(session) }, fitsContent: true)
+                    .frame(maxHeight: 270)
             }
             if let result = session.commandResult {
                 ChatCommandResultView(result: result) {

@@ -48,7 +48,7 @@ import XCTest
                 return pid != nil
             }
             let store = HostStatisticsStore.shared
-            let source = store.source(host: .authenticated(session.greeting.host), preferred: session.launch.connectionID)
+            let source = store.source(host: .authenticated(session.greeting.host, uid: session.greeting.uid), preferred: session.launch.connectionID)
             let subscription = try XCTUnwrap(store.subscribe(source, preferred: session.launch.connectionID))
             defer { store.unsubscribe(subscription) }
             guard case .ssh(let key) = source else {
@@ -64,7 +64,7 @@ import XCTest
             let sample = store.snapshot(source)
             XCTAssertNotNil(sample.memoryTotal); XCTAssertNotNil(sample.cpu)
             XCTAssertTrue(sample.topCPU.prefix(3).contains { $0.id == pid })
-            let record = HostRecord(id: .authenticated(session.greeting.host), name: "Statistics test", destinations: [destination], order: 0)
+            let record = HostRecord(id: .authenticated(session.greeting.host, uid: session.greeting.uid), name: "Statistics test", destinations: [destination], order: 0)
             let view = NSHostingView(rootView: HostStatsView(host: record, preferred: session.launch.connectionID, samplesAutomatically: false))
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 450), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false; window.contentView = view; window.orderFront(nil)

@@ -382,6 +382,55 @@ final class SSHIntegrationPolicyTests: XCTestCase {
         XCTAssertEqual(store.remembered(target), grant)
     }
 
+    /// A host whose platform has no helper is remembered so its logins go plain without trying again; saving a choice
+    /// for it (Settings › Hosts) tries again. Other logins and a login without a saved choice are never marked.
+    @MainActor
+    func testUnsupportedPlatformIsRememberedUntilAChoiceChanges() throws {
+        let name = "SSHUnsupportedTests." + System.uuid().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = SSHIntegrationPermissions(defaults: defaults), target = scope(), other = scope(user: "bob")
+        store.markUnsupported(target)
+        XCTAssertFalse(store.unsupported(target), "nothing saved, nothing marked")
+        let grant = SSHIntegrationGrant(profile: .full, hooks: true)
+        store.save(grant, for: target); store.save(grant, for: other)
+        store.markUnsupported(target)
+        XCTAssertTrue(store.unsupported(target))
+        XCTAssertFalse(store.unsupported(other))
+        XCTAssertTrue(SSHIntegrationPermissions(defaults: defaults).unsupported(target), "kept across launches")
+        store.save(SSHIntegrationGrant(profile: .statistics), for: target)
+        XCTAssertFalse(store.unsupported(target), "a changed choice tries the helper again")
+    }
+
+    /// A login that stops waiting (its consent timed out) leaves the shared prompt; the last one to leave closes it, and
+    /// nothing is saved.
+    @MainActor
+    func testPromptClosesOnlyWhenEveryWaitingLoginGaveUp() async throws {
+        let store = SSHIntegrationPermissions(defaults: nil), target = scope()
+        var started = false, cancelled = false
+        // Open until cancelled, as the sheet is.
+        let present: @MainActor (SSHIntegrationScope) async -> SSHIntegrationSelection? = { _ in
+            started = true
+            do { try await Task.sleep(for: .seconds(3600)) } catch {}
+            cancelled = true
+            return nil
+        }
+        let first = Task { await store.choose(target, present: present) }
+        try await TestSupport.eventually { started }
+        var secondStarted = false
+        let second = Task { secondStarted = true; return await store.choose(target, present: present) }
+        try await TestSupport.eventually { secondStarted }
+        for _ in 0..<20 { await Task.yield() }
+        first.cancel()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(cancelled, "another login still waits for the sheet")
+        second.cancel()
+        try await TestSupport.eventually { cancelled }
+        let results = await [first.value, second.value]
+        XCTAssertEqual(results, [nil, nil])
+        XCTAssertNil(store.remembered(target), "a sheet nobody waits for saves nothing")
+    }
+
     @MainActor
     func testPersistenceIsSeparateFromHostRegistry() {
         let name = "SSHIntegrationPolicyTests." + System.uuid().uuidString

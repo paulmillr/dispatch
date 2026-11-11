@@ -122,6 +122,9 @@ import Foundation
     /// a spinner rather than that repository's status and log as if they were this folder's.
     var gitResolving = false
     var status: GitStatus?
+    /// Why the last status read failed (git's words, or the helper's), until one succeeds: Review shows it in place of
+    /// its spinner, with Try again.
+    var statusError: String?
     /// The `GitChange.id` selected among the uncommitted changes, and its diff.
     var changesSelection: String?
     var changesDiff: GitDiffState?
@@ -132,6 +135,9 @@ import Foundation
     var reviewDraft: ReviewDraft?
     /// The draft's text: typing updates it without re-rendering the diff.
     @ObservationIgnored var reviewDraftText = ""
+    /// New comments not saved that were set aside when a comment was started on another file: Create Review lists
+    /// them, to keep or discard; never sent unless kept, never written to disk.
+    var reviewSetAside: [ReviewSetAside] = []
     /// A comment the diff is to scroll to; the diff clears it once shown.
     var reviewReveal: ReviewReveal?
     /// The comment ⌥↓ / ⌥↑ last went to, where they go on from.
@@ -141,6 +147,8 @@ import Foundation
     /// view narrower than `FilesView.columnsWidth` and scrolls in a wider one (`wraps(compact:)`).
     var diffWrap: Bool?
     var log: GitLog?
+    /// Why the last log read failed, until one succeeds: Commits shows it in place of "Loading the log…".
+    var logError: String?
     var logScope: GitLogScope = .branch
     /// The branch Commits shows in place of the checked-out one, by its full name (`refs/heads/feature`,
     /// `refs/remotes/origin/main`), read-only: nothing is checked out. Only with the branch scope; nil shows HEAD's.
@@ -174,7 +182,14 @@ import Foundation
     /// Why the selected commit's detail did not load; the loader tries again on its tick and on ⌘R.
     var commitDetailError: String?
     var commitFile: String?
+    /// The file to pick once the selected commit's files arrive (a review comment on it was asked for), in place of the
+    /// first.
+    var commitFileRequest: String?
     var commitDiff: GitDiffState?
+    /// Bumped by ⏎ or → in a commit's files: the file's diff takes the keyboard (`commitDiffFocusPending` while it is
+    /// still to appear).
+    var commitDiffFocus: UUID?
+    var commitDiffFocusPending = false
     /// Signatures checked so far, by commit hash: the selected signed commit is checked once, and the log's rows keep
     /// what was found.
     var signatureChecks: [String: GitSignatureCheck] = [:]
@@ -184,6 +199,8 @@ import Foundation
     /// Bumped by Edit › Find (⌘F): the filter field takes it, or the preview's find when `previewFocused`.
     var findRequest: UUID?
     var previewFocused = false
+    /// A git tab's diff (or its find) has the keyboard: ⌘F finds in the diff rather than filter the list.
+    var diffFocused = false
 
     init(id: UUID) {
         self.id = id
@@ -209,6 +226,15 @@ import Foundation
         if writeRefusal != host { writeRefusal = host }
     }
 
+    /// Rows dragged within their own list without ⌥: shown over the list while the drag stays (`FilesWriteRefusal`),
+    /// as Files copies and never moves.
+    var moveRefused = false
+
+    func refuseMove() {
+        writeRefusals &+= 1
+        if !moveRefused { moveRefused = true }
+    }
+
     /// The folder the outline is rooted at: the pin, else the shell's directory, else home.
     func root(tabDirectory: String?) -> String? {
         if let pinnedRoot { return pinnedRoot }
@@ -221,12 +247,19 @@ import Foundation
 
     /// Files always shows; Review and Commits inside a repository, and while it is still being resolved: the loader
     /// resolves only once files shows, so ⇧⌘U on a tab that never showed files waits for the answer (and falls back
-    /// to Files if there is no repository) rather than refusing.
+    /// to Files if there is no repository) rather than refusing. Where git cannot run (not installed on the host, left
+    /// out of its grant, or refusing the folder, as for dubious ownership) they show too, to say why.
     func canShow(_ tab: FilesTab) -> Bool {
         switch git {
-        case .repository, .loading: true
-        case .none, .unavailable, .off: tab == .files
+        case .repository, .loading, .unavailable: true
+        case .none, .off: tab == .files
         }
+    }
+
+    /// Why git cannot run here: nil unless `git` is unavailable.
+    var gitUnavailable: String? {
+        if case .unavailable(let message) = git { return message }
+        return nil
     }
 
     /// The mode button's menu, ⌃⌘1–3 or ⇧⌘U / ⇧⌘L: the tab shows `tab` if it can, and the new tab's view takes the keyboard

@@ -235,6 +235,56 @@ final class HostSessionStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.connections.first?.backends, [retained])
     }
 
+    func testAVersionOneSnapshotSplitsAMachineIntoItsLogins() throws {
+        let machine = HostID.authenticated("machine"), color = try XCTUnwrap(HostColor.allCases.first)
+        var alice = Space(name: "alice", directory: "/home/alice"), root = Space(name: "root", directory: "/root")
+        alice.hostID = machine; root.hostID = machine
+        let aliceTab = try XCTUnwrap(alice.tabs.first).id, rootTab = try XCTUnwrap(root.tabs.first).id
+        func connection(_ destination: String, uid: UInt32, surface: UUID) -> HostSessionStore.Connection {
+            .init(.init(connection: SSHConnectionID(), host: machine, shell: SSHShell(destination: destination), scope: nil,
+                        accountUID: uid, origin: surface, surfaces: [surface]))
+        }
+        let connections = [connection("alice@build", uid: 501, surface: aliceTab), connection("root@build", uid: 0, surface: rootTab)]
+        func context(_ connection: HostSessionStore.Connection) -> TerminalHostContext {
+            .init(host: machine, generation: connection.id.rawValue, state: .connected, authenticated: true)
+        }
+        var snapshot = HostSessionStore.Snapshot(
+            version: 1, hosts: [HostRecord(id: machine, name: "build", destinations: ["alice@build", "root@build"], order: 2, colorName: color.rawValue)],
+            spaces: [alice, root], selectedSpace: nil,
+            contexts: [aliceTab: context(connections[0]), rootTab: context(connections[1])], connections: connections)
+
+        XCTAssertEqual(snapshot.splitLogins(), [machine])
+
+        let aliceLogin = HostID.authenticated("machine", uid: 501), rootLogin = HostID.authenticated("machine", uid: 0)
+        XCTAssertEqual(snapshot.connections.map(\.host), [aliceLogin, rootLogin])
+        XCTAssertEqual(snapshot.spaces.map(\.hostID), [aliceLogin, rootLogin])
+        XCTAssertEqual(snapshot.contexts[aliceTab]?.host, aliceLogin)
+        XCTAssertEqual(snapshot.contexts[rootTab]?.host, rootLogin)
+        XCTAssertEqual(Set(snapshot.hosts.map(\.id)), [aliceLogin, rootLogin], "The machine's record is gone")
+        let record = try XCTUnwrap(snapshot.hosts.first { $0.id == rootLogin })
+        XCTAssertEqual(record.destinations, ["root@build"])
+        XCTAssertEqual(record.account, "root")
+        XCTAssertEqual(record.order, 2)
+        XCTAssertEqual(record.color, color)
+    }
+
+    func testASnapshotConnectionWithoutAnAccountStaysOnItsMachine() throws {
+        let machine = HostID.authenticated("machine")
+        var space = Space(name: "plain", directory: "/tmp")
+        space.hostID = machine
+        let tab = try XCTUnwrap(space.tabs.first).id
+        let connection = HostSessionStore.Connection(.init(connection: SSHConnectionID(), host: machine, shell: SSHShell(destination: "build"),
+                                                           scope: nil, origin: tab, surfaces: [tab]))
+        var snapshot = HostSessionStore.Snapshot(version: 1, hosts: [HostRecord(id: machine, name: "build", destinations: ["build"], order: 0)],
+                                                 spaces: [space], selectedSpace: nil,
+                                                 contexts: [tab: .init(host: machine, generation: connection.id.rawValue, state: .connected, authenticated: true)],
+                                                 connections: [connection])
+        XCTAssertEqual(snapshot.splitLogins(), [])
+        XCTAssertEqual(snapshot.connections.map(\.host), [machine])
+        XCTAssertEqual(snapshot.spaces.map(\.hostID), [machine])
+        XCTAssertEqual(snapshot.hosts.map(\.id), [machine])
+    }
+
     func testRestoredBackendInheritsAuthenticatedEndpointWithoutAFrontend() {
         let workspace = Workspace(), host = HostID.authenticated("restored")
         let connections = [SSHConnectionID(), SSHConnectionID()]

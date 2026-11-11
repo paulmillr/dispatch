@@ -6,6 +6,10 @@ struct ChatSideQuestionForm: View {
     /// The asking agent's name, as the helper reports it.
     var agent = "Codex"
     let submit: (_ skip: Bool) -> Void
+    /// The main chat's question (not a side conversation's): its terminal shows the same question.
+    var openTerminal: (() -> Void)? = nil
+    /// Below the main chat, the panel takes only the question's height (up to its frame); in the side sheet it fills.
+    var fitsContent = false
     @FocusState private var customFocused: Bool
     @State private var choiceFocused: String?
     @FocusState private var formFocused: Bool
@@ -18,24 +22,15 @@ struct ChatSideQuestionForm: View {
                 Spacer()
                 Text("\(request.index + 1) of \(request.questions.count)").foregroundStyle(theme.muted)
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(request.question.question).font(theme.typography.body).textSelection(.enabled)
-                    ForEach(request.question.options ?? []) { option in
-                        choice(option)
-                    }
-                    if request.question.allowsCustom {
-                        Group {
-                            if request.question.isSecret {
-                                SecureField("Your answer", text: answerBinding)
-                            } else {
-                                TextField("Your own answer…", text: answerBinding, axis: .vertical).lineLimit(1...4)
-                            }
-                        }.textFieldStyle(.plain).focused($customFocused).padding(9).chatPanel()
-                            .accessibilityIdentifier("chat-side-question-custom")
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.id(request.question.id)
+            if fitsContent {
+                // The question's own height while it fits the frame given; a scroll view only past it.
+                ViewThatFits(in: .vertical) {
+                    fields
+                    ScrollView { fields }.id(request.question.id)
+                }
+            } else {
+                ScrollView { fields }.id(request.question.id)
+            }
             if let error = request.submissionError {
                 Text(error).foregroundStyle(theme.red)
                     .fixedSize(horizontal: false, vertical: true)
@@ -45,13 +40,16 @@ struct ChatSideQuestionForm: View {
             HStack(spacing: 10) {
                 if request.index > 0 { Button("Back", action: request.back) }
                 if request.index + 1 < request.questions.count {
-                    Button("Next", action: request.next).disabled(!request.actions.canGoNext)
+                    Button { request.next() } label: { ApprovalKeyLabel(title: "Next", key: keys ? "⏎" : nil) }
+                        .disabled(!request.actions.canGoNext).accessibilityLabel("Next")
                 } else {
-                    Button("Send answers") { submit(false) }.disabled(!request.canSubmit(skip: false))
-                        .accessibilityIdentifier("chat-side-question-submit")
-                        .keyboardShortcut(formFocused || customFocused ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                    Button { submit(false) } label: { ApprovalKeyLabel(title: "Send Answers", key: keys ? "⏎" : nil) }
+                        .disabled(!request.canSubmit(skip: false))
+                        .accessibilityLabel("Send Answers").accessibilityIdentifier("chat-side-question-submit")
                 }
-                Button("Skip") { submit(true) }.disabled(!request.canSubmit(skip: true))
+                Button { submit(true) } label: { ApprovalKeyLabel(title: "Skip", key: keys && skipsOnEscape ? "⎋" : nil) }
+                    .disabled(!request.canSubmit(skip: true)).accessibilityLabel("Skip")
+                if let openTerminal { Button("Open in Terminal", action: openTerminal) }
                 if request.submitted { ProgressView().controlSize(.mini) }
             }.buttonStyle(ApprovalButtonStyle())
         }.font(theme.typography.detail).padding(10).chatPanel()
@@ -59,11 +57,13 @@ struct ChatSideQuestionForm: View {
             .focusable().focused($formFocused)
             .onChange(of: request.index) { _, _ in restoreFocus() }
             .task { await Task.yield(); restoreFocus() }
+            // Return (or ⌘⏎) is the default button: Next, then Send Answers on the last question.
             .onKeyPress(.return, phases: .down) { event in
-                guard event.modifiers.contains(.command) else { return .ignored }
-                if request.canSubmit(skip: false) { submit(false) }
-                return .handled
+                guard event.modifiers.isEmpty || event.modifiers == .command else { return .ignored }
+                advance(); return .handled
             }
+            // Esc is Skip while nothing is answered, so it never throws typed or chosen answers away.
+            .onExitCommand { if skipsOnEscape, request.canSubmit(skip: true) { submit(true) } }
             .onKeyPress(.space, phases: .down) { _ in
                 guard !customFocused, let choiceFocused else { return .ignored }
                 request.select(choiceFocused); return .handled
@@ -71,6 +71,34 @@ struct ChatSideQuestionForm: View {
             .onKeyPress(.upArrow, phases: .down) { event in moveChoice(-1, event: event) }
             .onKeyPress(.downArrow, phases: .down) { event in moveChoice(1, event: event) }
             .accessibilityIdentifier("chat-side-question-form")
+    }
+
+    /// The form has the keys: its buttons show them.
+    private var keys: Bool { formFocused || customFocused }
+    private var skipsOnEscape: Bool {
+        !request.questions.contains { request.answer($0) != nil || !(request.custom[$0.id] ?? "").isEmpty }
+    }
+    private func advance() {
+        if request.actions.canGoNext { request.next() } else if request.canSubmit(skip: false) { submit(false) }
+    }
+    private var fields: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(request.question.question).font(theme.typography.body).textSelection(.enabled)
+            ForEach(request.question.options ?? []) { option in
+                choice(option)
+            }
+            if request.question.allowsCustom {
+                Group {
+                    if request.question.isSecret {
+                        SecureField("Your answer", text: answerBinding)
+                    } else {
+                        TextField("Or type your own answer", text: answerBinding, axis: .vertical).lineLimit(1...4)
+                    }
+                }.textFieldStyle(.plain).focused($customFocused).onSubmit { advance() }.padding(9).chatPanel()
+                    .accessibilityIdentifier("chat-side-question-custom")
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+
     }
 
     private func restoreFocus() {

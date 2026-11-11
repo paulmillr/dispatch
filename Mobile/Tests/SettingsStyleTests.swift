@@ -1,10 +1,11 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 import XCTest
 @testable import DispatchMobile
 
-/// Settings' look (G1 to G4): the terminal's font, scheme, contrast, cursor and bold colours reaching the terminals,
-/// chat's font and size, the app's theme, and the screens that set them.
+/// Settings' look (G1 to G3): the terminal's font, scheme, contrast, cursor and bold colours reaching the terminals,
+/// chat's font and size, and the screens that set them.
 @MainActor
 final class SettingsStyleTests: XCTestCase {
     private func defaults() -> UserDefaults {
@@ -17,7 +18,6 @@ final class SettingsStyleTests: XCTestCase {
 
     func testDefaultsAreTheMockupsAndTheMacs() {
         let settings = MobileSettings(defaults: defaults())
-        XCTAssertEqual(settings.theme, .automatic)
         XCTAssertEqual(settings.terminalFont, "Source Code Pro")
         XCTAssertEqual(settings.terminalScheme, "dispatch-black")
         XCTAssertEqual(settings.textContrast, .lightThemes, "light schemes only, as the Mac's")
@@ -29,14 +29,14 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(settings.chatTextSize, .standard)
         XCTAssertTrue(settings.notifyNeedsYou && settings.notifyFinished && settings.notifyFailed)
         XCTAssertEqual(settings.notificationSound, .standard)
-        XCTAssertTrue(settings.notificationText && settings.notificationBadge)
+        XCTAssertTrue(settings.notificationText)
+        XCTAssertTrue(settings.alertPolicy.badge, "the badge always counts who waits")
         XCTAssertEqual(settings.notificationSummary, "Sound, text", "G1's Notifications row")
     }
 
     func testEveryChoiceIsSavedAndReadBack() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
-        settings.theme = .nautical
         settings.terminalFont = "Fira Code"
         settings.terminalScheme = "Nord"
         settings.textContrast = .always
@@ -51,12 +51,9 @@ final class SettingsStyleTests: XCTestCase {
         settings.notifyFailed = false
         settings.notificationSound = .shipsBell
         settings.notificationText = false
-        settings.notificationBadge = false
-        XCTAssertEqual(store.string(forKey: "theme"), "nautical", "the key the root reads")
         XCTAssertEqual(store.string(forKey: "chat.font"), "Comic Sans", "the Mac's names")
 
         let read = MobileSettings(defaults: store)
-        XCTAssertEqual(read.theme, .nautical)
         XCTAssertEqual(read.terminalFont, "Fira Code")
         XCTAssertEqual(read.terminalScheme, "Nord")
         XCTAssertEqual(read.textContrast, .always)
@@ -67,13 +64,40 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(store.string(forKey: "text.lineSpacing"), "relaxed", "the Mac's names")
         XCTAssertEqual(read.chatFont, .comicSans)
         XCTAssertEqual(read.chatTextSize, .larger)
-        XCTAssertFalse(read.notifyNeedsYou || read.notifyFinished || read.notifyFailed || read.notificationText || read.notificationBadge)
+        XCTAssertFalse(read.notifyNeedsYou || read.notifyFinished || read.notifyFailed || read.notificationText)
         XCTAssertEqual(read.notificationSound, .shipsBell)
         XCTAssertEqual(read.notificationSummary, "Ship's bell")
         XCTAssertEqual(read.alertPolicy, AgentAlerts.Policy(needsYou: false, finished: false, failed: false, sound: .shipsBell,
-                                                             text: false, badge: false))
+                                                             text: false, badge: true))
         read.notificationSound = .none
-        XCTAssertEqual(read.notificationSummary, "Silent")
+        XCTAssertEqual(read.notificationSummary, "Badge", "the badge alone")
+    }
+
+    /// Settings › Chat › Voice: Spoken Content's voice by default and when the chosen voice is gone, else the chosen
+    /// one, read by the speakers each time they speak.
+    func testReadAloudVoice() throws {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.speechVoice, "")
+        XCTAssertEqual(SpeechVoice.label(settings.speechVoice), "Spoken Content")
+        let spoken = SpeechVoice.utterance("The build is green.", defaults: store)
+        XCTAssertTrue(spoken.prefersAssistiveTechnologySettings, "the Settings app's voice, speed and pitch")
+        XCTAssertNil(spoken.voice)
+
+        settings.speechVoice = "com.example.voice.gone"
+        XCTAssertEqual(MobileSettings(defaults: store).speechVoice, "com.example.voice.gone")
+        XCTAssertTrue(SpeechVoice.utterance("The build is green.", defaults: store).prefersAssistiveTechnologySettings,
+                      "a voice since deleted falls back to Spoken Content's")
+        XCTAssertEqual(SpeechVoice.label(settings.speechVoice), "Spoken Content")
+
+        let voice = try XCTUnwrap(AVSpeechSynthesisVoice.speechVoices().first, "the simulator has voices")
+        settings.speechVoice = voice.identifier
+        let chosen = SpeechVoice.utterance("The build is green.", defaults: store)
+        XCTAssertEqual(chosen.voice?.identifier, voice.identifier)
+        XCTAssertFalse(chosen.prefersAssistiveTechnologySettings, "else Spoken Content's voice would win")
+        XCTAssertTrue(SpeechVoice.offered(current: voice.identifier).contains { $0.identifier == voice.identifier },
+                      "the voice in use is listed whatever its language")
+        XCTAssertEqual(SpeechVoice.label(voice.identifier), SpeechVoice.title(voice))
     }
 
     /// A font, scheme or value no longer offered falls back without losing the rest.
@@ -84,7 +108,6 @@ final class SettingsStyleTests: XCTestCase {
         store.set("../ghostty/dispatch", forKey: MobileSettings.terminalSchemeKey)
         store.set("blinking", forKey: MobileSettings.cursorKey)
         store.set("airy", forKey: MobileSettings.lineSpacingKey)
-        store.set("sepia", forKey: MobileSettings.themeKey)
         store.set("Papyrus", forKey: MobileSettings.chatFontKey)
         store.set(true, forKey: MobileSettings.boldIsBrightKey)
         let settings = MobileSettings(defaults: store)
@@ -93,7 +116,6 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(settings.textContrast, .lightThemes)
         XCTAssertEqual(settings.cursor, .block)
         XCTAssertEqual(settings.lineSpacing, .normal)
-        XCTAssertEqual(settings.theme, .automatic)
         XCTAssertEqual(settings.chatFont, .system)
         XCTAssertTrue(settings.boldIsBright, "the rest stays")
     }
@@ -229,29 +251,10 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(parsed.title, "Test")
     }
 
-    // MARK: Theme
+    // MARK: Appearance
 
-    /// The themes are the Mac's palettes; each themed token resolves by the trait, Automatic to the catalog's.
-    func testThemesColourTheTokensByTrait() {
-        func resolved(_ color: UIColor, _ theme: MobileTheme, _ style: UIUserInterfaceStyle = .dark) -> UIColor {
-            color.resolvedColor(with: UITraitCollection { $0.userInterfaceStyle = style; $0[MobileThemeTrait.self] = theme })
-        }
-        let accent = UIColor.themed("AccentColor", \.accent)
-        XCTAssertEqual(resolved(accent, .automatic), UIColor.dispatch("AccentColor").resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)))
-        XCTAssertEqual(resolved(accent, .nautical), UIColor(SidebarTheme.nautical.palette.accent))
-        XCTAssertEqual(resolved(accent, .lavender), MobileTheme.color(0x5648c4))
-        let canvas = UIColor.themed("Canvas", \.canvas)
-        XCTAssertEqual(resolved(canvas, .graphite), MobileTheme.color(0xf2f2f2))
-        XCTAssertEqual(resolved(canvas, .automatic, .light), UIColor.dispatch("Canvas").resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)))
-        XCTAssertNil(MobileTheme.automatic.colorScheme, "Automatic follows Appearance")
-        XCTAssertEqual(MobileTheme.nautical.colorScheme, .dark)
-        XCTAssertEqual(MobileTheme.graphite.colorScheme, .light)
-        XCTAssertEqual(MobileTheme.lavender.colorScheme, .light)
-        XCTAssertEqual(MobileTheme.allCases.map(\.subtitle), ["Follows Appearance", "Neutral greys", "Purple accent", "Radar green, engine room"])
-    }
-
-    /// The root applies the theme live: its scheme on the window and its trait for UIKit and SwiftUI.
-    func testTheRootAppliesTheTheme() async throws {
+    /// The root applies Appearance live: its scheme on the window, UIKit's tint the app's accent.
+    func testTheRootAppliesTheAppearance() async throws {
         let store = defaults()
         store.set("system", forKey: MobileAppearance.key)
         let found = await TestSupport.windowScene()
@@ -261,16 +264,13 @@ final class SettingsStyleTests: XCTestCase {
         window.isHidden = false
         defer { window.isHidden = true }
         try await TestSupport.eventually { window.overrideUserInterfaceStyle == .unspecified }
-        XCTAssertEqual(window.traitCollection[MobileThemeTrait.self], .automatic)
-        store.set("nautical", forKey: MobileSettings.themeKey)
-        try await TestSupport.eventually { window.traitCollection[MobileThemeTrait.self] == .nautical }
-        XCTAssertEqual(window.overrideUserInterfaceStyle, .dark, "Nautical is dark whatever Appearance says")
-        XCTAssertEqual(window.tintColor.resolvedColor(with: window.traitCollection), UIColor(SidebarTheme.nautical.palette.accent),
-                       "UIKit's tint is the theme's accent")
-        store.set("graphite", forKey: MobileSettings.themeKey)
+        // The window takes the tint once the root's probe is in it.
+        let accent = UIColor.dispatch("AccentColor").resolvedColor(with: window.traitCollection)
+        try await TestSupport.eventually { (window.tintColor as UIColor?)?.resolvedColor(with: window.traitCollection) == accent }
+        store.set("light", forKey: MobileAppearance.key)
         try await TestSupport.eventually { window.overrideUserInterfaceStyle == .light }
-        store.set("automatic", forKey: MobileSettings.themeKey)
-        try await TestSupport.eventually { window.overrideUserInterfaceStyle == .unspecified && window.traitCollection[MobileThemeTrait.self] == .automatic }
+        store.set("dark", forKey: MobileAppearance.key)
+        try await TestSupport.eventually { window.overrideUserInterfaceStyle == .dark }
     }
 
     // MARK: Chat
@@ -366,8 +366,8 @@ final class SettingsStyleTests: XCTestCase {
         let composition = ResilienceFixture.composition(ResilienceFixture.sessions([ResilienceFixture.host("studio")]))
         composition.settings.terminalFont = "Fira Code"
         composition.settings.chatFont = .comicSans
-        let expected = ["Theme, Automatic", "Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast, Light themes",
-                        "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "Show offline hosts", "Color-code hosts",
+        let expected = ["Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast, Light themes",
+                        "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "Color-code hosts",
                         "Remove all data"]
         _ = try await labels(SettingsView(composition: composition).environment(composition.hosts), height: 2400, expected: expected)
     }
@@ -379,19 +379,18 @@ final class SettingsStyleTests: XCTestCase {
                              expected: TerminalFont.all.map(\.name) + ["Ligatures", "Bold text as bright colors", "Cursor, Block", "Blinking cursor"])
     }
 
-    /// G3 and G4: the three fonts and the four themes by name.
-    func testChatFontAndThemeScreens() async throws {
+    /// G3: the fonts by name.
+    func testChatFontScreen() async throws {
         let settings = MobileSettings(defaults: defaults())
         _ = try await labels(NavigationStack { ChatFontSettingsView(settings: settings) },
                              expected: MobileChatFont.allCases.map(\.rawValue) + ["Larger"])
-        _ = try await labels(NavigationStack { ThemeSettingsView(settings: settings) }, expected: MobileTheme.allCases.map(\.title))
     }
 
-    /// G5: the three events, the sound, the text and the badge.
+    /// G5: the three events, the sound and the text (the badge always counts: no switch).
     func testNotificationsScreen() async throws {
         let composition = ResilienceFixture.composition(ResilienceFixture.sessions([]))
         _ = try await labels(NavigationStack { NotificationSettingsView(composition: composition) },
-                             expected: ["Needs you", "Finished", "Failed or disconnected", "Sound, Default", "Show message text", "Badge app icon"])
+                             expected: ["Needs you", "Finished", "Failed or disconnected", "Sound, Default", "Show message text"])
     }
 }
 

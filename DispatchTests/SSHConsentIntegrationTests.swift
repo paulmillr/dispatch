@@ -104,7 +104,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(sheet, named: "ssh-integration-consent", in: "ssh-consent-layout-validation")
         let heading = try XCTUnwrap(descendants(try XCTUnwrap(sheet.contentView)).compactMap { $0 as? NSTextField }
             .first { $0.stringValue.hasPrefix("Connect to ") })
-        XCTAssertEqual(heading.stringValue, "Connect to 127.0.0.1")
+        XCTAssertEqual(heading.stringValue, "Connect to \(try XCTUnwrap(scopes.first).account)@127.0.0.1", "the account the grant is for")
         XCTAssertEqual(scopes.count, 1)
         XCTAssertFalse(System.exists(invocations), "Only ssh -G may run before a choice")
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)

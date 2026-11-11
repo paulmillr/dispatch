@@ -5,9 +5,9 @@ struct ChatDraft: Codable, Identifiable, Equatable {
     var id = System.uuid()
     var title: String?
     var text = ""
-    /// Editor mode: Return inserts a newline and ⌘⏎ sends. On by ⌘E, a multi-line paste, or for every new draft with
-    /// Settings' Editor mode by default (`editorByDefault`); a newline typed with ⌥⏎ or ⇧⏎ leaves it as it is.
-    var multiline = ChatDraft.editorByDefault
+    /// Editor mode: Return inserts a newline and ⌘⏎ sends. On by ⌘E or a multi-line paste; a newline typed with ⌥⏎ or
+    /// ⇧⏎ leaves it as it is. A new draft starts out of it.
+    var multiline = false
     var selection = NSRange(location: 0, length: 0)
     var modified = Date()
     // A restored copy may need a new UI identity, but retains this version ID.
@@ -19,9 +19,6 @@ struct ChatDraft: Codable, Identifiable, Equatable {
             ?? attachments.first?.name.prefix(36) ?? "Draft")
     }
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty }
-    /// Settings › Chat mode (Mac) or Chat (iPhone), Editor mode by default: new drafts start in editor mode. Set on the
-    /// main actor as the setting loads and changes.
-    nonisolated(unsafe) static var editorByDefault = false
 }
 
 extension ChatDraft {

@@ -13,18 +13,24 @@ cd "$(dirname "$0")/../.."
 # setup.sh asks once before its downloads, all pinned and SHA-256-checked (scripts/build.lock.json); after it, build.sh
 # finds nothing missing and asks nothing. The Mac app's project needs no iPhone SSH engine: only the iPhone build
 # prepares it (--mobile).
+# A line naming what runs next, as scripts/release/build.sh writes them (builder.sh shows them).
+phase() { echo "phase: $(date +%s) $*"; }
+phase "tools: Rust, the crates$([[ "${RELEASE_PLATFORM:-mac}" == mac ]] || echo ", the SSH engine")"
 if [[ "${RELEASE_PLATFORM:-mac}" == mac ]]; then echo y | bash scripts/setup.sh; else echo y | bash scripts/setup.sh --mobile; fi
 [[ "$RELEASE_VARIANT" == pilot ]] || { echo "error: no variant $RELEASE_VARIANT (scripts/release/app.json)" >&2; exit 1; }
 flags=(--build-number "$RELEASE_BUILD_NUMBER")
 
 if [[ "${RELEASE_PLATFORM:-mac}" == mac ]]; then
+  phase "Xcode build"
   ./build.sh --release "${flags[@]}" < /dev/null
   mv build/Build/Products/Release/Dispatch.app build/Build/Products/Release/Dispatch.app.dSYM "$RELEASE_PRODUCTS/"
   exit 0
 fi
 
 archive="$RELEASE_PRODUCTS/DispatchMobile.xcarchive"
+phase "Xcode archive"
 ./build.sh --archive "$archive" "${flags[@]}" < /dev/null
+phase "ad hoc signatures"
 # Innermost first. The watch's entitlements name the App Group after the phone app: group.<its bundle id>.
 app="$archive/Products/Applications/DispatchMobile.app"
 group="group.$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")"

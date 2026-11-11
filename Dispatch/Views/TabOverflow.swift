@@ -149,11 +149,13 @@ struct TabOverflowControl: View {
             }
         } label: {
             HStack(spacing: 3) {
-                if leading { chevron; count } else { count; chevron }
+                // A pending approval among the hidden tabs shows as the mark its tab draws, not by colour alone.
+                let mark = ActivityMark.blocked.view(size: typography.size(.label) * 0.8).foregroundStyle(Chrome.palette.green)
+                if leading { chevron; count; if pending { mark } } else { if pending { mark }; count; chevron }
             }.padding(.horizontal, 6).frame(maxHeight: .infinity).contentShape(Rectangle())
         }
         .disabled(hidden.isEmpty)
-        .foregroundStyle(pending ? Chrome.accent : hidden.isEmpty ? Chrome.palette.faint : Chrome.muted)
+        .foregroundStyle(hidden.isEmpty ? Chrome.palette.faint : Chrome.muted)
         .help(hidden.isEmpty ? "" : "\(hidden.count) more \(hidden.count == 1 ? "tab" : "tabs") \(leading ? "before" : "after") · right-click for all tabs")
         .accessibilityLabel(leading ? "Show earlier tabs" : "Show later tabs")
         .accessibilityValue("\(hidden.count) hidden\(pending ? ", awaiting approval" : "")")

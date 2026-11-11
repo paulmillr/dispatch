@@ -79,6 +79,20 @@ impl<T: Harness> Harness for Registered<T> {
     fn hook(&mut self, message: &Json) -> Result<Hook, Error> {
         self.part.hook(message)
     }
+    fn limits_use_hooks(&self) -> bool {
+        self.part.limits_use_hooks()
+    }
+    /// As `calls!`, and a read whose answer comes through the hooks is refused while they are muted.
+    fn limits(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Vec<LimitWindow>>) {
+        if !(self.permitted)("limits") || (self.part.limits_use_hooks() && self.muted.as_ref().is_some_and(|muted| muted())) {
+            deferred(done)(io, Err(denied()));
+            return;
+        }
+        let previous = io.section(&self.section);
+        let caller = previous.clone();
+        self.part.limits(io, binding, returned(caller, done));
+        io.section(&previous);
+    }
     fn commands(&self, binding: &Binding) -> Vec<String> {
         self.part.commands(binding)
     }
@@ -132,6 +146,7 @@ impl<T: Harness> Harness for Registered<T> {
         fn queue_order(binding: &Binding, items: &[String]) -> ();
         fn side(binding: &Binding, question: &str, read_only: bool) -> Binding;
         fn side_close(side: &Binding) -> ();
+        fn limit_rows(binding: &Binding, read: Option<&str>) -> LimitRows;
         fn revoke(binding: &Binding, retire: bool) -> ();
         fn install(route: &Path, enabled: Option<bool>, agent: Option<&Binding>) -> Install;
     }

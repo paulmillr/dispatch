@@ -50,6 +50,8 @@ pub(crate) fn required(method: &str) -> &'static str {
         "files.unpack.close" => plugin_required("unpack_close"),
         "files.git" => plugin_required("git"),
         "installation.install" | "installation.audit" => "hooks.configure",
+        // A harness whose read needs the hooks (Claude's) also checks them (Registered::limits).
+        "chat.limits" | "chat.limits.rows" => "agent.inspect",
         // Public agent keys need submission authority; internal process-checked keys also
         // carry an admitted multiplexer controller's protocol, independently of Chat.
         "terminals.keys" => "agent.submit",

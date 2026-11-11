@@ -457,7 +457,7 @@ final class UIBenchmarkTests: XCTestCase {
                 workspace.hosts.begin(space.tabs[0].id, generation: generation, destination: "dev@" + host)
                 workspace.hosts.update(space.tabs[0].id, generation: generation, destination: "dev@" + host,
                     greeting: SSHGreeting(version: 1, host: host, boot: "boot", uid: 501, home: "/home/dev", capabilities: []), state: .connected)
-                space.hostID = .authenticated(host); workspace.spaces.append(space)
+                space.hostID = .authenticated(host, uid: 501); workspace.spaces.append(space)
             }
             workspace.selectSpace(at: 0)
             let window = try await mount(SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller), size: .init(width: 264, height: 740))

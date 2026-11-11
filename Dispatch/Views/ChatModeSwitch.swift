@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// What the strip's one mode button shows and does for a tab. In the terminal it is muted and
-/// names where a click goes; away from it, accent-lit, it names what shows. A click leaves the terminal for chat (or for
-/// files, without an agent) and returns to it from chat or files; files on an agent tab is a hold, a right-click or ⇧⌘F.
+/// What the strip's one mode button shows and does for a tab. In the terminal it is muted and names where the tab would
+/// go (chat, or files without an agent); away from it, accent-lit, it names what shows. A click opens the modes menu in
+/// every mode, as the phone's tap does (`ModeSwitchPressTracker`); ⇧⌘C and ⇧⌘F still switch at once.
 struct ModeSwitchState: Equatable {
     let mode: TabMode
     /// An agent runs or ran here, so a click opens chat.
@@ -50,9 +50,6 @@ struct ModeSwitchState: Equatable {
 
     var lit: Bool { mode != .terminal }
 
-    /// No agent leads the tab: Files is all a click could open, and which of its tabs is the question, so a click opens
-    /// the modes menu (as a hold does) rather than switching; from files the menu has the way back to the terminal too.
-    var opensMenu: Bool { files && !chat && mode != .chat }
     var dimmed: Bool { next == nil }
 
     /// The next step, as VoiceOver reads the button.
@@ -72,15 +69,15 @@ struct ModeSwitchState: Equatable {
         }
     }
 
-    /// Hover text; `chatHint` is chat's own (why it cannot open yet, or "Show agent chat").
+    /// Hover text: what the menu a click opens offers, and the keys that switch at once ("Terminal, Chat or Files ·
+    /// ⇧⌘C ⇧⌘F"); with nowhere to go, why (`chatHint`, chat's own: why it cannot open yet).
     func help(chatHint: String) -> String {
-        if opensMenu { return mode == .files ? "Terminal, Files, Review or Commits · ⇧⌘F" : "Files, Review or Commits · ⇧⌘F" }
-        return switch next {
-        case .chat: chatHint
-        case .files: "Show files · ⇧⌘F"
-        case .terminal: mode == .files ? "Show terminal · ⇧⌘F" : "Show terminal · ⇧⌘C"
-        case nil: host.map { "Files need dispatch-helper on \($0)" } ?? chatHint
-        }
+        if dimmed && !retained { return host.map { "Files need dispatch-helper on \($0)" } ?? chatHint }
+        let chat = reaches(.chat), files = files || mode == .files
+        let modes = ["Terminal"] + (chat ? ["Chat"] : []) + (files ? ["Files"] : [])
+        let named = modes.count > 1 ? modes.dropLast().joined(separator: ", ") + " or " + modes[modes.count - 1] : modes[0]
+        let keys = (chat ? ["⇧⌘C"] : []) + (files ? ["⇧⌘F"] : [])
+        return named + (keys.isEmpty ? "" : " · " + keys.joined(separator: " "))
     }
 
     /// Whether the tab can show `mode` (Nautical keeps an unreachable segment named but faint).
@@ -138,10 +135,9 @@ struct ChatModeSwitch: View {
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: state.lit)
                 .stripGlassButton()
                 .contentShape(Rectangle())
-                // Clicks and press-and-hold are AppKit's: a held press opens the modes menu instead of clicking.
+                // Clicks and press-and-hold are AppKit's: either opens the modes menu under the button.
                 .overlay {
-                    ModeSwitchPressTracker(enabled: !state.dimmed, opensMenu: state.opensMenu, help: help,
-                                           click: { choose(state.next) }, menu: { menuItems(state) })
+                    ModeSwitchPressTracker(enabled: !state.dimmed || state.retained, help: help, menu: { menuItems(state) })
                 }
         }
         .buttonStyle(.plain)
@@ -327,24 +323,19 @@ extension EnvironmentValues {
     }
 }
 
-/// The mode button's pointer: a click acts on release inside, as a button does (`opensMenu`: it opens the modes menu); a
-/// press held past the delay opens the modes menu under the button instead, as a toolbar back button does. A right-click
-/// falls through to SwiftUI's menu.
-/// Internal, not private, so the presentation tests can read the menu a hold opens.
+/// The mode button's pointer: a click opens the modes menu under the button on release inside, as the phone's tap opens
+/// its; a press held past the delay opens it at once, as a toolbar back button does. A right-click falls through to
+/// SwiftUI's menu (the same items). VoiceOver's press is the button's own: one step (`ModeSwitchState.next`).
+/// Internal, not private, so the presentation tests can read the menu a click opens.
 struct ModeSwitchPressTracker: NSViewRepresentable {
     let enabled: Bool
-    /// A click opens the menu too (`ModeSwitchState.opensMenu`).
-    var opensMenu = false
     let help: String
-    let click: @MainActor () -> Void
     let menu: @MainActor () -> [ModeSwitchMenuItem]
 
     func makeNSView(context: Context) -> TrackerView { TrackerView() }
 
     func updateNSView(_ view: TrackerView, context: Context) {
         view.enabled = enabled
-        view.opensMenu = opensMenu
-        view.click = click
         view.items = menu
         // The tracker is what the pointer is over, so it carries the hover text.
         if view.toolTip != help { view.toolTip = help }
@@ -354,9 +345,11 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
         /// How long a press waits before it becomes the menu, about a toolbar button's menu delay.
         static let holdDelay: TimeInterval = 0.45
         var enabled = true
-        var opensMenu = false
-        var click: @MainActor () -> Void = {}
         var items: @MainActor () -> [ModeSwitchMenuItem] = { [] }
+        /// Shows the menu at `point` in the view (tests record it rather than run the menu's modal loop).
+        var presentMenu: @MainActor (NSMenu, NSView, NSPoint) -> Void = { menu, view, point in
+            menu.popUp(positioning: nil, at: point, in: view)
+        }
 
         override var mouseDownCanMoveWindow: Bool { false }
         override func isAccessibilityElement() -> Bool { false }
@@ -377,12 +370,10 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
                 switch next.type {
                 case .periodic:
                     NSEvent.stopPeriodicEvents()
-                    showMenu()
+                    if enabled { showMenu() }
                     return
                 case .leftMouseUp:
-                    if enabled, bounds.contains(convert(next.locationInWindow, from: nil)) {
-                        if opensMenu { showMenu() } else { click() }
-                    }
+                    if enabled, bounds.contains(convert(next.locationInWindow, from: nil)) { showMenu() }
                     return
                 default:
                     continue
@@ -391,7 +382,7 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
         }
 
         private func showMenu() {
-            modesMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : bounds.minY - 4), in: self)
+            presentMenu(modesMenu(), self, NSPoint(x: 0, y: isFlipped ? bounds.maxY + 4 : bounds.minY - 4))
         }
 
         /// The menu a hold opens, as it stands now.

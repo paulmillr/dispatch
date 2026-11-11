@@ -16,7 +16,7 @@ struct AttentionBanner: View {
                     // On glass a floating capsule inset under the strip; otherwise a full-width sidebar-colored bar.
                     .liquidGlass(in: Capsule(), interactive: true)
                     .background(LiquidGlassStore.shared.active ? Color.clear : Chrome.sidebar).contentShape(Rectangle())
-            }.buttonStyle(.plain).help(entry.path)
+            }.buttonStyle(.plain).help(entry.place)
                 .padding(.horizontal, LiquidGlassStore.shared.active ? 8 : 0).padding(.top, LiquidGlassStore.shared.active ? 4 : 0)
                 .accessibilityIdentifier("attention-banner")
         }

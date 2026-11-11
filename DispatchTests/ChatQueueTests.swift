@@ -331,7 +331,67 @@ final class ChatQueueTests: XCTestCase {
         XCTAssertEqual(session.draft, "/btw ")
         XCTAssertEqual(sends, 0)
         XCTAssertTrue(session.matchingCommands.isEmpty)
+        // Return accepts the highlighted command as Tab does; once the draft is that command, Return sends it.
+        session.draft = "/comp"; editor.string = "/comp"
+        editor.keyDown(with: TerminalTestSupport.keyEvent(36, "\r", in: window))
+        XCTAssertEqual(session.draft, "/compact ")
+        XCTAssertEqual(sends, 0)
+        session.draft = "/compact"; editor.string = "/compact"
+        editor.keyDown(with: TerminalTestSupport.keyEvent(36, "\r", in: window))
+        XCTAssertEqual(sends, 1)
     }
+    /// A send Chat refuses says why and keeps the draft; the permission card's keys answer the newest request.
+    func testRefusedSendsSayWhyAndPermissionKeysAnswerTheNewestRequest() throws {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: System.uuid())
+        session.active = true; session.busy = true; session.showChat = true
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
+        session.helper = HelperChat(terminal: 0)
+        var decisions: [String: PendingApproval.Decision] = [:]
+        session.approvals = ["older", "newer"].map { key in
+            PendingApproval(key: key, operation: "Bash\nls fixtures") { decisions[$0.key] = $0.decision }
+        }
+        session.draft = "Steer this in"
+        chat.sendNow(session)
+        XCTAssertEqual(session.submissionFailure, "Not sent: Answer the permission request first. Your draft is preserved.")
+        XCTAssertEqual(session.draft, "Steer this in")
+        XCTAssertFalse(session.statusOffersTerminal, "A pending request is answered here, not in the terminal")
+        XCTAssertNotNil(chat.interruptBlockReason(session))
+
+        XCTAssertTrue(chat.canAnswerPermission(session))
+        XCTAssertEqual(chat.keyedApproval(session)?.key, "newer")
+        XCTAssertTrue(chat.answerPermission(session, allow: false))
+        XCTAssertEqual(decisions, ["newer": .deny])
+        XCTAssertTrue(chat.answerPermission(session, allow: true))
+        XCTAssertEqual(decisions, ["newer": .deny, "older": .allow])
+        XCTAssertFalse(chat.answerPermission(session, allow: true))
+
+        session.submissionFailure = nil
+        session.draft = "colored \u{1b}[31moutput"
+        chat.queue(session)
+        XCTAssertEqual(session.submissionFailure?.hasPrefix("The draft contains control characters"), true)
+        session.draft = "fifty-first"
+        session.queuedMessages = (0..<50).map { ChatQueuedMessage(text: "queued \($0)", process: session.process) }
+        chat.queue(session)
+        XCTAssertEqual(session.submissionFailure?.hasPrefix("The queue holds at most 50 messages"), true)
+        XCTAssertEqual(session.draft, "fifty-first")
+    }
+
+    /// After the agent exits, its queue says nothing in it was sent; Discard All clears it.
+    func testAnExitedAgentsQueueCanBeDiscarded() throws {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: System.uuid())
+        session.active = true; session.busy = true
+        session.helper = HelperChat(terminal: 0)
+        session.queuedMessages = [ChatQueuedMessage(text: "first", process: nil), ChatQueuedMessage(text: "second", process: nil)]
+        chat.discardQueue(session)
+        XCTAssertEqual(session.queuedMessages.count, 2, "A live agent's queue is not discarded")
+        session.active = false; session.agentExited = true
+        XCTAssertEqual(chat.placeholder(session), "Read-only · Open in Terminal to start \(chat.agents) again")
+        chat.discardQueue(session)
+        XCTAssertTrue(session.queuedMessages.isEmpty)
+    }
+
     func testMultilineControlReturnUsesSubmissionRoutingThroughAppKit() async throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         let session = chat.session(for: System.uuid())
@@ -899,6 +959,7 @@ extension ChatQueueTests {
         let (chat, session) = try attachmentSession()
         session.busy = false
         session.sessionID = "conversation"
+        session.helperCommands = ["/btw", "/side"]
         session.draft = "/btw what does this chart show?"
         session.drafts.attach([attachment("chart.png")])
         chat.sendFromComposer(session)

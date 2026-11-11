@@ -1,8 +1,8 @@
 import Foundation
 
 /// A Markdown file as Files' rendered preview reads it (`FileMarkdownView`): chat's blocks (`ChatMarkdownBlock`), set
-/// as a document rather than a message. A message keeps its line breaks, which an agent means; a file is wrapped by
-/// its editor (this repository's docs at 120 columns), so here:
+/// as a document rather than a message. A message keeps its line breaks, which an agent means; a file is
+/// hard-wrapped by whoever wrote it (this repository's docs at 120 columns), so here:
 ///
 /// - a paragraph's lines flow into one (two spaces or a backslash at a line's end still break it);
 /// - an indented line after a list item continues the item;
@@ -231,6 +231,36 @@ struct FileMarkdownDocument: Equatable {
     static func title(_ text: String) -> String {
         let value = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
         return value.map { String($0.characters) } ?? text
+    }
+}
+
+/// How a rendered Markdown file is set on the Mac (`FileMarkdownStyle`) and the phone (`FileMarkdownReader`) alike: the
+/// column's measure, the six heading sizes and the space between blocks, all in shares of the prose's size.
+enum FileMarkdownLayout {
+    /// The column's widest, in ems of the prose: about 80 characters a line.
+    static let ems: CGFloat = 36
+    /// Each level's size as a share of the prose's: six sizes, the sixth also muted.
+    static let headingScale: [CGFloat] = [1.75, 1.45, 1.22, 1.1, 1, 0.92]
+
+    /// A heading's share of the prose's size, for `level` (clamped to the six).
+    static func headingShare(_ level: Int) -> CGFloat { headingScale[min(max(level, 1), headingScale.count) - 1] }
+
+    /// The space above a block, after the one shown before it: most above a heading, less under it than above it, a
+    /// list's items close together. A heading right under another is its subtitle and sits close; under a folded one
+    /// (`afterFolded`) it is the next section, a line away.
+    static func gap(before kind: ChatMarkdownBlock.Kind, after previous: ChatMarkdownBlock.Kind?, afterFolded: Bool = false,
+                    size: CGFloat) -> CGFloat {
+        guard let previous else { return 0 }
+        let ems: CGFloat
+        switch (previous, kind) {
+        case _ where afterFolded: ems = 1.1
+        case (.heading, .heading): ems = 0.7
+        case (_, .heading(let level)): ems = level == 1 ? 2 : level == 2 ? 1.8 : level == 3 ? 1.5 : 1.3
+        case (.heading(let level), _): ems = level <= 2 ? 0.65 : 0.5
+        case (.list, .list): ems = 0.3
+        default: ems = 0.8
+        }
+        return (size * ems).rounded()
     }
 }
 

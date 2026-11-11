@@ -313,7 +313,6 @@ extension SettingsTests {
         }
         let choices: [String: Choice] = [
             MobileSettings.appearanceKey: choice(fresh.appearance, \.title),
-            MobileSettings.themeKey: choice(fresh.theme, \.title),
             MobileSettings.lineSpacingKey: choice(fresh.lineSpacing, \.title),
             MobileSettings.textContrastKey: choice(fresh.textContrast, \.title),
             MobileSettings.cursorKey: choice(fresh.cursor, \.title),
@@ -330,7 +329,6 @@ extension SettingsTests {
             MobileSettings.notifyFinishedKey: fresh.notifyFinished,
             MobileSettings.notifyFailedKey: fresh.notifyFailed,
             MobileSettings.notificationTextKey: fresh.notificationText,
-            MobileSettings.notificationBadgeKey: fresh.notificationBadge,
             MobileSettings.autoApproveUnsafePastesKey: fresh.autoApproveUnsafePastes,
             MobileSettings.hostColorsKey: fresh.showHostColors,
         ]
@@ -365,10 +363,10 @@ extension SettingsTests {
         defer { NotificationCenter.default.removeObserver(observer) }
 
         store.set("bar", forKey: MobileSettings.cursorKey)
-        store.set(false, forKey: MobileSettings.notificationBadgeKey)
-        try await TestSupport.eventually { settings.cursor == .bar && !settings.notificationBadge }
+        store.set(false, forKey: MobileSettings.notificationTextKey)
+        try await TestSupport.eventually { settings.cursor == .bar && !settings.notificationText }
         XCTAssertGreaterThan(restyles.value, 0, "the open terminals take the cursor")
-        XCTAssertGreaterThan(changes.value, 0, "the badge follows")
+        XCTAssertGreaterThan(changes.value, 0, "the notifications follow")
 
         // The model's own write is nothing new: only the outside one after it counts.
         let settled = changes.value

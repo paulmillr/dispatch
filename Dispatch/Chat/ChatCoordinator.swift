@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -34,14 +35,18 @@ final class ChatCoordinator {
         set { disabledInMemory = Array(newValue); defaults?.set(Array(newValue).sorted(), forKey: "disabledIntegrations") }
     }
     private var disabledInMemory: [String] = []
-    /// This Mac's agent hooks choices (Hosts settings), by launch key. Unset is allowed, as for an SSH host
-    /// that granted hooks; an agent turned off in `disabledIntegrations` stays off whatever this says.
+    /// This Mac's agent hooks choices (Hosts settings), by launch key. Only a yes allows them: unset is no, so nothing
+    /// edits an agent's config here until the setup sheet's Yes, Install in Hosts › This Mac or Restore All Defaults
+    /// (each names the files), or hooks a launch finds already installed (`loadLaunches`). An agent turned off in
+    /// `disabledIntegrations` stays off whatever this says.
     var localHooks: [String: Bool] {
         get { let memory = localHooksInMemory; return defaults?.dictionary(forKey: "localAgentHooks") as? [String: Bool] ?? memory }
         set { localHooksInMemory = newValue; defaults?.set(newValue, forKey: "localAgentHooks") }
     }
     private var localHooksInMemory: [String: Bool] = [:]
-    func localHooksAllowed(_ key: String) -> Bool { localHooks[key] != false }
+    /// Allowed only by a yes: this agent's (This Mac's Install, Restore All Defaults), else the first launch's Yes;
+    /// unanswered is no.
+    func localHooksAllowed(_ key: String) -> Bool { localHooks[key] ?? (localAgentsAnswer == "yes") }
     /// The first launch's answer to whether agents run on this Mac (`LocalAgentsConsent.key`); nil unanswered.
     var localAgentsAnswer: String? { defaults?.string(forKey: LocalAgentsConsent.key) }
     /// Integration changes run one after another, so rapid toggles end in the last choice everywhere.
@@ -187,8 +192,24 @@ final class ChatCoordinator {
     /// Whether the mode switch's click opens chat: once the agent exits the tab is a terminal again, and its retained
     /// transcript stays in the switch's menu and ⇧⌘C.
     func chatLeads(_ session: ChatSession) -> Bool { canEnterChat(session) && !session.agentExited }
+    /// What a Chat view without a conversation says: Chat mode is off, this Mac's hooks for an agent need setting up
+    /// or a restart, or the agent has yet to start (or finish its startup menus) in the tab's terminal.
+    func emptyChatHint(local: Bool) -> String {
+        if !enabled { return "Turn on Chat mode in Settings › Features, then start \(agents) in this tab's terminal." }
+        if local {
+            let launches = helperLaunches ?? []
+            if let launch = launches.first(where: { hookStatus($0.key) == .restart && localHooksAllowed($0.key) }) {
+                return "Restart \(launch.label) to load Dispatch's hooks (Settings › Hosts › This Mac), then start it in this tab's terminal."
+            }
+            if let launch = launches.first(where: { hookStatus($0.key) == .off && localHooksAllowed($0.key)
+                && !disabledIntegrations.contains($0.key) && localCLIs?.contains($0.key) == true }) {
+                return "Set up \(launch.label)'s hooks in Settings › Hosts › This Mac, then start it in this tab's terminal."
+            }
+        }
+        return "Start \(agents) in this tab's terminal and finish any startup menus. The chat shows here once the agent is found."
+    }
     func chatAvailabilityHint(_ session: ChatSession) -> String {
-        if !enabled { return "Enable Agent chat in Settings, then start \(agents) in this terminal." }
+        if !enabled { return "Turn on Chat mode in Settings › Features, then start \(agents) in this terminal." }
         if session.agentExited { return "Start \(agents) in this terminal. Its last conversation is in this button's menu." }
         if (!session.active || session.inputBlocked), session.hasOpenedChat || session.sessionID != nil || !session.draft.isEmpty { return "View the retained conversation and edit drafts · sending paused" }
         if session.discoveryBlocked { return session.status ?? "Cannot safely identify this agent session. Continue in terminal." }
@@ -464,8 +485,14 @@ final class ChatCoordinator {
     }
 
     func sendFromComposer(_ session: ChatSession) {
-        if session.draftIsCommand, session.helper != nil, let side = ChatSideMode.parse(session.draft), session.editingQueuedID == nil {
-            openSideConversation(side.mode, question: side.question, session: session); return
+        // `/btw` and `/side` are Dispatch's only where the helper lists them; elsewhere they go to the agent as typed.
+        if session.draftIsCommand, session.helper != nil, let side = ChatSideMode.parse(session.draft), session.editingQueuedID == nil,
+           session.helperCommands.contains("/" + side.mode.rawValue) {
+            if !openSideConversation(side.mode, question: side.question, session: session), session.submissionFailure == nil {
+                let reason = inputBlockReason(session, immediately: true) ?? "\(session.agentTitle) cannot open one right now."
+                session.submissionFailure = "Side conversation not opened: \(reason) Your draft is preserved."
+            }
+            return
         }
         if session.editingQueuedID != nil { queue(session) }
         else if !session.draftIsCommand && session.queuedMessages.isEmpty && directSubmissionReady(session) { submit(session) }
@@ -553,11 +580,18 @@ final class ChatCoordinator {
             session.submissionFailure = "Return to the queued message's draft or cancel its edit before sending."; return
         }
         if session.draftIsCommand, text.trimmingCharacters(in: .whitespaces).hasPrefix("!") {
-            session.status = "Shell commands cannot be queued. Send them when the agent is idle."; return
+            session.submissionFailure = "Shell commands cannot be queued. Send them when the agent is idle."; return
         }
-        guard !text.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" }),
-              session.queuedMessages.count < 50 || session.editingQueuedID != nil, text.utf8.count <= 1_048_576 else {
-            session.status = "Cannot queue this message; your draft is preserved."; return
+        // Each limit says what to change; the draft stays either way.
+        if text.unicodeScalars.contains(where: { $0.value < 32 && $0 != "\n" && $0 != "\t" }) {
+            session.submissionFailure = "The draft contains control characters (a pasted carriage return or escape). Remove them to queue it; your draft is preserved."
+            return
+        }
+        if session.queuedMessages.count >= 50, session.editingQueuedID == nil {
+            session.submissionFailure = "The queue holds at most 50 messages. Send or delete one first; your draft is preserved."; return
+        }
+        if text.utf8.count > 1_048_576 {
+            session.submissionFailure = "The draft is larger than 1 MB. Shorten it or attach it as a file; your draft is preserved."; return
         }
         if let id = session.editingQueuedID,
            let message = session.queuedMessages.first(where: { $0.id == id }), !message.held {
@@ -602,6 +636,24 @@ final class ChatCoordinator {
         if session.selectedQueuedID == id { session.selectedQueuedID = nil }
         session.queueWaiting = nil; session.queueRetryAfter = nil
         drainQueue(session)
+    }
+
+    /// Every queued message's text, one after another, on the clipboard: what an exited agent never got.
+    func copyQueue(_ session: ChatSession) {
+        let text = session.queuedMessages.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// After the agent exited: the queue here is cleared; nothing in it can be sent any more.
+    func discardQueue(_ session: ChatSession) {
+        guard session.agentExited, !session.active else { return }
+        if session.editingQueuedID != nil { cancelQueuedEdit(session) }
+        for message in session.queuedMessages { if let delivery = message.delivery { session.drafts.forgetDelivery(delivery) } }
+        session.queuedMessages = []
+        session.selectedQueuedID = nil; session.queuedSubmissionID = nil
+        session.queueWaiting = nil; session.queueRetryAfter = nil
     }
 
     func editQueued(_ id: UUID, in session: ChatSession) {
@@ -783,5 +835,99 @@ final class ChatCoordinator {
         let cache = ChatModelChoicesCache()
         sharedModelChoices[key] = cache
         return cache
+    }
+}
+
+/// Why an action the composer offers cannot run now, in words the composer shows (a refused send's failure line, a
+/// disabled control's help); nil when it can.
+extension ChatCoordinator {
+    /// Why `inputReady` refuses input: checked in the order a user can act on (what they must answer or close first).
+    func inputBlockReason(_ session: ChatSession, immediately: Bool = false) -> String? {
+        guard !inputReady(session, immediately: immediately) else { return nil }
+        let agent = session.agentTitle
+        if !enabled { return "Chat mode is off in Settings › Features." }
+        if helperInstalls[session.agentID]?.optional == true && disabledIntegrations.contains(session.agentID) {
+            return "\(agent) integration is disabled."
+        }
+        if !session.active || session.helper == nil { return "\(agent) is not running in this tab." }
+        if session.approvals.contains(where: { $0.pending && $0.questions == nil }) { return "Answer the permission request first." }
+        if session.waitingForAnswer { return "Answer \(agent)'s question first." }
+        if session.modelPicker != nil { return "Close the model picker first." }
+        if session.sideConversation != nil { return "Close the side conversation first." }
+        if session.loadingHistory { return "The conversation is still loading." }
+        if session.command != nil || session.commandEditor != nil || session.nativePrompt != nil {
+            return "Finish the running command first."
+        }
+        if session.awaitingPromptAck || session.submissionID != nil || session.nativeInputInFlight {
+            return "\(agent) has not taken the last message yet."
+        }
+        if session.activityCheck != nil { return "Checking \(agent) activity." }
+        if session.inputBlocked { return "Sending is paused for this chat." }
+        if !immediately && (session.busy || session.starting) { return "\(agent) is working." }
+        return "\(agent) cannot safely take input right now."
+    }
+
+    /// Why Stop (and Esc twice) cannot stop the agent while it works; nil when it can or nothing works.
+    func interruptBlockReason(_ session: ChatSession) -> String? {
+        guard session.busy, !canInterrupt(session) else { return nil }
+        if session.interruptionID != nil { return "Stopping…" }
+        if session.approvals.contains(where: \.pending) { return "Answer or deny the request first: Stop waits for it" }
+        if session.modelPicker != nil { return "Close the model picker to stop" }
+        if session.loadingHistory { return "Stop is available once the conversation loads" }
+        if session.awaitingPromptAck || session.submissionID != nil || session.nativeInputInFlight {
+            return "Stop is available once \(session.agentTitle) takes the message"
+        }
+        if session.command != nil || session.nativePrompt != nil { return "Finish the running command to stop" }
+        return "Stop is unavailable right now"
+    }
+
+    /// Why the model and effort cannot be chosen now; nil when they can.
+    func modelPickBlockReason(_ session: ChatSession) -> String? {
+        guard !canPickModel(session) else { return nil }
+        if session.busy { return "Change the model when \(session.agentTitle) is idle" }
+        if session.approvals.contains(where: \.pending) { return "Answer the request first, then change the model" }
+        if session.loadingHistory { return "Change the model once the conversation loads" }
+        if !session.active || session.helper == nil { return "\(session.agentTitle) is not running in this tab" }
+        return "The model cannot be changed right now"
+    }
+
+    /// The permission request ⇧⌘⏎ (Allow Once) and ⇧⌘⌫ (Deny) answer: an open side conversation's, else the newest
+    /// pending card's in the transcript. Questions are answered in their form.
+    func keyedApproval(_ session: ChatSession) -> PendingApproval? {
+        guard session.sideConversation?.permission == nil else { return nil }
+        return session.approvals.last { $0.pending && $0.questions == nil }
+    }
+
+    func canAnswerPermission(_ session: ChatSession) -> Bool {
+        session.showChat && (session.sideConversation?.permission != nil || keyedApproval(session) != nil)
+    }
+
+    /// Allow once or deny the request `keyedApproval` names (or the side sheet's); false when there is none.
+    @discardableResult
+    func answerPermission(_ session: ChatSession, allow: Bool) -> Bool {
+        guard session.showChat else { return false }
+        if let side = session.sideConversation, side.permission != nil {
+            side.resolvePermission(allow); return true
+        }
+        guard let approval = keyedApproval(session) else { return false }
+        approval.resolve(allow ? .allow : .deny)
+        return true
+    }
+}
+
+/// What VoiceOver says when a chat changes without the user's focus moving there: a reply finished, a permission
+/// request or a question arrived. Only for a chat on screen; the composer keeps its focus.
+@MainActor
+enum ChatAnnouncement {
+    /// Tests read what would be said, VoiceOver or not.
+    static var observer: ((String) -> Void)?
+
+    static func post(_ text: String, for session: ChatSession) {
+        guard session.showChat, TerminalRuntime.shared.workspace?.isSurfacePresented(session.id) != false else { return }
+        observer?(text)
+        guard NSWorkspace.shared.isVoiceOverEnabled, let window = NSApp.mainWindow ?? NSApp.keyWindow else { return }
+        NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
+            .announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
     }
 }

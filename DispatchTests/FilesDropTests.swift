@@ -352,7 +352,11 @@ final class FilesDropTests: XCTestCase {
         let item = NSPasteboardItem()
         item.setPropertyList(payload.propertyList, forType: .filesPaths)
         pasteboard.writeObjects([item])
-        XCTAssertEqual(controller.validate(pasteboard, onto: "/home/ivan/nightly/target", in: session), .copy)
+        XCTAssertEqual(controller.validate(pasteboard, onto: "/home/ivan/nightly/target", in: session), [],
+                       "Within its own list a plain drag would move, as in Finder: refused")
+        XCTAssertTrue(session.moveRefused, "and the list says ⌥ copies")
+        controller.optionHeld = { true }
+        XCTAssertEqual(controller.validate(pasteboard, onto: "/home/ivan/nightly/target", in: session), .copy, "⌥ copies")
         XCTAssertEqual(controller.validate(pasteboard, onto: "/home/ivan/nightly", in: session), [], "Where it already is")
         XCTAssertEqual(controller.validate(pasteboard, onto: "/home/ivan/nightly/fixtures/golden", in: session), [],
                        "A folder never goes inside itself")

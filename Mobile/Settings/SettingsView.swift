@@ -1,10 +1,9 @@
 import Dictation
 import SwiftUI
 
-/// Settings (G1): appearance, the theme (G4) and the colour scheme, the terminal's font (G2), size, line spacing and
-/// contrast, chat's font (G3) and dictation, notifications (G5) and background refresh, Hosts (whether Spaces shows the
-/// offline hosts, host colours, unsafe pastes; a host's own choices are in Edit host), the Apple Watch, and last Remove
-/// all data. Opened from the end of
+/// Settings (G1): appearance and the colour scheme, the terminal's font (G2), size, line spacing and contrast, chat's
+/// font (G3) and dictation, notifications (G5) and background refresh, Hosts (host colours, unsafe pastes; a host's own
+/// choices are in Edit host), the Apple Watch, and last Remove all data. Opened from the end of
 /// Spaces' edit mode, beside Add host, where hosts are managed: the headers of M2a and M3a stay as the mockup draws them.
 struct SettingsView: View {
     let composition: MobileComposition
@@ -20,7 +19,7 @@ struct SettingsView: View {
 
     /// Settings' pushed screens.
     enum Route: Hashable {
-        case theme, terminalFont, terminalScheme, chatFont, notifications
+        case terminalFont, terminalScheme, chatFont, notifications
     }
 
     init(composition: MobileComposition) {
@@ -29,13 +28,12 @@ struct SettingsView: View {
         _path = State(initialValue: Self.initialPath)
     }
 
-    /// Screenshot launches (Debug): `-DispatchSettingsShow G2|G3|G4|G5|scheme` opens that screen (G1: Settings itself).
+    /// Screenshot launches (Debug): `-DispatchSettingsShow G2|G3|G5|scheme` opens that screen (G1: Settings itself).
     private static var initialPath: [Route] {
         #if DEBUG
         switch UserDefaults.standard.string(forKey: "DispatchSettingsShow") {
         case "G2": return [.terminalFont]
         case "G3": return [.chatFont]
-        case "G4": return [.theme]
         case "G5": return [.notifications]
         case "scheme": return [.terminalScheme]
         default: return []
@@ -55,11 +53,6 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        // A Mac theme brings its own scheme: Appearance applies to Automatic.
-                        .disabled(settings.theme.colorScheme != nil)
-                        NavigationLink(value: Route.theme) {
-                            LabeledContent("Theme") { Text(settings.theme.title) }
-                        }
                         NavigationLink(value: Route.terminalScheme) {
                             LabeledContent("Color scheme") { Text(TerminalSchemes.title(settings.terminalScheme)) }
                         }
@@ -75,9 +68,6 @@ struct SettingsView: View {
                         Text("Appearance")
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
-                            if let scheme = settings.theme.colorScheme {
-                                Text("\(settings.theme.title) is \(scheme == .dark ? "dark" : "light"). Appearance applies to the Automatic theme.")
-                            }
                             if settings.colorVision != .typical {
                                 Text("Host colors, changes and Color scheme's list are made for \(settings.colorVision.title.lowercased()) color blindness (\(settings.colorVision.detail)).")
                             }
@@ -120,8 +110,6 @@ struct SettingsView: View {
                             ForEach(ChatSendWhileWorking.allCases) { Text($0.title).tag($0) }
                         }
                         .accessibilityIdentifier("settings-chat-send-while-working")
-                        Toggle("Editor mode by default", isOn: $settings.chatEditorByDefault)
-                            .accessibilityIdentifier("settings-chat-editor-by-default")
                         Picker("Open agents in", selection: $settings.chatAgentStart) {
                             ForEach(ChatAgentStart.allCases) { Text($0.title).tag($0) }
                         }
@@ -133,14 +121,21 @@ struct SettingsView: View {
                                 Text(settings.dictationEngine.label(whisper: settings.whisperModel))
                             }
                         }
+                        NavigationLink {
+                            SpeechVoiceSettingsView(settings: settings)
+                        } label: {
+                            LabeledContent("Voice") { Text(SpeechVoice.label(settings.speechVoice)) }
+                        }
+                        .accessibilityIdentifier("settings-chat-voice")
                     } header: {
                         Text("Chat")
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("While the agent works, send queues a message for after the turn, or steers it into the turn; its long press offers the other.")
-                            Text("With a hardware keyboard, editor mode's Return adds a line and ⌘Return sends. New drafts start in it with Editor mode by default; a multi-line paste turns it on, ⌘E switches it.")
+                            Text("With a hardware keyboard, editor mode's Return adds a line and ⌘Return sends; a multi-line paste turns it on, ⌘E switches it.")
                             Text("Open agents in picks what an agent tab shows first; the tab's switch shows the other. Esc twice keeps a stray Esc from a hardware keyboard from stopping the agent.")
                             Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
+                            Text("Voice is what conversation mode and Read Aloud speak in.")
                         }
                     }
 
@@ -166,8 +161,6 @@ struct SettingsView: View {
 
                     Section {
                         if !sessions.ordered.isEmpty {
-                            Toggle("Show offline hosts", isOn: Binding(get: { composition.tabs.showOffline },
-                                                                       set: { composition.tabs.showOffline = $0 }))
                             Toggle("Color-code hosts", isOn: $settings.showHostColors)
                         }
                         Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
@@ -177,7 +170,7 @@ struct SettingsView: View {
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
                             if !sessions.ordered.isEmpty {
-                                Text("Spaces lists the hosts it cannot reach under Offline, at the end. With Color-code hosts off, every host is gray.")
+                                Text("With Color-code hosts off, every host is gray.")
                             }
                             Text("Turn off unsafe pastes to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                         }
@@ -209,16 +202,15 @@ struct SettingsView: View {
                         Text(removal.message)
                     }
                 }
-                // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
+                // The cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
                 .listRowBackground(Color.groupedRow)
             }
-            // The canvas, as Spaces': black in dark (the mockup's G1), and the theme's.
+            // The canvas, as Spaces': black in dark (the mockup's G1).
             .scrollContentBackground(.hidden)
             .background(Color.canvas)
             .navigationTitle("Settings")
             .navigationDestination(for: Route.self) { route in
                 switch route {
-                case .theme: ThemeSettingsView(settings: settings)
                 case .terminalFont: TerminalFontSettingsView(settings: settings)
                 case .terminalScheme: TerminalSchemeSettingsView(settings: settings)
                 case .chatFont: ChatFontSettingsView(settings: settings)

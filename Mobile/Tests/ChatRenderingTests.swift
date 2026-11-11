@@ -119,6 +119,16 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(ChatStep(rg, directory: nil).kind.label, "Search")
     }
 
+    /// Every kind badge is as wide as the widest word, at any text size: what each step acted on starts at one place.
+    func testStepBadgesShareOneWidth() {
+        for size in [DynamicTypeSize.large, .accessibility2] {
+            let widths = Set([ChatStep.Kind.read, .patch, .run, .search, .think, .web, .tool].map { kind in
+                self.size(ChatStepBadge(kind: kind).environment(\.dynamicTypeSize, size).fixedSize(), width: 402).width
+            })
+            XCTAssertEqual(widths.count, 1, "\(size): \(widths)")
+        }
+    }
+
     func testTheWorkingRowFoldsToOneLine() async throws {
         let helper = ScriptedHelper()
         helper.script { $0.method == "chat.open" ? .open : .result([Any]()) }

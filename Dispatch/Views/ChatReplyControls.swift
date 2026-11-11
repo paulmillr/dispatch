@@ -13,11 +13,15 @@ struct ChatReplyButton: View {
     var identifier = "chat-send"
     /// Without it, a tight footer drops the keycap (the help keeps it).
     var showsKey = true
+    /// Why the action would be refused now: the button is disabled and its help says why.
+    var blocked: String? = nil
     let action: () -> Void
+    private var enabled: Bool { canSubmit && blocked == nil }
 
     private var title: String {
+        // ⌥⌘ while the agent is idle sends an ordinary prompt: nothing to steer, so it reads Send.
         steers ? (alternateSendHeld ? "Queue" : "Steer")
-            : alternateSendHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send"
+            : alternateSendHeld ? (busy ? "Steer" : "Send") : editingQueued ? "Requeue" : busy ? "Queue" : "Send"
     }
     private var label: String {
         switch title {
@@ -38,7 +42,7 @@ struct ChatReplyButton: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "mic").font(.system(size: theme.typography.detailSize, weight: .medium))
-                    .foregroundStyle(canSubmit ? theme.accent : theme.muted)
+                    .foregroundStyle(enabled ? theme.accent : theme.muted)
                 ZStack {
                     Text("TRANSMIT").hidden().accessibilityHidden(true)
                     Text(title == "Send" ? "TRANSMIT" : title.uppercased())
@@ -49,11 +53,11 @@ struct ChatReplyButton: View {
                 }
             }.padding(.horizontal, 10)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
-                .foregroundStyle(canSubmit ? theme.ink : theme.muted)
+                .foregroundStyle(enabled ? theme.ink : theme.muted)
                 .background(Chrome.palette.control, in: RoundedRectangle(cornerRadius: 6))
-                .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(canSubmit ? theme.accent.opacity(0.5) : Chrome.palette.controlBorder) }
+                .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(enabled ? theme.accent.opacity(0.5) : Chrome.palette.controlBorder) }
                 .contentShape(RoundedRectangle(cornerRadius: 6))
-        }.buttonStyle(.plain).disabled(!canSubmit).fixedSize()
+        }.buttonStyle(.plain).disabled(!enabled).fixedSize()
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(label)
     }
@@ -74,10 +78,10 @@ struct ChatReplyButton: View {
                 }
             }.padding(.horizontal, 9)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
-                .foregroundStyle(canSubmit ? theme.terminal : theme.muted)
-                .modifier(ReplyButtonSurface(enabled: canSubmit))
-        }.font(theme.typography.detail).buttonStyle(.plain).disabled(!canSubmit).fixedSize()
-            .help("\(title) · \(key)")
+                .foregroundStyle(enabled ? theme.terminal : theme.muted)
+                .modifier(ReplyButtonSurface(enabled: enabled))
+        }.font(theme.typography.detail).buttonStyle(.plain).disabled(!enabled).fixedSize()
+            .help(blocked.map { "\(title): \($0)" } ?? "\(title) · \(key)")
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(label)
     }

@@ -41,7 +41,6 @@ enum Screens {
         case "S3-offline": FilesUnavailableScreen(reason: .offline)
         case "S4-review-sent": ReviewSentScreen()
         case "S5-diff-fold-outdated": DiffFoldOutdatedScreen()
-        case "S6d-chat-corner-time": ChatCornerTimeScreen()
         // Spaces reworked.
         case "P1-spaces": SpacesTabBar { SpacesRootScreen() }
         case "P1b-spaces-needs-you": SpacesTabBar { SpacesRootScreen(filter: 1) }
@@ -55,7 +54,6 @@ enum Screens {
         case "G1-settings": SettingsScreen()
         case "G2-terminal-font": SettingsPush(title: "Terminal font") { TerminalFontScreen() }
         case "G3-chat-font": SettingsPush(title: "Chat font") { ChatFontScreen() }
-        case "G4-theme": SettingsPush(title: "Theme") { AppThemeScreen() }
         case "G5-notifications": SettingsPush(title: "Notifications") { NotificationsScreen() }
         // Terminal.
         case "T1-terminal-search": TerminalSearchScreen()
@@ -78,31 +76,9 @@ enum Screens {
         case "M1b-message-info-unfolded": MessageInfoScreen(variant: .unfolded)
         case "M1c-message-info-short": MessageInfoScreen(variant: .short)
         case "M1d-message-info-stopped": MessageInfoScreen(variant: .interrupted)
-        // The mode button, as the Mac strip's: Back and the host on the left, the toggle on the right.
-        case "B7-host-leading-chat": ModeChatScreen()
-        case "B7b-host-leading-terminal": ModeAgentTerminalScreen()
-        case "B7c-host-leading-states": ModeStatesScreen()
-        // The mode button's lit glyph.
-        case "Z0-mode-glyph-compare": ModeGlyphCompareScreen()
-        case "Z1-mode-glyph-soft-fill": ModeGlyphChatScreen(idea: .softFill)
-        case "Z2-mode-glyph-platter": ModeGlyphChatScreen(idea: .platter)
-        case "Z3-mode-glyph-plain-bubble": ModeGlyphChatScreen(idea: .plainBubble)
-        case "Z4-mode-glyph-dot": ModeGlyphChatScreen(idea: .dot)
-        // New glyphs for the mode button's Chat.
-        case "N0-new-glyph-compare": NewModeGlyphCompareScreen()
-        case "N1-new-glyph-pill": NewModeGlyphChatScreen(glyph: .pill)
-        case "N2-new-glyph-thread": NewModeGlyphChatScreen(glyph: .thread)
-        case "N3-new-glyph-typing": NewModeGlyphChatScreen(glyph: .typing)
-        case "N4-new-glyph-spark": NewModeGlyphChatScreen(glyph: .spark)
-        case "N5-new-glyph-quote": NewModeGlyphChatScreen(glyph: .quote)
-        case "N6-tab-list-today": AgentIconsSpaceScreen(style: .chatTextBubble, menu: false)
-        case "N6b-tab-list-pill": AgentIconsSpaceScreen(style: .chatPill, menu: false)
-        case "N6c-tab-list-pill-menu": AgentIconsSpaceScreen(style: .chatPill)
-        case "N7-chat-symbol-check": ChatSymbolCheckScreen()
-        // Tab header options.
-        case "X9b-header-disc-ellipsis": HeaderOptionScreen()
-        // Agent icons.
-        case "Y5-chat-text-bubble": AgentIconsSpaceScreen(style: .chatTextBubble)
+        // The title capsule, as the app ships it: Back alone, the host, title and folder in one capsule that opens the menu.
+        case "B8c-title-capsule-menu": CapsuleMenuScreen()
+        case "B8d-title-capsule-long": CapsuleLongTitleScreen()
         // Host stats widget.
         case "W0-spaces-tree": SpacesTabBar { SpacesTreeMock() }
         case "W0b-offline-collapsed": SpacesTabBar { SpacesTreeMock(offlineCollapsed: true) }
@@ -126,6 +102,15 @@ enum Screens {
         case "I5-host-popover": PadStripScreen(detail: .files, popover: true)
         case "I7-full-width-terminal": PadStripScreen(detail: .terminal)
         case "I8-sidebar-hidden": PadStripScreen(detail: .chat, sidebarHidden: true)
+        // The iPhone Duo: unfolded (the inner screen, the split) and folded (the cover screen, the phone's stack).
+        case "V1-duo-chat": DuoSplitScreen(detail: .chat)
+        case "V2-duo-files": DuoSplitScreen(detail: .files)
+        case "V3-duo-terminal": DuoSplitScreen(detail: .terminal)
+        case "V7-duo-space": DuoSplitScreen(detail: .chat, inSpace: true)
+        case "V8-duo-empty": DuoSplitScreen(detail: nil)
+        case "V4-duo-cover-chat": CapsuleChatScreen()
+        case "V5-duo-cover-files": HybridFilesScreen()
+        case "V6-duo-cover-terminal": HybridTerminalScreen()
         // iPhone on its side (shoot.py rotate landscape first).
         // On its side with the full height: the chrome in rails beside the content.
         // One rail: the mode's action at the leading rail's foot, nothing on the trailing side.

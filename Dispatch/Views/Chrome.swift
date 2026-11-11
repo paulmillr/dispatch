@@ -43,6 +43,8 @@ enum SidebarTheme: String, Codable, CaseIterable, Sendable {
 
 struct SidebarPalette: Sendable {
     let theme: SidebarTheme
+    /// The system's Increase Contrast (Accessibility › Display): the secondary inks get stronger.
+    var increasedContrast = false
     var isDark: Bool { theme.isDark }
     /// Nautical, the hidden theme Settings unlocks, is a harbour's vessel traffic radar: green-black chrome, phosphor
     /// green accent and gray-green ink.
@@ -61,9 +63,15 @@ struct SidebarPalette: Sendable {
     var sidebarDivider: Color { color(0x212121, 0xcdcdd1, 0x1f2a21) }
     var ink: Color { color(0xececf0, 0x131318, 0xdfe8df) }
     var secondary: Color { color(0xc9c9ce, 0x2e2e36, 0x9aa89b) }
-    var muted: Color { color(0x8f8f98, 0x767680, 0x7c8c7e) }
-    var detail: Color { color(0x5c5c64, 0x8a8a94, 0x55635a) }
-    var faint: Color { color(0x3f3f47, 0xb0b0b8, 0x2c3b2e) }
+    var muted: Color { increasedContrast ? strongDetail : color(0x8f8f98, 0x767680, 0x7c8c7e) }
+    /// Decoration and the terminal's bright black; text uses `detailText`.
+    var detail: Color { increasedContrast ? detailText : color(0x5c5c64, 0x8a8a94, 0x55635a) }
+    /// Secondary text on the sidebar (branches, the search field's prompt and ⌘P, counts): at least 4.5:1 against
+    /// `sidebar` (7:1 with Increase Contrast), as WCAG asks of text.
+    var detailText: Color { increasedContrast ? strongDetail : color(0x84848d, 0x666670, 0x748476) }
+    private var strongDetail: Color { color(0xa3a3ab, 0x4a4a52, 0x9aa89b) }
+    /// Decoration only (rules, a disabled control's glyph), never text.
+    var faint: Color { increasedContrast ? color(0x84848d, 0x666670, 0x748476) : color(0x3f3f47, 0xb0b0b8, 0x2c3b2e) }
     var accent: Color { color(0xe07be0, 0xb8449e, 0x8be28f) }
     var green: Color { color(0x7fd3a1, 0x2f9a5c, 0x7fd3a1) }
     var warning: Color { color(0xd9b36a, 0xb07a1a, 0xd9b36a) }
@@ -94,6 +102,20 @@ final class SidebarThemeStore {
     var current = SidebarTheme.dark
     /// Typing `AppTheme.nauticalCode` in Settings sets this for the rest of the run.
     var nauticalUnlocked = false
+    /// The system's Increase Contrast, followed while the app runs (`Chrome.palette` reads it).
+    var increasedContrast = false
+
+    init() {
+        #if canImport(AppKit)
+        increasedContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                                                          object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                SidebarThemeStore.shared.increasedContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            }
+        }
+        #endif
+    }
 }
 
 @MainActor
@@ -117,7 +139,9 @@ enum Chrome {
         typography.expanded(LiquidGlassStore.shared.active ? 38 : 30)
     }
     #endif
-    static var palette: SidebarPalette { SidebarThemeStore.shared.current.palette }
+    static var palette: SidebarPalette {
+        SidebarPalette(theme: SidebarThemeStore.shared.current, increasedContrast: SidebarThemeStore.shared.increasedContrast)
+    }
     static var window: Color { palette.window }
     static var sidebar: Color { palette.sidebar }
     nonisolated static let terminal = Color(red: 13/255, green: 13/255, blue: 15/255)

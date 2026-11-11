@@ -23,7 +23,7 @@ final class HostPerformanceTests: XCTestCase {
                     if !systems[host - 1].isEmpty { greeting.os = systems[host - 1]; greeting.distribution = distributions[host - 1] }
                     workspace.hosts.update(terminal, generation: generation, destination: "admin@" + name,
                                            greeting: greeting, state: host == 3 ? .disconnected : .connected)
-                    space.hostID = .authenticated(name)
+                    space.hostID = .authenticated(name, uid: 501)
                 }
                 workspace.spaces.append(space)
             }

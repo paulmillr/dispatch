@@ -74,8 +74,16 @@ extension AppDelegate {
         }
         let app = menu("Dispatch")
         add(app, "About Dispatch", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp)
+        add(app, "Check for Updates…", #selector(checkForUpdates), target: self)
         app.addItem(.separator())
         add(app, "Settings…", #selector(showSettings), ",", target: self)
+        app.addItem(.separator())
+        // Services on a terminal's selection (TerminalView is a services requestor): Search With, Open man Page, ….
+        let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        services.submenu = NSMenu(title: "Services")
+        app.addItem(services)
+        NSApp.servicesMenu = services.submenu
+        NSApp.registerServicesMenuSendTypes([.string], returnTypes: [])
         app.addItem(.separator())
         add(app, "Hide Dispatch", #selector(NSApplication.hide(_:)), "h", target: NSApp)
         add(app, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option], target: NSApp)
@@ -91,8 +99,8 @@ extension AppDelegate {
         add(file, "Rename Tab…", #selector(renameTab), target: self)
         file.addItem(.separator())
         add(file, "Close Tab", #selector(closeCurrentTab), "w", target: self)
+        // In a tmux or herdr space this item is Detach Space (validateMenuItem): one item, not a second "Detach Session".
         add(file, "Close Space", #selector(closeCurrentSpace), "W", [.command, .shift], target: self)
-        add(file, "Detach Session", #selector(detachCurrent), target: self)
         let edit = menu("Edit")
         add(edit, "Undo", Selector(("undo:")), "z")
         add(edit, "Redo", Selector(("redo:")), "z", [.command, .shift])
@@ -117,7 +125,7 @@ extension AppDelegate {
         add(view, "Toggle Sidebar", #selector(toggleSidebar), "s", [.control, .command], target: self)
         add(view, "Toggle Sidebar", #selector(toggleSidebar), "\\", target: self, hidden: true)
         for (index, preset) in LayoutPreset.allCases.enumerated() {
-            add(view, preset.title.capitalized, #selector(applyLayout(_:)), preset.shortcutKey ?? "", [], target: self, tag: index)
+            add(view, preset.title, #selector(applyLayout(_:)), preset.shortcutKey ?? "", [], target: self, tag: index)
         }
         view.addItem(.separator())
         add(view, "Switch Terminal / Chat", #selector(toggleChat), "C", [.command, .shift], target: self)
@@ -166,10 +174,20 @@ extension AppDelegate {
         let windows = menu("Window")
         add(windows, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
         add(windows, "Zoom", #selector(NSWindow.performZoom(_:)))
+        windows.addItem(.separator())
+        // Dispatch has one window: closing it detaches every space and quits, as its close button does; ⌘W is the tab's.
+        add(windows, "Close Window and Quit", #selector(closeMainWindow), "w", [.command, .option], target: self)
+        windows.addItem(.separator())
+        add(windows, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)), target: NSApp)
         NSApp.windowsMenu = windows
         let help = menu("Help")
         add(help, "Keyboard Shortcuts", #selector(showKeyboardShortcuts), "/", target: self)
+        help.addItem(.separator())
+        add(help, "Dispatch on GitHub", #selector(openProjectPage), target: self)
+        add(help, "Report an Issue", #selector(reportIssue), target: self)
         NSApp.helpMenu = help
+        // Chat › the composer's actions, after View (AppDelegate+ChatMenu.swift).
+        ChatMenu.add(to: main, after: view)
         NSApp.mainMenu = main
         applyKeyGroups(settings.values.keyGroups)
     }
@@ -208,6 +226,17 @@ extension AppDelegate {
     static func filesTabModifiers(_ groups: KeyGroups) -> NSEvent.ModifierFlags? {
         let modifiers: NSEvent.ModifierFlags = [.control, .command]
         return [groups.spaces, groups.tabs, groups.splits].contains(modifiers) ? nil : modifiers
+    }
+
+    @objc func closeMainWindow() { window?.performClose(nil) }
+    static let projectPage = URL(string: "https://github.com/paulmillr/dispatch")!
+    @objc func openProjectPage() { NSWorkspace.shared.open(Self.projectPage) }
+    @objc func reportIssue() { NSWorkspace.shared.open(Self.projectPage.appendingPathComponent("issues/new")) }
+
+    /// A layout from its key: applied, or a beep and a note saying what it needs.
+    func applyLayoutOrExplain(_ preset: LayoutPreset) {
+        if let reason = workspace.layoutRefusal(preset) { return WindowNotes.shared.show(reason) }
+        if !workspace.applyLayout(preset) { NSSound.beep() }
     }
 
     @objc func increaseFontSize() { setFontSize(settings.values.fontSize + 1) }
@@ -266,10 +295,10 @@ extension AppDelegate {
             workspace.selectSpace(at: index)
             return true
         }
-        // Layouts (⌃1…4, 6, 8 by default) always apply here, even when they do not fit (no tabs or no room for them).
+        // Layouts (⌃1…4, 6, 8 by default) are always taken here; one that does not fit (too few tabs, no room) says why.
         if !groups.splits.isEmpty, modifiers == groups.splits, let preset = LayoutPreset.shortcut(keyCode: keyCode) {
             guard NSApp.keyWindow === window else { return nil }
-            workspace.applyLayout(preset)
+            applyLayoutOrExplain(preset)
             return true
         }
         guard !groups.tabs.isEmpty, modifiers == groups.tabs else { return nil }

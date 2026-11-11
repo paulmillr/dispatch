@@ -22,7 +22,7 @@ final class FileTransferPresentationTests: XCTestCase {
             ("packing", row(.packing), ["Copying 5,120 items to fixtures/", "packing"]),
             ("sending", row(.sending) {
                 $0.bytesTotal = 48_000_000; $0.bytesDone = 31_000_000; $0.rate = 12_000_000; $0.entries = 5_120
-            }, ["Sending", "31 of 48 MB", "12 MB/s"]),
+            }, ["Copying to fixtures/", "31 of 48 MB", "12 MB/s"]),
             ("unpacking", row(.unpacking) { $0.entries = 5_120; $0.bytesTotal = 48_000_000 }, ["Unpacking on homelab"]),
             ("done", row(.done) {
                 $0.entriesDone = 5_120; $0.bytesTotal = 48_000_000; $0.finishedAt = started.addingTimeInterval(6.2)

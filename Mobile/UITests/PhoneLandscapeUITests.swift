@@ -152,16 +152,31 @@ final class PhoneLandscapeUITests: XCTestCase {
             .waitForExistence(timeout: 5), "the review's sheet")
     }
 
-    /// A mode chosen on its side is the one the upright screen shows: Review in the Files segment's capsule.
+    /// The modes hold still from mode to mode: the rail keeps the foot's place whether the mode has an action there
+    /// (Chat's Reply, Review's Create review) or not (Files, Commits), and fills the window's height in every mode.
+    func testTheModesHoldStillAcrossModes() {
+        launch(["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "chat"])
+        XCTAssertTrue(app.buttons["Reply"].waitForExistence(timeout: 10), "Chat's Reply")
+        let start = modes.frame
+        for mode in ["Commits", "Files", "Review", "Chat"] {
+            modes.buttons[mode].tap()
+            expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: modes.buttons[mode])
+            waitForExpectations(timeout: 5)
+            XCTAssertEqual(modes.frame.minY, start.minY, accuracy: 0.5, "\(mode): the modes in place")
+        }
+        // Back on Chat, the rail's menu disc holds the conversation's items.
+        rail.buttons["tab-menu"].tap()
+        XCTAssertTrue(app.buttons["Search"].waitForExistence(timeout: 5), "the conversation's Search in the disc's menu")
+    }
+
+    /// A mode chosen on its side is the one the upright screen shows: the mode button names Review.
     func testTurningUprightKeepsTheMode() {
         launch(["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "chat"])
         modes.buttons["Review"].tap()
         XCTAssertTrue(app.buttons["Create review"].waitForExistence(timeout: 5))
         XCUIDevice.shared.orientation = .portrait
-        let review = app.otherElements["files-modes"].buttons["Review"]
-        XCTAssertTrue(review.waitForExistence(timeout: 5), "Files' modes upright")
-        XCTAssertTrue(review.isSelected, "Review still shown")
-        XCTAssertEqual(app.buttons["tab-mode-button"].label, "Show Terminal", "the mode button on Files")
+        XCTAssertTrue(app.buttons["tab-mode-button"].waitForExistence(timeout: 5), "the mode button upright")
+        XCTAssertTrue(app.buttons["Create review"].waitForExistence(timeout: 5), "Review still shown")
         attach("Upright again")
     }
 }

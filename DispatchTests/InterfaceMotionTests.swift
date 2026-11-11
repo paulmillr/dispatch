@@ -639,11 +639,11 @@ final class InterfaceMotionTests: XCTestCase {
             .padding(22).frame(maxWidth: .infinity, maxHeight: .infinity).background(Chrome.terminal).foregroundStyle(Chrome.ink).preferredColorScheme(.dark))
         try await Task.sleep(for: .milliseconds(600))
         let snapshot2 = try await capture("approval-pending").text(separator: " ")
-        XCTAssertTrue(snapshot2.contains("Allow once"))
+        XCTAssertTrue(snapshot2.contains("Allow Once"))
         approval.resolve(.deny)
         try await Task.sleep(for: .milliseconds(400))
         let receipt = try await capture("approval-receipt").text(separator: " ")
-        XCTAssertTrue(receipt.contains("Denied")); XCTAssertFalse(receipt.contains("Allow once"))
+        XCTAssertTrue(receipt.contains("Denied")); XCTAssertFalse(receipt.contains("Allow Once"))
         approval.resolve(.allow)
         XCTAssertEqual(approval.decision, .deny)
     }

@@ -9,12 +9,13 @@ struct ShortcutRow: Identifiable {
     init(_ key: String, _ explanation: String) { self.key = key; self.explanation = explanation }
 
     /// What each digit group does; Settings › Keyboard describes its recorders the same way.
-    static let tabDigits = "switch to tab (or pane when split)"
-    static let spaceDigits = "switch to space"
-    static let splitDigits = "single · 2 columns · 2 above · 2×2 · 3×2 · 4×2"
+    static let tabDigits = "switch to tab (or pane when split) · 9 the last tab"
+    static let spaceDigits = "switch to space · 9 the last space"
+    /// The layouts by the names the View menu and the layout picker give them, in their keys' order.
+    static var splitDigits: String { LayoutPreset.allCases.filter { $0.shortcutKey != nil }.map(\.title).joined(separator: " · ") }
 
-    /// The digit chords lead, in Settings › Keyboard' order and following it; then stepping through tabs and spaces, and
-    /// the prefix keys last.
+    /// The digit chords lead, in Settings › Keyboard' order and following it; then stepping through tabs, panes and spaces,
+    /// as the Navigate menu names them, and the prefix keys last while the focused space answers them.
     @MainActor static var navigation: [ShortcutRow] {
         let keys = KeyGroupsStore.shared.current, steps = keys.steps
         func brackets(_ modifiers: NSEvent.ModifierFlags) -> String {
@@ -26,13 +27,44 @@ struct ShortcutRow: Identifiable {
             keys.shortcut(\.tabs, "1…9").map { .init($0, tabDigits) },
             keys.shortcut(\.spaces, "1…9").map { .init($0, spaceDigits) },
             keys.shortcut(\.splits, "1…4, 6, 8").map { .init($0, splitDigits) },
-            steps.tabs.map { .init(brackets($0), "tab scroll: previous / next") },
-            steps.spaces.map { .init(brackets($0), "space scroll: previous / next") },
-            .init("⌘\\", "show or hide the sidebar · also ⌃⌘S"),
-            .init("⌃B …", "tmux or herdr prefix keys"),
+            steps.tabs.map { .init(brackets($0), "previous / next tab") },
+            .init("⌃⇥ / ⌃⇧⇥", "next / previous tab"),
+            .init(brackets(KeyGroups.paneStep), "previous / next pane"),
+            steps.spaces.map { .init(brackets($0), "previous / next space") },
+            .init("⌘P", "search spaces"),
+            .init("⌃⌘S", "show or hide the sidebar · also ⌘\\"),
+            prefix.map { .init("\($0.prefix.symbol) …", "prefix keys, listed under More") },
             voiceNavigation,
         ]
         return rows.compactMap { $0 }
+    }
+
+    /// The prefix table the focused terminal answers (Settings › Keyboard › Prefix keys), nil while it has none.
+    @MainActor static var prefix: PrefixTable? {
+        guard let controller = NSApp.delegate as? AppDelegate, let surface = controller.workspace.activeSurfaceID else { return nil }
+        return controller.prefixTable(for: surface)
+    }
+
+    /// The focused space's prefix keys, each binding as the prefix then its key; a window's digits in one row. Bindings
+    /// Dispatch cannot run are listed as such.
+    @MainActor static func prefixRows(_ table: PrefixTable) -> [ShortcutRow] {
+        let prefix = table.prefix.symbol
+        var digits: [String] = [], rows: [(key: String, row: ShortcutRow)] = []
+        for (key, binding) in table.bindings where !table.arms(key) {
+            if case .selectWindow = binding.action, key.name.count == 1, key.name.first?.isNumber == true, !key.control, !key.option {
+                digits.append(key.name)
+                continue
+            }
+            rows.append((key.symbol, .init("\(prefix) \(key.symbol)", binding.action.title)))
+        }
+        for (key, command) in table.rejected {
+            rows.append((key.symbol, .init("\(prefix) \(key.symbol)", "“\(command)”, which Dispatch can't run")))
+        }
+        let sorted = rows.sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }.map(\.row)
+        let windows = digits.sorted()
+        let window = windows.isEmpty ? [] : [ShortcutRow("\(prefix) \(windows.count > 1 ? "\(windows.first!)…\(windows.last!)" : windows[0])",
+                                                         "window by its number")]
+        return window + sorted + [.init("\(prefix) \(prefix)", "send \(prefix) to the program")]
     }
 
     /// Settings › Dictation › Navigate by voice, while dictation and its voice key are on.
@@ -44,13 +76,15 @@ struct ShortcutRow: Identifiable {
 
     @MainActor static var window: [ShortcutRow] { windowRows(KeyGroupsStore.shared.current) }
 
-    /// ⌃⌘1…3 are the files tabs' unless a Settings › Keyboard group takes ⌃⌘ digits (AppDelegate.filesTabModifiers).
+    /// ⌃⌘1…3 are the files tabs' unless a Settings › Keyboard group takes ⌃⌘ digits (AppDelegate.filesTabModifiers). Worded
+    /// as the menus are.
     @MainActor static func windowRows(_ keys: KeyGroups) -> [ShortcutRow] { [
         .init("⌘N / ⇧⌘N", "new space / new local space"),
         .init("⌘T", "new tab"),
-        .init("⌘W / ⇧⌘W", "close tab / close space"),
+        .init("⌘W / ⇧⌘W", "close tab / close space (detach space in tmux and herdr)"),
+        .init("⌥⌘W", "close window and quit"),
         .init("⌘D / ⇧⌘D", "split right / split down"),
-        .init("⌘J / ⇧⌘J", "notification scroll"),
+        .init("⌘J / ⇧⌘J", "next / previous attention"),
         .init("⇧⌘C", "switch between terminal and chat"),
         .init("⇧⌘F", "switch between terminal and files"),
         .init("⇧⌘U / ⇧⌘L", "show files on the Review / Commits tab"),
@@ -58,8 +92,10 @@ struct ShortcutRow: Identifiable {
         .init("⌥⌘P", "show or hide the files preview"),
         .init("⌥↓ / ⌥↑", "Review: next / previous comment"),
         .init("⇧⌘⏎", "Review: create the review"),
-        .init("⌘K", "clear the terminal screen and scrollback"),
+        .init("⌘K", "clear screen and scrollback (not in full-screen programs, tmux or herdr)"),
         .init("⌘F", "find · ⌘G / ⇧⌘G next / previous"),
+        .init("⌘-click", "open a link · hover with ⌘ to see where it goes"),
+        .init("right-click", "copy, paste, clear, split and modes · ⌃-click too"),
         .init("⌘+ / ⌘- / ⌘0", "bigger / smaller / reset font size"),
         .init("⌃⌘F", "full screen"),
         .init("⌘,", "settings"),
@@ -216,7 +252,8 @@ struct WorkspaceShortcutSheet: View {
                                    colorScheme: Chrome.colorScheme, font: typography.font(.body),
                                    keyFont: typography.shortcut()),
                       primary: [.init(rows: ShortcutRow.navigation)],
-                      more: [.init(rows: ShortcutRow.window)])
+                      more: [.init(rows: ShortcutRow.window)]
+                        + (ShortcutRow.prefix.map { [.init(title: "Prefix keys", rows: ShortcutRow.prefixRows($0))] } ?? []))
             .accessibilityIdentifier("workspace-shortcut-sheet")
     }
 }

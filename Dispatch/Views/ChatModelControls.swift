@@ -14,9 +14,11 @@ struct ChatModelControls: View {
     /// Claude's banner and footer name the effort only when it differs from the
     /// model's default, and Codex reports none while it is unset, so a known model
     /// without one is on its default effort.
-    private var effortLabel: String {
-        session.effort ?? (["claude", "codex"].contains(session.agentID) && session.model != session.agentTitle ? "default" : "unknown")
+    private var effortLabel: String? {
+        session.effort ?? (["claude", "codex"].contains(session.agentID) && session.model != session.agentTitle ? "default" : nil)
     }
+    /// Why the picker is dimmed (the agent works, a request waits), instead of the help for a picker that opens.
+    private var blocked: String? { coordinator.modelPickBlockReason(session) }
 
     static func label(for model: String) -> String { AgentModelMenu.label(for: model) }
 
@@ -30,23 +32,32 @@ struct ChatModelControls: View {
             Button { open(.model) } label: {
                 Text(modelLabel).lineLimit(1).truncationMode(.middle).frame(maxWidth: modelWidth, alignment: .leading)
                     .footerMenuUnderline(theme.muted)
-            }.help(session.model).accessibilityLabel("Choose model").accessibilityValue(session.model)
+            }.help(blocked.map { "\(session.model) · \($0)" } ?? "\(session.model) · ⇧⌘M").accessibilityLabel("Choose model").accessibilityValue(session.model)
+                .accessibilityHint(blocked ?? "")
                 .accessibilityIdentifier("chat-model-picker")
                 .keyboardShortcut(focused ? KeyboardShortcut("m", modifiers: [.command, .shift]) : nil)
-            if !compactEffort { Text("·").accessibilityHidden(true) }
-            Button { open(.effort) } label: {
-                Group {
-                    if compactEffort {
-                        ChatEffortMeter(effort: session.effort)
-                    } else {
-                        Text(effortLabel)
-                    }
-                }.frame(minWidth: 24, minHeight: 20)
-                    .contentShape(Rectangle())
-            }.help("Effort: \(effortLabel) · ⇧⌘E")
+            // An agent that reports no effort shows none, rather than "unknown"; ⇧⌘E still opens the picker.
+            if let effortLabel {
+                if !compactEffort { Text("·").accessibilityHidden(true) }
+                Button { open(.effort) } label: {
+                    Group {
+                        if compactEffort {
+                            ChatEffortMeter(effort: session.effort)
+                        } else {
+                            Text(effortLabel)
+                        }
+                    }.frame(minWidth: 24, minHeight: 20)
+                        .contentShape(Rectangle())
+                }.help(blocked.map { "Effort: \(effortLabel) · \($0)" } ?? "Effort: \(effortLabel) · ⇧⌘E")
                     .accessibilityLabel("Choose effort").accessibilityValue(effortLabel)
+                    .accessibilityHint(blocked ?? "")
                     .accessibilityIdentifier("chat-effort-picker")
                     .keyboardShortcut(focused ? KeyboardShortcut("e", modifiers: [.command, .shift]) : nil)
+            } else {
+                Button { open(.effort) } label: { Color.clear.frame(width: 0, height: 0) }
+                    .buttonStyle(.plain).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                    .keyboardShortcut(focused ? KeyboardShortcut("e", modifiers: [.command, .shift]) : nil)
+            }
         }.buttonStyle(.plain).disabled(!coordinator.canPickModel(session))
             .background {
                 Button { coordinator.openModelPicker(session, column: .effort, cycle: true) } label: { Color.clear.frame(width: 0, height: 0) }
@@ -176,7 +187,7 @@ struct ChatModelPickerView: View {
             }
             if let error = picker.error {
                 Text(error).font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 8)
-                Button("Open in terminal", action: terminal).buttonStyle(.bordered).padding(.horizontal, 8)
+                Button("Open in Terminal", action: terminal).buttonStyle(.bordered).padding(.horizontal, 8)
             }
             Rectangle().fill(theme.border).frame(height: 1)
             HStack(spacing: 8) {

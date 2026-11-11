@@ -44,23 +44,30 @@ final class TmuxPresentationTests: XCTestCase {
             let view = try XCTUnwrap(app.runtime.views[tab.id])
             return view.convert(view.bounds, to: nil)
         }
-        func click(_ button: NSRect) throws {
-            let rect = button
-            try PresentationTestSupport.click(app.window, at: NSPoint(x: rect.midX, y: rect.midY))
+        /// A click opens the modes menu (`ModeSwitchPressTracker`): `choose` is picked from it as it opens, rather than
+        /// running the menu's modal loop.
+        func click(_ button: NSRect, choose title: String) throws {
+            let root = try XCTUnwrap(app.window.contentView)
+            for tracker in PresentationTestSupport.views(of: ModeSwitchPressTracker.TrackerView.self, in: root) {
+                tracker.presentMenu = { menu, _, _ in
+                    if let index = menu.items.firstIndex(where: { $0.title == title }) { menu.performActionForItem(at: index) }
+                }
+            }
+            try PresentationTestSupport.click(app.window, at: NSPoint(x: button.midX, y: button.midY))
         }
 
         try await app.wait { (try? await chatButtons().count) == 1 }
         let initialButtons = try await chatButtons()
         var button = try XCTUnwrap(initialButtons.first)
         XCTAssertGreaterThan(button.midY, try terminalRect(first).maxY, "The switch belongs above the terminal, in the tab bar")
-        try click(button)
+        try click(button, choose: "Chat")
         try await app.wait { firstSession.showChat }
         // From chat the same switch names the terminal next, and goes there; files stays a menu or ⇧⌘F step.
         func terminalButtons() -> [NSRect] {
             PresentationTestSupport.accessibilityFrames("chat-mode-switch", label: "Show Terminal", in: app.window).filter { !$0.isEmpty }
         }
         try await app.wait { terminalButtons().count == 1 }
-        try click(try XCTUnwrap(terminalButtons().first))
+        try click(try XCTUnwrap(terminalButtons().first), choose: "Terminal")
         try await app.wait { !firstSession.showChat }
         XCTAssertEqual(app.runtime.files.mode(for: first.id), .terminal)
 
@@ -90,7 +97,7 @@ final class TmuxPresentationTests: XCTestCase {
             button = try XCTUnwrap(visibleButtons.first { abs($0.midY - terminal.maxY - 13) < 8 })
             let session = app.runtime.chat.session(for: tab.id)
             app.workspace.selectTab(tab.id == first.id ? second.id : first.id)
-            try click(button)
+            try click(button, choose: "Chat")
             try await app.wait { session.showChat && app.workspace.activeTab?.id == tab.id }
             XCTAssertFalse(tab.id == first.id ? secondSession.showChat : firstSession.showChat)
             app.runtime.chat.chooseChat(false, session: session)

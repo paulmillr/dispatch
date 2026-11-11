@@ -87,8 +87,10 @@ struct ReviewScope: Hashable, Sendable {
     private(set) var reviews: [String: Review] = [:]
     /// What the last Create review took, per scope, for its Undo; memory only, gone once a comment is added.
     private(set) var copied: [String: Review] = [:]
-    /// The agent the last Create review went to, per scope (nil: the clipboard).
+    /// The agent the last Create review went to, per scope (nil: the clipboard, or cleared).
     private(set) var sentTo: [String: String] = [:]
+    /// When the last Create review took the scope's review: its note goes by the clock, not by when it is seen.
+    private(set) var takenAt: [String: Date] = [:]
     private(set) var error: String?
     @ObservationIgnored private let store: any ReviewPersistence
     @ObservationIgnored private var pending: Task<Void, Never>?
@@ -251,6 +253,7 @@ struct ReviewScope: Hashable, Sendable {
         guard let review = reviews.removeValue(forKey: scope), !review.isEmpty else { return nil }
         copied[scope] = review
         sentTo[scope] = agent
+        takenAt[scope] = System.date()
         flush()
         return review
     }
@@ -259,6 +262,7 @@ struct ReviewScope: Hashable, Sendable {
     func restore(_ scope: String) {
         guard let taken = copied.removeValue(forKey: scope) else { return }
         sentTo[scope] = nil
+        takenAt[scope] = nil
         var review = reviews[scope] ?? Review()
         review.comments = taken.comments + review.comments.filter { comment in !taken.comments.contains { $0.id == comment.id } }
         if review.summary.isEmpty { review.summary = taken.summary }
@@ -271,6 +275,7 @@ struct ReviewScope: Hashable, Sendable {
     func forgetCopied(_ scope: String) {
         if copied[scope] != nil { copied[scope] = nil }
         if sentTo[scope] != nil { sentTo[scope] = nil }
+        if takenAt[scope] != nil { takenAt[scope] = nil }
     }
 
     /// Every review gone, as after removing its file (the phone's Remove all data): empty, writable again, no error.
@@ -279,6 +284,7 @@ struct ReviewScope: Hashable, Sendable {
         reviews = [:]
         copied = [:]
         sentTo = [:]
+        takenAt = [:]
         error = nil
         loaded = true
     }

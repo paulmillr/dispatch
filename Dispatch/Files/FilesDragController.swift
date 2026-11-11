@@ -79,6 +79,9 @@ struct FilesDragPayload: Equatable, Sendable {
     private let home: String
     /// The promises of the drag being started, by tab: every row dragged together arrives as one copy.
     private var openBatches: [UUID: FilesPromiseBatch] = [:]
+    /// ⌥ is held: rows dragged within their own list copy only then (Files copies and never moves, so a plain drag
+    /// there, which moves in Finder, is refused). Tests set it.
+    var optionHeld: @MainActor () -> Bool = { NSEvent.modifierFlags.contains(.option) }
 
     init(engine: FileTransferEngine = .shared,
          coordinator: @escaping @MainActor () -> FilesCoordinator = { TerminalRuntime.shared.files },
@@ -142,7 +145,7 @@ struct FilesDragPayload: Equatable, Sendable {
 
     /// `validateDrop` on a pasteboard: a copy for Finder files or rows of a files view, when drag and drop is on
     /// and the tab shows files. A drop that would copy a folder into itself, or rows into the folder they are in,
-    /// is refused.
+    /// is refused, and so are rows dragged within their own list unless ⌥ is held.
     func validate(_ pasteboard: NSPasteboard, onto directory: String, in session: FilesSession) -> NSDragOperation {
         guard dragEnabled, let target = session.source else { return [] }
         // A host without Copy files in takes nothing, and says so while the drag is over it.
@@ -153,6 +156,11 @@ struct FilesDragPayload: Equatable, Sendable {
         if let payload = FilesDragPayload.read(pasteboard) {
             guard source(for: payload) != nil else { return [] }
             if payload.endpoint == target.endpoint, payload.paths.contains(where: { Self.contains($0, directory) }) { return [] }
+            // Within its own list a drag would move in Finder; here only ⌥ copies, and the list says so.
+            if payload.session == session.id, payload.endpoint == target.endpoint, !optionHeld() {
+                session.refuseMove()
+                return []
+            }
             return .copy
         }
         let files = Self.droppedFiles(pasteboard)

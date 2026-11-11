@@ -10,6 +10,9 @@ struct ImportPlan {
         let setting: String
         /// The new value as Settings shows it.
         let value: String
+        /// Why this one deserves a look before importing (it runs a command, or loosens security): listed apart, and
+        /// unchecked until chosen.
+        var caution: String? = nil
         let apply: (inout Preferences) -> Void
     }
 
@@ -23,6 +26,8 @@ struct ImportPlan {
         var role: Role
         /// Saved under exactly `name`, replacing a theme of that name (a Dispatch export, whose settings name it).
         var keepsName = false
+        /// What the review says about it besides its role: saved under another name than the source's.
+        var note: String? = nil
         enum Role { case light, dark, both, none }
     }
 

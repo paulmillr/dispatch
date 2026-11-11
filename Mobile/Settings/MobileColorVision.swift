@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Settings' Colorblind-friendly as a UIKit trait (the window's, set by `mobileAppearance()`, as `MobileThemeTrait`),
+/// Settings' Colorblind-friendly as a UIKit trait (the window's, set by `mobileAppearance()`),
 /// bridged to SwiftUI's environment, so the change colours (`UIColor.change`) resolve per view in UIKit and SwiftUI.
 struct ColorVisionTrait: UITraitDefinition {
     static let defaultValue = ColorVision.typical

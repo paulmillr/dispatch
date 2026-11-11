@@ -92,6 +92,8 @@ pub struct Claude {
     subagents: subagents::Subagents,
     /// A typed `/usage` whose panel is being read (`menu::Usage`), from its Enter until its result.
     usages: BTreeMap<Key, crate::menu::Usage>,
+    /// `chat.limits` reads under way (limits.rs).
+    limits: crate::limits::Limits,
 }
 
 fn finish<T: 'static>(io: &mut dyn Io, done: Done<T>, result: Result<T, Error>) {
@@ -490,7 +492,8 @@ impl Harness for Claude {
     }
     fn hook(&mut self, message: &Json) -> Result<Hook, Error> {
         let root = message.root();
-        let event = text(root, "hook_event_name")
+        // A status line (limits.rs) comes the hooks' way and names no event.
+        let event = if crate::limits::status_line(root) { Some("StatusLine") } else { text(root, "hook_event_name") }
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| error("hook", "Missing Claude hook event"))?
             .to_owned();
@@ -869,6 +872,18 @@ impl Harness for Claude {
             finish(io, done, Err(error("changed", "Side conversation changed")));
         }
     }
+    fn limits_use_hooks(&self) -> bool {
+        true
+    }
+    fn limits(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Vec<LimitWindow>>) {
+        let Some(directory) = self.sessions.get(&key(binding)).map(|session| session.directory.clone()) else {
+            return finish(io, done, Err(error("changed", "Claude conversation changed")));
+        };
+        match crate::limits::command(io) {
+            Ok(command) => self.limits.read(io, &directory, command, binding.session.clone(), done),
+            Err(e) => finish(io, done, Err(e)),
+        }
+    }
     fn revoke(&mut self, io: &mut dyn Io, binding: &Binding, _: bool, done: Done<()>) {
         for mut interaction in self.interactions.cards(binding) {
             interaction.questions.clear();
@@ -911,6 +926,9 @@ impl Harness for Claude {
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         for update in std::mem::take(&mut self.queued) {
             ui.update(update);
+        }
+        if self.limits.event(io, &event) {
+            return;
         }
         let Some(event) = self.sides.borrow_mut().event(io, ui, event) else {
             return;
@@ -967,6 +985,9 @@ impl Harness for Claude {
             return;
         }
         if let Event::Done { work, result } = event {
+            let Some(result) = self.limits.done(io, work, result) else {
+                return;
+            };
             if let Some(mut setup) = self.installs.remove(&work) {
                 match setup.complete(result) {
                     Ok(crate::install::Next::Job(job)) => self.installation(io, setup, job),

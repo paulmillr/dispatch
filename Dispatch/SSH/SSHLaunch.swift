@@ -100,7 +100,13 @@ enum SSHLauncherCommand {
               let configuration = resolvedConfiguration(invocation, executable: executable),
               let scope = SSHIntegrationScope(executable: executable, destination: invocation.destination, configuration: configuration),
               let origin = AgentProcess.capture(System.pid) else { return replace(executable, args) }
-        guard let grant = permission(scope: scope, directory: directory, tab: tab, token: token, origin: origin) else { return 130 }
+        let answer = permission(scope: scope, directory: directory, tab: tab, token: token, origin: origin)
+        guard case .granted(let grant) = answer else {
+            // Never silent: the terminal says why this ssh ended without connecting.
+            let why = answer == .timedOut ? "no helper choice was made within \(Int(consentTimeout.components.seconds)) seconds" : "the helper choice was cancelled"
+            try? FileHandle.standardError.write(contentsOf: Data("Dispatch: ssh did not connect: \(why). Run ssh again to choose.\n".utf8))
+            return 130
+        }
         guard grant.isCurrent, grant.profile != .ordinary else { return replace(executable, args) }
         let id = SSHConnectionID(), credential = System.uuid().uuidString
         let sessionID = String(id.rawValue.uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24))
@@ -295,26 +301,35 @@ enum SSHLauncherCommand {
         } catch { AppReplay.fail(error); return nil }
     }
 
+    /// How long a login waits for the consent sheet; the app closes a sheet still open after it
+    /// (`SSHCoordinator.consent`), whose late choice could connect nothing.
+    static let consentTimeout: Duration = .seconds(120)
+
+    private enum Permission: Equatable {
+        case granted(SSHIntegrationGrant)
+        case cancelled, timedOut
+    }
+
     private static func permission(scope: SSHIntegrationScope, directory: String, tab: UUID, token: String,
-                                   origin: AgentProcess) -> SSHIntegrationGrant? {
+                                   origin: AgentProcess) -> Permission {
         let id = System.uuid(), root = URL(fileURLWithPath: directory)
         let request = root.appendingPathComponent(id.uuidString + ".sshconsent")
         let reply = root.appendingPathComponent(id.uuidString + ".sshchoice")
         defer { try? FileManager.default.removeItem(at: request); try? FileManager.default.removeItem(at: reply) }
         let value = SSHConsentRequest(id: id, tabID: tab, token: token, scope: scope, origin: origin)
-        guard let data = try? JSONEncoder().encode(value), (try? data.write(to: request, options: .atomic)) != nil else { return .init(profile: .ordinary) }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        guard let data = try? JSONEncoder().encode(value), (try? data.write(to: request, options: .atomic)) != nil else { return .granted(.init(profile: .ordinary)) }
+        let deadline = ContinuousClock.now.advanced(by: consentTimeout)
         while ContinuousClock.now < deadline {
             if let data = try? Data(contentsOf: reply), data.count < 16_384,
                let response = try? JSONDecoder().decode(SSHConsentResponse.self, from: data) {
-                guard let grant = response.grant else { return nil }
-                if grant.isCurrent { return grant }
+                guard let grant = response.grant else { return .cancelled }
+                if grant.isCurrent { return .granted(grant) }
             }
-            guard FileManager.default.fileExists(atPath: directory) else { break }
+            guard FileManager.default.fileExists(atPath: directory) else { return .cancelled }
             usleep(50_000)
         }
         // A late click on Cancel must never race an automatic SSH connection.
-        return nil
+        return .timedOut
     }
 
     /// The waiting login's view of a helper upload to this host (`SSHBootstrapScript.upload` writes the size it expects

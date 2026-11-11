@@ -268,10 +268,13 @@ struct CommitsBar: View {
 
     private var summary: some View {
         HStack(spacing: 4) {
-            Image(systemName: log.scope == .all ? "point.3.connected.trianglepath.dotted" : "arrow.triangle.branch")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            // A branch's name stands alone; every branch keeps its glyph.
+            if log.scope == .all {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)

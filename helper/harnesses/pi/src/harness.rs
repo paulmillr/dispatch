@@ -612,6 +612,17 @@ impl Harness for Pi {
     fn side_close(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<()>) {
         crate::side::close(&self.runtime, io, binding, done);
     }
+    fn limit_rows(&mut self, io: &mut dyn Io, binding: &Binding, read: Option<&str>, done: Done<LimitRows>) {
+        let fields = read.map_or_else(Vec::new, |name| vec![("read", Data::String(name))]);
+        bridge::call(
+            &self.runtime,
+            io,
+            binding,
+            "limits",
+            fields,
+            Box::new(move |io, result| done(io, result.map(|document| crate::limits::parsed(document.root())))),
+        );
+    }
     fn install(
         &mut self,
         io: &mut dyn Io,

@@ -6,6 +6,12 @@ enum FilesFormatting {
     /// What the size and modified columns show for an unknown value or a folder.
     private static let none = "—"
 
+    /// A folder with nothing to list: "Empty folder" when hidden items show; with them left out it may hold some, and
+    /// the line says how to show them.
+    static func empty(hidden: Bool) -> String {
+        hidden ? "Empty folder" : "No visible items · ⇧⌘. shows hidden ones"
+    }
+
     /// "612 B", "4.1 KB", "188 KB", "9.6 MB": one decimal below 10 of a unit, none above, so the column stays narrow.
     static func size(_ bytes: UInt64) -> String {
         guard bytes >= 1_000 else { return "\(bytes) B" }

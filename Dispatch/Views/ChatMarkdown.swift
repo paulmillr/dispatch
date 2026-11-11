@@ -89,7 +89,7 @@ struct ChatMarkdown: View {
                 }
             }
             if rendered.truncated {
-                Text("Rendered preview truncated for safety")
+                Text("Long reply shortened")
                     .font(theme.typography.detail).foregroundStyle(theme.muted)
             }
         }.frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)

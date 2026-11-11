@@ -141,6 +141,8 @@ final class SwiftBackend: TerminalBackend {
     var passwordInput: Bool { session.passwordInput }
     var needsConfirmQuit: Bool { started && !exited && session.locked { session.surface.needsConfirmQuit } }
     var hasSelection: Bool { session.locked { session.surface.hasSelection } }
+    var mouseCaptured: Bool { session.locked { session.surface.mouseCaptured } }
+    var alternateScreen: Bool { session.locked { session.surface.alternateScreen } }
     var grid: TerminalGrid {
         session.locked {
             let s = session.surface.size, g = session.surface.terminal.grid
@@ -199,6 +201,29 @@ enum TerminalLinkPolicy {
         guard let scheme = URLComponents(string: value)?.scheme?.lowercased() else { return nil }
         return ["http", "https"].contains(scheme) ? nil : scheme
     }
+
+    /// Whether an OSC 8 hyperlink's target may open: a web address with a host. Its text can say anything, so it is
+    /// never opened without asking (`openHyperlink`).
+    static func opensHyperlink(_ value: String) -> Bool {
+        guard let url = URLComponents(string: value), let scheme = url.scheme?.lowercased() else { return false }
+        return ["http", "https"].contains(scheme) && !(url.host ?? "").isEmpty
+    }
+
+    /// ⌘-click on an OSC 8 hyperlink: asks with its target shown (a sheet on the terminal's window), then opens it in the
+    /// default browser; any other target is refused with a beep.
+    @MainActor static func openHyperlink(_ value: String, from view: TerminalView?) {
+        guard opensHyperlink(value) else { NSSound.beep(); return }
+        let alert = NSAlert()
+        alert.messageText = "Open this link?"
+        alert.informativeText = String(value.prefix(512))
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Open")
+        guard AppDelegate.runSheet(alert, in: view?.window) == .alertSecondButtonReturn else { return }
+        let opener = Process()
+        opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        opener.arguments = [value]
+        try? opener.run()
+    }
 }
 
 private final class SwiftHost: SurfaceHost {
@@ -223,6 +248,14 @@ private final class SwiftHost: SurfaceHost {
         case .colorChange(.background, let c): event = .background(r: c.r, g: c.g, b: c.b)
         case .programStatus(let records): event = .programStatus(records)
         case .commandFinished(let code, _): event = .commandFinished(exitCode: Int(code))
+        case .ringBell: event = .bell
+        case .mouseShape(let shape): event = .mouseShape(shape.name)
+        case .mouseOverLink(let url): event = .linkHover(url.isEmpty ? nil : text(url))
+        // An OSC 8 hyperlink names its target apart from its text: it opens only once you have seen where it goes.
+        case .openURL(let kind, let url) where kind == .osc8:
+            let target = text(url), view = view
+            DispatchQueue.main.async { MainActor.assumeIsolated { TerminalLinkPolicy.openHyperlink(target, from: view) } }
+            return true
         default: return false
         }
         view?.handle(event)

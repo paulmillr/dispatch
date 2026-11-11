@@ -43,7 +43,7 @@ struct ChatDraftControls: View {
         }.font(theme.typography.font(offset: -1.5))
             .contentShape(Rectangle())
             .contextMenu { draftActions }
-            .alert("Rename draft", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            .alert("Rename Draft", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Title", text: $title)
                 Button("Save") { if let renaming { drafts.rename(renaming.id, title: title) }; renaming = nil }
                 Button("Cancel", role: .cancel) { renaming = nil }
@@ -66,7 +66,7 @@ struct ChatDraftControls: View {
         ForEach(drafts.saved) { draft in
             Button(draft.label) { drafts.select(draft.id) }
         }
-        Menu("Manage drafts") {
+        Menu("Manage Drafts") {
             ForEach(drafts.saved) { draft in
                 Menu(draft.label) {
                     Button("Rename…") { title = draft.title ?? draft.label; renaming = draft }
@@ -79,10 +79,10 @@ struct ChatDraftControls: View {
     }
     @ViewBuilder private var draftActions: some View {
         let drafts = session.drafts
-        Button("Working buffer") { drafts.select(nil) }
-        Button("Discard current draft") { drafts.discard() }
-            .disabled(drafts.current.text.isEmpty && drafts.current.attachments.isEmpty && !drafts.current.multiline)
-        Button("Undo draft deletion") { drafts.undoDelete() }.disabled(!drafts.canUndoDelete)
+        Button("Current Draft") { drafts.select(nil) }
+        Button("Discard Current Draft") { drafts.discard() }
+            .disabled(drafts.shape.isEmpty && !drafts.shape.multiline)
+        Button("Undo Draft Deletion") { drafts.undoDelete() }.disabled(!drafts.canUndoDelete)
         if !drafts.recoverable.isEmpty {
             Divider()
             recoveryActions

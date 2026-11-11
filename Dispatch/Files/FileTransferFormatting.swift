@@ -81,10 +81,13 @@ enum FileTransferFormatting {
     var separated = false
     /// The second line of a failure: what the target was left with.
     var note: String?
+    /// Where the copy goes, as VoiceOver hears it after the folder: "this Mac" or the host's name.
+    var destination: String
 
     /// `host` is where the archive unpacks: the target's host name, or "this Mac".
     init(_ transfer: FileTransfer, host: String) {
         let label = transfer.targetLabel
+        destination = transfer.kind == .copyOut || transfer.kind == .local ? "this Mac" : host
         let items = FileTransferFormatting.items(UInt64(transfer.items))
         func copying(_ detail: String?) -> (String, String?, String?, Bool) {
             ("Copying \(items) to ", label, detail, detail != nil)
@@ -99,7 +102,8 @@ enum FileTransferFormatting {
             var detail = transfer.bytesTotal.map { FileTransferFormatting.progress(transfer.bytesDone, of: $0) }
                 ?? FileTransferFormatting.bytes(transfer.bytesDone)
             if let rate = transfer.rate { detail += " · " + FileTransferFormatting.rate(rate) }
-            parts = ("Sending", nil, detail, false)
+            // The target stays in the line while the bytes go, as before they started.
+            parts = ("Copying to ", label, detail, true)
         case .unpacking:
             // Rows dragged out unpack into the drop folder; the others on the shown host.
             let title = transfer.kind == .copyOut ? "Unpacking into \(label)" : "Unpacking on \(host)"
@@ -139,6 +143,7 @@ enum FileTransferFormatting {
 
     /// The whole text, as VoiceOver reads the row.
     var spoken: String {
-        [title + (emphasis ?? ""), detail, note].compactMap { $0 }.joined(separator: ", ")
+        let lead = title + (emphasis.map { $0 + " on " + destination } ?? "")
+        return [lead, detail, note].compactMap { $0 }.joined(separator: ", ")
     }
 }

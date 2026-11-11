@@ -4,6 +4,22 @@ import XCTest
 
 @MainActor
 final class PrefixKeysTests: XCTestCase {
+    /// The indicator and the ⌘/ sheet name keys as the Mac writes them, the server's own prefix included.
+    func testPrefixKeysAreNamedAndListedForTheSheet() throws {
+        XCTAssertEqual(PrefixKey(tmux: "C-a")?.symbol, "⌃A")
+        XCTAssertEqual(PrefixKey(tmux: "S-Up")?.symbol, "⇧↑")
+        XCTAssertEqual(PrefixKey(tmux: "%")?.symbol, "%")
+        let table = try XCTUnwrap(PrefixTable.tmux(prefix: "C-a", repeatTime: "500", keys: [
+            "bind-key -T prefix c new-window", "bind-key -T prefix 0 select-window -t :=0",
+            "bind-key -T prefix 1 select-window -t :=1", "bind-key -T prefix y run-shell true",
+        ]))
+        let rows = ShortcutRow.prefixRows(table)
+        XCTAssertEqual(rows.first?.key, "⌃A 0…1")
+        XCTAssertTrue(rows.contains { $0.key == "⌃A c" && $0.explanation == "new tab" })
+        XCTAssertTrue(rows.contains { $0.key == "⌃A y" && $0.explanation.contains("which Dispatch can't run") })
+        XCTAssertEqual(rows.last?.key, "⌃A ⌃A")
+    }
+
     private func key(_ code: UInt16, _ text: String, _ flags: NSEvent.ModifierFlags = [], up: Bool = false,
                      repeating: Bool = false, at time: TimeInterval = 0) -> NSEvent {
         NSEvent.keyEvent(with: up ? .keyUp : .keyDown, location: .zero, modifierFlags: flags, timestamp: time, windowNumber: 0,

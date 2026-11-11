@@ -251,16 +251,18 @@ would get none.
 The Mac app has its own updater, using Foundation, CryptoKit, Security and macOS tools; there is no updater dependency.
 The first-launch setup sheet (`LocalAgentsConsent`: Chat, Tabs, then the agents question on Prefs) offers **Keep
 Dispatch up to date** checked; existing installations that have not answered get the sheet with that section alone.
-Nothing is requested until Let's roll! (Continue on the updates-only sheet) saves the choice; Skip saves nothing.
+Nothing is requested until Let's roll! (Continue on the updates-only sheet) saves the choice; Not Now saves nothing.
 The sheet shows once per Mac, answered or not: `settings.json` records it (`setupShown`), shared by Release and Debug
 builds, which keep separate defaults. Settings › General › Updates can change the choice and
 check manually without enabling it. Unanswered or off (also the default for older settings files), there are no
 automatic requests. On, Dispatch checks once a day
-while running and downloads newer versions, then offers **Restart and install** in a sheet on the main window.
-**Check for updates** downloads a newer release it finds straight away, without opting in; Settings shows the
-download's size and progress, then verification, with **Cancel**, and then **Restart and install** (no sheet: the
+while running and downloads newer versions, then offers **Restart and Install** in a sheet on the main window.
+**Check for Updates** downloads a newer release it finds straight away, without opting in; Settings shows the
+download's size and progress, then verification, with **Cancel**, and then **Restart and Install** (no sheet: the
 click came from Settings). The feed request goes out while the installed app's signature is checked, so a build that
-cannot update itself still makes that one request when you click. Restart goes through the normal
+cannot update itself still makes that one request when you click, and says whether a newer version is out, with a
+**Download…** button for its DMG instead of installing it. Dispatch › Check for Updates… opens Settings there and checks.
+An offer that finds a sheet over the main window (the SSH consent, a close confirmation) waits for it to end. Restart goes through the normal
 running-process confirmation and session cleanup. An ordinary quit never installs a pending update.
 
 The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks/dispatch.rb`: the cask's literal
@@ -281,7 +283,7 @@ The daily check saves when it last ran only once a check completed: a network fa
 dropped connection, a server error) is tried again after 5 min, 30 min and 2 h, then daily, and a relaunch checks at
 once. Failures show in Settings with what failed and when ("Could not download Dispatch 0.1.7 (14:05): …"). A check,
 download or verification can be cancelled. Turning automatic updates off stops the daily check's work and discards an
-update it staged; one started with **Check for updates** stays.
+update it staged; one started with **Check for Updates** stays.
 Dispatch checks the DMG's SHA-256, mounts it read-only, copies the app to a private staging folder beside the installed
 app, and checks its version, minimum macOS, architecture, Developer ID signature (including nested code and all
 architectures) and Gatekeeper assessment. It leaves quarantine intact. A development/ad hoc build, a read-only or
@@ -361,8 +363,14 @@ checklist style; with neither, origin's `main`.
    three bundle ids, Ad Hoc, unexpired, the App Group on the two watch ones, made for this machine's certificate; it
    names what is wrong), the release record and its install site (below: clean, on a branch, a git author, push access,
    not a public GitHub repository; a site it can fill in), the deploy command, the pinned Xcode and the build user.
-2. **Build.** `release/builder.sh --platform ios`, as you or as the build user: an `.xcarchive` built unsigned and
-   signed ad hoc with each target's entitlements (`release/app.sh`).
+2. **Build.** `release/builder.sh --platform ios --cache`, as you or as the build user: an `.xcarchive` built unsigned
+   and signed ad hoc with each target's entitlements (`release/app.sh`). Unlike the Mac build, which starts from nothing
+   so that it matches GitHub's, it keeps the tree's `build/` between builds, in
+   `/private/tmp/release-build-cache-<user>/ios/` (the build user's alone): the Rust toolchain, the crates, the helpers
+   (reused while their sources are the same) and the SSH engine's dependencies. The first build after a restart (which
+   empties `/private/tmp`) downloads and compiles all of them; later ones mostly archive the app. Every source file gets
+   the current time first, so Cargo never takes an output for another commit's. The step's line shows the phase (tools,
+   Xcode archive and its target, ad hoc signatures, zipping), and afterwards how long each took.
 3. **Ship.** It shows the plan and asks `ship 0.1.7-20261110.1432 for iPhone? [y/N]`. The archive is exported with Apple
    Distribution and the profiles (manual signing) into `Dispatch.ipa`, checked (signature, profile, bundle id,
    version, build). Then recorded and deployed (below).

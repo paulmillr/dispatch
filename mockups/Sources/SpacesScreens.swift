@@ -38,6 +38,9 @@ struct SpacesRootScreen: View {
     var barFilter = 0
     /// iPad without the bottom bar: New as a plus disc in the bar row.
     var newInBar = false
+    /// The title on the bar's row beside Edit (the iPad sidebar's; the Duo's beside its chips).
+    var titleInBar: Bool? = nil
+    private var inBar: Bool { titleInBar ?? compactFilters }
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -79,12 +82,12 @@ struct SpacesRootScreen: View {
                     .padding(.horizontal, 16).padding(.bottom, 8)
                 }
             }
-            .navigationTitle(compactFilters ? "" : "Spaces")
+            .navigationTitle(inBar ? "" : "Spaces")
             // The iPad sidebar (320 points) puts the title on the bar's row at the leading edge, as Apple's iPad
             // sidebars do, with Edit at the trailing end of the same row; the phone keeps the large title.
-            .navigationBarTitleDisplayMode(compactFilters ? .inline : .large)
+            .navigationBarTitleDisplayMode(inBar ? .inline : .large)
             .toolbar {
-                if compactFilters {
+                if inBar {
                     ToolbarItem(placement: .topBarLeading) {
                         HStack(spacing: 10) {
                             if newInBar {
@@ -156,7 +159,6 @@ struct SpacesRootScreen: View {
                         Text(s.0).font(.body)
                         if let branch = s.1 {
                             HStack(spacing: 3) {
-                                Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
                                 Text(branch).font(.caption)
                             }
                             .foregroundStyle(.secondary).lineLimit(1)
@@ -272,6 +274,9 @@ struct SpaceScreen: View {
     var editing = false
     /// New tab held: the agents to start.
     var newTabMenu = false
+    /// The unfolded Duo's sidebar this wide (V7): the rows open the tab beside it, so no chevrons.
+    var sidebar: CGFloat? = nil
+    var tabs = MockSpaces.appTabs
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -287,7 +292,7 @@ struct SpaceScreen: View {
                         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 14)
                     }
                     VStack(spacing: 0) {
-                        ForEach(Array(MockSpaces.appTabs.enumerated()), id: \.element.id) { i, tab in
+                        ForEach(Array(tabs.enumerated()), id: \.element.id) { i, tab in
                             tabRow(tab, index: i)
                                 .background(Color.groupedRow)
                                 .offset(x: swiped && i == 2 ? -75 : 0)
@@ -298,7 +303,7 @@ struct SpaceScreen: View {
                                     }
                                 }
                                 .clipped()
-                            if i < MockSpaces.appTabs.count - 1 { Hairline(inset: 60).background(Color.groupedRow) }
+                            if i < tabs.count - 1 { Hairline(inset: 60).background(Color.groupedRow) }
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -366,16 +371,16 @@ struct SpaceScreen: View {
                             HStack(spacing: 6) {
                                 Text("app").font(.headline)
                                 HStack(spacing: 3) {
-                                    Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
                                     Text("dark-mode").font(.caption.weight(.semibold))
                                 }
                                 .foregroundStyle(.secondary)
                             }
-                            HostPath(path: "~/src/app").font(.caption)
+                            // Host · folder's name, the folder left out when it names the space (`TabScreenHeader.distinct`).
+                            Text("mba2").font(.caption).foregroundStyle(hostTint)
                         }
                         .padding(.leading, 4)
                     }
-                    .frame(width: 402 - 52 - (editing ? 78 : 44), alignment: .leading)
+                    .frame(width: (sidebar ?? 402) - 52 - (editing ? 78 : 44), alignment: .leading)
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
@@ -437,7 +442,9 @@ struct SpaceScreen: View {
                         Image(systemName: "line.3.horizontal").font(.body).foregroundStyle(.tertiary)
                     } else {
                         Text(tab.time).font(.subheadline).foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        if sidebar == nil {
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
                     }
                 }
                 Text(tab.line).font(.subheadline).foregroundStyle(tab.dot == .stateUnread ? Color.primary : .secondary).lineLimit(1)
@@ -447,12 +454,10 @@ struct SpaceScreen: View {
     }
 }
 
-/// The agent's mark at the row's leading edge: Claude's sparkle, Codex's angle brackets, Pi's π, a terminal glyph for a shell.
-/// The style comes from `agentIconStyle` (AgentIcons.swift); Y5's by default.
+/// The mark at the row's leading edge: the Chat capsule for an agent's tab, the terminal glyph for a shell (`AgentMark`).
 struct AgentGlyph: View {
     let kind: String
-    @Environment(\.agentIconStyle) private var style
-    var body: some View { StyledAgentGlyph(kind: kind, style: style) }
+    var body: some View { AgentMark(kind: kind) }
 }
 
 /// P3: the host disc on a tab screen opens the space switcher: this space's tabs with the current one marked, New tab,
@@ -519,7 +524,6 @@ struct SpaceSwitcherSheet: View {
                         HStack(spacing: 6) {
                             Text("app").font(.headline)
                             HStack(spacing: 3) {
-                                Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
                                 Text("dark-mode").font(.caption.weight(.semibold))
                             }
                             .foregroundStyle(.secondary)

@@ -39,9 +39,6 @@ struct TerminalSearchScreen: View {
     var body: some View {
         NavigationStack {
             TerminalMock(highlight: "theme.ts")
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    SegmentCapsule(selected: 0, badge: 3).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-                }
                 .safeAreaBar(edge: .bottom) {
                     HStack(spacing: 8) {
                         HStack(spacing: 8) {
@@ -65,7 +62,7 @@ struct TerminalSearchScreen: View {
                     .padding(.horizontal, 12).padding(.bottom, 4)
                 }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
+                .toolbar { CapsuleTabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm")), state: ModeButtonState(shown: .terminal, agent: false)) }
         }
     }
 }
@@ -89,9 +86,6 @@ struct TerminalMenuScreen: View {
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20))
                     .padding(.trailing, 12).padding(.bottom, 70)
                 }
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    SegmentCapsule(selected: 0, badge: 3).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-                }
                 .safeAreaBar(edge: .bottom) {
                     HStack(spacing: 0) {
                         ForEach(["Ctrl", "Esc", "Tab", "Alt"], id: \.self) { k in
@@ -105,7 +99,7 @@ struct TerminalMenuScreen: View {
                     .padding(.horizontal, 12).padding(.bottom, 4)
                 }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
+                .toolbar { CapsuleTabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm")), state: ModeButtonState(shown: .terminal, agent: false)) }
         }
     }
     private func row(_ title: String, _ symbol: String, note: String? = nil) -> some View {

@@ -24,10 +24,9 @@ struct TabsContent {
     /// The Terminal segment's folder as the shell reports it (OSC 7), for the phone's "host · folder · shell" (X9b);
     /// nil: the topology's.
     var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
-    /// The Chat segment's header controls around the host disc (conversation mode's disc; beside the Duo's switch,
-    /// Chat's ⋯ menu), given the disc (`keepsDisc`: it is the Duo header's switch, which stays; else the tab's menu,
-    /// with `chatMenu` in it); nil: the disc alone.
-    var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView, _ keepsDisc: Bool) -> AnyView)? = nil
+    /// The Chat segment's trailing header control, given the mode button (conversation mode's waveform takes its place
+    /// while on); nil: the button alone.
+    var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView) -> AnyView)? = nil
     /// The conversation's items in the phone's tab menu (`ChatThreadMenuItems`, X9b).
     var chatMenu: (@MainActor (MobileTab, MobilePane) -> AnyView)? = nil
     var files = FilesModeContent()
@@ -1245,24 +1244,19 @@ struct SpacesSpaceLine: View {
     }
 }
 
-/// A branch beside a space's name (P1, P2, P3): the branch glyph and its name, secondary.
+/// A branch beside a space's name (P1, P2, P3): its name, secondary, no glyph before it.
 struct SpacesBranchChip: View {
     /// A header's title with the branch after it, as one text that truncates as one line (P2, P3).
     static func title(_ title: String, branch: String?) -> Text {
         guard let branch else { return Text(title).font(.headline) }
-        // The glyph's own spoken name is "Divide".
-        let mark = Text(Image(systemName: "arrow.triangle.branch")).font(.caption2.weight(.semibold)).accessibilityLabel("branch")
-        return Text("\(Text(title).font(.headline))  \(mark.foregroundStyle(.secondary)) \(Text(branch).font(.caption.weight(.semibold)).foregroundStyle(.secondary))")
+        return Text("\(Text(title).font(.headline))  \(Text(branch).font(.caption.weight(.semibold)).foregroundStyle(.secondary))")
     }
 
     let branch: String
     var font: Font = .caption
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
-            Text(branch).font(font)
-        }
+        Text(branch).font(font)
         .foregroundStyle(.secondary)
         .lineLimit(1)
         // A usual branch keeps its whole name (the space's name gives way first); a long one truncates.

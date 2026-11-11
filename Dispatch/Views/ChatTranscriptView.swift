@@ -564,7 +564,8 @@ private struct ChatTranscriptRowView: View {
                 Text("moored · \(AgentWorkingAnimation.elapsedText(duration)) on passage").font(theme.typography.detail).foregroundStyle(theme.muted)
             }.padding(.vertical, 6).overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
         } else if let approval = row.approval {
-            ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle) { coordinator.showTerminal(session) }
+            ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle,
+                               keyed: coordinator.keyedApproval(session) === approval) { coordinator.showTerminal(session) }
                 .padding(.vertical, 8)
         } else if row.item?.kind == .user, let item = row.item {
             ChatRadioLog.line(time: row.time, info: messageInfo(row.time), station: HarbourRadio.ownStation, own: true, theme: theme) {
@@ -646,10 +647,13 @@ private struct ChatTranscriptRowView: View {
                     ChatBubbleOutline(start: row.bubbleStart, end: row.bubbleEnd)
                         .stroke(theme.border, lineWidth: 1)
                 }
+                // VoiceOver says who wrote it before the text.
+                .accessibilityElement(children: .contain).accessibilityLabel(session.agentTitle)
                 .accessibilityIdentifier("chat-message-\(row.id)")
             } else if let item = row.item { itemView(item) }
             else if let approval = row.approval {
-                ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle) { coordinator.showTerminal(session) }
+                ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle,
+                               keyed: coordinator.keyedApproval(session) === approval) { coordinator.showTerminal(session) }
             }
         }.padding(.bottom, row.bubbleEnd ? 12 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -823,6 +827,8 @@ struct ChatUserMessage: View {
                 .frame(maxWidth: width, alignment: .trailing)
             }
         }
+        // VoiceOver says who wrote it before the text.
+        .accessibilityElement(children: .contain).accessibilityLabel("You")
     }
 
     private var bubble: some View {

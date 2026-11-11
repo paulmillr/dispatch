@@ -139,7 +139,7 @@ extension MobileTabs {
 
 /// The iPad split's strip (I1–I8), the Mac's: the shown tab's space's tabs as pills in one glass track (state dot,
 /// the agent's mark or a terminal glyph, the title, × on the selected one), "+" (a tap a shell, held the agents), and
-/// the mode switch at the trailing end. With the sidebar hidden (I8) it leads with the sidebar pill and the space's
+/// the mode button at the trailing end (`PadModeButton`). With the sidebar hidden (I8) it leads with the sidebar pill and the space's
 /// capsule. Above the detail column's stack, so a screen a mode pushes (a file, a commit's diff) opens under it.
 struct PadStrip: View {
     let navigator: SpacesNavigator
@@ -171,7 +171,7 @@ struct PadStrip: View {
                         PadNewTabButton(navigator: navigator, space: space, connected: workspace.client != nil || workspace.opensShells)
                     }
                 }
-                PadModeSwitch(modes: modes.slots, enabled: Set(modes.available), selected: modes.shown,
+                PadModeButton(modes: modes.slots, enabled: Set(modes.available), selected: modes.shown,
                               review: modes.available.contains(.review) ? content.files.reviewCount(ref) : 0) { mode in
                     model.setMode(mode, for: ref)
                 }
@@ -243,11 +243,8 @@ struct PadSpaceCapsule: View {
                 HStack(spacing: 6) {
                     Text(space.name).font(.subheadline.weight(.semibold))
                     if let branch {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
-                            Text(branch).font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.secondary)
+                        Text(branch).font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .lineLimit(1)
@@ -664,7 +661,82 @@ struct PadModeSwitch: View {
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("View")
-        .accessibilityIdentifier(TabSegmentCapsule.identifier)
+        .accessibilityIdentifier(Self.identifier)
+    }
+
+    static let identifier = "tab-segments"
+}
+
+/// The iPad strip's mode button (I1–I8), the Mac strip's and the phone header's (`TabModeButton`): one glass capsule
+/// naming the shown mode, its glyph (filled in the accent away from Terminal) and, where the column has room
+/// (`titledColumn`), its title. A tap opens the tab's modes, Terminal, Chat, then Files, Review with its comment count
+/// and Commits, the shown one checked; a mode the tab cannot show yet (Review and Commits until the repository is
+/// known) dimmed. Review's comment count is beside Review in the menu, as the phone's button has it.
+struct PadModeButton: View {
+    /// The modes listed (`MobileTabs.modes`' slots).
+    let modes: [PadMode]
+    /// The modes that can be chosen now.
+    var enabled: Set<PadMode>? = nil
+    let selected: PadMode
+    /// Review's comment count; zero draws none.
+    let review: Int
+    let choose: (PadMode) -> Void
+    @Environment(\.tabsColumnWidth) private var column
+
+    /// The narrowest tab column whose button names its mode: an 11-inch iPad on its side beside the sidebar (890
+    /// points) does, upright (514) the glyph alone leaves the pills their room.
+    static let titledColumn: CGFloat = 640
+    static let identifier = TabModeButton.identifier
+
+    private var titled: Bool { (column ?? 0) >= Self.titledColumn }
+    private var on: Bool { selected != .terminal }
+
+    var body: some View {
+        Menu {
+            Section {
+                ForEach(modes.filter { $0.segment != .files }) { item($0) }
+            }
+            Section {
+                ForEach(modes.filter { $0.segment == .files }) { item($0) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(symbol: on ? TabModeButton.filled(selected.symbol) : selected.symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(on ? Color.dispatchPink : Color.primary)
+                if titled {
+                    Text(selected.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, titled ? 14 : 0)
+            .frame(minWidth: 44, minHeight: 38)
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .tint(Color.primary)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
+        .fixedSize()
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel("Mode")
+        .accessibilityValue("\(selected.title) selected")
+        .accessibilityHint("Lists the tab's modes")
+        .accessibilityIdentifier(Self.identifier)
+    }
+
+    /// A menu row checked when shown, as the system's toggles in a menu (`TabModeButton`'s).
+    private func item(_ mode: PadMode) -> some View {
+        Toggle(isOn: Binding(get: { mode == selected }, set: { _ in choose(mode) })) {
+            Text(mode.title)
+            if mode == .review, review > 0 { Text(TabModeButton.comments(review)) }
+            Image(symbol: mode.symbol)
+        }
+        .disabled(!(enabled?.contains(mode) ?? true))
     }
 }
 

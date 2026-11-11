@@ -169,7 +169,13 @@ else
   rm -rf "$work/build"
   step "build${build_user:+ as $build_user}" "$work/build-run.log" bash "$scripts/release/builder.sh" "$work/source" \
     "$work/build" --commit "$commit" --build-number "$number" --xcode-build "$xcode" --variant "$variant" \
-    --platform ios ${build_user:+--user "$build_user"}
+    --platform ios --cache ${build_user:+--user "$build_user"}
+  # How long each phase took (build.sh's "phase:" lines): the first build fills the cache, later ones reuse it.
+  times="$(awk 'function span(s) { return s < 60 ? s "s" : int(s / 60) "m " s % 60 "s" }
+    $1 == "phase:" { if (name != "") printf "%s%s %s", (count++ ? " · " : ""), name, span($2 - at)
+                     at = $2; name = $3; for (i = 4; i <= NF; i++) name = name " " $i }
+    END { print "" }' "$work/build.log")"
+  [[ -z "$times" ]] || note "$times"
 fi
 file="$work/build/$(field "$work/build" ios.file)"
 [[ "$(field "$work/build" commit)" == "$commit" && "$(field "$work/build" version)" == "$version" &&
@@ -195,14 +201,17 @@ ipa="$work/adhoc/Dispatch.ipa"
 export_build() {
   rm -rf "$work/archive" "$work/export" "$work/adhoc"
   mkdir -p "$work/archive" "$work/adhoc"
+  progress "unzipping the archive"
   ditto -x -k "$file" "$work/archive"
   local archives=("$work"/archive/*.xcarchive)
   [[ ${#archives[@]} == 1 && -d "${archives[0]}" ]] || { echo "no single .xcarchive in $file"; return 1; }
+  progress "exporting with Apple Distribution"
   DEVELOPER_DIR="$developer/Contents/Developer" xcodebuild -exportArchive -archivePath "${archives[0]}" \
     -exportOptionsPlist "$work/ExportOptions.plist" -exportPath "$work/export"
   local ipas=("$work"/export/*.ipa)
   [[ ${#ipas[@]} == 1 && -f "${ipas[0]}" ]] || { echo "the export made no single .ipa"; return 1; }
   # Checked as an iPhone checks it: the signature, the profile in it, this version and build.
+  progress "checking the .ipa"
   rm -rf "$work/check"
   mkdir "$work/check"
   ditto -x -k "${ipas[0]}" "$work/check"
@@ -225,12 +234,15 @@ fi
 
 # A new commit, never an amended one; already made by an interrupted run, it is only pushed.
 publish_record() {
+  progress "pulling"
   git -C "$record" pull --ff-only --quiet
+  progress "filling in the site"
   adhoc site "$site" "$phone" ${moved[@]+"${moved[@]}"} "$ipa" "$version" "$label"
   mkdir -p "$record/$variant/$label"
   cp "$ipa" "$work/build/build.json" "$record/$variant/$label/"
   git -C "$record" add -A -- adhoc-site "$variant/$label"
   git -C "$record" diff --cached --quiet || TZ=UTC git -C "$record" commit --quiet -m "$NAME for iPhone $label"
+  progress "pushing $(du -sh "$ipa" | cut -f1 | tr -d ' ')"
   git -C "$record" push --quiet
 }
 # The served folder gets the site's files over its own; the old flow's <variant>/<build>/ folders go. A clone gets one
@@ -238,6 +250,7 @@ publish_record() {
 serve_site() {
   # A rerun after a failed push holds the commit already, which no longer fast-forwards: the push then replaces it.
   [[ -z "$served_root" ]] || git -C "$served_root" pull --ff-only --quiet || true
+  progress "copying"
   rm -rf "${served:?}/$variant"
   cp -R "$site/." "$served/"
   [[ -n "$served_root" ]] || return 0
@@ -250,6 +263,7 @@ serve_site() {
     git -C "$served_root" update-ref "refs/heads/$branch" "$new" "$old"
     git -C "$served_root" reset --quiet
   fi
+  progress "pushing"
   git -C "$served_root" push --quiet --force-with-lease="$branch" origin "$branch"
 }
 if [[ -z "$push" ]]; then

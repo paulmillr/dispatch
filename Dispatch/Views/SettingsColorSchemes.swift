@@ -86,7 +86,7 @@ struct ColorSchemeGallery: View {
             SettingsGroup(title: "Your color schemes") {
                 SettingsSeparator()
                 HStack(spacing: 10) {
-                    Button("New…") { sheet = SchemeSheet(kind: .maker(nil), title: "New color scheme") }
+                    Button("New…") { sheet = SchemeSheet(kind: .maker(nil), title: "New color scheme", isNew: true) }
                         .accessibilityIdentifier("settings-new-theme")
                     Button("Add File…") { addFile() }.accessibilityIdentifier("settings-add-theme")
                     Button("Import…", action: importSchemes)
@@ -350,6 +350,16 @@ struct ColorSchemeGallery: View {
         let saved = done.replacing.map { save(.init(name: $0, theme: theme, role: .none, keepsName: true)) }
             ?? save(.init(name: name, theme: theme, role: .none))
         if let saved { for light in done.selects { selection(light).wrappedValue = saved } }
+        // A new scheme is used at once, on its own side (the side shown when it reads as either). Following the system,
+        // the gallery turns to that side; otherwise turning would change the app's appearance, so it says where it went.
+        if let saved, done.isNew {
+            let side = ColorSchemes.side(theme.text) ?? light
+            selection(side).wrappedValue = saved
+            if side != light {
+                if following { light = side }
+                else { message = "“\(saved)” is a \(side ? "light" : "dark") scheme: Dispatch uses it when it is \(side ? "light" : "dark"). Switch to \(side ? "Light" : "Dark") to see it." }
+            }
+        }
         sheet = nil
     }
 
@@ -444,6 +454,8 @@ struct SchemeSheet: Identifiable {
     var replacing: String?
     /// The sides (light true) whose choice moves to the new scheme: its original was chosen there.
     var selects: [Bool] = []
+    /// New…: the scheme made is used on its own side once saved.
+    var isNew = false
 }
 
 /// A tile's buttons, drawn in the tile's text color at its top right.

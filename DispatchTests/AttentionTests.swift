@@ -215,20 +215,21 @@ final class AttentionTests: XCTestCase {
         session.turns[0].ended = .now
         let entry = try XCTUnwrap(attention.entries.first)
         let response = try XCTUnwrap(attention.notificationRequest(for: entry))
-        XCTAssertEqual(response.content.title, "billing · Response ready")
-        XCTAssertEqual(response.content.subtitle, entry.path)
+        XCTAssertEqual(response.content.title, "billing", "the tab, whole")
+        XCTAssertEqual(entry.place, controller.workspace.current?.name, "a local tab's place is its space alone")
+        XCTAssertEqual(response.content.subtitle, "Done · " + entry.place)
         XCTAssertEqual(response.content.body, "Fixed duplicate webhook processing. All 12 tests pass.")
         XCTAssertEqual(response.content.userInfo["row"] as? String, session.transcriptRows.first?.id)
-        // Without text content: which pane and what happened, nothing of the reply or the folder.
+        // Without text content: which pane and what happened, nothing of the reply or where it is.
         // Set directly, as the cases above do: applying would also replace the chat theme and Liquid Glass the case
         // began with.
         let preferences = runtime.preferences
         defer { runtime.preferences = preferences }
         runtime.preferences.attentionTextContent = false
         let bare = try XCTUnwrap(attention.notificationRequest(for: entry))
-        XCTAssertEqual(bare.content.title, "billing · Response ready")
+        XCTAssertEqual(bare.content.title, "billing")
         XCTAssertEqual(bare.content.body, "")
-        XCTAssertEqual(bare.content.subtitle, "")
+        XCTAssertEqual(bare.content.subtitle, "Done")
         runtime.preferences = preferences
         session.busy = true
         XCTAssertNil(attention.notificationRequest(for: entry), "Resuming work invalidates the previous alert")
@@ -236,14 +237,16 @@ final class AttentionTests: XCTestCase {
         let permission = try XCTUnwrap(attention.notificationRequest(for: XCTUnwrap(attention.entries.first)))
         XCTAssertEqual(permission.identifier, response.identifier)
         XCTAssertEqual(permission.content.threadIdentifier, response.content.threadIdentifier)
-        XCTAssertEqual(permission.content.title, "billing · Permission needed")
+        XCTAssertEqual(permission.content.title, "billing")
+        XCTAssertEqual(permission.content.subtitle, "Permission needed · " + entry.place)
         XCTAssertEqual(permission.content.body, "Run npm test to verify the webhook changes?")
         let questions = ClaudeQuestions.choices([("Which **environment** should I use?", ["Staging", "Production"])])
         session.approvals = [PendingApproval(key: "question", operation: "AskUserQuestion", turnID: "turn", questions: questions) { _ in }]
         let questionEntry = try XCTUnwrap(attention.entries.first)
         let question = try XCTUnwrap(attention.notificationRequest(for: questionEntry))
         XCTAssertEqual(question.identifier, response.identifier)
-        XCTAssertEqual(question.content.title, "billing · Question for you")
+        XCTAssertEqual(question.content.title, "billing")
+        XCTAssertEqual(question.content.subtitle, "Question for you · " + questionEntry.place)
         XCTAssertEqual(question.content.body, "Which environment should I use?")
         XCTAssertEqual(question.content.userInfo["row"] as? String, "approval-\(session.approvals[0].id)")
         attention.openNotification(question.content.userInfo)
@@ -251,6 +254,24 @@ final class AttentionTests: XCTestCase {
         XCTAssertTrue(session.approvals[0].pending, "Opening a question never answers it")
         session.approvals[0].resolve(.deny)
         XCTAssertNil(attention.notificationRequest(for: questionEntry), "Resolved requests cannot produce another alert")
+    }
+
+    /// A pane's place is its space, and its host's name when that is not this Mac: "release on mini". The tmux
+    /// window's name (`dispatch-helper` under an agent Dispatch launched) is no part of it.
+    func testANotificationPlaceIsTheSpaceAndARemoteHost() {
+        let workspace = Workspace()
+        var space = Space(name: "release", directory: "/tmp")
+        let shell = SSHShell(destination: "mini", executable: "/usr/bin/false")
+        space.panes[0].tabs[0].machine = .ssh(shell)
+        let terminal = space.tabs[0].id, generation = System.uuid()
+        workspace.hosts.begin(terminal, generation: generation, destination: "mini")
+        workspace.hosts.update(terminal, generation: generation, destination: "mini",
+            greeting: SSHGreeting(version: 1, host: "mini", boot: "test", uid: 501, home: "/tmp", capabilities: []), state: .connected)
+        space.hostID = .authenticated("mini", uid: 501)
+        workspace.spaces = [space]
+        let entry = AttentionEntry.entries(workspace: workspace, sessions: [:]).first { $0.id == terminal }
+        XCTAssertEqual(entry?.place, "release on " + workspace.hosts.record(space.hostID).name)
+        XCTAssertEqual(workspace.hosts.record(space.hostID).name, "mini")
     }
 
     func testNotificationClickRevealsTheResponseAndDoesNotJumpIntoAnotherConversation() throws {

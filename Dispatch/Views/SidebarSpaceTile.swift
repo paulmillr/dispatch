@@ -138,7 +138,7 @@ struct HostHeadingMark: View {
 
     private var tone: Color {
         if let foreground = host.tint?.foreground { return hovering ? foreground : foreground.opacity(0.75) }
-        return hovering ? Chrome.palette.secondary : Chrome.palette.detail
+        return hovering ? Chrome.palette.secondary : Chrome.palette.detailText
     }
 
     var body: some View {
@@ -171,7 +171,7 @@ struct SidebarSpaceTile: View {
     private var label: SpaceBranchName {
         SpaceBranchName(id: entry.id, name: entry.name, showBranch: showBranch, fontSize: metrics.nameSize,
                         inline: true, branchFontSize: metrics.detailSize, branch: branch,
-                        branchColor: selected ? Chrome.palette.sidebarDetail : Chrome.palette.detail)
+                        branchColor: selected ? Chrome.palette.sidebarDetail : Chrome.palette.detailText)
     }
 
     private var activity: some View {
@@ -455,7 +455,7 @@ struct SidebarStatusPill: View {
     var body: some View {
         let dark = Chrome.palette.isDark
         let color = activity.reconnecting ? Chrome.palette.warning : activity.offline ? Chrome.muted
-            : activity.blocked || activity.failed ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
+            : activity.blocked ? Chrome.palette.green : activity.failed ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
         HStack(spacing: 4) {
             if glyph {
                 AgentActivityGlyph(tabIDs: surfaceIDs, connecting: connecting, size: metrics.activitySize).fixedSize()

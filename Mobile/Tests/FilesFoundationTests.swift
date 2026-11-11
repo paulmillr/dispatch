@@ -21,7 +21,6 @@ final class FilesFoundationTests: XCTestCase {
         XCTAssertEqual(FilesMode.allCases.map(\.symbol), ["folder", "pencil.and.list.clipboard", "clock.arrow.circlepath"])
         XCTAssertEqual(FilesMode.available(repository: true), [.files, .review, .commits])
         XCTAssertEqual(FilesMode.available(repository: false), [.files], "outside a repository only Files")
-        XCTAssertEqual(TabSegmentCapsule.headerWidth(3), 124)
     }
 
     func testAPlainShellTabHasTerminalAndFiles() throws {
@@ -31,43 +30,6 @@ final class FilesFoundationTests: XCTestCase {
         model.sync([ShellFixtures.input(shells)])
         let tab = try XCTUnwrap(model.workspace(ShellFixtures.host.id)?.tabs.first { $0.isShell })
         XCTAssertEqual(TabSegment.available(for: tab), [.terminal, .files])
-    }
-
-    /// The capsule is a container of buttons labelled with the segments' titles, the shown one selected, the Files
-    /// badge spoken as its value.
-    func testTheCapsuleIsButtonsLabelledByTitle() async throws {
-        AccessibilityLabelTests.enableAccessibility()
-        let (window, host) = try show(TabSegmentCapsule(selection: .constant(.chat), badge: 3).frame(width: 370))
-        defer { window.isHidden = true }
-        var elements: [NSObject] = []
-        try await TestSupport.eventually(timeout: .seconds(2)) {
-            elements = accessibilityElements(host.view)
-            return elements.contains { $0.accessibilityLabel == "Files" }
-        }
-        let labels = elements.compactMap(\.accessibilityLabel)
-        for title in ["Terminal", "Chat", "Files"] { XCTAssertTrue(labels.contains(title), "\(title) in \(labels)") }
-        let chat = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Chat" })
-        XCTAssertTrue(chat.accessibilityTraits.contains(.selected))
-        XCTAssertTrue(chat.accessibilityTraits.contains(.button))
-        let files = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Files" })
-        XCTAssertEqual(files.accessibilityValue, "3 comments")
-    }
-
-    /// The capsule keeps its bar height at xxxLarge and larger sizes (the large content viewer takes over).
-    func testTheCapsuleFitsAPhoneAtTheLargestSizes() throws {
-        for size in [DynamicTypeSize.large, .xxxLarge, .accessibility5] {
-            final class Box { var size = CGSize.zero }
-            let box = Box()
-            let capsule = TabSegmentCapsule(selection: .constant(.terminal), badge: 3)
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { box.size = $0 }
-                .frame(width: 370)
-                .environment(\.dynamicTypeSize, size)
-            let (window, _) = try show(capsule)
-            window.isHidden = true
-            XCTAssertEqual(box.size.width, 370, accuracy: 0.5, "\(size)")
-            XCTAssertGreaterThanOrEqual(box.size.height, 34, "\(size)")
-            XCTAssertLessThan(box.size.height, 64, "\(size): a bar's control")
-        }
     }
 
     /// The tab screen shows the Files segment's explanation for a plain SSH host (S1), the modes for a granted one, and
@@ -80,10 +42,9 @@ final class FilesFoundationTests: XCTestCase {
                                terminal: { _, _ in Text("terminal-body") }, chat: { _, _ in Text("chat-body") })
         let (window, host) = try show(NavigationStack { screen }, size: CGSize(width: 402, height: 874))
         defer { window.isHidden = true }
-        // The phone's Files is in the mode button's menu (a hold, which has no accessibility action): the View menu's
-        // request shows it, as the button's menu does.
+        // The phone's Files is in the mode button's menu: the View menu's request shows it, as a pick in the menu does.
         try await TestSupport.eventually(timeout: .seconds(2)) {
-            accessibilityElements(host.view).contains { $0.accessibilityLabel?.hasPrefix("Show ") == true }
+            accessibilityElements(host.view).contains { $0.accessibilityLabel == "Mode" }
         }
         TabSegment.requestSwitch(ref, to: TabSegment.files)
         try await TestSupport.eventually(timeout: .seconds(2)) {
@@ -394,10 +355,9 @@ final class FilesFoundationTests: XCTestCase {
         try await TestSupport.eventually { helper.requests("files.branch").count == 1 }
         XCTAssertEqual(helper.requests("files.git").count, 1)
         XCTAssertFalse(ticks.waiting, "no polling on Terminal")
-        // The phone's Files is in the mode button's menu (a hold, which has no accessibility action): the View menu's
-        // request shows it, as the button's menu does.
+        // The phone's Files is in the mode button's menu: the View menu's request shows it, as a pick in the menu does.
         try await TestSupport.eventually(timeout: .seconds(2)) {
-            accessibilityElements(host.view).contains { $0.accessibilityLabel?.hasPrefix("Show ") == true }
+            accessibilityElements(host.view).contains { $0.accessibilityLabel == "Mode" }
         }
         TabSegment.requestSwitch(ref, to: TabSegment.files)
         try await TestSupport.eventually { ticks.waiting }

@@ -17,8 +17,9 @@ final class DictationStore {
     var wakeWord: String { WakeWordsSetting.title(wakeWords.first ?? "dispatch") }
 }
 
-/// The composer's dictation control, beside Send: a microphone that listens until clicked again (ChatDictation: what
-/// it hears shows in the draft as it comes). While it listens it shows the level and how to finish; a failure shows
+/// The composer's dictation control, beside Send: a click dictates one message, which a second click inserts (↩ sends
+/// it, esc cancels); its menu (right-click) starts conversation mode, as a tap of the voice key does (ChatDictation:
+/// what it hears shows in the draft as it comes). While it listens it shows the level and how to finish; a failure shows
 /// why until clicked, or for `DictationErrorTimeout` (10 s).
 struct ChatDictationButton: View {
     @Environment(\.chatTheme) private var theme
@@ -32,8 +33,15 @@ struct ChatDictationButton: View {
             Button(action: toggle) { glyph(active: active) }
                 .buttonStyle(.plain)
                 .help(help(active: active))
-                .accessibilityLabel(active ? "Stop dictation" : "Dictate")
+                .accessibilityLabel(active ? (ChatDictation.shared.conversation ? "End conversation mode" : "Stop dictation") : "Dictate")
                 .accessibilityIdentifier("chat-dictate")
+                .contextMenu {
+                    Button("Dictate One Message") { ChatDictation.shared.start(session) }.disabled(active)
+                    Button("Start Conversation Mode") { ChatDictation.shared.startConversation(session) }.disabled(active)
+                }
+                .accessibilityAction(named: "Start conversation mode") {
+                    if !active { ChatDictation.shared.startConversation(session) }
+                }
         }
     }
 
@@ -59,7 +67,7 @@ struct ChatDictationButton: View {
         case .starting: "Starting…"
         case .listening: ChatDictation.shared.conversation
             ? "Conversation · “\(DictationStore.shared.wakeWord), send” · " + (DictationStore.shared.shortcut.map { "tap \($0.name) to stop" } ?? "click to stop")
-            : "Listening · ↩ sends · esc cancels"
+            : "Listening · click inserts · ↩ sends · esc cancels"
         case .transcribing: "Transcribing…"
         }
     }
@@ -91,7 +99,9 @@ struct ChatDictationButton: View {
         }
         let preferences = TerminalRuntime.shared.preferences
         let engine = preferences.dictationEngine.label(whisper: preferences.whisperModel)
-        return "Conversation mode · \(engine)" + (DictationStore.shared.shortcut.map { " · or tap \($0.name); hold it for one message" } ?? "")
+        // Conversation mode listens on and reads replies aloud: only ever chosen by name (this menu, a tap of the key).
+        return "Dictate one message · \(engine) · right-click for conversation mode"
+            + (DictationStore.shared.shortcut.map { " · or hold \($0.name) for one message, tap it for conversation mode" } ?? "")
     }
 
     private func toggle() {

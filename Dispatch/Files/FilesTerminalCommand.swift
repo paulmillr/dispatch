@@ -1,15 +1,10 @@
 import Foundation
 import Observation
 
-/// Open in editor and cd here (F2a, F2d, F5a "$EDITOR in this tab"): the command is typed into the tab's own
-/// terminal, so it runs on whichever host that shell is on (a remote tab's paths are that host's), then the tab
-/// shows its terminal. Nothing is typed unless the shell sits at a prompt.
-enum FilesEditor {
-    enum Action: Equatable, Sendable {
-        case edit
-        case changeDirectory
-    }
-
+/// cd Here (F2a, F2d): `cd 'path'` is typed into the tab's own terminal, so it runs on whichever host that shell is on (a
+/// remote tab's paths are that host's), then the tab shows its terminal. Nothing is typed unless the shell sits at a
+/// prompt.
+enum FilesTerminalCommand {
     /// Why nothing was typed.
     enum Refusal: Equatable, Sendable {
         /// A program runs in the terminal (or its input is held during a reconnect): typing would go to it.
@@ -23,7 +18,7 @@ enum FilesEditor {
             switch self {
             case .busy: "The terminal is busy"
             case .noTerminal: "The terminal isn’t running"
-            case .unsafePath: "This name has control characters; open it from the shell"
+            case .unsafePath: "This name has control characters; cd to it from the shell"
             }
         }
     }
@@ -34,19 +29,15 @@ enum FilesEditor {
         "'" + path.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 
-    /// The line typed for `action`, or nil when the path cannot be typed safely. `$EDITOR` is expanded by the
-    /// shell, with vi when it is unset, as most tools do.
-    static func command(for path: String, action: Action) -> String? {
+    /// The line typed to change to `path`, or nil when the path cannot be typed safely.
+    static func command(changingTo path: String) -> String? {
         guard !path.isEmpty, !hasControlCharacters(path) else { return nil }
-        switch action {
-        case .edit: return "${EDITOR:-vi} " + quote(path)
-        case .changeDirectory: return "cd " + quote(path)
-        }
+        return "cd " + quote(path)
     }
 
     /// Whether to type now. `busy`: the terminal is not at a shell prompt (`needsConfirmQuit`) or its input is parked.
-    static func refusal(path: String, action: Action, hasTerminal: Bool, busy: Bool) -> Refusal? {
-        if command(for: path, action: action) == nil { return .unsafePath }
+    static func refusal(path: String, hasTerminal: Bool, busy: Bool) -> Refusal? {
+        if command(changingTo: path) == nil { return .unsafePath }
         return terminalRefusal(hasTerminal: hasTerminal, busy: busy)
     }
 
@@ -62,15 +53,16 @@ enum FilesEditor {
 
     /// Types the command and a Return into the tab's terminal and shows the terminal, or posts why it did not.
     @MainActor @discardableResult
-    static func run(_ action: Action, path: String, tab: UUID, files: FilesCoordinator) -> Refusal? {
-        guard let command = command(for: path, action: action) else {
-            FilesEditorNotices.shared.post(Refusal.unsafePath.message, tab: tab)
+    static func changeDirectory(_ path: String, tab: UUID, files: FilesCoordinator) -> Refusal? {
+        guard let command = command(changingTo: path) else {
+            FilesTerminalNotices.shared.post(Refusal.unsafePath.message, tab: tab)
             return .unsafePath
         }
         return type(command, tab: tab, files: files)
     }
 
-    /// Types `line`, built by `command`, and a Return into the tab's terminal and shows the terminal, under `run`'s rule.
+    /// Types `line`, built by `command`, and a Return into the tab's terminal and shows the terminal, under
+    /// `changeDirectory`'s rule.
     /// A shell that marks its prompt (OSC 133, Dispatch's own shell integration) is at it or not. One that never marks
     /// it (in a tmux or herdr pane, on an SSH host) is asked about through the tab's helper, which checks the pane's own
     /// processes; then the line is typed once it answers, into the same terminal only.
@@ -84,7 +76,7 @@ enum FilesEditor {
                 let idle = await helper.idle(node)
                 guard idle == true, TerminalRuntime.shared.views[tab] === view, !view.inputParked,
                       helperTerminal(tab)?.node == node else {
-                    FilesEditorNotices.shared.post(Refusal.busy.message, tab: tab)
+                    FilesTerminalNotices.shared.post(Refusal.busy.message, tab: tab)
                     return
                 }
                 write(line, tab: tab, files: files)
@@ -93,7 +85,7 @@ enum FilesEditor {
         }
         let busy = parked || (surface?.needsConfirmQuit ?? true)
         if let refusal = terminalRefusal(hasTerminal: surface != nil, busy: busy) {
-            FilesEditorNotices.shared.post(refusal.message, tab: tab)
+            FilesTerminalNotices.shared.post(refusal.message, tab: tab)
             return refusal
         }
         return write(line, tab: tab, files: files)
@@ -119,16 +111,16 @@ enum FilesEditor {
         _ = surface.key(enter)
         enter.action = .release
         _ = surface.key(enter)
-        FilesEditorNotices.shared.clear(tab)
+        FilesTerminalNotices.shared.clear(tab)
         files.switchMode(tab, to: .terminal)
         return nil
     }
 }
 
-/// The preview header's brief notice when Open in editor or cd here typed nothing, per tab. It lives outside the
-/// files session so the list's ⌘O and the preview's button report the same way.
-@MainActor @Observable final class FilesEditorNotices {
-    static let shared = FilesEditorNotices()
+/// The files header's brief notice when cd Here typed nothing, per tab: in the header, so it shows whichever view and
+/// pane are shown. It lives outside the files session so the crumbs' menu and the folder preview report the same way.
+@MainActor @Observable final class FilesTerminalNotices {
+    static let shared = FilesTerminalNotices()
 
     struct Notice: Equatable {
         let id: UUID
@@ -143,7 +135,7 @@ enum FilesEditor {
         let notice = Notice(id: System.uuid(), text: text)
         notices[tab] = notice
         Task { @MainActor [weak self] in
-            try? await System.sleep(for: .seconds(4), "files.editor-notice")
+            try? await System.sleep(for: .seconds(4), "files.terminal-notice")
             if self?.notices[tab] == notice { self?.notices[tab] = nil }
         }
     }

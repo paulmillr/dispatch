@@ -96,7 +96,7 @@ struct TabsHeaderPill<Label: View>: View {
     }
 }
 
-/// The back pill: a chevron and the previous screen's title (a tab's is `TabHeaderBackAndMenu`).
+/// The back pill: a chevron and the previous screen's title (a tab's is `TabsBackDisc`).
 struct TabsBackPill: View {
     /// A screen's name truncates past this, so the bar keeps room for the title and the trailing pill: a long space
     /// or tab name pushed every item into the bar's "…" menu.
@@ -120,7 +120,7 @@ struct TabsBackPill: View {
     }
 }
 
-/// Back on a tab that is gone (no tab, no menu beside it; a tab's is `TabHeaderBackAndMenu`): the system's chevron
+/// Back on a tab that is gone (no tab, no title capsule beside it): the system's chevron
 /// circle without a label; how many conversations elsewhere need the user is a badge on its corner (Messages' unread
 /// count). VoiceOver still names the screen it returns to, and reads the count as its value.
 struct TabsBackDisc: View {
@@ -210,6 +210,9 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     /// The trailing control is a system bar item (a phone tab's mode button): the bar draws its glass. Otherwise the
     /// controls bring their own.
     var trailingGlass = false
+    /// A tab on the phone (B7): the title, its subtitle and the host's disc in one glass capsule that opens the tab's
+    /// menu (`TabMenuItems`), beside Back's own circle, as Messages heads a conversation. Nil: the title block alone.
+    var titleCapsule: TabsTitleCapsule? = nil
     @ViewBuilder var back: Back
     @ViewBuilder var subtitle: Subtitle
     @ViewBuilder var trailing: Trailing
@@ -220,9 +223,11 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
         // overflowed the bar, which then showed only its "…" menu, the back pill inside it.
         ToolbarItem(placement: .topBarLeading) {
             TabsHeaderLeading(width: Self.leadingWidth(column: column, trailing: trailingWidth, atTrailingEdge: atTrailingEdge),
-                              back: showsBack, fills: titleBlock) {
+                              back: showsBack, fills: titleBlock && titleCapsule == nil) {
                 if showsBack { back }
-                if titleBlock {
+                if let titleCapsule {
+                    TabsTitleCapsuleView(title: title, capsule: titleCapsule) { subtitle }
+                } else if titleBlock {
                     TabsTitleBlock(title: title) { subtitle }
                         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         .padding(.leading, 4)
@@ -253,6 +258,63 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
         // The bar's height is fixed: its title grows to xxxLarge, as the system's inline titles do.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .padding(.leading, 4)
+    }
+}
+
+/// What a tab's title capsule holds besides the title (`TabsScreenHeader.titleCapsule`): the host's disc, and the menu
+/// a tap opens (nil: no menu, a preview without the stack).
+struct TabsTitleCapsule {
+    let glyph: AnyView
+    var menu: AnyView?
+}
+
+/// A tab's title capsule (B7): the host's disc, then the title over its subtitle (host · folder), one line each, in one
+/// glass capsule as wide as they need and no wider than the bar leaves. A tap opens the tab's menu.
+struct TabsTitleCapsuleView<Subtitle: View>: View {
+    let title: String
+    let capsule: TabsTitleCapsule
+    @ViewBuilder var subtitle: Subtitle
+    static var identifier: String { "tab-title-capsule" }
+
+    var body: some View {
+        Group {
+            if let menu = capsule.menu {
+                Menu { menu } label: { label }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .tint(Color.primary)
+                    .accessibilityHint("Opens the tab's menu")
+            } else {
+                label
+            }
+        }
+        .glassEffect(capsule.menu == nil ? .regular : .regular.interactive(), in: Capsule())
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityIdentifier(Self.identifier)
+    }
+
+    private var label: some View {
+        HStack(spacing: 8) {
+            capsule.glyph
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                subtitle
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 16)
+        .frame(minHeight: 44)
+        .contentShape(Capsule())
+        .accessibilityElement(children: .combine)
     }
 }
 

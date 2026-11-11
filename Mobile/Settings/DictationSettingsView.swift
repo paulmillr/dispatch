@@ -1,3 +1,4 @@
+import AVFoundation
 import Dictation
 import SwiftUI
 
@@ -111,5 +112,86 @@ private extension DictationModelStore.State {
     var failed: String? {
         if case .failed(let message) = self { return message }
         return nil
+    }
+}
+
+/// Settings › Chat › Voice: the voice conversation mode and Read Aloud speak in (`SpeechVoice`). Spoken Content, the
+/// default, follows the Settings app; or one of this phone's voices in the user's languages, best first, Personal Voice
+/// once allowed. Tapping a voice chooses it and plays a sample. The list follows voices downloaded or deleted meanwhile.
+struct SpeechVoiceSettingsView: View {
+    @Bindable var settings: MobileSettings
+    @State private var voices: [AVSpeechSynthesisVoice] = []
+    @State private var personalVoice = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+    @State private var sampler = SystemMessageSpeaker()
+
+    var body: some View {
+        Form {
+            Section {
+                row(id: "", title: "Spoken Content", detail: "The Settings app’s voice, speed and pitch")
+            } footer: {
+                Text("Spoken Content uses what the Settings app sets in Accessibility › Spoken Content › Voices, where more voices download, Premium and Enhanced ones among them: they sound far more natural than the default ones.")
+            }
+            ForEach(groups, id: \.title) { group in
+                Section(group.title) {
+                    ForEach(group.voices, id: \.identifier) { voice in
+                        row(id: voice.identifier, title: voice.name, detail: SpeechVoice.language(voice))
+                    }
+                }
+            }
+            if personalVoice == .notDetermined {
+                Section {
+                    Button("Use Personal Voice") {
+                        AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in
+                            Task { @MainActor in
+                                personalVoice = status
+                                reload()
+                            }
+                        }
+                    }
+                } footer: {
+                    Text("A Personal Voice made on this \(MobileDevice.name) (Accessibility › Personal Voice) can read replies once you allow it.")
+                }
+            }
+        }
+        .navigationTitle("Voice")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in
+            reload()
+        }
+        .onDisappear { sampler.stop() }
+    }
+
+    private func reload() {
+        voices = SpeechVoice.offered(current: settings.speechVoice)
+    }
+
+    /// Personal Voice, Premium, Enhanced, then the rest; empty groups left out.
+    private var groups: [(title: String, voices: [AVSpeechSynthesisVoice])] {
+        let personal = voices.filter { $0.voiceTraits.contains(.isPersonalVoice) }
+        let others = voices.filter { !$0.voiceTraits.contains(.isPersonalVoice) }
+        return [("Personal Voice", personal),
+                ("Premium", others.filter { $0.quality == .premium }),
+                ("Enhanced", others.filter { $0.quality == .enhanced }),
+                ("Default", others.filter { $0.quality != .premium && $0.quality != .enhanced })]
+            .filter { !$0.voices.isEmpty }
+    }
+
+    private func row(id: String, title: String, detail: String) -> some View {
+        let selected = settings.speechVoice == id || (id.isEmpty && SpeechVoice.installed(settings.speechVoice) == nil)
+        return Button {
+            settings.speechVoice = id
+            sampler.speak("This is how replies are read aloud.", voice: id)
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if selected { Image(systemName: "checkmark").foregroundStyle(.tint).accessibilityLabel("In use") }
+            }
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

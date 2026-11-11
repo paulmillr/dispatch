@@ -18,8 +18,7 @@ struct QueueRowScreen: View {
                     VStack(spacing: 10) {
                         Spacer(minLength: 60)
                         Bubble(text: "Make billing webhook retries idempotent.", user: true)
-                        BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.",
-                                summary: "2 files +38 −4 · 10:17")
+                        BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.")
                         Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
                         BubbleH(text: "The invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard. Moving the check into a shared middleware so both routes get it.")
                     }
@@ -46,7 +45,7 @@ struct QueueRowScreen: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
+            .toolbar { CapsuleTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
             .overlay { if variant == .menu { QueueMenuOverlay(text: queued[0]) } }
         }
     }
@@ -230,11 +229,9 @@ struct QueuePausedScreen: View {
                 VStack(spacing: 10) {
                     Spacer(minLength: 60)
                     Bubble(text: "Make billing webhook retries idempotent.", user: true)
-                    BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.",
-                            summary: "2 files +38 −4 · 10:17")
+                    BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.")
                     Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
-                    BubbleH(text: "The invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard.",
-                            summary: "Stopped · 10:21")
+                    BubbleH(text: "The invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard.")
                     QueuedBubblesMock(rows: ["Also add a test that delivers the same event twice.",
                                              "Then run the webhook suite and tell me what fails."],
                                       caption: "2 queued · paused after Stop", resume: true)
@@ -248,7 +245,7 @@ struct QueuePausedScreen: View {
             .scrollEdgeEffectStyle(.soft, for: .bottom)
             .safeAreaBar(edge: .bottom) { Composer(placeholder: "Queue another…") }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
+            .toolbar { CapsuleTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
         }
     }
 }

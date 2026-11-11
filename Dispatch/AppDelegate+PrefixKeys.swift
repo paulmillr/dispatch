@@ -24,8 +24,10 @@ extension AppDelegate {
     /// A server binding Dispatch cannot run as tmux would (a program, a size, a target, tmux's own client UI): the
     /// sequence ends there, refused, rather than running something else.
     func rejectPrefix(_ command: String, surface: UUID) {
-        print("Prefix binding not supported in Dispatch: \(command)")
-        NSSound.beep()
+        let table = prefixTable(for: surface)
+        let key = table?.rejected.first { $0.value == command }?.key
+        let sequence = [table?.prefix.symbol, key?.symbol].compactMap { $0 }.joined(separator: " ")
+        WindowNotes.shared.show("\(sequence.isEmpty ? "This key" : sequence) runs “\(command)”, which Dispatch can't run.")
     }
 
     /// After every ended sequence in a tmux space the server's table is read again, so a `bind` or `set prefix` made
@@ -81,7 +83,7 @@ extension AppDelegate {
             if let next = (1...presets.count).lazy.map({ presets[(start + $0) % presets.count] })
                 .first(where: { self.workspace.canApplyLayout($0, in: space) }) { workspace.applyLayout(next) }
         case .layout(let preset):
-            workspace.applyLayout(preset)
+            applyLayoutOrExplain(preset)
         // The multiplexer's own command, run on the server of the focused terminal (old app: tmux commands).
         case .tmux(let command):
             if let tab = workspace.spaces.flatMap(\.tabs).first(where: { $0.surfaceIDs.contains(surface) }), let node = tab.terminal {

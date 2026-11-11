@@ -166,6 +166,7 @@ struct PaneView: View {
                 Button("Rename Pane…") { controller.rename(title: "Rename pane", value: activeLabel ?? "") { workspace.updateTab(pane.selected, customTitle: $0) } }
                 Button("Move Pane to New Space") { workspace.moveTabToNewSpace(pane.selected) }
                 Divider()
+                Button("Close Pane") { controller.closeTab(pane.selected) }.help(MoveTargetsSection.closeHelp)
                 Button("Detach") { controller.detachTab(pane.selected) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminatePane(pane.selected) }
             }

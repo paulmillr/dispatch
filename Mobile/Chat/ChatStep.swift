@@ -20,19 +20,38 @@ extension ChatStep {
     static var removed: Color { .removed }
 }
 
-/// M5f's kind badge: the word in mono caps on a faint tint, 50 points wide whatever the word, so the log's paths line up.
+/// M5f's kind badge: its icon (`ChatStep.Kind.symbol`, message details' glyph), then the word in mono caps, on a faint tint; every badge as wide as the widest word
+/// ("SEARCH") at any text size, so what follows it starts at one place in every row.
 struct ChatStepBadge: View {
     let kind: ChatStep.Kind
-    @ScaledMetric(relativeTo: .caption2) private var width: CGFloat = 50
+    /// Every badge's word: the widest sets the width, laid out but not drawn.
+    private static let words: [ChatStep.Kind] = [.read, .patch, .run, .search, .think, .web, .tool]
+    @ScaledMetric(relativeTo: .caption2) private var icon: CGFloat = 12
     var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: kind.symbol)
+                .font(.caption2.weight(.semibold))
+                .imageScale(.small)
+                .frame(width: icon)
+            ZStack(alignment: .leading) {
+                ForEach(Self.words, id: \.label) { Self.word($0).hidden() }
+                Self.word(kind)
+            }
+        }
+        .foregroundStyle(kind.tint)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .frame(minHeight: 20)
+        .background(kind.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(kind.label)
+    }
+
+    private static func word(_ kind: ChatStep.Kind) -> some View {
         Text(kind.label.uppercased())
             .font(.caption2.weight(.bold).monospaced())
             .tracking(0.44)
-            .foregroundStyle(kind.tint)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .frame(minWidth: width, minHeight: 20, alignment: .leading)
-            .background(kind.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .accessibilityLabel(kind.label)
+            .lineLimit(1)
     }
 }

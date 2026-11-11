@@ -144,8 +144,8 @@ import Foundation
     /// The tab's identified host: its terminal's, else the one HostRegistry names for its helper's greeting.
     private static func identified(context: TerminalHostContext?, link: SSHCoordinator.Link?) -> HostID? {
         if let host = context?.host, host != .local, !host.isProvisional { return host }
-        guard let host = link?.greeting.host, !host.isEmpty, host.utf8.count <= 256 else { return nil }
-        return .authenticated(host)
+        guard let greeting = link?.greeting, !greeting.host.isEmpty, greeting.host.utf8.count <= 256 else { return nil }
+        return .authenticated(greeting.host, uid: greeting.uid)
     }
 
     /// Reads, inside an observation, the resolver's inputs that are observable: the tab's host state and its

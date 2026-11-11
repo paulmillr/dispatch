@@ -729,7 +729,7 @@
           // first prompt.
           let startup = TerminalRuntime.shared.preferences.startupCommand.trimmingCharacters(in: .whitespaces)
           if local, latest.machine == .local, latest.launchCommand == nil, !startup.isEmpty,
-             !FilesEditor.hasControlCharacters(startup) {
+             !FilesTerminalCommand.hasControlCharacters(startup) {
             try? await client.input(.init(terminal: terminal, bytes: Data((startup + "\r").utf8)))
           }
           assigned[terminal] = tab.id
@@ -2187,7 +2187,10 @@
         }) {
           self.close(node, policy: .detach)
         } else if result.confirmation {
-          if AppDelegate.confirmClose() {
+          // Named as the user's Close Tab names it, with what this Mac sees running on its tty.
+          let tab = terminals.first.flatMap { id in self.workspace?.liveTab(id) }
+          let programs = terminals.flatMap { TerminalRuntime.shared.views[$0]?.jobs ?? [] }
+          if AppDelegate.confirmClose(.tab(tab?.label ?? "Terminal"), programs: programs, in: NSApp.mainWindow) {
             guard !self.stopped, !Task.isCancelled else { return }
             do { _ = try await client.close(.init(node: node, policy: .terminate)) }
             catch {

@@ -98,6 +98,9 @@ struct ChatCodeBlock: View {
     var language = "text"
     var title: String?
     var firstLine: Int?
+    /// A tall block shows its first 320 pt until Show All: never a vertical scroll area of its own, which would take
+    /// the wheel from the transcript scrolling past it.
+    @State private var expanded = false
     var body: some View {
         let preview = TextRendering.prefix(code, scalars: 32_768)
         let shown = firstLine != nil && preview.text.hasSuffix("\n") ? String(preview.text.dropLast()) : preview.text
@@ -107,9 +110,9 @@ struct ChatCodeBlock: View {
         // GeometryReader so resizing only lays out the existing attributed text.
         let highlighted = SyntaxHighlight.text(shown.isEmpty ? " " : shown, language: language, theme: theme)
         let natural = CGFloat(shown.components(separatedBy: "\n").count) * theme.typography.codeDetailLineHeight + 24
-        // A block that fits its 320 pt scrolls sideways only: with both axes, a horizontal scroller shown always
-        // (no trackpad) takes its one line's height and a vertical scroller appears for it.
+        // Every block scrolls sideways only, so vertical scrolling always reaches the transcript.
         let tall = natural > 320
+        let lines = shown.components(separatedBy: "\n").count
         let scroller = NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -122,7 +125,7 @@ struct ChatCodeBlock: View {
             }.font(theme.typography.detail).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(theme.window)
             GeometryReader { geometry in
-            ScrollView(tall ? [.horizontal, .vertical] : .horizontal) {
+            ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 12) {
                     if let firstLine {
                         Text((0..<shown.components(separatedBy: "\n").count).map { String(firstLine + $0) }.joined(separator: "\n"))
@@ -135,9 +138,15 @@ struct ChatCodeBlock: View {
                 }.font(theme.typography.codeDetail)
                     .frame(minWidth: max(0, geometry.size.width - 24), alignment: .leading).padding(12)
             }
-            }.frame(height: tall ? 320 : max(44, natural) + scroller)
+            }.frame(height: tall && !expanded ? 320 : max(44, natural) + scroller, alignment: .top).clipped()
+            if tall {
+                Button(expanded ? "Show Less" : "Show All \(lines) Lines") { expanded.toggle() }
+                    .buttonStyle(.plain).font(theme.typography.detail).foregroundStyle(theme.blue)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .accessibilityIdentifier("code-block-show-all")
+            }
             if preview.truncated {
-                Text("Preview truncated · Copy includes the full text")
+                Text(TextRendering.shortenedNote)
                     .font(theme.typography.detail).foregroundStyle(theme.muted).padding(8)
             }
         }.background(theme.terminal, in: RoundedRectangle(cornerRadius: 6))

@@ -49,9 +49,12 @@ enum MobileLandscape {
     /// modes, the action) fits the shortest phone on its side (375 points).
     static let railMargin: CGFloat = 8
     static let railGap: CGFloat = 6
-    /// The rail's height with everything in it: Back and the disc 8 apart, the modes, the 50-point action.
+    /// The rail's foot, the mode's action (a 50-point disc): held empty in a mode without one (Files, Commits, Chat
+    /// while its composer is open), so the modes above it never move as the mode changes.
+    static let railAction: CGFloat = 50
+    /// The rail's height with everything in it: Back and the disc 8 apart, the modes, the action.
     static var railHeight: CGFloat {
-        2 * railMargin + 44 + 8 + 44 + railGap + PadModeSwitch.length(5, axis: .vertical) + railGap + 50
+        2 * railMargin + 44 + 8 + 44 + railGap + PadModeSwitch.length(5, axis: .vertical) + railGap + railAction
     }
 
     /// The terminal's key capsule shows only riding a docked keyboard; at rest the rail's keyboard button raises it

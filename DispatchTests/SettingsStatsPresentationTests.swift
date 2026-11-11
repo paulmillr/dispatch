@@ -328,15 +328,17 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let grouped = try groupedSnapshot.text()
         // OCR can read the small "ops@homelab.test" without its dot: compare without spaces and dots.
         let compact = { (text: String) in text.filter { $0 != " " && $0 != "." } }
-        for label in ["homelab", "ops@homelab.test", "stats", "OTHER LOGINS", "archive.test"] {
+        for label in ["homelab", "ops@homelab.test", "Stats", "Other logins", "archive.test"] {
             XCTAssertTrue(compact(grouped).contains(compact(label)), grouped)
         }
         let homelab = try XCTUnwrap(grouped.range(of: "homelab")), carol = try XCTUnwrap(grouped.range(of: "archive.test"))
         XCTAssertTrue(homelab.lowerBound < carol.lowerBound, "Unmatched logins follow the hosts: \(grouped)")
 
         // Clicking a host edits its login in place, and each change is saved at once.
+        // The rows' chips read like the editor's controls ("Codex"); the controls sit rightmost.
         func click(_ title: String, in snapshot: PresentationTestSupport.Snapshot) throws {
-            let observation = try XCTUnwrap(snapshot.recognizedText().first { $0.topCandidates(1).first?.string.contains(title) == true })
+            let observation = try XCTUnwrap(snapshot.recognizedText().filter { $0.topCandidates(1).first?.string.contains(title) == true }
+                .max { $0.boundingBox.midX < $1.boundingBox.midX })
             let recognized = try XCTUnwrap(observation.topCandidates(1).first)
             let box = try XCTUnwrap(recognized.boundingBox(for: XCTUnwrap(recognized.string.range(of: title)))).boundingBox
             try PresentationTestSupport.click(window, at: settings.convert(NSPoint(x: box.midX * settings.bounds.width,
@@ -924,7 +926,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertEqual(permissions.entries.count, 3)
         try click("Reset all", in: await capture(window, "settings-host-reset-cancelled"))
         try await TestSupport.eventually { window.attachedSheet != nil }
-        let confirm = try XCTUnwrap(PresentationTestSupport.views(of: NSButton.self, in: XCTUnwrap(window.attachedSheet?.contentView)).first { $0.title == "Forget all" })
+        let confirm = try XCTUnwrap(PresentationTestSupport.views(of: NSButton.self, in: XCTUnwrap(window.attachedSheet?.contentView)).first { $0.title == "Forget All" })
         confirm.performClick(nil)
         try await TestSupport.eventually { permissions.entries.isEmpty }
         XCTAssertEqual(resets, 1)
@@ -934,10 +936,13 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let emptySnapshot = try await capture(window, "settings-host-integrations-empty")
         let empty = try emptySnapshot.text()
         XCTAssertFalse(empty.lowercased().contains("carol"), empty)
-        // With nothing listed or connected, Reset all clears saved state at once.
+        // With nothing listed or connected, Reset all still asks: offline hosts' spaces would go too.
         try click("Reset all", in: emptySnapshot)
+        try await TestSupport.eventually { window.attachedSheet != nil }
+        let again = try XCTUnwrap(PresentationTestSupport.views(of: NSButton.self, in: XCTUnwrap(window.attachedSheet?.contentView)).first { $0.title == "Forget All" })
+        again.performClick(nil)
         try await TestSupport.eventually { resets == 2 }
-        XCTAssertNil(window.attachedSheet)
+        try await TestSupport.eventually { window.attachedSheet == nil }
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("settings.json").path))
     }
 

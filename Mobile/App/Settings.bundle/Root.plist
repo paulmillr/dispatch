@@ -12,7 +12,7 @@
 			<key>Title</key>
 			<string>Appearance</string>
 			<key>FooterText</key>
-			<string>Appearance applies to the Automatic theme: Graphite, Lavender and Nautical bring their own. Red-green or blue-yellow color vision draws hosts and changes in colors made for it and gives the terminal a scheme made for it.</string>
+			<string>Red-green or blue-yellow color vision draws hosts and changes in colors made for it and gives the terminal a scheme made for it.</string>
 		</dict>
 		<dict>
 			<key>Type</key>
@@ -34,30 +34,6 @@
 				<string>System</string>
 				<string>Dark</string>
 				<string>Light</string>
-			</array>
-		</dict>
-		<dict>
-			<key>Type</key>
-			<string>PSMultiValueSpecifier</string>
-			<key>Title</key>
-			<string>Theme</string>
-			<key>Key</key>
-			<string>theme</string>
-			<key>DefaultValue</key>
-			<string>automatic</string>
-			<key>Values</key>
-			<array>
-				<string>automatic</string>
-				<string>graphite</string>
-				<string>lavender</string>
-				<string>nautical</string>
-			</array>
-			<key>Titles</key>
-			<array>
-				<string>Automatic</string>
-				<string>Graphite</string>
-				<string>Lavender</string>
-				<string>Nautical</string>
 			</array>
 		</dict>
 		<dict>
@@ -313,16 +289,6 @@
 			<string>Show message text</string>
 			<key>Key</key>
 			<string>notify.text</string>
-			<key>DefaultValue</key>
-			<true/>
-		</dict>
-		<dict>
-			<key>Type</key>
-			<string>PSToggleSwitchSpecifier</string>
-			<key>Title</key>
-			<string>Badge app icon</string>
-			<key>Key</key>
-			<string>notify.badge</string>
 			<key>DefaultValue</key>
 			<true/>
 		</dict>

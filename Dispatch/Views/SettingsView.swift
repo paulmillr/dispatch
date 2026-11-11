@@ -19,6 +19,9 @@ struct SettingsView: View {
     var fitInitialHeight: ((CGFloat) -> Void)?
     @State private var confirmingSSHReset = false
     @State private var confirmingReset = false
+    @State private var confirmingRestore = false
+    /// Search: what is typed in the title bar's field; while not empty, the page lists the settings that match.
+    @State private var query = ""
     @State private var resettingSSH = false
     /// Multiplexers whose terminal-started sessions can open as spaces, by the helper's name
     /// (the legacy route's fixed pair until its removal).
@@ -42,15 +45,18 @@ struct SettingsView: View {
     /// The side Theme's gallery shows while the app follows the system, once the switch is used; nil, the system's.
     @State private var schemeSideLight: Bool?
     @State private var tabsAndSpacesExpanded = false
-    /// Startup command as typed, saved on Return.
+    /// Startup command as typed, saved on Return, on leaving the field and when Settings goes away.
     @State private var startupDraft: String?
+    /// The text field being typed in, whose text is saved once it loses focus.
+    private enum TypedField: Hashable { case startup, shell, search }
+    @FocusState private var typing: TypedField?
     @State private var fontExpanded = false
     @State private var sizeExpanded = false
     @State private var notificationsExpanded = false
     @State private var securityExpanded = false
     /// /etc/shells, read when Settings opens.
     @State private var shells: [String] = []
-    /// Custom… chosen in Shell: the command being typed, saved on Return.
+    /// Custom… chosen in Shell: the command being typed, saved like the startup command.
     @State private var customShell: String?
 
     private var accent: Color { Chrome.accent }
@@ -116,22 +122,27 @@ struct SettingsView: View {
                 .font(typography, .title)
                 .foregroundStyle(Chrome.muted)
                 .frame(maxWidth: .infinity).frame(minHeight: typography.expanded(38))
+                .overlay(alignment: .trailing) { searchField.padding(.trailing, 12) }
                 .background(Chrome.sidebar)
                 .overlay(alignment: .bottom) { separator }
             HStack(spacing: 2) {
-                ForEach(SettingsTab.allCases, id: \.self) { tab in
-                    Button { selectedTab = tab } label: {
+                ForEach(Array(SettingsTab.allCases.enumerated()), id: \.element) { index, tab in
+                    Button { selectedTab = tab; query = "" } label: {
                         Text(tab.rawValue).font(typography, .label)
                             .foregroundStyle(selectedTab == tab ? SettingsControlStyle.selectedText : Chrome.muted)
                             .padding(.horizontal, 14).padding(.vertical, 5)
                             .background(selectedTab == tab ? Chrome.palette.control : .clear,
                                         in: RoundedRectangle(cornerRadius: 5))
                     }.buttonStyle(.plain)
+                        // ⌘1 to ⌘6, in the order shown, as in System Settings' and Xcode's windows.
+                        .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                        .help("\(tab.rawValue) (⌘\(index + 1))")
                         .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
                 }
             }.padding(.top, 12).padding(.bottom, 14)
                 .accessibilityIdentifier("settings-tabs")
             settingsPage {
+                if !query.trimmingCharacters(in: .whitespaces).isEmpty { searchResults } else {
                 switch selectedTab {
                 case .general: generalSettings
                 case .theme: themeSettings
@@ -145,15 +156,19 @@ struct SettingsView: View {
                 case .features: featureSettings
                 case .hosts: hostSettings
                 }
-            }.id(selectedTab)
+                }
+            }.id(query.isEmpty ? selectedTab.rawValue : "search")
             .padding(.horizontal, 12)
             HStack {
                 Spacer()
-                Button("restore defaults", action: restoreDefaults)
+                // Every page's settings at once, so it sits under the pages, named for that, and asks first.
+                Button("Restore All Defaults…") { confirmingRestore = true }
                     .buttonStyle(.plain)
                     .font(typography, .body)
                     .foregroundStyle(SettingsControlStyle.detail)
                     .padding(.vertical, 4)
+                    .accessibilityIdentifier("settings-restore-defaults")
+                    .help("Every setting on every page, after asking")
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let error {
                 separator
@@ -170,17 +185,23 @@ struct SettingsView: View {
         .tint(accent)
         .preferredColorScheme(Chrome.colorScheme)
         .accessibilityIdentifier("settings-sheet")
+        .alert("Restore all settings to their defaults?", isPresented: $confirmingRestore) {
+            Button("Cancel", role: .cancel) {}
+            Button("Restore Defaults", role: .destructive) { restoreDefaults() }
+        } message: {
+            Text(Self.restoreDefaultsMessage)
+        }
         .alert("Reset Dispatch on this Mac?", isPresented: $confirmingReset) {
             Button("Cancel", role: .cancel) {}
             Button("Reset", role: .destructive) { resetDispatch() }
         } message: {
-            Text("Dispatch quits and closes every tab, then deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices, your color schemes and diagnostics, and removes its agent hooks and ~/.dispatch from this Mac. Dictation models are kept; SSH hosts are not changed. Dispatch then opens again with the setup sheet.")
+            Text("Dispatch quits and closes every tab, then deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices and its diagnostics, and removes its agent hooks and ~/.dispatch from this Mac. Your color schemes and the dictation models are kept; SSH hosts are not changed. Dispatch then opens again with the setup sheet.")
         }
         .alert("Forget all SSH hosts?", isPresented: $confirmingSSHReset) {
             Button("Cancel", role: .cancel) {}
-            Button("Forget all", role: .destructive) { resetHosts() }
+            Button("Forget All", role: .destructive) { resetHosts() }
         } message: {
-            Text("Disconnects all SSH connections and removes every host’s saved tabs, helper choices and cached data from Dispatch. Remote tmux and herdr sessions and running programs keep running. Global preferences are kept.")
+            Text(hostsResetMessage)
         }
         .ignoresSafeArea()
         .onAppear {
@@ -192,11 +213,25 @@ struct SettingsView: View {
             schemes = ColorSchemes(directory: System.resources.appendingPathComponent("ghostty/themes"))
             loaded = true
         }
+        // A page another place asked for (SettingsNavigation): the Hosts row it names opens there.
+        .onChange(of: SettingsNavigation.shared.page, initial: true) { _, page in
+            guard let page else { return }
+            selectedTab = page
+            SettingsNavigation.shared.page = nil
+        }
         .onChange(of: SidebarThemeStore.shared.nauticalUnlocked) { _, unlocked in
             if unlocked { draft.appTheme = .nautical }
         }
         // A new theme, here or from elsewhere, opens the gallery on the side in use.
         .onChange(of: draft.appTheme) { _, _ in schemeSideLight = nil }
+        // What is typed in a field is saved once it loses focus, or Settings closes or goes to the background.
+        .onChange(of: typing) { previous, _ in
+            if previous == .startup { commitStartup() }
+            if previous == .shell { commitShell() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            commitStartup(); commitShell()
+        }
         .onChange(of: draft.colorVision) { _, vision in
             if loaded { conformSchemes(to: vision) }
         }
@@ -219,7 +254,7 @@ struct SettingsView: View {
         }
     }
 
-    private enum SettingsTab: String, CaseIterable {
+    enum SettingsTab: String, CaseIterable {
         case general = "General"
         case theme = "Theme"
         case features = "Features"
@@ -264,6 +299,13 @@ struct SettingsView: View {
             }
             settingsGroup("Terminal") {
                 launchRow
+                // A program's BEL: in the tab you look at, the alert sound or a flash; a tab elsewhere gets a bell mark.
+                row("Bell", detail: draft.bell == .off ? "programs' bells are ignored" : "other tabs show a bell mark") {
+                    dropdown("Bell", selection: Binding(get: { draft.bell.title }, set: { title in
+                        if let bell = TerminalBell.allCases.first(where: { $0.title == title }) { draft.bell = bell }
+                    }), choices: TerminalBell.allCases.map(\.title))
+                    .accessibilityIdentifier("settings-bell")
+                }
                 tabsAndSpacesOptions
                 securityOptions
             }
@@ -284,7 +326,7 @@ struct SettingsView: View {
                 }
                 row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
                     if updater.state == .ready {
-                        Button("Restart and install") { updater.restart() }
+                        Button("Restart and Install") { updater.restart() }
                             .accessibilityIdentifier("settings-install-update")
                     } else if updater.cancellable {
                         HStack(spacing: 8) {
@@ -297,8 +339,13 @@ struct SettingsView: View {
                             Button("Cancel") { updater.cancel() }
                                 .accessibilityIdentifier("settings-cancel-update")
                         }
+                    } else if let available = updater.available {
+                        // This copy can't install it itself: the release's own download.
+                        Button("Download…") { NSWorkspace.shared.open(available.url) }
+                            .help("Download Dispatch \(available.version) from GitHub")
+                            .accessibilityIdentifier("settings-download-update")
                     } else {
-                        Button("Check for updates") { updater.check() }
+                        Button("Check for Updates") { updater.check() }
                             .disabled(updater.busy)
                             .accessibilityIdentifier("settings-check-updates")
                     }
@@ -355,7 +402,7 @@ struct SettingsView: View {
             }
             // Last: the one destructive action here.
             row("Reset Dispatch", detail: "deletes Dispatch’s data on this Mac and starts again from the setup sheet",
-                info: "Dispatch quits, removes its agent hooks, Pi extension and ~/.dispatch from this Mac, deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices, your color schemes and its diagnostics, then opens again as on a fresh install. Dictation models are kept. Nothing changes on your SSH hosts.") {
+                info: "Dispatch quits, removes its agent hooks, Pi extension and ~/.dispatch from this Mac, deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices and its diagnostics, then opens again as on a fresh install. Your color schemes (~/.config/dispatch/themes) and the dictation models are kept. Nothing changes on your SSH hosts.") {
                 Button("Reset…") { confirmingReset = true }
                     .accessibilityIdentifier("settings-reset-dispatch")
             }
@@ -612,17 +659,12 @@ struct SettingsView: View {
         VStack(spacing: 8) {
             // An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
             integrationCard("Chat mode", detail: "coding agent CLIs as chat",
-                            privacy: "Adds hooks to the agents' own config and reads their transcripts, in memory only.",
+                            privacy: "Reads the agents' transcripts, in memory only. Their hooks go into their own config: on this Mac only for agents you install in Hosts › This Mac (or Yes at setup), on SSH hosts as each host allows.",
                             enabled: chatEnabled, fold: chatFold) {
                 cardOption("While the agent works", detail: "⏎ queues the message for after the turn, or steers it into the turn; ⌥⌘⏎ does the other",
                            detailBelow: true) {
                     choice("While the agent works", $draft.chatSendWhileWorking)
                         .accessibilityIdentifier("settings-chat-send-while-working")
-                }
-                cardOption("Editor mode by default", detail: "new drafts start in editor mode: ⏎ adds a line, ⌘⏎ sends; ⌘E switches",
-                           detailBelow: true) {
-                    settingToggle("Editor mode by default", isOn: $draft.chatEditorByDefault)
-                        .accessibilityIdentifier("settings-chat-editor-by-default")
                 }
                 cardOption("Open agents in", detail: "what a tab shows when an agent starts in its terminal; its Chat switch shows the other",
                            detailBelow: true) {
@@ -630,8 +672,20 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-chat-agent-start")
                 }
                 cardOption("Tool steps", detail: "how a turn's tool groups show until you open or close one", detailBelow: true) {
-                    choice("Tool steps", $draft.chatToolSteps)
-                        .accessibilityIdentifier("settings-chat-tool-steps")
+                    // A range, from none to every step, set as Line spacing is: a slider with a stop per choice.
+                    let order: [ChatToolGroupDisclosure] = [.collapsed, .current, .all]
+                    let steps = { (value: Double) in order[min(order.count - 1, max(0, Int(value.rounded())))] }
+                    HStack(spacing: 12) {
+                        SettingsSlider(value: Binding(get: { Double(order.firstIndex(of: draft.chatToolSteps) ?? 1) },
+                                                      set: { draft.chatToolSteps = steps($0) }),
+                                       range: 0...Double(order.count - 1), step: 1, label: "Tool steps",
+                                       identifier: "settings-chat-tool-steps", stops: true, describe: { steps($0).title })
+                            .frame(height: 20)
+                        // As wide as the longest choice ("Current step"), so the slider keeps its length.
+                        Text(draft.chatToolSteps.title).foregroundColor(Chrome.ink)
+                            .font(typography, .label).fixedSize()
+                            .frame(width: typography.expanded(84), alignment: .trailing)
+                    }.frame(width: pickerWidth)
                 }
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
             }.accessibilityIdentifier("settings-agents")
@@ -650,7 +704,7 @@ struct SettingsView: View {
                         settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
                     }
                 }
-                Text("the original tab closes after attach.")
+                Text("The tab that started a session closes once it opens as a space.")
                     .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 7)
             }
@@ -708,8 +762,8 @@ struct SettingsView: View {
                 cardOption("Sound", detail: "play a sound for new background attention", detailBelow: true) {
                     settingToggle("Attention sound", isOn: $draft.attentionSound)
                 }
-                cardOption("Display text content", detail: "the start of the agent's reply and the pane's folder", detailBelow: true,
-                           privacy: "Banners show the pane, its folder and the start of the agent's reply, and can appear on the lock screen.") {
+                cardOption("Display text content", detail: "the start of the agent's reply, and the space and host", detailBelow: true,
+                           privacy: "Banners show the tab, its space and host, and the start of the agent's reply, and can appear on the lock screen.") {
                     settingToggle("Display text content", isOn: $draft.attentionTextContent)
                         .accessibilityIdentifier("settings-notification-text")
                 }
@@ -741,7 +795,7 @@ struct SettingsView: View {
                        privacy: "Skips choosing what the helper may see on a new host.") {
                 settingToggle("Auto-confirm uploads", isOn: $draft.autoGrantNewHosts)
                     .accessibilityIdentifier("settings-auto-confirm-uploads")
-                    .help("The helper can see processes, files you can read, agent transcripts and Git. It is kept at ~/.dispatch/bin/versions/<hash>/dispatch-helper.")
+                    .help("The helper can see processes, files you can read, agent transcripts and Git. It is kept in a versioned folder in ~/.dispatch on each host.")
             }
             cardOption("Reconnect automatically", detail: "after a drop, with your keys or SSH agent", detailBelow: true) {
                 settingToggle("Reconnect automatically", isOn: $draft.autoReconnectSSH)
@@ -903,13 +957,24 @@ struct SettingsView: View {
             TextField("tmux new -A -s main", text: Binding(get: { startupDraft ?? draft.startupCommand }, set: { startupDraft = $0 }))
                 .textFieldStyle(.roundedBorder).font(typography.code(.label))
                 .frame(width: pickerWidth)
-                .onSubmit {
-                    if let startupDraft { draft.startupCommand = startupDraft.trimmingCharacters(in: .whitespaces) }
-                    startupDraft = nil
-                }
+                .focused($typing, equals: .startup)
+                .onSubmit(commitStartup)
+                .onDisappear(perform: commitStartup)
                 .accessibilityIdentifier("settings-startup-command")
-                .help("Typed at the first prompt of new local tabs, as if you had. SSH, tmux and herdr tabs are left alone. Press Return to use it.")
+                .help("Typed at the first prompt of new local tabs, as if you had. SSH, tmux and herdr tabs are left alone. Saved as you leave the field.")
         }
+    }
+
+    /// The startup command as typed, saved: on Return, leaving the field, or Settings closing or going to the background.
+    private func commitStartup() {
+        if let startupDraft { draft.startupCommand = startupDraft.trimmingCharacters(in: .whitespaces) }
+        startupDraft = nil
+    }
+
+    /// The custom shell as typed, saved as the startup command is.
+    private func commitShell() {
+        guard let typed = customShell?.trimmingCharacters(in: .whitespaces), typed != draft.shell else { return }
+        draft.shell = typed
     }
 
     /// A chosen shell that isn't an executable here; tabs use the login shell instead.
@@ -998,10 +1063,12 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 TextField("/opt/homebrew/bin/fish -l", text: Binding(get: { customShell ?? draft.shell }, set: { customShell = $0 }))
                     .textFieldStyle(.roundedBorder).font(typography.code(.label))
-                    .onSubmit { if let customShell { draft.shell = customShell.trimmingCharacters(in: .whitespaces) } }
+                    .focused($typing, equals: .shell)
+                    .onSubmit(commitShell)
+                    .onDisappear(perform: commitShell)
                     .accessibilityIdentifier("settings-custom-shell")
             }.padding(.bottom, 9)
-            Text("A program by its full path, then its arguments. Press Return to use it.")
+            Text("A program by its full path, then its arguments; saved as you leave the field.")
                 .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
         }
@@ -1125,10 +1192,21 @@ struct SettingsView: View {
     /// is under Features.
     private var hostSettings: some View {
         VStack(spacing: 8) {
-            SSHHostsSettings(workspace: workspace, permissions: sshPermissions, resetting: resettingSSH) {
-                if hasActiveSSHConnections() { confirmingSSHReset = true } else { resetHosts() }
-            }
+            // Always asked: offline hosts' spaces and every saved choice go too.
+            SSHHostsSettings(workspace: workspace, permissions: sshPermissions, resetting: resettingSSH) { confirmingSSHReset = true }
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
+    }
+
+    /// What Forget All removes, counted: the remote spaces and their tabs, the saved hosts and the logins' helper choices.
+    private var hostsResetMessage: String {
+        func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+        let remote = workspace.spaces.filter { $0.hostID != .local }
+        let hosts = workspace.hosts.records.keys.filter { $0 != .local }.count
+        let logins = sshPermissions.entries.count
+        let live = hasActiveSSHConnections() ? "Disconnects every SSH connection, then closes " : "Closes "
+        return live + "\(count(remote.count, "remote space")) (\(count(remote.reduce(0) { $0 + $1.tabs.count }, "tab"))) and forgets "
+            + "\(count(hosts, "saved host")) with their cached data and the helper choices of \(count(logins, "SSH login")). "
+            + "Remote tmux and herdr sessions and running programs keep running. Global preferences are kept."
     }
 
     /// Reset: Dispatch quits (the usual confirmation for running programs), then DispatchRemoval.resetLocal runs.
@@ -1155,7 +1233,7 @@ struct SettingsView: View {
         let chat = TerminalRuntime.shared.chat
         // Every agent is on unless turned off here.
         return Fold(title: "Options", changed: chat.listedLaunches.filter { chat.disabledIntegrations.contains($0.key) }.count
-                        + changed { [$0.chatSendWhileWorking, $0.chatEditorByDefault, $0.chatAgentStart, $0.chatToolSteps] },
+                        + changed { [$0.chatSendWhileWorking, $0.chatAgentStart, $0.chatToolSteps] },
                     isExpanded: $agentsExpanded)
     }
 
@@ -1213,24 +1291,27 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings-options-\(card)")
     }
 
+    /// An agent in Chat, on every machine: its switch, and how its hooks stand on this Mac (Hosts › This Mac installs
+    /// or removes them there, which Set Up… opens).
     private func agentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
-        return cardOption(launch.label, detail: localGap(launch.key)) {
-            settingToggle(launch.label, isOn: Binding(get: { !chat.disabledIntegrations.contains(launch.key) },
-                                                      set: { chat.setHelperIntegration(launch.key, enabled: $0) }), compact: true)
-                .accessibilityIdentifier("settings-agent-toggle-\(launch.key)")
+        let on = chat.enabled && !chat.disabledIntegrations.contains(launch.key)
+        let local = chat.localHooksAllowed(launch.key)
+            ? SSHHostsSettings.status(chat.hookStatus(launch.key), install: chat.helperInstalls[launch.key], label: launch.label, missing: false)
+            : chat.localHooks[launch.key] == false ? "off" : "not set up"
+        return cardOption(launch.label, detail: on ? "this Mac: \(local)" : nil) {
+            HStack(spacing: 10) {
+                if on, chat.hookStatus(launch.key) != .ready {
+                    Button("Set Up…") { SettingsNavigation.shared.hosts(SSHHostsSettings.localID) }
+                        .buttonStyle(.plain).font(typography, .body).foregroundStyle(accent)
+                        .help("Hosts › This Mac: install or remove \(launch.label)’s hooks on this Mac")
+                        .accessibilityIdentifier("settings-agent-setup-\(launch.key)")
+                }
+                settingToggle("Use \(launch.label) in Chat", isOn: Binding(get: { !chat.disabledIntegrations.contains(launch.key) },
+                                                                          set: { chat.setHelperIntegration(launch.key, enabled: $0) }), compact: true)
+                    .accessibilityIdentifier("settings-agent-toggle-\(launch.key)")
+            }
         }.accessibilityIdentifier("settings-agent-\(launch.key)")
-    }
-
-    /// An agent's switch is its choice everywhere (this Mac and SSH hosts). On while this Mac runs its CLI without its
-    /// hooks (none found when the first launch asked, an install that failed before), the row says so rather than
-    /// look set up; Hosts › This Mac installs it. Known once a launch or This Mac asked the login shell (`localCLIs`).
-    private func localGap(_ key: String) -> String? {
-        let chat = TerminalRuntime.shared.chat
-        guard chat.enabled, !chat.disabledIntegrations.contains(key), chat.localHooksAllowed(key), chat.helperInstalls[key] != nil,
-              chat.hookStatus(key) == .off, chat.localCLIs?.contains(key) == true, chat.localInstallationFailure(key) == nil
-        else { return nil }
-        return "not set up on this Mac"
     }
 
     private var chatEnabled: Binding<Bool> {
@@ -1238,19 +1319,165 @@ struct SettingsView: View {
     }
 
 
+    // MARK: Search
+
+    /// The title bar's search field; ⌘F focuses it, Escape clears it.
+    private var searchField: some View {
+        HStack(spacing: 4) {
+            TextField("Search", text: $query)
+                .textFieldStyle(.roundedBorder).font(typography, .body)
+                .frame(width: typography.expanded(130))
+                .focused($typing, equals: .search)
+                .onExitCommand { query = "" }
+                .onSubmit { if let first = searchMatches.first { open(first) } }
+                .accessibilityIdentifier("settings-search")
+            Button("Search Settings") { typing = .search }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0).accessibilityHidden(true)
+        }
+    }
+
+    /// A setting Search finds: its label, where it is, other words for it, and what opens it there (its fold).
+    private struct Searchable {
+        let title: String
+        let tab: SettingsTab
+        let place: String
+        var words = ""
+        var open: (() -> Void)?
+    }
+
+    /// Every row worth finding, by page, in the order they show.
+    private var searchIndex: [Searchable] {
+        let fold = { (flag: Binding<Bool>) in { flag.wrappedValue = true } }
+        let font = fold($fontExpanded), size = fold($sizeExpanded), tabs = fold($tabsAndSpacesExpanded),
+            security = fold($securityExpanded), appearance = fold($appearanceExpanded), chat = fold($agentsExpanded),
+            files = fold($filesOptionsExpanded), muxes = fold($multiplexersExpanded), notifications = fold($notificationsExpanded),
+            helper = fold($remoteHelperExpanded), dictation = fold($dictationExpanded)
+        return [
+            .init(title: "Font", tab: .general, place: "Text", words: "terminal typeface family"),
+            .init(title: "Chat font", tab: .general, place: "Text › Font", open: font),
+            .init(title: "Interface font", tab: .general, place: "Text › Font", words: "sidebar tabs typeface", open: font),
+            .init(title: "Ligatures", tab: .general, place: "Text › Font", open: font),
+            .init(title: "Size", tab: .general, place: "Text", words: "font size points zoom"),
+            .init(title: "Line spacing", tab: .general, place: "Text › Size", words: "line height", open: size),
+            .init(title: "Cursor", tab: .general, place: "Text", words: "blinking block bar underline"),
+            .init(title: "On launch", tab: .general, place: "Terminal", words: "reopen spaces history restore start fresh session"),
+            .init(title: "Starting folder", tab: .general, place: "Terminal › Tabs & spaces", words: "directory home", open: tabs),
+            .init(title: "Shell", tab: .general, place: "Terminal › Tabs & spaces", words: "zsh bash fish login", open: tabs),
+            .init(title: "Startup command", tab: .general, place: "Terminal › Tabs & spaces", words: "run tmux", open: tabs),
+            .init(title: "Scrollback", tab: .general, place: "Terminal › Tabs & spaces", words: "history lines memory", open: tabs),
+            .init(title: "Show git branch in spaces", tab: .general, place: "Terminal › Tabs & spaces", open: tabs),
+            .init(title: "Show sidebar with one space", tab: .general, place: "Terminal › Tabs & spaces", open: tabs),
+            .init(title: "Automatic tab names", tab: .general, place: "Terminal › Tabs & spaces", words: "title", open: tabs),
+            .init(title: "Vertical tabs", tab: .general, place: "Terminal › Tabs & spaces", open: tabs),
+            .init(title: "Programs can copy", tab: .general, place: "Terminal › Security", words: "clipboard osc 52", open: security),
+            .init(title: "Automatically approve unsafe pastes", tab: .general, place: "Terminal › Security", words: "paste", open: security),
+            .init(title: "Secure keyboard entry", tab: .general, place: "Terminal › Security", words: "keystrokes password", open: security),
+            .init(title: "Kitty graphics", tab: .general, place: "Terminal › Security", words: "images", open: security),
+            .init(title: "Automatic updates", tab: .general, place: "Updates", words: "check for updates version download"),
+            .init(title: "Follow system", tab: .theme, place: "Colors", words: "light dark appearance mode"),
+            .init(title: "Space size", tab: .theme, place: "Colors › Appearance", words: "sidebar compact large", open: appearance),
+            .init(title: "Terminal opacity", tab: .theme, place: "Colors › Appearance", words: "transparency translucent", open: appearance),
+            .init(title: "Colorblind-friendly", tab: .theme, place: "Colors › Appearance", words: "color blindness vision", open: appearance),
+            .init(title: "Improve text contrast", tab: .theme, place: "Colors › Appearance", open: appearance),
+            .init(title: "Color-code remote hosts", tab: .theme, place: "Colors › Appearance", words: "host colors", open: appearance),
+            .init(title: "Liquid Glass", tab: .theme, place: "Colors › Appearance", open: appearance),
+            .init(title: "Color scheme", tab: .theme, place: "Theme", words: "theme palette surprise"),
+            .init(title: "Your color schemes", tab: .theme, place: "Theme", words: "new add file custom maker"),
+            .init(title: "Chat mode", tab: .features, place: "Features", words: "agents codex claude pi hooks"),
+            .init(title: "While the agent works", tab: .features, place: "Chat mode", words: "queue steer return", open: chat),
+            .init(title: "Open agents in", tab: .features, place: "Chat mode", open: chat),
+            .init(title: "Tool steps", tab: .features, place: "Chat mode", open: chat),
+            .init(title: "Tmux & herdr", tab: .features, place: "Features", words: "multiplexer sessions spaces", open: muxes),
+            .init(title: "Files", tab: .features, place: "Features", words: "browser preview git review"),
+            .init(title: "Git", tab: .features, place: "Files", words: "review commits", open: files),
+            .init(title: "Drag and drop", tab: .features, place: "Files", open: files),
+            .init(title: "Show hidden files", tab: .features, place: "Files", words: "dotfiles", open: files),
+            .init(title: "Disable file previews", tab: .features, place: "Files", open: files),
+            .init(title: "Line numbers", tab: .features, place: "Files", open: files),
+            .init(title: "Wrap lines", tab: .features, place: "Files", open: files),
+            .init(title: "Render Markdown", tab: .features, place: "Files", open: files),
+            .init(title: "Notifications", tab: .features, place: "Features", words: "dock badge banner attention"),
+            .init(title: "Sound", tab: .features, place: "Notifications", words: "attention", open: notifications),
+            .init(title: "Display text content", tab: .features, place: "Notifications", open: notifications),
+            .init(title: "Remote helper", tab: .features, place: "Features", words: "ssh upload"),
+            .init(title: "Auto-confirm uploads", tab: .features, place: "Remote helper", words: "ssh new hosts", open: helper),
+            .init(title: "Reconnect automatically", tab: .features, place: "Remote helper", words: "ssh", open: helper),
+            .init(title: "Dictation", tab: .features, place: "Features", words: "voice microphone speech"),
+            .init(title: "Engine", tab: .features, place: "Dictation", words: "whisper parakeet apple models", open: dictation),
+            .init(title: "Navigate by voice", tab: .features, place: "Dictation", open: dictation),
+            .init(title: "Wake words", tab: .features, place: "Dictation", open: dictation),
+            .init(title: "Read replies aloud", tab: .features, place: "Dictation", words: "speech", open: dictation),
+            .init(title: "Number keys", tab: .keyboard, place: "Keyboard", words: "spaces tabs splits digits modifiers shortcuts"),
+            .init(title: "Prefix keys", tab: .keyboard, place: "Key bindings", words: "ctrl-b tmux"),
+            .init(title: "Dictate", tab: .keyboard, place: "Key bindings", words: "voice key"),
+            .init(title: "Option as Alt", tab: .keyboard, place: "Key bindings", words: "meta"),
+            .init(title: "Import", tab: .extra, place: "Extra", words: "ghostty iterm2 terminal dispatch settings"),
+            .init(title: "Export settings", tab: .extra, place: "Extra"),
+            .init(title: "Slow connection mode", tab: .extra, place: "Experimental"),
+            .init(title: "Diagnostics", tab: .extra, place: "Troubleshooting", words: "logs"),
+            .init(title: "Reset Dispatch", tab: .extra, place: "Troubleshooting"),
+            .init(title: "This Mac", tab: .hosts, place: "Hosts", words: "agent hooks install remove codex claude pi",
+                  open: { SettingsNavigation.shared.host = SSHHostsSettings.localID }),
+            .init(title: "SSH hosts", tab: .hosts, place: "Hosts", words: "helper choices forget remove reset"),
+        ]
+    }
+
+    private var searchMatches: [Searchable] {
+        let words = query.lowercased().split(separator: " ").map(String.init)
+        return searchIndex.filter { entry in
+            let text = "\(entry.title) \(entry.place) \(entry.tab.rawValue) \(entry.words)".lowercased()
+            return words.allSatisfy(text.contains)
+        }
+    }
+
+    private func open(_ entry: Searchable) {
+        query = ""
+        selectedTab = entry.tab
+        entry.open?()
+    }
+
+    /// While searching, the page: each match with where it is; choosing one opens its page there.
+    private var searchResults: some View {
+        settingsGroup("Search") {
+            let matches = searchMatches
+            if matches.isEmpty {
+                Text("No settings match “\(query)”.").font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 9)
+            }
+            ForEach(Array(matches.enumerated()), id: \.offset) { index, entry in
+                if index > 0 { separator }
+                Button { open(entry) } label: {
+                    HStack {
+                        Text(entry.title).foregroundStyle(Chrome.ink)
+                        Spacer(minLength: 8)
+                        Text("\(entry.tab.rawValue) › \(entry.place)").font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
+                    }.padding(.vertical, 7).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .accessibilityIdentifier("settings-search-result-\(index)")
+            }
+        }
+    }
+
+    /// A fresh install's settings with `current`'s machine answers: automatic updates and the setup sheet's record.
+    static func restoredDefaults(keeping current: Preferences) -> Preferences {
+        var defaults = Preferences()
+        defaults.automaticUpdates = current.automaticUpdates
+        defaults.setupShown = current.setupShown
+        return defaults
+    }
+
+    /// What Restore All Defaults changes, as its confirmation says it.
+    static let restoreDefaultsMessage = "Every page goes back to a fresh install’s choices: fonts, theme and color scheme choices, colorblind mode, host colors and the order of spaces, the starting folder, shell and startup command, On launch, security switches and keys. Chat mode and every agent turn on again, and their hooks are installed on this Mac again: ~/.claude/settings.json, ~/.codex/hooks.json and Pi’s extension. Automatic updates and the setup sheet stay as they are; your color schemes, saved hosts and SSH choices are kept."
+
+    /// Restore All Defaults, once confirmed: every setting but the machine's own answers (automatic updates and whether
+    /// the setup sheet was shown), then Chat mode with every agent on and their hooks installed on this Mac again.
     private func restoreDefaults() {
-        draft = Preferences()
+        draft = Self.restoredDefaults(keeping: draft)
         keyError = nil
         customShell = nil
-        // Chat mode (Features) and this Mac's agent hooks (Hosts) restore together: the agents install their hooks here
-        // again.
-        if selectedTab == .hosts || selectedTab == .features {
-            // This Mac's agent hooks first, so restoring the agents installs them here again.
-            let chat = TerminalRuntime.shared.chat
-            chat.localHooks = [:]
-            chat.setEnabled(true)
-            chat.restoreHelperIntegrations()
-        }
+        startupDraft = nil
+        TerminalRuntime.shared.chat.restoreDefaults()
     }
 
     private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -1333,12 +1560,9 @@ struct SettingsView: View {
         SettingsRow(title: title, detail: detail, indented: indented, privacy: privacy, info: info, control: control)
     }
 
-    /// After the vision changes, a scheme that isn't for it gives way: to the vision's own light or dark scheme, or,
-    /// leaving colorblind mode, to Dispatch.
+    /// After the vision changes, a scheme that isn't for it gives way (`ColorSchemes.conform`).
     private func conformSchemes(to vision: ColorVision) {
-        let pair = ColorSchemes.colorblind[vision]
-        if ColorSchemes.vision(of: draft.lightTheme) != vision { draft.lightTheme = pair?.light.first ?? "Default" }
-        if ColorSchemes.vision(of: draft.theme) != vision { draft.theme = pair?.dark.first ?? "Default" }
+        ColorSchemes.conform(&draft, to: vision) { schemes.themes[$0] != nil }
     }
 
 
@@ -1642,6 +1866,27 @@ struct ColorSchemes {
         // A made one's recipe names it; an edited one keeps the mode it was edited in.
         let theme = CustomThemes.theme(named: name)
         return theme.flatMap(ThemeRecipe.init(theme:))?.vision ?? theme.flatMap(ThemeEditorView.vision(in:)) ?? .typical
+    }
+
+    /// After the vision changes, a scheme that isn't for it gives way: to the vision's own light or dark scheme, or,
+    /// leaving colorblind mode, to the schemes chosen before it (kept in `typicalTheme` and `typicalLightTheme` while it
+    /// is on) where they still `exist`, else to Dispatch.
+    static func conform(_ draft: inout Preferences, to vision: ColorVision, exist: (String) -> Bool) {
+        if vision == .typical {
+            func previous(_ name: String?) -> String {
+                name.flatMap { $0 == "Default" || (exist($0) && Self.vision(of: $0) == .typical) ? $0 : nil } ?? "Default"
+            }
+            if Self.vision(of: draft.lightTheme) != vision { draft.lightTheme = previous(draft.typicalLightTheme) }
+            if Self.vision(of: draft.theme) != vision { draft.theme = previous(draft.typicalTheme) }
+            draft.typicalTheme = nil; draft.typicalLightTheme = nil
+            return
+        }
+        // The typical pair is kept once, when colorblind mode starts: moving between its kinds keeps it.
+        if draft.typicalTheme == nil, Self.vision(of: draft.theme) == .typical { draft.typicalTheme = draft.theme }
+        if draft.typicalLightTheme == nil, Self.vision(of: draft.lightTheme) == .typical { draft.typicalLightTheme = draft.lightTheme }
+        let pair = colorblind[vision]
+        if Self.vision(of: draft.lightTheme) != vision { draft.lightTheme = pair?.light.first ?? "Default" }
+        if Self.vision(of: draft.theme) != vision { draft.theme = pair?.dark.first ?? "Default" }
     }
 
     /// Only the schemes for `vision`: colorblind modes list their own schemes; typical vision lists none of them.

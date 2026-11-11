@@ -21,7 +21,7 @@ final class HostLinuxIntegrationTests: XCTestCase {
             app.runtime.ssh.links.values.contains { $0.launch.tabID == source && $0.shellPID != nil }
         }
         let session = try XCTUnwrap(app.runtime.ssh.links.values.first { $0.launch.tabID == source })
-        let host = HostID.authenticated(session.greeting.host)
+        let host = HostID.authenticated(session.greeting.host, uid: session.greeting.uid)
         let record = app.workspace.hosts.record(host)
         XCTAssertEqual(record.system?.os, "Linux")
         XCTAssertEqual(record.system?.distribution, profile.distribution ?? "ubuntu")

@@ -9,13 +9,11 @@ import SwiftUI
     /// Points the prose, and the code in blocks, gain over Settings' size.
     static let larger = 3.0
     static let largerCode = 1.0
-    /// The column's widest, in ems of the prose.
-    static let ems: CGFloat = 36
+    /// The column's widest, in ems of the prose (`FileMarkdownLayout`, the phone's too).
+    static let ems = FileMarkdownLayout.ems
     /// Beside the column: room for a heading's fold chevron (`gutter`), and the least a narrow pane keeps.
     static let margin: CGFloat = 40
     static let gutter: CGFloat = 24
-    /// Each level's size as a share of the prose's: six sizes, the sixth also muted.
-    static let headingScale: [CGFloat] = [1.75, 1.45, 1.22, 1.1, 1, 0.92]
 
     struct Typography: Equatable {
         let prose: ChatTypography
@@ -54,26 +52,14 @@ import SwiftUI
 
     /// The points `ChatTypography.font(offset:)` adds to the prose's size for a heading of `level`.
     static func headingOffset(_ level: Int, _ typography: ChatTypography) -> CGFloat {
-        let share = headingScale[min(max(level, 1), headingScale.count) - 1]
+        let share = FileMarkdownLayout.headingShare(level)
         return (typography.size * (share - 1) * 2).rounded() / 2
     }
 
-    /// The space above a block, after the one shown before it: most above a heading, less under it than above it, a
-    /// list's items close together. A heading right under another is its subtitle and sits close; under a folded one
-    /// (`afterFolded`) it is the next section, a line away.
+    /// The space above a block (`FileMarkdownLayout.gap`, the phone's too).
     static func gap(before kind: ChatMarkdownBlock.Kind, after previous: ChatMarkdownBlock.Kind?, afterFolded: Bool = false,
                     size: CGFloat) -> CGFloat {
-        guard let previous else { return 0 }
-        let ems: CGFloat
-        switch (previous, kind) {
-        case _ where afterFolded: ems = 1.1
-        case (.heading, .heading): ems = 0.7
-        case (_, .heading(let level)): ems = level == 1 ? 2 : level == 2 ? 1.8 : level == 3 ? 1.5 : 1.3
-        case (.heading(let level), _): ems = level <= 2 ? 0.65 : 0.5
-        case (.list, .list): ems = 0.3
-        default: ems = 0.8
-        }
-        return (size * ems).rounded()
+        FileMarkdownLayout.gap(before: kind, after: previous, afterFolded: afterFolded, size: size)
     }
 }
 

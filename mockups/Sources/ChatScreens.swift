@@ -5,8 +5,8 @@ import SwiftUI
 struct ChatShell<Content: View, Bottom: View, Overlay: View>: View {
     var title = "Billing webhook retries"
     var folder = "app"
-    var badge: Int? = 3
-    var trailing: AnyView = AnyView(TabMenuDisc())
+    /// In the mode button's place (conversation mode's waveform); nil: the mode button.
+    var trailing: AnyView? = nil
     @ViewBuilder var content: Content
     @ViewBuilder var bottom: Bottom
     @ViewBuilder var overlay: Overlay
@@ -16,13 +16,14 @@ struct ChatShell<Content: View, Bottom: View, Overlay: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.canvas)
                 .overlay { overlay }
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    SegmentCapsule(selected: 1, badge: badge).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-                }
                 .scrollEdgeEffectStyle(.soft, for: .bottom)
                 .safeAreaBar(edge: .bottom) { bottom }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: title, subtitle: AnyView(TabSubtitle(folder: folder)), trailing: trailing) }
+                // The shipped header (`CapsuleTabHeader`): Back, the title capsule, the mode button.
+                .toolbar {
+                    CapsuleTabHeader(title: title, subtitle: AnyView(TabSubtitle(folder: folder)),
+                                     state: ModeButtonState(shown: .chat, agent: true), trailing: trailing)
+                }
         }
     }
 }
@@ -36,10 +37,10 @@ struct Transcript: View {
                 Spacer(minLength: 60)
                 Bubble(text: "Make billing webhook retries idempotent.", user: true)
                 BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.",
-                        highlight: highlight, summary: "2 files +38 −4 · 10:17")
+                        highlight: highlight)
                 Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
                 BubbleH(text: "Right, the invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard. Moving the check into a shared middleware so both routes get it.",
-                        highlight: highlight, summary: "3 files +61 −9 · 10:24")
+                        highlight: highlight)
                 Color.clear.frame(height: trailingSpace)
             }
             .padding(.horizontal, 16)
@@ -48,11 +49,10 @@ struct Transcript: View {
     }
 }
 
-/// An agent bubble with an optional highlighted word (search) and the turn's summary in its corner (`MetaBubble`).
+/// An agent bubble with an optional highlighted word (search).
 struct BubbleH: View {
     let text: String
     var highlight: String? = nil
-    var summary: String? = nil
     private var attributed: AttributedString {
         var a = AttributedString(text)
         if let highlight, let r = a.range(of: highlight, options: .caseInsensitive) {
@@ -61,26 +61,7 @@ struct BubbleH: View {
         }
         return a
     }
-    var body: some View {
-        HStack {
-            Group {
-                if let summary {
-                    (Text(attributed) + Text("   ") + Text(summary).font(.caption2.monospacedDigit()).foregroundStyle(.clear))
-                        .padding(.bottom, 2)
-                        .overlay(alignment: .bottomTrailing) {
-                            Text(summary).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                .padding(.trailing, -2).padding(.bottom, -3)
-                        }
-                } else {
-                    Text(attributed)
-                }
-            }
-            .font(.body)
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color.bubbleAgent, in: RoundedRectangle(cornerRadius: 18))
-            Spacer(minLength: 60)
-        }
-    }
+    var body: some View { MessageBubble(user: false) { Text(attributed) } }
 }
 
 struct Composer: View {
@@ -200,8 +181,7 @@ struct ChatSideScreen: View {
                     .padding(.top, 6)
                     Spacer(minLength: 300)
                     Bubble(text: "Which handler runs first for a retried invoice.paid event?", user: true)
-                    MetaBubble(text: "The route handler in src/routes/invoices.ts runs before the shared middleware, because it is mounted on the router directly. The guard sees the event only on the second pass.",
-                               summary: "Read 3 files · 10:31")
+                    BubbleH(text: "The route handler in src/routes/invoices.ts runs before the shared middleware, because it is mounted on the router directly. The guard sees the event only on the second pass.")
                     Color.clear.frame(height: 8)
                 }
                 .padding(.horizontal, 16)
@@ -309,8 +289,7 @@ struct ChatConversationScreen: View {
                 VStack(spacing: 10) {
                     Spacer(minLength: 200)
                     Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
-                    MetaBubble(text: "Right, the invoice.paid path has its own handler and bypasses the guard. Moving the check into a shared middleware so both routes get it.",
-                               summary: "2 files +4 −4 · 10:24")
+                    BubbleH(text: "Right, the invoice.paid path has its own handler and bypasses the guard. Moving the check into a shared middleware so both routes get it.")
                     HStack(spacing: 6) {
                         Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(Color.dispatchPink)
                         Text("Reading aloud · 0:08").font(.footnote).foregroundStyle(.tertiary)
@@ -359,8 +338,7 @@ struct ChatJumpScreen: View {
             ScrollView {
                 VStack(spacing: 10) {
                     Bubble(text: "Make billing webhook retries idempotent.", user: true)
-                    MetaBubble(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.",
-                               summary: "2 files +38 −4 · 10:17")
+                    BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.")
                     Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
                     Bubble(text: "Right, the invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard.", user: false)
                     Bubble(text: "What about the Stripe CLI's replay command, does it reuse event ids?", user: true)

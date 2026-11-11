@@ -585,6 +585,18 @@ final class Workspace {
         return true
     }
 
+    /// Why `applyLayout(preset)` would do nothing, for the note a layout key shows instead ("Grid needs 4 tabs. This
+    /// space has 2."); nil when it applies.
+    func layoutRefusal(_ preset: LayoutPreset) -> String? {
+        guard let current else { return "Open a space first." }
+        guard hasRoom(for: preset) else { return "\(preset.title) needs a larger window." }
+        let count = current.containers.isEmpty ? current.tabs.count : current.containers.count
+        guard count >= preset.count else {
+            return "\(preset.title) needs \(preset.count) tabs. This space has \(count == 1 ? "1 tab" : "\(count) tabs")."
+        }
+        return nil
+    }
+
     func canSplitTab(_ id: UUID, beside target: UUID) -> Bool {
         guard hostsAllowMove(id, to: target) else { return false }
         if let source = container(containing: id) {

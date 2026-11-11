@@ -5,23 +5,37 @@ struct ChatPermissionCard: View {
     let approval: PendingApproval
     var directory = ""
     var agent = "Claude Code"
+    /// The request Chat › Allow Once (⇧⌘⏎) and Deny (⇧⌘⌫) answer (`ChatCoordinator.keyedApproval`): its buttons show
+    /// the keys.
+    var keyed = false
     let openTerminal: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var arrived = false
     @State private var details = false
     private var allowButton: some View {
-        Button("Allow once") { approval.resolve(.allow) }.buttonStyle(ApprovalButtonStyle(primary: true))
+        Button { approval.resolve(.allow) } label: { ApprovalKeyLabel(title: "Allow Once", key: keyed ? "⇧⌘⏎" : nil) }
+            .buttonStyle(ApprovalButtonStyle(primary: true))
+            .help(keyed ? "Allow Once · ⇧⌘⏎" : "Allow Once").accessibilityLabel("Allow Once")
     }
-    private var denyButton: some View { Button("Deny") { approval.resolve(.deny) }.buttonStyle(ApprovalButtonStyle()) }
-    private var terminalButton: some View { Button("Open in terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle()) }
+    private var denyButton: some View {
+        Button { approval.resolve(.deny) } label: { ApprovalKeyLabel(title: "Deny", key: keyed ? "⇧⌘⌫" : nil) }
+            .buttonStyle(ApprovalButtonStyle())
+            .help(keyed ? "Deny · ⇧⌘⌫" : "Deny").accessibilityLabel("Deny")
+    }
+    private var terminalButton: some View { Button("Open in Terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle()) }
 
     var body: some View {
         // The transport may resolve before a coordinator tick updates decision.
         // The one-second timeline also retires an expired card without user input.
-        TimelineView(.animation(minimumInterval: 1, paused: approval.decision != nil)) { _ in
+        TimelineView(.animation(minimumInterval: 1, paused: approval.decision != nil)) { context in
             let pending = approval.pending
             VStack(alignment: .leading, spacing: 10) {
                 if pending {
+                    if let remaining = remaining(at: context.date) {
+                        Text("Expires in \(Self.countdown(remaining)) · then \(approval.questions == nil ? "decide" : "answer") in Terminal")
+                            .font(theme.typography.detail).monospacedDigit().foregroundStyle(theme.yellow)
+                            .accessibilityIdentifier("approval-countdown")
+                    }
                     if let draft = approval.questionDraft {
                         ChatQuestionForm(draft: draft, agent: agent, submit: approval.answerDraft,
                                          skip: { approval.resolve(.deny) }, openTerminal: openTerminal)
@@ -73,13 +87,24 @@ struct ChatPermissionCard: View {
                             Image(systemName: "chevron.right").rotationEffect(.degrees(details ? 90 : 0))
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("\(receipt), show requested operation")
+                    // An answer typed into a card that expired is kept here to copy, never lost with the card.
+                    if approval.decision == .expired, !unsent.isEmpty {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("Not sent: \(unsent)").foregroundStyle(theme.muted).textSelection(.enabled)
+                                .lineLimit(4).frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Copy") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(unsent, forType: .string)
+                            }.buttonStyle(ApprovalButtonStyle()).accessibilityLabel("Copy unsent answer")
+                        }.accessibilityIdentifier("approval-unsent")
+                    }
                     if details {
                         if let questions = approval.questions {
                             ForEach(questions.questions) { question in
                                 Text(question.text).foregroundStyle(theme.ink)
                                 Text(approval.answers?[question.text] ?? "No answer sent").foregroundStyle(theme.muted).textSelection(.enabled)
                             }
-                            Button("Open in terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle())
+                            Button("Open in Terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle())
                         } else { operation }
                     }
                 }
@@ -103,6 +128,23 @@ struct ChatPermissionCard: View {
             .accessibilityIdentifier("approval-\(approval.id)")
         }
     }
+    /// Seconds left in the last minute before the producer retires the request; nil before then or without a limit.
+    private func remaining(at date: Date) -> TimeInterval? {
+        guard let expires = approval.expires else { return nil }
+        let left = expires.timeIntervalSince(date)
+        return left <= 60 ? max(0, left) : nil
+    }
+    /// "0:42".
+    static func countdown(_ seconds: TimeInterval) -> String {
+        let whole = Int(seconds.rounded(.up))
+        return String(format: "%d:%02d", whole / 60, whole % 60)
+    }
+    /// What the user typed as their own answers, joined: kept on an expired card's receipt.
+    private var unsent: String {
+        guard let draft = approval.questionDraft else { return "" }
+        return draft.questionnaire.questions.compactMap { draft.custom[$0.id] }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
     /// A pending request's color: the accent, or Nautical's PAN-PAN amber.
     private var urgent: Color { theme.radioLog ? theme.yellow : theme.accent }
     @ViewBuilder private var operation: some View {
@@ -116,6 +158,19 @@ struct ChatPermissionCard: View {
         case .deny: approval.questions == nil ? "Denied" : "Skipped questions"
         case .terminal: "Continued in terminal"
         case .expired, nil: "Expired"
+        }
+    }
+}
+
+/// A card button's title and, for the card the keys answer, its key in a fainter weight.
+struct ApprovalKeyLabel: View {
+    @Environment(\.chatTheme) private var theme
+    let title: String
+    var key: String?
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(title)
+            if let key { Text(key).font(AppFont.shortcut(size: theme.typography.codeDetailSize)).opacity(0.6).accessibilityHidden(true) }
         }
     }
 }

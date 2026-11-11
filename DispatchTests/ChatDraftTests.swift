@@ -581,7 +581,7 @@ extension ChatDraftTests {
 }
 
 extension ChatDraftTests {
-    func testTypedLinesKeepTheModeAndTheDefaultStartsNewDrafts() {
+    func testTypedLinesKeepTheModeAndNewDraftsStartOutOfIt() {
         let drafts = collection()
         drafts.edit(text: "first\nsecond")
         XCTAssertFalse(drafts.current.multiline, "a second line alone is no editor mode")
@@ -590,10 +590,8 @@ extension ChatDraftTests {
         XCTAssertTrue(ChatDraftShape(ChatDraft(text: "/compact", multiline: true), hasSaved: false).command)
         XCTAssertFalse(ChatDraftShape(ChatDraft(text: "/compact\nnow"), hasSaved: false).command, "more than one line is text")
 
-        ChatDraft.editorByDefault = true
-        defer { ChatDraft.editorByDefault = false }
         drafts.keep()
         XCTAssertTrue(drafts.current.isEmpty)
-        XCTAssertTrue(drafts.current.multiline, "Editor mode by default starts new drafts in it")
+        XCTAssertFalse(drafts.current.multiline, "a new draft starts out of editor mode")
     }
 }

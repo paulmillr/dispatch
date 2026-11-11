@@ -132,7 +132,30 @@ final class VoiceConversation: NSObject {
         queue.removeFirst()
         speaking = true
         Dictation.shared.mute(true)
-        synthesizer.speak(AVSpeechUtterance(string: next))
+        let utterance = AVSpeechUtterance(string: next)
+        utterance.voice = Self.voice()
+        synthesizer.speak(utterance)
+    }
+
+    /// The best voice the Mac has for its language: a Premium one, else an Enhanced one, in the language's region
+    /// first, unless the system's own voice is as good; nil (the system's voice) when none is better. Looked up on each
+    /// reading, so a voice downloaded in System Settings › Accessibility › Spoken Content is used from the next.
+    static func voice(language: String = AVSpeechSynthesisVoice.currentLanguageCode()) -> AVSpeechSynthesisVoice? {
+        let system = AVSpeechSynthesisVoice(language: language)
+        func code(_ language: String) -> String { String(language.prefix { $0 != "-" && $0 != "_" }) }
+        func rank(_ quality: AVSpeechSynthesisVoiceQuality) -> Int {
+            switch quality { case .premium: 2; case .enhanced: 1; default: 0 }
+        }
+        let best = AVSpeechSynthesisVoice.speechVoices()
+            .filter { voice in
+                rank(voice.quality) > 0 && code(voice.language) == code(language)
+                    && voice.voiceTraits.isDisjoint(with: [.isNoveltyVoice, .isPersonalVoice])
+            }
+            .max { a, b in
+                (rank(a.quality), a.language == language ? 1 : 0, b.name) < (rank(b.quality), b.language == language ? 1 : 0, a.name)
+            }
+        guard let best, rank(best.quality) > system.map({ rank($0.quality) }) ?? -1 else { return nil }
+        return best
     }
 
     private func spoke() {

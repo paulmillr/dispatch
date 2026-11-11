@@ -143,6 +143,8 @@ enum TestSupport {
         try await eventually(timeout: .seconds(10), diagnostic: "launches: \((chat.helperLaunches ?? []).map(\.key))") {
             keys.allSatisfy { key in chat.helperLaunches?.contains { $0.key == key } == true }
         }
+        // This Mac allows an agent's hooks only once asked (ChatCoordinator.localHooks): a case turning them on has.
+        if enabled { for key in keys { chat.localHooks[key] = true } }
         for key in keys { chat.setHelperIntegration(key, enabled: enabled) }
         try await eventually(timeout: .seconds(10), diagnostic: chat.error ?? "no error") {
             keys.allSatisfy { (chat.hookStatus($0) != .off) == enabled }
@@ -614,7 +616,7 @@ extension AgentModelMenu {
     init() {
         timer = Timer(timeInterval: 0.05, repeats: true) { _ in
             MainActor.assumeIsolated {
-                guard let window = NSApp.modalWindow, Self.shows("Close running processes?", in: window.contentView) else { return }
+                guard let window = NSApp.modalWindow, window.identifier?.rawValue == AppDelegate.closeConfirmationIdentifier else { return }
                 NSApp.stopModal(withCode: .alertSecondButtonReturn); Self.wake() // from a timer, stopModal ends the loop only at its next event
             }
         }
@@ -623,11 +625,6 @@ extension AgentModelMenu {
 
     func stop() { timer.invalidate() }
     private static func wake() { NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0).map { NSApp.postEvent($0, atStart: true) } }
-    private static func shows(_ text: String, in view: NSView?) -> Bool {
-        guard let view else { return false }
-        if (view as? NSTextField)?.stringValue == text { return true }
-        return view.subviews.contains { shows(text, in: $0) }
-    }
 }
 
 extension TerminalRuntime {

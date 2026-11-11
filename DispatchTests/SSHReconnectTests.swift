@@ -274,7 +274,9 @@ final class SSHReconnectTests: XCTestCase {
         controller.reconnect(hostID: recipe.host, sourceSurfaceID: recipe.origin)
         try await TestSupport.eventually { controller.presentationState(for: recipe.origin)?.connected == true }
         XCTAssertNil(controller.state(for: recipe.origin), "Success must release input before the banner folds")
+        XCTAssertTrue(controller.showsBar(for: recipe.origin), "Chat's status waits while the bar says connected")
         try await TestSupport.eventually { controller.presentationState(for: recipe.origin) == nil }
+        XCTAssertFalse(controller.showsBar(for: recipe.origin))
     }
 
     func testOfflineTimestampAndAttemptCountSurviveFailure() async throws {

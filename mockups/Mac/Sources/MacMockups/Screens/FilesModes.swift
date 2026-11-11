@@ -229,7 +229,7 @@ struct CreateReviewButton: View {
     var count: Int? = 3
     var body: some View {
         HStack(spacing: 6) {
-            Label("Create review", systemImage: "text.bubble.fill").labelStyle(.titleAndIcon)
+            Label("Create Review", systemImage: "text.bubble.fill").labelStyle(.titleAndIcon)
             if let count {
                 Text("\(count)").font(t.font(.caption)).foregroundStyle(theme.blue)
                     .padding(.horizontal, 5).padding(.vertical, 1)
@@ -252,7 +252,7 @@ struct FilesSplit<List: View, Detail: View>: View {
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            // FilesView.layout: under columnsWidth (900) no column beside the list (NarrowPanes draws the stacked and
+            // FilesView.layout: under columnsWidth (900) no column beside the list (the stacked and
             // one-column shapes); else the preview within the minima (list 320, preview 240).
             let preview: CGFloat? = width < 900 ? nil
                 : min(max(width >= 1_000 ? 560 : width / 2, 240), max(240, width - 320)).rounded()
@@ -770,7 +770,7 @@ struct FinishReview: View {
                 Spacer(minLength: 8)
                 previewButton("Cancel", prominent: false)
                 // Not prominent while this tab has an agent to send to.
-                previewButton("Copy review", prominent: false)
+                previewButton("Copy Review", prominent: false)
                 previewButton("Send to Claude Code")
                 // Another tab's agent (Theme contrast): a borderless menu, as AppKit draws it.
                 Menu {
@@ -888,16 +888,13 @@ struct FilesTab: View {
         } detail: {
             VStack(spacing: 0) {
                 // FilePreviewDetail.header: one line, 10 apart: the name, Copy path, the meta (FilesFormatting.meta),
-                // then wrap (off: Settings › Files › Wrap lines) and Open in editor; a `border` rule under it.
+                // then wrap (off: Settings › Files › Wrap lines); a `border` rule under it.
                 HStack(spacing: 10) {
                     Text("Palette.swift").font(t.font(.content)).foregroundStyle(theme.ink).lineLimit(1).layoutPriority(1)
                     IconButton { Image(systemName: "doc.on.doc").font(.system(size: 11)) }
                     Text("572 B · modified 6m ago").font(t.font(.body)).foregroundStyle(theme.muted).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 4) {
-                        IconButton { WrapGlyph() }
-                        IconButton { Image(systemName: "square.and.pencil").font(.system(size: 11)) }
-                    }
+                    IconButton { WrapGlyph() }
                 }
                 .padding(.horizontal, 14)
                 .frame(height: Self.headerHeight)
@@ -1393,4 +1390,73 @@ struct CommitDetail: View {
         .line(old: nil, new: 23, Code(pl("    )"))),
         .line(old: 18, new: 24, Code(pl("}"))),
     ]
+}
+
+// MARK: Pieces
+
+extension FilesSegment {
+    /// ModeSwitchState.glyph: the folder, Review the phone's clipboard (the chat bubble is Chat's), Commits the clock.
+    var symbol: String {
+        switch self {
+        case .files: "folder"
+        case .review: "pencil.and.list.clipboard"
+        case .commits: "clock.arrow.circlepath"
+        }
+    }
+
+    /// FilesHeader.title.
+    var title: String {
+        switch self {
+        case .files: "Files"
+        case .review: "Review"
+        case .commits: "Commits"
+        }
+    }
+}
+
+/// FilesHeader.tabName: the tab's name in semibold ink; one column with a detail shown, the way back: "‹", the tab's
+/// glyph in the accent, the name, on a raised pill.
+struct FilesPill: View {
+    let segment: FilesSegment
+    var back = false
+    var body: some View {
+        if back {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.left").font(t.symbol(.micro, weight: .bold))
+                Image(systemName: segment.symbol).font(t.symbol(.caption))
+                Text(segment.title).foregroundStyle(p.ink)
+            }
+            .font(t.font(.label, weight: .semibold))
+            .foregroundStyle(p.accent)
+            .lineLimit(1)
+            .padding(.horizontal, 9).frame(height: t.expanded(22))
+            .background(Capsule().fill(Mock.glass ? GlassTone.selected : p.selectedControl))
+            .fixedSize()
+        } else {
+            Text(segment.title).font(t.font(.label, weight: .semibold)).foregroundStyle(p.ink).fixedSize()
+        }
+    }
+}
+
+/// GitDiffModePicker with `glyphs`: Diff | Source as two glyphs on the picker's track.
+struct GlyphModePicker: View {
+    var body: some View {
+        HStack(spacing: 1) {
+            segment("plus.forwardslash.minus", on: true)
+            segment("doc.plaintext", on: false)
+        }
+        .padding(1)
+        .background { if Mock.glass { GlassCapsule() } else { RoundedRectangle(cornerRadius: 5).fill(p.control) } }
+        .fixedSize()
+    }
+
+    private func segment(_ symbol: String, on: Bool) -> some View {
+        Image(systemName: symbol).font(.system(size: t.size(offset: -2.5), weight: .medium)).foregroundStyle(on ? p.ink : p.muted)
+            .frame(width: t.expanded(16)).padding(.horizontal, 8).frame(height: 20)
+            .background {
+                if on {
+                    if Mock.glass { Capsule().fill(GlassTone.selected) } else { RoundedRectangle(cornerRadius: 4).fill(p.selectedControl) }
+                }
+            }
+    }
 }

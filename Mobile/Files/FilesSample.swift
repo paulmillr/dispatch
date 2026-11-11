@@ -157,6 +157,18 @@ final class FilesSample: MobileFilesSource, @unchecked Sendable {
         const [theme, setTheme] = useTheme();
         ```
 
+        ## Tokens
+
+        | Token | Light | Dark |
+        | --- | --- | --- |
+        | `--surface` | white | `#1c1c1e` |
+        | `--accent` | pink | pink |
+
+        ## Dark mode
+
+        > The sidebar's choice wins over the system's
+        > until it is set back to *System*.
+
         """
 }
 #endif

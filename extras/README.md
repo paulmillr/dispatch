@@ -1,5 +1,8 @@
 # Extras
 
+`pi/` holds two Pi extensions for OpenRouter and OpenCode Go limits. They are not in use yet: Dispatch's bundled Pi
+bridge does not ask them, so installing one does nothing. `node --test extras/pi/limits.test.mjs` runs their tests.
+
 Dispatch themes for other applications. Edit the Ghostty palettes here: the app build copies them into its
 resources. The bat and Vim ports are maintained separately in their native formats and match the Ghostty palette and
 the syntax palette in `design/Syntax highlight.dc.html`.

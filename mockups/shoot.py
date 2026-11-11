@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build the mockup apps and screenshot their screens in the simulator.
 
-    python3 mockups/shoot.py build [phone|ipad|landscape|watch]   # XcodeGen, xcodebuild, simctl install
+    python3 mockups/shoot.py build [phone|ipad|duo|landscape|watch]   # XcodeGen, xcodebuild, simctl install
     python3 mockups/shoot.py rotate [ipad|landscape]       # once per simulator boot: landscape (the iPad, or an iPhone)
     python3 mockups/shoot.py H2-review [dark|light]        # one screen; both schemes by default
-    python3 mockups/shoot.py all [phone|ipad|watch]        # every screen of the platform, then its sheets
-    python3 mockups/shoot.py sheets [phone|ipad|watch]     # contact sheets from existing shots
+    python3 mockups/shoot.py all [phone|ipad|duo|watch]    # every screen of the platform, then its sheets
+    python3 mockups/shoot.py sheets [phone|ipad|duo|watch] # contact sheets from existing shots
     python3 mockups/shoot.py list                          # the screen ids by group
 
     python3 mockups/shoot.py mac [render|list|sheets] [--themes dark,light] [selector…]   # Mac screens (README, Mac)
@@ -16,7 +16,7 @@ The Mac screens need no simulator: `mac` builds the Swift package in Mac/ (incre
 offscreen into mockups/shots/mac/<id>-<theme>.png, sheets into mockups/sheets/mac-<group>-<theme>.png.
 Shots land in mockups/shots/<id>-<scheme>.png (watch: <id>.png), contact sheets in mockups/sheets/<group>-<scheme>.png.
 The simulator is the booted one whose name fits the platform, else the newest available, which is booted;
-MOCKUPS_DEVICE=<name or UDID> overrides. MOCKUPS_SETTLE seconds (default 3) wait before each screenshot.
+MOCKUPS_DEVICE=<name or UDID> overrides. The Duo is folded or unfolded per screen (`hinge`). MOCKUPS_SETTLE seconds (default 3) wait before each screenshot.
 """
 import json, os, re, subprocess, sys, time
 from pathlib import Path
@@ -27,7 +27,7 @@ REPO = ROOT.parent
 # Screen ids by contact-sheet group; the platform decides the simulator and the sheet layout.
 GROUPS = {
     'phone': {
-        'tab': ['H0-terminal', 'H1-files', 'H2-review', 'H3-commits'],
+        'tab': ['H0-terminal', 'H1-files', 'H2-review', 'H3-commits', 'B8c-title-capsule-menu', 'B8d-title-capsule-long'],
         'review': ['R2-diff-comments', 'R3-diff-select', 'R4-diff-compose', 'R5-review-sheet', 'R5b-review-sheet-swipe',
                    'R5c-review-sheet-noagent'],
         'pushed': ['F2-file', 'C2-commit'],
@@ -36,21 +36,13 @@ GROUPS = {
         'host': ['W0-spaces-tree', 'W0b-offline-collapsed', 'W0c-offline-menu', 'W1a-host-small', 'W1b-host-dragging',
                  'W1c-host-small-offline', 'W1-host-cpu', 'W2-host-mem', 'W3-host-scrub', 'W5-host-stale',
                  'W6-host-plain', 'W7-host-lowpower'],
-        'states': ['S1-no-helper', 'S2-no-grant', 'S3-offline', 'S4-review-sent', 'S5-diff-fold-outdated', 'S6d-chat-corner-time'],
-        'settings': ['G1-settings', 'G2-terminal-font', 'G3-chat-font', 'G4-theme', 'G5-notifications'],
+        'states': ['S1-no-helper', 'S2-no-grant', 'S3-offline', 'S4-review-sent', 'S5-diff-fold-outdated'],
+        'settings': ['G1-settings', 'G2-terminal-font', 'G3-chat-font', 'G5-notifications'],
         'terminal': ['T1-terminal-search', 'T2-terminal-menu'],
         'chat': ['C1-chat-search', 'C2-chat-slash', 'C3-chat-side', 'C4-chat-goal', 'C4b-chat-goal-sheet',
                  'C5-chat-conversation', 'C6-chat-jump'],
         'queue': ['Q1-queue-bubbles', 'Q1b-queue-menu', 'Q1c-queue-editing', 'Q6-queue-paused'],
         'message': ['M1-message-info', 'M1b-message-info-unfolded', 'M1c-message-info-short', 'M1d-message-info-stopped'],
-        'mode-glyph': ['Z0-mode-glyph-compare', 'Z1-mode-glyph-soft-fill', 'Z2-mode-glyph-platter',
-                       'Z3-mode-glyph-plain-bubble', 'Z4-mode-glyph-dot'],
-        'new-glyph': ['N0-new-glyph-compare', 'N1-new-glyph-pill', 'N2-new-glyph-thread', 'N3-new-glyph-typing',
-                      'N4-new-glyph-spark', 'N5-new-glyph-quote', 'N6-tab-list-today', 'N6b-tab-list-pill',
-                      'N6c-tab-list-pill-menu', 'N7-chat-symbol-check'],
-        'mode-host': ['B7-host-leading-chat', 'B7b-host-leading-terminal', 'B7c-host-leading-states'],
-        'header': ['X9b-header-disc-ellipsis'],
-        'chat-icon': ['Y5-chat-text-bubble'],
     },
     'ipad': {
         'ipad': ['I1-split-files', 'I2-split-review', 'I2b-split-review-empty', 'I3-split-commits', 'I3b-split-commits-empty',
@@ -61,6 +53,10 @@ GROUPS = {
         'onerail': ['L12-one-rail-chat', 'L12b-one-rail-chat-typing', 'L12c-one-rail-chat-draft', 'L13-one-rail-review',
                     'L14-one-rail-terminal', 'L14b-one-rail-terminal-typing', 'L14c-one-rail-terminal-keys',
                     'L15-edge-terminal', 'L15b-edge-chat'],
+    },
+    'duo': {
+        'duo': ['V1-duo-chat', 'V2-duo-files', 'V3-duo-terminal', 'V7-duo-space', 'V8-duo-empty'],
+        'duo-cover': ['V4-duo-cover-chat', 'V5-duo-cover-files', 'V6-duo-cover-terminal'],
     },
     'watch': {
         'watch': ['K1-list', 'K1b-list-scrolled', 'K2-thread', 'K3-approval', 'K4-question', 'K5-reply', 'K6-host',
@@ -74,6 +70,9 @@ PLATFORMS = {
                  bundle='dev.dispatch.mockups.Mockups', match=r'^iPad', schemes=['dark', 'light'], cols='3', scale='0.25'),
     'landscape': dict(scheme='Mockups', sdk='iphonesimulator', product='Debug-iphonesimulator/Mockups.app',
                       bundle='dev.dispatch.mockups.Mockups', match=r'^iPhone', schemes=['dark', 'light'], cols='3', scale='0.25'),
+    # The iPhone Duo: the inner screen (display 3) unfolded, the cover (the primary display) folded; `hinge` turns it.
+    'duo': dict(scheme='Mockups', sdk='iphonesimulator', product='Debug-iphonesimulator/Mockups.app',
+                bundle='dev.dispatch.mockups.Mockups', match=r'^iPhone Duo', schemes=['dark', 'light'], cols='3', scale='0.25'),
     'watch': dict(scheme='MockupsWatch', sdk='watchsimulator', product='Debug-watchsimulator/MockupsWatch.app',
                   bundle='dev.dispatch.mockups.MockupsWatch', match=r'^Apple Watch', schemes=[None], cols='6', scale='1'),
 }
@@ -163,17 +162,37 @@ def rotate(platform='ipad'):
     print('landscape' if result.returncode == 0 else result.stdout[-2000:] + result.stderr[-2000:])
 
 
+def hinge(state):
+    """Folds ('Closed') or unfolds ('Open') the Duo simulator: DeviceHub's hinge buttons, through the accessibility
+    API (`hinge.swift`; the shell running this needs Accessibility access). simctl has no hinge."""
+    tool = ROOT / 'build/hinge'
+    if not tool.exists():
+        run('swiftc', '-O', 'hinge.swift', '-o', str(tool), cwd=ROOT)
+    pid = run('pgrep', '-f', 'DeviceHub.app/Contents/MacOS/DeviceHub', check=False, capture_output=True).stdout.split()
+    if not pid:
+        sys.exit('the Duo needs DeviceHub (Xcode › Open Developer Tool) to fold and unfold')
+    result = run(str(tool), state, pid[0], check=False, capture_output=True)
+    if result.returncode:
+        sys.exit(f'could not set the Duo\'s hinge to {state}: {result.stdout.strip()}')
+    time.sleep(2)
+
+
 def shot(screen, scheme, udid=None):
     platform = platform_of(screen)
     p = PLATFORMS[platform]
     udid = udid or device(platform)
     (ROOT / 'shots').mkdir(exist_ok=True)
+    display = []
+    if platform == 'duo':
+        cover = '-cover-' in screen
+        hinge('Closed' if cover else 'Open')
+        display = ['--display=primary' if cover else '--display=3']
     run('xcrun', 'simctl', 'terminate', udid, p['bundle'], check=False, capture_output=True)
     args = ['-screen', screen] + (['-scheme', scheme] if scheme else [])
     run('xcrun', 'simctl', 'launch', udid, p['bundle'], *args, capture_output=True)
     time.sleep(float(os.environ.get('MOCKUPS_SETTLE', '3')))
     out = ROOT / 'shots' / (f'{screen}-{scheme}.png' if scheme else f'{screen}.png')
-    run('xcrun', 'simctl', 'io', udid, 'screenshot', str(out), capture_output=True)
+    run('xcrun', 'simctl', 'io', udid, 'screenshot', *display, str(out), capture_output=True)
     print(out.relative_to(REPO))
 
 

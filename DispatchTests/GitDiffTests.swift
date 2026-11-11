@@ -69,6 +69,30 @@ final class GitDiffTests: XCTestCase {
         XCTAssertEqual(diff.lines[14].old, 13, "The second hunk's old side runs 6 through 13")
     }
 
+    /// Copy Hunk gives the hunk as git printed it: its header and each line with its mark.
+    func testCopyHunkIsTheHunkAsGitPrintsIt() {
+        let diff = GitDiffPresentation.parse(billing)
+        XCTAssertEqual(GitDiffView.hunkText(diff, 0), """
+            @@ -1,4 +1,5 @@
+             import { stripe } from '../lib/stripe'
+            +import { db } from '../lib/db'
+             import type { WebhookEvent } from '../types'
+             
+             export const SEEN = 1
+
+            """)
+        XCTAssertTrue(GitDiffView.hunkText(diff, 1).hasPrefix("@@ -6,8 +7,9 @@ export async function handleWebhook\n"))
+        XCTAssertEqual(GitDiffView.hunkText(diff, 9), "")
+    }
+
+    /// Review with nothing uncommitted says where comments can still be written, or that some are still to send.
+    func testTheEmptyReviewTabPointsAtCommitsAndHeldComments() {
+        XCTAssertEqual(GitChangesText.empty(comments: 0),
+                       "No changes · the working tree matches HEAD\nComment on a commit’s lines in Commits (⌃⌘3)")
+        XCTAssertEqual(GitChangesText.empty(comments: 2),
+                       "No changes · the working tree matches HEAD\n2 comments still to send · Create Review")
+    }
+
     func testDiffWithoutTrailingNewlineParsesTheSame() {
         let trimmed = String(billing.dropLast())
         XCTAssertFalse(trimmed.hasSuffix("\n"))

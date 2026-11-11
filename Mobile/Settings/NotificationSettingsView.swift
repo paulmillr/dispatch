@@ -44,7 +44,6 @@ struct NotificationSettingsView: View {
                         ForEach(NotificationSound.allCases) { Text($0.title).tag($0) }
                     }
                     Toggle("Show message text", isOn: $settings.notificationText)
-                    Toggle("Badge app icon", isOn: $settings.notificationBadge)
                 } footer: {
                     Text("Off, banners say only which conversation needs you. The badge counts conversations waiting for you across hosts.")
                 }
@@ -56,19 +55,17 @@ struct NotificationSettingsView: View {
                     }
                 }
             }
-            // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
+            // The cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)
         }
         .scrollContentBackground(.hidden)
         .background(Color.canvas)
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
-        // The badge follows its switch at once.
-        .onChange(of: settings.notificationBadge) { _, _ in composition.updateBadge() }
         // Approvals and questions always notify: iOS is asked here, and again when a switch is turned on (it shows its
         // prompt once; after that the answer is the Settings app's).
         .task { await checkPermission() }
-        .onChange(of: [settings.notifyNeedsYou, settings.notifyFinished, settings.notifyFailed, settings.notificationBadge]) { old, new in
+        .onChange(of: [settings.notifyNeedsYou, settings.notifyFinished, settings.notifyFailed]) { old, new in
             if zip(old, new).contains(where: { !$0 && $1 }) { Task { await checkPermission() } }
         }
     }

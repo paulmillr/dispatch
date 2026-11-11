@@ -24,6 +24,47 @@ enum FilePreviewContent {
         return String(decoding: data.dropFirst(start).prefix(max(0, count - start)), as: UTF8.self)
     }
 
+    /// Text in an encoding other than UTF-8 that a preview can still show (read-only): UTF-16 that starts with its
+    /// byte-order mark, or 8-bit text with no control characters but whitespace, no C1 controls and nothing that reads as
+    /// broken UTF-8 (Latin-1).
+    enum OtherEncoding: Equatable, Sendable {
+        case utf16
+        case latin1
+
+        var title: String {
+            switch self {
+            case .utf16: "UTF-16"
+            case .latin1: "Latin-1"
+            }
+        }
+    }
+
+    /// The encoding `head` (a file's first bytes) reads as when it is not UTF-8; nil for UTF-8 or for bytes that are
+    /// not text.
+    static func otherEncoding(_ head: Data) -> OtherEncoding? {
+        if head.starts(with: [0xFF, 0xFE]) || head.starts(with: [0xFE, 0xFF]) { return head.count % 2 == 0 ? .utf16 : nil }
+        guard !head.isEmpty, validUTF8PrefixLength(head, allowingIncompleteSuffix: true) == nil else { return nil }
+        let allowed: Set<UInt8> = [0x09, 0x0A, 0x0C, 0x0D, 0x1B]
+        for byte in head where (byte < 0x20 && !allowed.contains(byte)) || byte == 0x7F || (0x80...0x9F).contains(byte) {
+            return nil
+        }
+        // A lead byte followed by a continuation byte is broken UTF-8 (an overlong form, a cut sequence), not Latin-1,
+        // whose letters stand alone: "caf\u{E9} " is E9 then a space.
+        for (byte, next) in zip(head, head.dropFirst()) where byte >= 0xC0 && (0x80...0xBF).contains(next) { return nil }
+        return .latin1
+    }
+
+    /// `data` decoded as `encoding`, a UTF-16 byte-order mark omitted; nil when it does not decode.
+    static func text(_ data: Data, encoding: OtherEncoding) -> String? {
+        switch encoding {
+        case .utf16:
+            guard data.count % 2 == 0 else { return nil }
+            return String(data: data, encoding: .utf16).map { $0.hasPrefix("\u{FEFF}") ? String($0.dropFirst()) : $0 }
+        case .latin1:
+            return String(data: data, encoding: .isoLatin1)
+        }
+    }
+
     /// Returns the number of bytes in the valid prefix. With `allowingIncompleteSuffix`, only a well-formed scalar
     /// cut off at the end is accepted; overlong encodings, surrogates and values past U+10FFFF remain invalid.
     static func validUTF8PrefixLength(_ data: Data, allowingIncompleteSuffix: Bool) -> Int? {

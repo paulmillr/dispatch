@@ -85,6 +85,8 @@ struct StripTab: View {
             }
             // The selection outline marks the tab; a focus ring around it would read as a second selection.
             .focusEffectDisabled()
+            // The × shows only under the pointer: VoiceOver and Full Keyboard Access close the tab from here.
+            .accessibilityAction(named: "Close", close)
             HStack(spacing: 0) {
                 ZStack {
                     if hovered { closeButton }

@@ -184,6 +184,36 @@ final class GitLoadingTests: XCTestCase {
         XCTAssertEqual(source.gitCalls.count, asked, "Nothing runs git on a tab whose git is unavailable")
     }
 
+    /// git failing after the repository is found (a lock, a corrupt index) is said in place of a spinner; the reads
+    /// back off a tick more after each failure, ⌘R asks at once, and an answer clears the error.
+    func testAFailedStatusSaysWhyAndBacksOff() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        repository(source)
+        source.gitAnswers[Self.status] = GitOutput(status: 128, output: "fatal: index file corrupt\n", truncated: false)
+        let f = fixture(source, directory: api)
+        try await TestSupport.eventually { f.session.statusError == "fatal: index file corrupt" }
+        XCTAssertNil(f.session.status)
+        try await f.idle()
+        let failed = calls(source, "status").count
+        try await f.tick()
+        XCTAssertEqual(calls(source, "status").count, failed, "one tick skipped after the first failure")
+        try await f.tick()
+        XCTAssertEqual(calls(source, "status").count, failed + 1, "then read again")
+        try await f.tick()
+        try await f.tick()
+        try await f.tick()
+        XCTAssertEqual(calls(source, "status").count, failed + 1, "three skipped after the second")
+
+        source.gitAnswers[Self.status] = ok(Self.porcelain)
+        f.coordinator.refreshNow(f.session.id)
+        try await TestSupport.eventually { f.session.status != nil }
+        XCTAssertNil(f.session.statusError)
+        try await f.idle()
+        let read = calls(source, "status").count
+        try await f.tick()
+        XCTAssertEqual(calls(source, "status").count, read + 1, "every tick again once it reads")
+    }
+
     // MARK: Status and marks
 
     /// The Review tab reads only the status, on the tick like the Files tab.

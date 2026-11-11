@@ -466,15 +466,15 @@ final class ChatPresentationTests: XCTestCase {
             return false
         }
         let sheet = try await PresentationTestSupport.capture(XCTUnwrap(popover), named: "shortcut-sheet", in: "chat-footer-validation").text()
-        XCTAssertTrue(sheet.contains("redirects")); XCTAssertTrue(sheet.contains("current turn"))
+        XCTAssertTrue(sheet.contains("adds it to")); XCTAssertTrue(sheet.contains("current turn"))
         popover?.performClose(nil)
         // Remounting also proves the onboarding state is persisted, not tied to a view instance.
         mount()
         try await Task.sleep(for: .milliseconds(150))
         session.draft = "Queued first"; coordinator.queue(session, drain: false)
         let tip = try await capture("first-queue-tip")
-        // The tip may wrap after "interrupt", beside its close button, which OCR reads into the line.
-        XCTAssertTrue(tip.contains("redirect the current turn"), tip)
+        // The tip may wrap beside its close button, which OCR reads into the line.
+        XCTAssertTrue(tip.contains("to the current turn now"), tip)
         XCTAssertTrue(tips.bool(forKey: "chatQueueSteerTipShown"))
         mount()
         try await Task.sleep(for: .milliseconds(150))
@@ -981,7 +981,7 @@ final class ChatPresentationTests: XCTestCase {
         session.draft = "draft\n"
         session.approvals.append(PendingApproval(key: "permission", operation: "Bash\nswift build", turnID: "turn") { _ in })
         let approval = try await capture("1b-approval")
-        XCTAssertTrue(try approval.text().contains("Allow once"), "The pending approval must be actionable in Chat")
+        XCTAssertTrue(try approval.text().contains("Allow Once"), "The pending approval must be actionable in Chat")
         session.approvals[0].resolve(.deny)
         let patchGroup = try XCTUnwrap(session.transcriptRows.compactMap(\.group).first)
         session.expandedToolGroups.insert(patchGroup.id)

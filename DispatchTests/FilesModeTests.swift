@@ -281,11 +281,13 @@ final class FilesModeTests: XCTestCase {
         XCTAssertFalse(files.canShowFiles(id, tab: .changes))
         XCTAssertTrue(files.canShowFiles(id, tab: .files))
 
-        // git missing on the host is no repository either.
+        // git missing on the host (or refusing the folder): the git tabs stay, to say why.
         session.git = .repository(GitRepository(root: "/srv"))
         files.showFiles(id, tab: .commits)
         session.git = .unavailable("git is not installed on homelab")
-        XCTAssertEqual(session.tab, .files)
+        XCTAssertEqual(session.tab, .commits)
+        XCTAssertEqual(session.gitUnavailable, "git is not installed on homelab")
+        XCTAssertTrue(files.canShowFiles(id, tab: .changes))
         XCTAssertNil(session.changedCount)
     }
 
@@ -348,7 +350,7 @@ final class FilesModeTests: XCTestCase {
                            "the View menu's rule")
         }
         session.git = .unavailable("git is not installed on homelab")
-        XCTAssertEqual(enabled(), ["Terminal", "Chat", "Files"], "where git cannot run")
+        XCTAssertEqual(enabled(), all, "where git cannot run the git tabs open to say why")
         session.git = .repository(GitRepository(root: "/Users/ivan/src/api"))
         XCTAssertEqual(enabled(), all)
         XCTAssertEqual(checked(), ["Terminal"], "the git tabs are checked only while files shows them")
@@ -496,30 +498,29 @@ final class FilesModeTests: XCTestCase {
         let terminalChat = State(mode: .terminal, chat: true, files: true, host: nil)
         XCTAssertEqual(terminalChat.glyph, "text.bubble"); XCTAssertFalse(terminalChat.lit)
         XCTAssertEqual(terminalChat.label, "Show Chat"); XCTAssertEqual(terminalChat.value, "Terminal selected")
-        XCTAssertEqual(terminalChat.help(chatHint: "Show agent chat"), "Show agent chat")
+        // A click opens the modes menu in every state: the hover text says what it offers and the keys that switch at once.
+        XCTAssertEqual(terminalChat.help(chatHint: "Show agent chat"), "Terminal, Chat or Files · ⇧⌘C ⇧⌘F")
 
         let terminalFiles = State(mode: .terminal, chat: false, files: true, host: nil)
         XCTAssertEqual(terminalFiles.glyph, "folder"); XCTAssertFalse(terminalFiles.lit)
         XCTAssertEqual(terminalFiles.label, "Show Files")
-        // No agent: a click opens the menu of the files tabs rather than guessing one.
-        XCTAssertTrue(terminalFiles.opensMenu)
-        XCTAssertEqual(terminalFiles.help(chatHint: ""), "Files, Review or Commits · ⇧⌘F")
+        XCTAssertEqual(terminalFiles.help(chatHint: ""), "Terminal or Files · ⇧⌘F")
         let shellFiles = State(mode: .files, chat: false, files: true, host: nil, tab: .changes)
-        XCTAssertTrue(shellFiles.opensMenu, "the menu has the terminal too")
-        XCTAssertEqual(shellFiles.help(chatHint: ""), "Terminal, Files, Review or Commits · ⇧⌘F")
-        XCTAssertFalse(terminalChat.opensMenu, "an agent's tab clicks into chat")
+        XCTAssertEqual(shellFiles.help(chatHint: ""), "Terminal or Files · ⇧⌘F")
+        let nowhere = State(mode: .terminal, chat: false, files: false, host: "box")
+        XCTAssertEqual(nowhere.help(chatHint: ""), "Files need dispatch-helper on box", "with nowhere to go, why")
 
-        // Chat: the click returns to the terminal even where files could show (files is a hold, a right-click or ⇧⌘F).
+        // Chat: VoiceOver's press steps back to the terminal; a click opens the menu.
         let chat = State(mode: .chat, chat: true, files: true, host: nil)
         XCTAssertEqual(chat.glyph, "text.bubble"); XCTAssertTrue(chat.lit)
         XCTAssertEqual(chat.next, .terminal); XCTAssertEqual(chat.label, "Show Terminal"); XCTAssertEqual(chat.value, "Chat selected")
-        XCTAssertEqual(chat.help(chatHint: ""), "Show terminal · ⇧⌘C")
+        XCTAssertEqual(chat.help(chatHint: ""), "Terminal, Chat or Files · ⇧⌘C ⇧⌘F")
         XCTAssertTrue(chat.reaches(.files))
 
         let files = State(mode: .files, chat: true, files: true, host: nil)
         XCTAssertEqual(files.glyph, "folder"); XCTAssertTrue(files.lit)
         XCTAssertEqual(files.label, "Show Terminal"); XCTAssertEqual(files.value, "Files selected")
-        XCTAssertEqual(files.help(chatHint: ""), "Show terminal · ⇧⌘F")
+        XCTAssertEqual(files.help(chatHint: ""), "Terminal, Chat or Files · ⇧⌘C ⇧⌘F")
         // In files mode the button names the files tab shown (the header no longer does); in the terminal, where a
         // click goes.
         let review = State(mode: .files, chat: true, files: true, host: nil, tab: .changes)
@@ -540,7 +541,7 @@ final class FilesModeTests: XCTestCase {
         // A plain SSH login with an agent: chat, then back to the terminal.
         let plainChat = State(mode: .chat, chat: true, files: false, host: "nightly")
         XCTAssertEqual(plainChat.next, .terminal); XCTAssertEqual(plainChat.label, "Show Terminal")
-        XCTAssertEqual(plainChat.help(chatHint: ""), "Show terminal · ⇧⌘C")
+        XCTAssertEqual(plainChat.help(chatHint: ""), "Terminal or Chat · ⇧⌘C")
         XCTAssertFalse(plainChat.reaches(.files))
 
         let plain = State(mode: .terminal, chat: false, files: false, host: "nightly")

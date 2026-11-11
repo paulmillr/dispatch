@@ -60,9 +60,8 @@ final class CommitsUITests: XCTestCase {
         XCTAssertTrue(row(app, "Upgrade react-router to v7").exists)
         tap(app.buttons["Close search"])
         tap(app.buttons["Uncommitted changes"])
-        let review = app.otherElements["files-modes"].buttons["Review"]
-        XCTAssertTrue(review.waitForExistence(timeout: 5))
-        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: review)
-        waitForExpectations(timeout: 5)
+        // Review shows (its Create review at the bottom), the mode button still the header's.
+        XCTAssertTrue(app.buttons["Create review"].waitForExistence(timeout: 5), "Review")
+        XCTAssertTrue(app.buttons["tab-mode-button"].exists)
     }
 }

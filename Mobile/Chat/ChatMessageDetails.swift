@@ -232,7 +232,7 @@ struct ChatMessageDetails: View {
                 // M5d: a patch pushes the turn's changes (Code stream).
                 DiffView(session: session, steps: steps, opening: step, directory: directory, back: session.agentName)
             } else {
-                ChatStepOutput(session: session, step: step)
+                ChatStepOutput(session: session, step: step, directory: directory)
             }
         } label: { stepRow(step, nested: nested) }
         .buttonStyle(.plain)
@@ -379,44 +379,49 @@ struct ChatRawText: UIViewRepresentable {
 struct ChatStepOutputSheet: View {
     let session: MobileChatSession
     let step: ChatStep
+    var directory: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            ChatStepOutput(session: session, step: step)
+            ChatStepOutput(session: session, step: step, directory: directory)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         .tint(Color.dispatchPink)
     }
 }
 
-/// A step's full output (`chat.tools`), or its diff for a patch: monospaced, selectable. Pushed from message details,
-/// in a sheet from the working row.
+/// A step opened (from message details, or the working row's sheet), as the Mac opens one (`ChatToolCard`), from the
+/// same `ToolPresentation`: what it did (its title and summary, "Read · ChatWorkingRow.swift · lines 70–175") with its
+/// status, its folder, the command when the summary does not already say it, the documents it changed, and its output:
+/// a read's captured source highlighted at its own line numbers, else each output block as code, Markdown or a note,
+/// with Copy; "Done" or "Failed with no output" when there was none. Tool details opens the raw input and output. The
+/// full record is asked for (`chat.tools`) as it opens.
 struct ChatStepOutput: View {
     let session: MobileChatSession
     let step: ChatStep
+    /// The conversation's folder, which summaries name paths from.
+    var directory: String? = nil
     @State private var record: HelperChat.Record?
     @State private var error: String?
+    @State private var raw = false
 
     var body: some View {
+        let item = item
+        let tool = ToolPresentationCache.shared.cached(for: item) ?? ToolPresentation(item)
+        let directory = tool.directory ?? self.directory ?? item.directory ?? ""
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if step.kind == .patch, !documents.isEmpty {
-                    ForEach(Array(documents.enumerated()), id: \.offset) { _, document in
-                        Text(TextRendering.visible(document.path)).font(.footnote.weight(.semibold).monospaced())
-                        diff(document.diff)
-                    }
+            VStack(alignment: .leading, spacing: 14) {
+                header(tool, directory: directory)
+                if let folder = tool.directory ?? item.directory, !folder.isEmpty {
+                    Label(TextRendering.visible(folder), systemImage: "folder")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                if step.kind == .think {
+                    MobileChatMarkdownView(text: step.item.text)
                 } else {
-                    let input = ToolPresentation(step.item).input
-                    if !input.isEmpty, step.kind == .run {
-                        let shown = TextRendering.rich("$ " + input)
-                        Text(shown.text).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
-                        if shown.truncated { Text("Input preview truncated").font(.caption).foregroundStyle(.secondary) }
-                    }
-                    let shown = TextRendering.rich(output.isEmpty ? (record == nil && error == nil ? "Loading…" : "No output.") : output)
-                    Text(shown.text)
-                        .font(.system(size: 13, design: .monospaced))
-                    if shown.truncated { Text("Output preview truncated").font(.caption).foregroundStyle(.secondary) }
+                    details(tool, item: item, directory: directory)
                 }
                 if let error { Text(TextRendering.visible(error)).font(.caption).foregroundStyle(.secondary) }
             }
@@ -424,8 +429,9 @@ struct ChatStepOutput: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
         }
-        .navigationTitle(TextRendering.visible(step.title))
+        .navigationTitle(step.kind.label)
         .navigationBarTitleDisplayMode(.inline)
+        .environment(\.openURL, MobileChatMarkdown.openURL)
         .task {
             guard step.kind != .think else { return }
             do { record = try await session.fullOutput(of: step.item) } catch { self.error = error.localizedDescription }
@@ -437,11 +443,163 @@ struct ChatStepOutput: View {
         return item
     }
 
-    private var output: String {
-        step.kind == .think ? step.item.text : ToolPresentation(item).output
+    private var loading: Bool { record == nil && error == nil && step.kind != .think }
+
+    /// The badge, the title and status, and what it acted on: the Mac card's header.
+    private func header(_ tool: ToolPresentation, directory: String) -> some View {
+        let summary = step.kind == .think ? "" : TextRendering.visible(TextRendering.prefix(tool.displaySummary(in: directory), scalars: 512).text)
+        // The title only where it says more than the badge ("Locate", "Run tests"; not "Read" beside READ).
+        let title = TextRendering.visible(step.kind == .think ? "Thinking" : tool.displayTitle)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ChatStepBadge(kind: step.kind)
+                if title.lowercased() != step.kind.label.lowercased() {
+                    Text(title).font(.subheadline.weight(.semibold))
+                }
+                Spacer(minLength: 8)
+                status(tool)
+            }
+            Text(summary.isEmpty ? TextRendering.visible(step.title) : summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
     }
 
-    private var documents: [ToolDocument] { ToolPresentation(item).documents }
+    @ViewBuilder private func status(_ tool: ToolPresentation) -> some View {
+        HStack(spacing: 6) {
+            if tool.additions > 0 { Text("+\(tool.additions)").foregroundStyle(ChatStep.added) }
+            if tool.deletions > 0 { Text("−\(tool.deletions)").foregroundStyle(ChatStep.removed) }
+            if let result = tool.confirmedResult { Text(result).foregroundStyle(ChatStep.added).lineLimit(1) }
+            if step.failed {
+                Text(tool.exitCode.map { $0 != 0 ? "exit \($0)" : "Failed" } ?? "Failed").foregroundStyle(Color.caution)
+                Image(systemName: "exclamationmark.circle").foregroundStyle(Color.caution)
+            } else if step.running {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: "checkmark.circle").foregroundStyle(ChatStep.added)
+            }
+        }
+        .font(.caption.monospacedDigit())
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func details(_ tool: ToolPresentation, item: ChatItem, directory: String) -> some View {
+        if let state = item.patch?.state, [.interrupted, .failed, .declined].contains(state) {
+            Text("Patch " + state.rawValue).font(.caption).foregroundStyle(.secondary)
+        }
+        if let patch = item.patch, !item.completed {
+            Text(patch.state == .generating ? "Generating changes…" : "Applying changes…").font(.caption).foregroundStyle(.secondary)
+        }
+        if !tool.input.isEmpty, item.patch == nil, !tool.usesRawDetails {
+            ChatStepCodeBlock(title: tool.language == "shell" ? "Command" : "Input", code: tool.input, language: tool.language)
+        }
+        ForEach(tool.requests) { request in
+            let operation = ToolPresentation(request)
+            if let read = operation.readCommand {
+                Label(read.summary(in: directory), systemImage: "doc.text").font(.caption).foregroundStyle(.secondary)
+            } else if let action = operation.commandPresentation {
+                let summary = operation.displaySummary(in: directory)
+                Label(action.title + (summary.isEmpty ? "" : " · " + summary), systemImage: action.symbol)
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !operation.input.isEmpty {
+                ChatStepCodeBlock(title: "Requested command", code: operation.input, language: operation.language)
+            }
+        }
+        if tool.isOrchestration, tool.requests.isEmpty, tool.output.isEmpty {
+            Text("Agent tool activity").font(.caption).foregroundStyle(.secondary)
+        }
+        ForEach(Array(tool.documents.enumerated()), id: \.offset) { _, document in
+            if !document.diff.isEmpty {
+                Text(TextRendering.visible(document.displayPath(in: directory))).font(.footnote.weight(.semibold).monospaced())
+                diff(document.diff)
+            }
+        }
+        let shownDiff = tool.documents.contains { !$0.diff.isEmpty } && (tool.output.contains("+++ ") || tool.output.contains("*** Update File:"))
+        if !tool.output.isEmpty, !shownDiff {
+            output(tool)
+        } else if loading {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading output…") }
+                .font(.caption).foregroundStyle(.secondary)
+        } else if !tool.isPatch, tool.completed, tool.output.isEmpty, item.patch == nil {
+            Text(tool.failed ? "Failed with no output" : "Done").font(.caption).foregroundStyle(.secondary)
+        }
+        rawDetails(tool, item: item)
+    }
+
+    /// The output as the Mac shows it: a read's captured source at its own line numbers; else each block (code,
+    /// Markdown, a note), bounded together, with Copy for all of it.
+    @ViewBuilder private func output(_ tool: ToolPresentation) -> some View {
+        if let read = tool.sourceReadPreview {
+            ChatStepCodeBlock(title: "Captured output", code: tool.output, language: CodeSyntax.language(read.path),
+                              firstLine: read.firstLine, copy: tool.output)
+        } else {
+            let preview = Self.preview(tool.outputBlocks)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Output").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Copy") { UIPasteboard.general.string = tool.output }
+                        .foregroundStyle(Color.dispatchPink)
+                        .accessibilityLabel("Copy full tool output")
+                }
+                .font(.caption.weight(.semibold))
+                ForEach(Array(preview.blocks.enumerated()), id: \.offset) { _, block in
+                    switch block.kind {
+                    case .code(let language): ChatStepCodeBlock(code: block.text, language: language)
+                    case .markdown: MobileChatMarkdownView(text: block.text)
+                    case .attachment:
+                        Text(TextRendering.visible(block.text)).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if preview.truncated {
+                    Text("Preview shortened · Copy includes the full output").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// The Mac's bound on the whole preview: 40 blocks, 32 K characters together.
+    static func preview(_ blocks: [ToolOutput.Block]) -> (blocks: [ToolOutput.Block], truncated: Bool) {
+        var remaining = 32_768
+        var visible: [ToolOutput.Block] = []
+        for block in blocks.prefix(40) {
+            let bounded = TextRendering.prefix(block.text, scalars: remaining)
+            visible.append(.init(kind: block.kind, text: bounded.text))
+            remaining -= bounded.text.unicodeScalars.count
+            if bounded.truncated || remaining == 0 { return (visible, true) }
+        }
+        return (visible, visible.count < blocks.count)
+    }
+
+    /// "Tool details" (or "Raw details" where the summary stands for the command): the raw input and output.
+    @ViewBuilder private func rawDetails(_ tool: ToolPresentation, item: ChatItem) -> some View {
+        Button { withAnimation(.snappy(duration: 0.2)) { raw.toggle() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right").rotationEffect(.degrees(raw ? 90 : 0))
+                Text(tool.usesRawDetails ? "Raw details" : "Tool details")
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .accessibilityValue(raw ? "Expanded" : "Collapsed")
+        if raw {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(TextRendering.visible(item.title)).font(.caption).foregroundStyle(.secondary)
+                if !item.text.isEmpty {
+                    ChatStepCodeBlock(title: "Raw input", code: item.text,
+                                      language: tool.isOrchestration ? "javascript" : ToolPresentation.json(item.text) == nil ? "text" : "json")
+                }
+                if !item.output.isEmpty {
+                    ChatStepCodeBlock(title: "Raw output", code: item.output,
+                                      language: ToolPresentation.json(item.output) == nil ? "text" : "json")
+                }
+            }
+        }
+    }
 
     private func diff(_ text: String) -> some View {
         let shown = TextRendering.rich(text)
@@ -454,6 +612,55 @@ struct ChatStepOutput: View {
                     .background(line.hasPrefix("+") ? ChatStep.added.opacity(0.08) : line.hasPrefix("-") ? ChatStep.removed.opacity(0.08) : .clear)
             }
             if shown.truncated { Text("Diff preview truncated").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+/// A code block in an opened step (the Mac's `ChatCodeBlock`): an optional title (and Copy), the code highlighted in
+/// the terminal's font, line numbers from `firstLine` when it is a file's, scrolling sideways; 32 K characters at most.
+struct ChatStepCodeBlock: View {
+    var title: String? = nil
+    let code: String
+    let language: String
+    var firstLine: Int? = nil
+    /// What Copy puts on the clipboard (the whole text); nil shows no Copy.
+    var copy: String? = nil
+    @Environment(\.chatTypography) private var typography
+
+    var body: some View {
+        let preview = TextRendering.prefix(code, scalars: 32_768)
+        let lines = CodeSyntax.lines(preview.text.hasSuffix("\n") ? String(preview.text.dropLast()) : preview.text, language: language)
+        VStack(alignment: .leading, spacing: 6) {
+            if title != nil || copy != nil {
+                HStack {
+                    if let title { Text(title).foregroundStyle(.secondary) }
+                    Spacer()
+                    if let copy {
+                        Button("Copy") { UIPasteboard.general.string = copy }
+                            .foregroundStyle(Color.dispatchPink)
+                            .accessibilityLabel("Copy \(title ?? "code")")
+                    }
+                }
+                .font(.caption.weight(.semibold))
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    if let firstLine {
+                        VStack(alignment: .trailing, spacing: 0) {
+                            ForEach(lines.indices, id: \.self) { index in Text(String(firstLine + index)) }
+                        }
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                    }
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in Text(line) }
+                    }
+                }
+                .font(typography.code)
+                .padding(10)
+            }
+            .background(Color.faintFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if preview.truncated { Text("Preview truncated").font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

@@ -61,6 +61,7 @@ struct FileTransferRow: View {
                 Image(systemName: transfer.kind == .copyOut ? "arrow.down" : "arrow.up")
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(palette.accent)
+                    .help("To \(text.destination)")
                     .accessibilityHidden(true)
             }
             title(text)
@@ -162,8 +163,8 @@ struct FileTransferRow: View {
     }
 }
 
-/// pack · send · unpack: green once done, accent while running, dim ahead. Files written one by one are neither
-/// packed nor unpacked: they show the send dot alone.
+/// The copy's steps as dots (packed, sent, unpacked): green once done, accent while running, dim ahead, their names in
+/// the help. Files written one by one are neither packed nor unpacked: they show the send dot alone.
 private struct StageDots: View {
     @Environment(\.appTypography) private var typography
     let stage: FileTransfer.Stage
@@ -171,7 +172,7 @@ private struct StageDots: View {
     private var palette: SidebarPalette { Chrome.palette }
 
     var body: some View {
-        let names = archived ? ["pack", "send", "unpack"] : ["send"]
+        let names = archived ? ["Packing", "Sending", "Unpacking"] : ["Sending"]
         let active: Int = switch stage {
         case .preparing: -1
         case .packing: 0
@@ -179,16 +180,25 @@ private struct StageDots: View {
         default: names.count - 1
         }
         HStack(spacing: 5) {
-            ForEach(Array(names.enumerated()), id: \.offset) { index, name in
+            ForEach(Array(names.enumerated()), id: \.offset) { index, _ in
                 Circle()
                     .fill(index < active ? palette.green : index == active ? palette.accent : palette.controlBorder)
                     .frame(width: 5, height: 5)
-                Text(name)
             }
         }
-        .font(typography, .caption)
-        .foregroundStyle(palette.detail)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .help(Self.help(names: names, active: active))
         .accessibilityHidden(true)
+    }
+}
+
+extension StageDots {
+    /// "Step 2 of 3: Sending · packed into one archive, unpacked as a whole at the end".
+    static func help(names: [String], active: Int) -> String {
+        let step = min(max(active, 0), names.count - 1)
+        let what = names.count > 1 ? " · packed into one archive, unpacked as a whole at the end" : " · file by file"
+        return "Step \(step + 1) of \(names.count): \(names[step])" + what
     }
 }
 

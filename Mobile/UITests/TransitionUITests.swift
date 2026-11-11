@@ -147,16 +147,26 @@ final class TransitionUITests: XCTestCase {
         tap(app.buttons["Cancel"])
     }
 
-    /// A tab's mode button switches Terminal / Chat, back and forth.
+    /// A tab's mode button opens its menu on every segment, as the Mac's click does: Terminal and Chat, back and forth,
+    /// picked from it.
     func testSegmentSwitch() {
         let app = launch(arguments: Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1"])
         rest()
         let mode = app.buttons["tab-mode-button"]
         for _ in 0..<2 {
-            tap(mode)
-            XCTAssertEqual(mode.label, "Show Chat")
-            tap(mode)
-            XCTAssertEqual(mode.label, "Show Terminal")
+            for target in ["Terminal", "Chat"] {
+                tap(mode)
+                let item = app.buttons[target].firstMatch
+                XCTAssertTrue(item.waitForExistence(timeout: 5), "the menu lists \(target)")
+                item.tap()
+                // Chat's composer shows on Chat only.
+                let composer = app.textViews["Message"]
+                if target == "Chat" {
+                    XCTAssertTrue(composer.waitForExistence(timeout: 5), "Chat shows")
+                } else {
+                    XCTAssertTrue(composer.waitForNonExistence(timeout: 5), "Terminal shows")
+                }
+            }
         }
     }
 

@@ -393,7 +393,7 @@ final class GitCommitsPresentationTests: XCTestCase {
         session.signatureChecks[head.hash] = GitSignatureCheck(verdict: .good(certified: true), kind: .gpg,
                                                                signer: "Sam Example <sam@example.com>", key: "0123456789ABCDEF")
         try await says("Sam Example <sam@example.com> · GPG key ID: 0123456789ABCDEF", "git-commit-signature", in: window)
-        try await read(["Sam Example", "Signed"], in: window, named: "git-commit-signature")
+        try await read(["Sam Example", "Verified"], in: window, named: "git-commit-signature")
         // The seal sits beside the author, on the hash's line.
         let author = try await frame("git-commit-author", in: window)
         let seal = try await frame("git-commit-signature", in: window)

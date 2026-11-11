@@ -28,12 +28,22 @@ it downloads and stores is in [security](security.md#dictation).
   own greedy TDT loop (`ParakeetTranscriber`); no FluidAudio code. Its encoder takes a fixed 15 s window, so stretches
   are cut at 14 s (`StretchRecognizer`). The first load compiles for the Neural Engine (several seconds, once).
 
+## In the composer
+
+The microphone beside Send dictates one message: what it hears shows in the draft, a second click inserts it, Return
+sends it and Escape cancels. Conversation mode, which goes on listening and reads replies aloud (Read replies aloud,
+on by default), starts only when chosen by name: the microphone's right-click menu, or a tap of the voice key (holding
+it dictates one message).
+
 ## Voice commands
 
-A command starts with a wake word, "Dispatch" or "Captain" by default (user-editable in Settings › Dictation;
+A command starts with a wake word, "Dispatch" or "Captain" by default (user-editable in Settings › Features › Dictation;
 `VoiceCommand.defaultWakeWords`). Wake words need two syllables: both recognizers drop or mishear a short word that opens
 a sentence ("Dash", "Helm", "Deck", "Patch" all failed). Both also hear "tab two" as "tattoo"; the grammar maps it.
 Replies read aloud are half-duplex: the microphone is muted while speaking (no echo cancellation).
+On the Mac they are read in the best voice installed for the system's language (`VoiceConversation.voice`): a Premium
+one, else an Enhanced one, the language's region first, unless the system's own voice is as good. The iPhone has
+Settings › Chat › Voice instead (docs/ios.md).
 A failure ("Dispatch can't use the microphone…") shows where dictation was started, in the composer's footer or the
 voice note over the window, until clicked or for 10 s on the Mac (`dictationErrorTimeout`); Settings keeps its own.
 

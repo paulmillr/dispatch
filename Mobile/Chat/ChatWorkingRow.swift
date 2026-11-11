@@ -209,7 +209,8 @@ struct ChatWorkingDisc<Content: View>: View {
 /// with the accent scan, the thinking line and elapsed time with Stop beside it (while the conversation can take it, away
 /// from the trailing controls a thumb reaches for); the trailing side counts the steps since the agent last wrote (the
 /// Mac's live tool group), holds the queue's capsule while messages wait (a tap opens the queue card under the row) and
-/// a disclosure chevron that unfolds those steps in place. Open, it reads as a live log; a step opens its full output.
+/// a disclosure chevron that unfolds those steps in place. Open, it reads as a live log; a step opens as the Mac opens
+/// one (`ChatStepOutput`).
 struct ChatWorkingRow: View {
     let session: MobileChatSession
     let directory: String?
@@ -321,10 +322,10 @@ struct ChatWorkingRow: View {
                             ChatStepLogRow(step: step, live: index == steps.count - 1 && step.running)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityHint("Shows its full output")
+                        .accessibilityHint("Shows what it did")
                         if index < steps.count - 1 { Rectangle().fill(Color.hairline.opacity(0.6)).frame(height: 0.5) }
                     }
-                    Text(steps.isEmpty ? "No steps yet" : "Tap a step for its output")
+                    Text(steps.isEmpty ? "No steps yet" : "Tap a step for what it did")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)

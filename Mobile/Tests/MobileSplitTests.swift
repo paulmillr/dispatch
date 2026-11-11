@@ -27,13 +27,14 @@ final class MobileSplitTests: XCTestCase {
         XCTAssertFalse(MobileSplit.applies(to: CGSize(width: 420, height: 912)))
         XCTAssertEqual(MobileSplit.sidebarWidth(for: CGSize(width: 669, height: 951)), 263, "Laptop: the tab keeps a phone's width")
         XCTAssertTrue(MobileSplit.narrow(sidebar: 263))
-        XCTAssertFalse(MobileSplit.narrow(sidebar: 475), "Book: rows and tab bar as on the phone")
+        XCTAssertFalse(MobileSplit.narrow(sidebar: 320), "Book: rows and tab bar as on the phone")
         XCTAssertEqual(MobileSplit.sidebarWidth(for: CGSize(width: 820, height: 1000)), 414, "Laptop, wider: the tab keeps a phone's width")
-        XCTAssertEqual(MobileSplit.columns(width: 951, height: 669), .init(sidebar: 475.25, gap: 0.5, tab: 475.25),
-                       "Book without a reported fold: halves")
-        XCTAssertEqual(MobileSplit.columns(width: 951, height: 669, fold: 517.5), .init(sidebar: 517.25, gap: 0.5, tab: 433.25),
-                       "Book: the hairline on the Duo's fold, off centre")
-        XCTAssertEqual(MobileSplit.columns(width: 951, height: 669, fold: 100).sidebar, 475.25, "A fold too near an edge: halves")
+        XCTAssertEqual(MobileSplit.columns(width: 951, height: 669), .init(sidebar: 320, gap: 0.5, tab: 630.5),
+                       "Book: the iPad's sidebar, the tab across the fold")
+        XCTAssertEqual(MobileSplit.columns(width: 951, height: 669, fold: 517.5), .init(sidebar: 320, gap: 0.5, tab: 630.5),
+                       "Book: the fold does not move the sidebar")
+        XCTAssertEqual(MobileSplit.columns(width: 600, height: 600, fold: 260).sidebar, 259.75,
+                       "Never wider than the fold's side leaves it")
         XCTAssertEqual(MobileSplit.columns(width: 669, height: 951, fold: 334.5).sidebar, 263, "Laptop: the fold runs across")
     }
 

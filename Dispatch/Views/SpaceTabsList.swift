@@ -411,6 +411,8 @@ struct SpaceTabRow: View {
         // A window's pane lines stay controls of their own.
         .accessibilityElement(children: tab.members.count > 1 ? .contain : .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        // The close button shows only under the pointer: VoiceOver and Full Keyboard Access close from here.
+        .accessibilityAction(named: "Close") { close() }
         .accessibilityIdentifier("sidebar-tab-\(tab.id)")
     }
 
@@ -541,6 +543,9 @@ struct SpaceTabCard: View {
         .contextMenu { SpaceTabMenu(tab: tab, space: space, workspace: workspace, controller: controller, name: name) }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction(named: "Close") {
+            if tab.window { controller.closeWindow(tab.id) } else { controller.closeTab(tab.id) }
+        }
         .accessibilityIdentifier("sidebar-tab-\(tab.id)")
     }
 }
@@ -571,6 +576,7 @@ struct SpaceTabMenu: View {
                 }
             })
             Divider()
+            Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
             Button("Detach") { controller.detachWindow(tab.id) }.help(MoveTargetsSection.detachHelp)
             Button("Terminate…") { controller.terminateWindow(tab.id) }
         } else {

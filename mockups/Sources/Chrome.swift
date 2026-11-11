@@ -244,3 +244,11 @@ struct ChangeRow: View {
         }
     }
 }
+
+/// The app's own symbols (`dispatch.chat`, `.fill`, in the shared asset catalog), else the system's, as the app's
+/// `Image(symbol:)` (Mobile/App/MobileChrome.swift).
+extension Image {
+    init(symbol name: String) {
+        self = name.hasPrefix("dispatch.") ? Image(name) : Image(systemName: name)
+    }
+}

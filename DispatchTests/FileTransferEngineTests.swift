@@ -668,7 +668,7 @@ final class FileTransferEngineTests: XCTestCase {
         XCTAssertEqual(source.calls.filter { $0.hasPrefix("pack ") }.count, 1, "One run feeds both rows")
     }
 
-    func testFinishedRowsLeaveAfterFourSeconds() async throws {
+    func testFinishedRowsLeaveAfterFourSecondsOnceSeen() async throws {
         let (source, target) = hosts()
         source.file("/src/a.txt", "a")
         let session = session(target)
@@ -676,9 +676,13 @@ final class FileTransferEngineTests: XCTestCase {
         engine.sleep = { [unowned self] duration, name in sleeps.append((duration, name)) }
         let transfer = engine.copy(items: ["/src/a.txt"], from: source, to: target, directory: "/dst", in: session,
                                    kind: .copyIn)
+        // Finished while its Files list was not on screen: the row stays until it shows, then four seconds more.
+        try await TestSupport.eventually { transfer.stage == .done && self.sleeps.count == 1 }
+        XCTAssertEqual(session.transfers.map(\.id), [transfer.id], "nobody saw it end")
+        session.visible = true
+        session.presented = true
         try await TestSupport.eventually { session.transfers.isEmpty }
-        XCTAssertEqual(transfer.stage, .done)
-        XCTAssertEqual(sleeps.map(\.name), ["files.transfer.dismiss"])
+        XCTAssertEqual(sleeps.map(\.name), ["files.transfer.dismiss", "files.transfer.dismiss"])
         XCTAssertEqual(sleeps.first?.duration, .seconds(4))
     }
 
@@ -689,6 +693,7 @@ final class FileTransferEngineTests: XCTestCase {
         let session = session(target)
         let engine = engine()
         engine.sleep = { [unowned self] duration, name in sleeps.append((duration, name)) }
+        engine.holdsUnseenRows = false
         let failed = engine.copy(items: ["/src/a.txt"], from: source, to: target, directory: "/dst", in: session,
                                  kind: .copyIn)
         try await settle(failed)
@@ -704,6 +709,22 @@ final class FileTransferEngineTests: XCTestCase {
         XCTAssertTrue(session.transfers.isEmpty, "✕ dismisses a failed row")
     }
 
+    /// Closing tabs (or quitting) while a copy runs asks first, and says what stopping it leaves.
+    func testClosingAsksAboutRunningCopies() {
+        let copy = AppDelegate.closeConfirmation(.tab("api"), programs: nil, copies: 1)
+        XCTAssertEqual(copy.message, "Close “api”?")
+        XCTAssertEqual(copy.information, "A copy in Files is still running. Closing the tab stops it. Files already copied stay.")
+        XCTAssertEqual(AppDelegate.closeConfirmation(.space("web"), programs: nil, copies: 2).information,
+                       "2 copies in Files are still running. Closing the space stops them. Files already copied stay.")
+        let both = AppDelegate.closeConfirmation(.quit, programs: ["vim"], copies: 3)
+        XCTAssertEqual(both.information, "“vim” is still running in Dispatch's tabs, and 3 copies in Files. Quitting ends it and "
+                       + "stops the copies. Files already copied stay. tmux and herdr sessions keep running.")
+        XCTAssertEqual(both.action, "Quit")
+        XCTAssertEqual(AppDelegate.closeConfirmation(.tab("api"), programs: [], copies: 0).information,
+                       "A process is still running in this tab. Closing the tab ends it.")
+        XCTAssertEqual(FileTransferEngine(coordinator: { FilesCoordinator { nil } }).running(in: [System.uuid()]), 0)
+    }
+
     func testRowTextPerState() {
         let transfer = FileTransfer(kind: .copyIn, items: 5_120, targetPath: "/home/ivan/nightly/fixtures",
                                     targetLabel: "fixtures/", startedAt: Date(timeIntervalSince1970: 100))
@@ -716,8 +737,9 @@ final class FileTransferEngineTests: XCTestCase {
         transfer.bytesTotal = 48_000_000
         transfer.bytesDone = 31_000_000
         transfer.rate = 12_000_000
-        XCTAssertEqual(text().title, "Sending")
+        XCTAssertEqual(text().title + (text().emphasis ?? ""), "Copying to fixtures/", "the target stays while sending")
         XCTAssertEqual(text().detail, "31 of 48 MB · 12 MB/s")
+        XCTAssertEqual(text().spoken, "Copying to fixtures/ on homelab, 31 of 48 MB · 12 MB/s")
         transfer.entries = 5_120
         transfer.stage = .unpacking
         XCTAssertEqual(text().title, "Unpacking on homelab")

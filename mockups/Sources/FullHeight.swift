@@ -30,7 +30,7 @@ struct TabRail: View {
             VStack(spacing: 2) {
                 ForEach(PadMode.allCases) { m in
                     let on = m == mode
-                    Image(systemName: m.symbol).font(.system(size: 16, weight: .medium))
+                    Image(symbol: m.symbol).font(.system(size: 16, weight: .medium))
                         .foregroundStyle(on ? Color.dispatchPink : .primary)
                         .frame(width: FullHeight.control - 4, height: 35)
                         .background { if on { Capsule().fill(Color.lens) } }
@@ -107,7 +107,8 @@ struct FullHeightShell<Content: View>: View {
 
 // MARK: - Chat
 
-/// The thread from the window's top to its bottom: the title its first lines, the turn's corner in the last bubble.
+/// The thread from the window's top to its bottom: the title capsule as the tab opens, the turn's corner in the last
+/// bubble.
 struct FullHeightThread: View {
     var bottom: CGFloat = 16
     /// The thread's widest: the phone's measure, or none (L15: the bubbles' own 60-point gap is the only limit).
@@ -115,13 +116,12 @@ struct FullHeightThread: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
-                InlineTitle().padding(.top, 14).padding(.bottom, 6)
+                // The upright header's title capsule, shown for a moment as the tab opens (`TabTitleChip`).
+                TitleCapsuleMock(title: "Sidebar theme toggle").padding(.top, 8).padding(.bottom, 6)
                 Bubble(text: "Add a theme toggle to the sidebar and make the unread rows stand out.", user: true)
-                MetaBubble(text: "Added ThemeToggle in the sidebar footer and a useTheme hook that follows the system preference. Unread rows now carry an unread class on the item.",
-                           summary: "4 files +61 −9 · 10:17")
+                BubbleH(text: "Added ThemeToggle in the sidebar footer and a useTheme hook that follows the system preference. Unread rows now carry an unread class on the item.")
                 Bubble(text: "Put the class on the link, not the item.", user: true)
-                MetaBubble(text: "Moving it. I'll also drop the `end` prop since it breaks nested routes.",
-                           summary: "Editing Sidebar.tsx · 48s", working: true)
+                BubbleH(text: "Moving it. I'll also drop the `end` prop since it breaks nested routes.")
                 Color.clear.frame(height: bottom)
             }
             .frame(maxWidth: measure ?? .infinity)
@@ -208,7 +208,6 @@ struct OneRailReviewScreen: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 InlineTitle(centered: false)
                                 HStack(spacing: 4) {
-                                    Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                     Text(MockGit.branch).font(.subheadline.weight(.semibold))
                                     Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.caption, design: .monospaced))
                                 }

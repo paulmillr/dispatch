@@ -267,7 +267,7 @@ final class FilesOutlineView: NSOutlineView {
         super.keyDown(with: event)
     }
 
-    /// The files keys win over the menus' while the list has focus: ⌘↑ / ⌘↓ / ⌘O / ⌥⌘C / ⌘R / ⇧⌘. / ⌘F.
+    /// The files keys win over the menus' while the list has focus: ⌘↑ / ⌘↓ / ⌥⌘C / ⌘R / ⇧⌘. / ⌘F.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self, let controller else { return super.performKeyEquivalent(with: event) }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
@@ -275,7 +275,6 @@ final class FilesOutlineView: NSOutlineView {
         switch flags {
         case [.command] where event.keyCode == 126: controller.showEnclosingFolder()
         case [.command] where event.keyCode == 125: controller.openSelection()
-        case [.command] where key == "o": controller.openInEditor()
         case [.command] where key == "r": controller.refresh()
         case [.command] where key == "f": controller.find()
         case [.command, .option] where event.keyCode == 8: controller.copyPaths()
@@ -655,11 +654,6 @@ final class FilesOutlineView: NSOutlineView {
         session.showEnclosingFolder(of: root)
     }
 
-    func openInEditor() {
-        guard let session, let row = primaryRow else { return }
-        TerminalRuntime.shared.files.openInEditor(session.id, path: row.id)
-    }
-
     /// The selected rows' paths, in the list's order.
     private var selectedPaths: [String] {
         guard let session else { return [] }
@@ -837,7 +831,6 @@ final class FilesOutlineView: NSOutlineView {
             menu.addItem(item)
         }
         add(single?.isDirectory == true ? "Open" : "Preview", #selector(menuOpen), enabled: single != nil)
-        add("Open in Editor", #selector(menuOpenInEditor), key: "o", enabled: single != nil)
         menu.addItem(.separator())
         add("Copy", #selector(menuCopyFiles), key: "c", enabled: !targets.isEmpty)
         add("Copy Path", #selector(menuCopy), key: "c", modifiers: [.command, .option], enabled: !targets.isEmpty)
@@ -849,11 +842,14 @@ final class FilesOutlineView: NSOutlineView {
         add(targets.count > 1 ? "Download \(targets.count) Items…" : "Download…", #selector(menuDownload), enabled: !targets.isEmpty)
         menu.addItem(.separator())
         add("Show Enclosing Folder", #selector(menuEnclosingFolder), enabled: (single?.depth ?? 0) > 0)
+        // This Mac's files are Finder's too, as the crumbs' menu offers.
+        if session?.source?.endpoint.isLocal == true {
+            add("Reveal in Finder", #selector(menuRevealInFinder), enabled: !targets.isEmpty)
+        }
         add("Refresh", #selector(menuRefresh), key: "r", enabled: true)
     }
 
     @objc private func menuOpen() { openSelection() }
-    @objc private func menuOpenInEditor() { openInEditor() }
     @objc private func menuCopy() { copyPaths() }
     @objc private func menuCopyFiles() { copyFiles() }
     @objc private func menuCopyScp() {
@@ -865,6 +861,11 @@ final class FilesOutlineView: NSOutlineView {
         TerminalRuntime.shared.files.download(session.id, paths: selectedPaths, window: outline?.window)
     }
     @objc private func menuRefresh() { refresh() }
+
+    @objc private func menuRevealInFinder() {
+        let urls = selectedPaths.map { URL(fileURLWithPath: $0) }
+        if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+    }
 
     @objc private func menuEnclosingFolder() {
         guard let session, let row = primaryRow else { return }

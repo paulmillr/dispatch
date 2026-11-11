@@ -93,6 +93,24 @@ extension AgentProcess {
             .first { $0.foreground > 1 }.map { UInt64($0.foreground) }
     } }
 
+    /// What closing terminal `device` would end besides its shell: every other process on it (running, stopped with ⌃Z,
+    /// or in the background), by executable name, each name once ("" for one whose path this account cannot read, such
+    /// as `sudo`'s). The shell is the terminal's session leader. As in the helper's close check (`darwin::jobs`), any
+    /// other process counts. Nil when the device lists no processes.
+    static func jobs(device: UInt32) -> [String]? { System.process("jobs", device) { () -> [String]? in
+        var pids = [pid_t](repeating: 0, count: 1024)
+        let count = proc_listpids(UInt32(PROC_TTY_ONLY), device, &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard count > 0 else { return nil }
+        var names: [String] = []
+        for pid in pids.prefix(Int(count) / MemoryLayout<pid_t>.size) where pid > 0 && getsid(pid) != pid {
+            var path = [CChar](repeating: 0, count: 4096)
+            let name = proc_pidpath(pid, &path, UInt32(path.count)) > 0
+                ? URL(fileURLWithPath: String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).lastPathComponent : ""
+            if !names.contains(name) { names.append(name) }
+        }
+        return names
+    } }
+
     static func members(of group: pid_t, maximum: Int = 262_144) -> [AgentProcess] { System.process("members", [group, pid_t(maximum)]) {
         let bytes = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
         guard bytes > 0, bytes < 1_048_576 else { return [] }

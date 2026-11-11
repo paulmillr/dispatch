@@ -193,25 +193,22 @@ struct FilesModePlaceholder: View {
     }
 }
 
-/// The Files segment (H1, H2, H3; S1, S2, S3): the system tab bar with the modes, each mode's body under the capsule,
-/// Review's badge, the accessory slot. Outside a git repository only Files, and no bar. S1 and S2 take the whole
-/// segment, with no bar: the host has no modes to offer.
+/// The Files segment (H1, H2, H3; S1, S2, S3): the mode the tab's mode button chose (`TabModeButton`: Files, Review and
+/// Commits, the last two inside a git repository), alone under the tab's bar, its accessory in a glass capsule at the
+/// bottom. S1 and S2 take the whole segment: the host has no modes to offer.
 struct TabFilesSegment: View {
     let context: FilesModeContext
     let content: FilesModeContent
     @Binding var mode: FilesMode
     /// The tab's git repository (`SpaceGitFacts`): the modes' bar shows only inside one.
     let repository: Bool
-    /// A phone's stack: the modes are the capsule at the tab's top (`FilesModeCapsule`), not the system tab bar; the
-    /// mode shows alone, its accessory in a glass bar at the bottom. Beside the Duo's sidebar the system tab bar.
-    var modesOnTop = false
     let notNow: () -> Void
     /// S2's Change integration…: the host's settings.
     let changeIntegration: () -> Void
 
     var body: some View {
         if context.availability.showsModes {
-            if modesOnTop { topModes } else { modes }
+            shownMode
         } else {
             FilesUnavailableView(availability: context.availability, notNow: notNow,
                                  installHelper: { content.installHelper(context.host.id) },
@@ -219,38 +216,8 @@ struct TabFilesSegment: View {
         }
     }
 
-    private var modes: some View {
-        let available = FilesMode.available(repository: repository)
-        let shown = available.contains(mode) ? mode : .files
-        let accessory = accessoryView(shown)
-        let count = content.reviewCount(context.tab.ref)
-        // The system tab bar's pages get the navigation bar's inset but not the tab's `safeAreaBar` (the capsule and the
-        // mode's row): each page is inset by the difference, read in the same layout pass (`FilesPageInset`), so its
-        // content starts below the bar and scrolls beneath it.
-        return GeometryReader { segment in
-        TabView(selection: Binding(get: { shown }, set: { mode = $0 })) {
-            ForEach(available) { item in
-                Tab(item.title, systemImage: item.symbol, value: item) {
-                    Group {
-                        if item == shown { content.body(context.with(mode: item)) } else { Color.canvas }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .modifier(FilesPageInset(top: segment.safeAreaInsets.top))
-                    .opacity(context.availability.isOffline ? 0.45 : 1)
-                    .background(Color.canvas)
-                    .toolbarVisibility(available.count > 1 ? .visible : .hidden, for: .tabBar)
-                }
-                .badge(item == .review ? count : 0)
-            }
-        }
-        .tint(.dispatchPink)
-        .modifier(FilesAccessory(accessory: accessory))
-        }
-    }
-
-    /// The mode alone under the tab's bar (its capsule there, `FilesModeCapsule`), and the accessory the tab bar carried
-    /// in a glass capsule at the bottom, where the tab bar's accessory sat.
-    private var topModes: some View {
+    /// The mode alone under the tab's bar, and its accessory (Create review, offline) in a glass capsule at the bottom.
+    private var shownMode: some View {
         let shown = FilesMode.available(repository: repository).contains(mode) ? mode : .files
         return content.body(context.with(mode: shown))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -280,33 +247,6 @@ extension FilesModeContext {
     func with(mode: FilesMode) -> FilesModeContext {
         FilesModeContext(tab: tab, host: host, mode: mode, directory: directory, git: git, availability: availability, push: push,
                          select: select)
-    }
-}
-
-/// A page's missing top inset: the segment's (`top`, under the tab's bar) less what the page was given.
-private struct FilesPageInset: ViewModifier {
-    let top: CGFloat
-
-    func body(content: Content) -> some View {
-        GeometryReader { page in
-            content.safeAreaPadding(.top, max(0, top - page.safeAreaInsets.top))
-        }
-    }
-}
-
-/// The tab bar's accessory, present only while there is one. iOS 26.0 has no `isEnabled`, so its TabView is rebuilt
-/// when the accessory comes and goes.
-private struct FilesAccessory: ViewModifier {
-    let accessory: AnyView?
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.1, *) {
-            content.tabViewBottomAccessory(isEnabled: accessory != nil) { accessory }
-        } else if let accessory {
-            content.tabViewBottomAccessory { accessory }
-        } else {
-            content
-        }
     }
 }
 

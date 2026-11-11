@@ -2,7 +2,7 @@
 # The release build, run the same way by both builders (docs/releasing.md, Two builders): GitHub Actions
 # (.github/workflows/release.yml) and the signing machine, as its build user (scripts/release/builder.sh).
 #
-#   scripts/release/build.sh OUT --commit SHA --build-number N [--variant NAME] [--platform mac|ios]
+#   scripts/release/build.sh OUT --commit SHA --build-number N [--variant NAME] [--platform mac|ios] [--cached]
 #
 # From a fresh tree at /private/tmp/release-build (a fixed path: source paths end up in the binaries, and both builders
 # must make the same files), in a fixed environment, with the Xcode that DEVELOPER_DIR selects. The app's own
@@ -14,12 +14,18 @@
 # builds, the app's bundle id and the zips' SHA-256. With --platform ios (the iPhone build, scripts/release/iphone.sh's), release/app.sh leaves one
 # .xcarchive instead, its apps signed ad hoc with their entitlements; OUT gets it zipped, and build.json its app's
 # bundle id (the variant's ios_bundle_id) and SHA-256. Nothing here holds a key or talks to Apple.
+#
+# --cached (iPhone only; scripts/release/builder.sh --cache): build/ is an earlier build's, which the tree's tools reuse
+# (the pinned toolchains, the crates, the helper's builds by content). Every source file gets the current time first:
+# Cargo compares times, and the tree's (the commit's, from git archive) can be older than outputs of a later commit.
+#
+# Its phases are lines "phase: UNIX-TIME TEXT" in its output (builder.sh shows them).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 BUILD_ROOT=/private/tmp/release-build
 
 fail() { echo "error: $*" >&2; exit 1; }
-usage() { fail "usage: scripts/release/build.sh OUT --commit SHA --build-number N [--variant NAME] [--platform mac|ios]"; }
+usage() { fail "usage: scripts/release/build.sh OUT --commit SHA --build-number N [--variant NAME] [--platform mac|ios] [--cached]"; }
 config() { python3 -I "$ROOT/scripts/release/config.py" "$@"; }
 
 # Both builders build in this same environment, whatever they start with: these variables only, the system's tools
@@ -34,9 +40,10 @@ if [[ "${RELEASE_ENVIRONMENT:-}" != 1 ]]; then
     ${DEVELOPER_DIR:+DEVELOPER_DIR="$DEVELOPER_DIR"} /bin/bash "$ROOT/scripts/release/build.sh" "$@"
 fi
 
-out="" commit="" number="" variant="" platform=mac
+out="" commit="" number="" variant="" platform=mac cached=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cached) cached=1 ;;
     --commit) [[ $# -ge 2 ]] || usage; commit="$2"; shift ;;
     --build-number) [[ $# -ge 2 ]] || usage; number="$2"; shift ;;
     --variant) [[ $# -ge 2 ]] || usage; variant="$2"; shift ;;
@@ -52,7 +59,11 @@ umask 022
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || fail "--commit takes the full 40-character commit SHA"
 [[ "$number" =~ ^[0-9]{8}\.[0-9]{4}$ ]] || fail "--build-number takes the commit's UTC time, YYYYMMDD.HHMM"
 [[ "$ROOT" == "$BUILD_ROOT" ]] || fail "the source must be at $BUILD_ROOT (paths end up in the binaries), not $ROOT"
-[[ ! -e "$ROOT/build" ]] || fail "$ROOT/build exists: a release builds from a fresh tree"
+if [[ -n "$cached" ]]; then
+  [[ "$platform" == ios ]] || fail "--cached is for iPhone builds only: a Mac release builds from a fresh tree"
+else
+  [[ ! -e "$ROOT/build" ]] || fail "$ROOT/build exists: a release builds from a fresh tree"
+fi
 mkdir -p "$out"
 out="$(cd "$out" && pwd -P)"
 [[ -z "$(ls -A "$out")" ]] || fail "$out is not empty"
@@ -63,7 +74,12 @@ version="$(config version)"
 zip="$name-$variant-unsigned.zip"
 
 cd "$ROOT"
+phase() { echo "phase: $(date +%s) $*"; }
 echo "$name $version ($variant, $platform) build $number from $commit"
+if [[ -n "$cached" && -d build ]]; then
+  find . -path ./build -prune -o -exec touch -h {} + 2> /dev/null
+  echo "build/ is an earlier build's: $(du -sh build | cut -f1)"
+fi
 xcodebuild -version
 products="$BUILD_ROOT-products"
 rm -rf "$products"
@@ -76,6 +92,7 @@ if [[ "$platform" == ios ]]; then
   archives=("$products"/*.xcarchive)
   [[ ${#archives[@]} == 1 && -d "${archives[0]}" ]] || fail "scripts/release/app.sh left no single .xcarchive in $products"
   archive="$(basename "${archives[0]}")"
+  phase "zipping the archive"
   pack "${archives[0]}" "$archive.zip"
   python3 -I - "$out" "$variant" "$version" "$number" "$commit" "${archives[0]}" "$bundle" <<'PY'
 import hashlib, json, os, plistlib, re, subprocess, sys
@@ -105,6 +122,7 @@ build = {
 (out / 'build.json').write_text(json.dumps(build, indent=2) + '\n')
 print(json.dumps(build, indent=2))
 PY
+  phase "done"
   echo "Release build in $out"
   exit 0
 fi
@@ -144,4 +162,5 @@ for file in "$out"/*.zip; do
   # GitHub takes files up to 2 GB as release assets and artifacts; anything near that is a broken build.
   [[ "$(stat -f %z "$file")" -lt $((1024 * 1024 * 1024)) ]] || fail "$file is over 1 GB"
 done
+phase "done"
 echo "Release build in $out"

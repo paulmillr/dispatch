@@ -50,6 +50,46 @@ enum PrefixAction: Equatable {
     case tmux(String)
 }
 
+extension PrefixAction {
+    /// What the binding does, as the ⌘/ sheet lists it (the menus' words, lower case).
+    var title: String {
+        switch self {
+        case .newSpace: "new space"
+        case .closeSpace: "close space"
+        case .renameSpace: "rename space"
+        case .previousSpace: "previous space"
+        case .nextSpace: "next space"
+        case .searchSpaces: "search spaces"
+        case .selectSpace(let number): "space \(number)"
+        case .newTab: "new tab"
+        case .closeTab: "close tab"
+        case .renameTab: "rename tab"
+        case .previousTab: "previous tab"
+        case .nextTab: "next tab"
+        case .selectWindow(let index): "window \(index)"
+        case .selectTab(let number): "tab \(number)"
+        case .splitRight: "split right"
+        case .splitDown: "split down"
+        case .closePane: "close pane"
+        case .breakPane: "move pane to new space"
+        case .nextPane: "next pane"
+        case .previousPane: "previous pane"
+        case .nextLayout: "next layout"
+        case .layout(let preset): "layout: \(preset.title)"
+        case .nextAttention: "next attention"
+        case .previousAttention: "previous attention"
+        case .detach: "detach"
+        case .toggleSidebar: "show or hide the sidebar"
+        case .find: "find"
+        case .scrollPageUp: "scroll up a page"
+        case .paste: "paste"
+        case .shortcuts: "this sheet"
+        case .settings: "settings"
+        case .tmux(let command): "tmux: \(command)"
+        }
+    }
+}
+
 /// A key as tmux and herdr name it: the typed character (Shift applied, as in `%` or `X`) or a
 /// named key (Shift as `S-`), plus Option and Control. Command chords are the app's.
 struct PrefixKey: Hashable {
@@ -78,6 +118,16 @@ struct PrefixKey: Hashable {
             name = text
         }
         (option, control) = (flags.contains(.option), flags.contains(.control))
+    }
+
+    /// The key as the Mac writes it: `⌃B`, `⌃A`, `⌥1`, `%`, `⇧↑`, `⇞`, `Space`.
+    var symbol: String {
+        let names = ["Enter": "⏎", "Tab": "⇥", "BTab": "⇧⇥", "Escape": "⎋", "PageUp": "⇞", "PageDown": "⇟",
+                     "Up": "↑", "Down": "↓", "Left": "←", "Right": "→", " ": "Space"]
+        var key = name, shift = ""
+        if key.hasPrefix("S-") { shift = "⇧"; key.removeFirst(2) }
+        key = names[key] ?? (control && key.count == 1 ? key.uppercased() : key)
+        return (control ? "⌃" : "") + (option ? "⌥" : "") + shift + key
     }
 
     /// tmux's key string (`C-b`, `M-1`, `\"`, `S-Up`, `PPage`); nil for keys Dispatch cannot see.
@@ -432,6 +482,8 @@ extension LayoutPreset {
 final class PrefixKeys {
     /// The terminal whose next key completes a prefix sequence.
     private(set) var armed: UUID?
+    /// The key that armed it (the table's prefix or prefix2), which the indicator shows.
+    private(set) var armedKey: PrefixKey?
     /// The table a terminal answers; nil when its prefix keys are off.
     @ObservationIgnored var table: (UUID) -> PrefixTable? = { _ in nil }
     @ObservationIgnored var perform: (PrefixAction, UUID) -> Void = { _, _ in }
@@ -460,6 +512,7 @@ final class PrefixKeys {
             armed = nil
             guard let key, let table = table(surface), table.arms(key) else { return false }
             armed = surface
+            armedKey = key
             return swallow(event)
         }
         armed = nil

@@ -72,9 +72,15 @@ final class IPadUITests: XCTestCase {
     /// The sidebar's filter menu (`PadFilterMenu`): its value starts with the filter's name.
     private func filter(_ app: XCUIApplication) -> XCUIElement { app.buttons["Filter"].firstMatch }
 
-    /// The strip's mode switch (`PadModeSwitch`): a container of buttons labelled Terminal, Chat, Files, Review, Commits.
-    private func segment(_ app: XCUIApplication, _ title: String) -> XCUIElement {
-        app.otherElements["tab-segments"].buttons[title]
+    /// The strip's mode button (`PadModeButton`): its value names the shown mode ("Chat selected").
+    private func modeButton(_ app: XCUIApplication) -> XCUIElement { app.buttons["tab-mode-button"] }
+
+    /// Shows `title` (Terminal, Chat, Files, Review, Commits) from the mode button's menu.
+    private func choose(_ app: XCUIApplication, _ title: String) {
+        modeButton(app).tap()
+        let item = app.buttons[title].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "the menu lists \(title)")
+        item.tap()
     }
 
     /// The window splits upright and on its side: the tree beside the empty detail column, then beside the space's tab
@@ -88,7 +94,7 @@ final class IPadUITests: XCTestCase {
         XCTAssertFalse(app.tabBars.firstMatch.exists, "The sidebar is the tree alone")
         shot("split-portrait-empty")
         row.tap()
-        wait(segment(app, "Terminal"))
+        wait(modeButton(app))
         XCTAssertNotNil(selectedPill(app), "Its first tab, selected in the strip")
         XCTAssertGreaterThanOrEqual(app.descendants(matching: .any)["pad-tabs"].buttons.count, 2,
                                     "The other tab beside it, or in the overflow menu")
@@ -99,13 +105,13 @@ final class IPadUITests: XCTestCase {
         shot("split-portrait-tab")
         for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
             XCUIDevice.shared.orientation = orientation
-            wait(segment(app, "Terminal"))
+            wait(modeButton(app))
             XCTAssertTrue(row.isHittable, "Split on its side too")
             XCTAssertTrue(row.waitForSelection())
             shot(orientation == .landscapeLeft ? "split-landscape-left-tab" : "split-landscape-right-tab")
         }
         XCUIDevice.shared.orientation = .portrait
-        wait(segment(app, "Terminal"))
+        wait(modeButton(app))
         XCTAssertTrue(row.waitForSelection(), "Rotating back keeps the tab")
     }
 
@@ -153,19 +159,19 @@ final class IPadUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No tab open"].waitForExistence(timeout: 1), "No tab: Next Tab does not apply")
 
         dispatchRow(app).tap()
-        let chat = segment(app, "Chat"), terminal = segment(app, "Terminal")
-        wait(terminal)
+        let mode = modeButton(app)
+        wait(mode)
         let first = selectedPill(app)
         XCTAssertNotNil(first)
-        let before = chat.isSelected
+        let before = (mode.value as? String)?.hasPrefix("Chat") == true
         app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue((before ? terminal : chat).waitForSelection(), "⇧⌘C switches the segment")
+        XCTAssertTrue(mode.waitForValue(prefix: before ? "Terminal" : "Chat"), "⇧⌘C switches the segment")
         app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue((before ? chat : terminal).waitForSelection(), "and back")
+        XCTAssertTrue(mode.waitForValue(prefix: before ? "Chat" : "Terminal"), "and back")
         app.typeKey("f", modifierFlags: [.command, .shift])
-        XCTAssertTrue(segment(app, "Files").waitForSelection(), "⇧⌘F: Files")
+        XCTAssertTrue(mode.waitForValue(prefix: "Files"), "⇧⌘F: Files")
         app.typeKey("f", modifierFlags: [.command, .shift])
-        XCTAssertTrue(terminal.waitForSelection(), "and back to Terminal")
+        XCTAssertTrue(mode.waitForValue(prefix: "Terminal"), "and back to Terminal")
 
         app.typeKey("]", modifierFlags: .command)
         XCTAssertTrue(waitForSelectedPill(app, first, not: true), "⌘]: the next tab, selected in the strip")
@@ -189,7 +195,7 @@ final class IPadUITests: XCTestCase {
         XCTAssertTrue(row.isHittable, "No tab: the sidebar is all there is")
 
         row.tap()
-        wait(segment(app, "Terminal"))
+        wait(modeButton(app))
         let first = selectedPill(app)
         app.typeKey("s", modifierFlags: [.command, .control])
         wait(show)
@@ -246,9 +252,9 @@ final class IPadUITests: XCTestCase {
         let row = dispatchRow(app)
         wait(row)
         row.tap()
-        let terminal = segment(app, "Terminal")
-        wait(terminal)
-        if !terminal.isSelected { terminal.tap() }
+        let mode = modeButton(app)
+        wait(mode)
+        if (mode.value as? String)?.hasPrefix("Terminal") != true { choose(app, "Terminal") }
         app.typeKey("0", modifierFlags: .command)
         let base = try fontSize(app)
         shot("font-default")

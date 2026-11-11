@@ -29,10 +29,10 @@ final class IPadLayoutUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
             if app.state == .runningForeground { arrange("Fill") }
         }
-        // A launch that opens a tab waits for it (the strip's modes, or the stack's mode button).
+        // A launch that opens a tab waits for it (the strip's mode button, or the stack's).
         if arguments.contains(where: { $0.hasPrefix("tab:") }) {
             let tab = app.descendants(matching: .any)
-                .matching(NSPredicate(format: "identifier IN %@", ["tab-segments", "tab-mode-button"])).firstMatch
+                .matching(NSPredicate(format: "identifier == %@", "tab-mode-button")).firstMatch
             XCTAssertTrue(tab.waitForExistence(timeout: 10))
         }
     }
@@ -284,10 +284,16 @@ final class IPadLayoutUITests: XCTestCase {
             arrange("Fill")
             assertSplit(sidebar: Self.sidebar(window.width))
             XCTAssertTrue(app.textViews["Terminal"].waitForExistence(timeout: 10), "\(round): the terminal beside the tree")
-            let files = app.otherElements["tab-segments"].buttons["Files"]
-            files.tap()
-            XCTAssertTrue(files.waitForExistence(timeout: 5) && files.isSelected, "\(round): the split answers")
-            app.otherElements["tab-segments"].buttons["Terminal"].tap()
+            let mode = app.buttons["tab-mode-button"]
+            for (title, check) in [("Files", "the split answers"), ("Terminal", "and back")] {
+                mode.tap()
+                let item = app.buttons[title].firstMatch
+                XCTAssertTrue(item.waitForExistence(timeout: 5), "\(round): the menu lists \(title)")
+                item.tap()
+                let shown = NSPredicate(format: "value BEGINSWITH %@", title)
+                XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: shown, object: mode)], timeout: 5),
+                               .completed, "\(round): \(check)")
+            }
             shot("hardware-keyboard-split-\(round)")
             arrange("Left")
             assertStackedTab()
@@ -372,7 +378,7 @@ final class IPadLayoutUITests: XCTestCase {
             ("row", app.buttons["e2e"].firstMatch), ("filter", app.buttons["Filter"].firstMatch),
             ("edit", app.buttons["Edit"]), ("host", app.buttons["mba2 stats"].firstMatch),
             ("pill", tabs.buttons.element(boundBy: 1)),
-            ("mode", app.otherElements["tab-segments"].buttons["Files"])]
+            ("mode", app.buttons["tab-mode-button"])]
         for (name, element) in targets {
             XCTAssertTrue(element.waitForExistence(timeout: 5), name)
             element.hover()

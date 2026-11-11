@@ -226,7 +226,7 @@ final class ChatEndToEndTests: XCTestCase {
                     XCTAssertEqual(card.key, session.approvals[0].key, "Identical hook metadata must still receive separate decisions")
                     try await Task.sleep(for: .milliseconds(350))
                     let visible = try await PresentationTestSupport.capture(window, named: "repeated-code-mode-approval", in: "chat-validation").text()
-                    XCTAssertTrue(visible.contains("Allow once"), visible)
+                    XCTAssertTrue(visible.contains("Allow Once"), visible)
                 }
                 card.resolve(.allow)
             }

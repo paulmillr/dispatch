@@ -59,6 +59,13 @@ final class SSHReconnectController {
         var surfaces: Set<UUID>
         var restored = false
         var backends: [HelperWorkspace.Detached] = []
+
+        /// Whether a helper's report is this recipe's login. A connection saved without its account, when a host was a
+        /// machine, can only be held to the machine.
+        func isLogin(machine: String, uid: UInt32) -> Bool {
+            guard let accountUID else { return host == .authenticated(machine, uid: uid) || host == .authenticated(machine) }
+            return accountUID == uid && host == .authenticated(machine, uid: uid)
+        }
     }
     struct State: Equatable {
         var reconnecting = false
@@ -168,6 +175,12 @@ final class SSHReconnectController {
         // A restored shell logging in again in its own tab: the strip carries what its ssh asks.
         if launchingShells[surface] != nil { return State(reconnecting: true, attempted: true, step: "logging in") }
         return completed[surface] == nil ? nil : State(connected: true)
+    }
+    /// The tab shows the reconnect bar (`SSHReconnectOverlay`): its own state, gone, logging in again or just
+    /// connected, or another host's login asking here. What else would say the connection is down (chat's status line)
+    /// waits while it does.
+    func showsBar(for surface: UUID) -> Bool {
+        presentationState(for: surface) != nil || orphan(for: surface) != nil
     }
     func retain(_ recipe: Recipe) {
         for surface in recipe.surfaces { completed[surface] = nil }

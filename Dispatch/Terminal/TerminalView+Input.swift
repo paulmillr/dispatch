@@ -146,6 +146,11 @@ extension TerminalView {
     override func mouseDown(with event: NSEvent) {
         guard !inputParked, let surface else { return }
         if window?.makeFirstResponder(self) == true { select() }
+        // ⌃-click opens the terminal's menu, as in Terminal and iTerm2, unless the program reads the mouse.
+        if event.modifierFlags.intersection([.control, .option, .shift, .command]) == .control, !surface.mouseCaptured {
+            NSMenu.popUpContextMenu(contextMenu(), with: event, for: self)
+            return
+        }
         reportMousePosition(event)
         _ = surface.mouseButton(.press, .left, mods: mouseModifiers(event))
     }
@@ -156,10 +161,16 @@ extension TerminalView {
         _ = surface.mouseButton(.release, .left, mods: mouseModifiers(event))
     }
 
+    /// A program reading the mouse gets the click. Otherwise the terminal's menu opens, after the engine selected the
+    /// word or link under the pointer (Ghostty's right-click-action = context-menu).
     override func rightMouseDown(with event: NSEvent) {
         guard !inputParked, let surface else { return }
         reportMousePosition(event)
-        _ = surface.mouseButton(.press, .right, mods: mouseModifiers(event))
+        guard !surface.mouseButton(.press, .right, mods: mouseModifiers(event)) else { return }
+        // The menu takes the release: the engine gets it now, so its button is not left held.
+        _ = surface.mouseButton(.release, .right, mods: mouseModifiers(event))
+        if window?.makeFirstResponder(self) == true { select() }
+        NSMenu.popUpContextMenu(contextMenu(), with: event, for: self)
     }
 
     override func rightMouseUp(with event: NSEvent) {
@@ -429,6 +440,106 @@ extension TerminalView: @preconcurrency NSTextInputClient {
         let screenPoint = window?.convertPoint(toScreen: convert(viewPoint, to: nil)) ?? viewPoint
         return NSRect(x: screenPoint.x, y: screenPoint.y - height, width: width, height: height)
     }
+}
+
+// MARK: - Context menu
+
+extension TerminalView {
+    /// The terminal's right-click (and ⌃-click) menu: Copy, Paste and Select All; the link under the pointer; Clear
+    /// Screen; splitting; and the modes the tab's switch offers (Terminal, Chat, Files, Review, Commits). Its items act
+    /// on this terminal, which the click selected.
+    func contextMenu() -> NSMenu {
+        let menu = NSMenu(title: "Terminal")
+        menu.autoenablesItems = false
+        func add(_ title: String, enabled: Bool = true, checked: Bool = false, _ action: @escaping @MainActor () -> Void) {
+            let item = TerminalMenuItem(title: title, run: action)
+            item.isEnabled = enabled
+            item.state = checked ? .on : .off
+            menu.addItem(item)
+        }
+        add("Copy", enabled: surface?.hasSelection == true) { [weak self] in self?.copy(nil) }
+        add("Paste", enabled: !inputParked && NSPasteboard.general.string(forType: .string).map { !$0.isEmpty } == true) { [weak self] in
+            self?.paste(nil)
+        }
+        add("Select All", enabled: surface != nil) { [weak self] in self?.selectAll(nil) }
+        // The right press selected the link under the pointer, if any.
+        if let link = surface?.readSelection()?.trimmingCharacters(in: .whitespacesAndNewlines),
+           TerminalLinkPolicy.opensHyperlink(link) {
+            menu.addItem(.separator())
+            add("Open Link") {
+                let opener = Process()
+                opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                opener.arguments = [link]
+                try? opener.run()
+            }
+            add("Copy Link") { TerminalClipboard.write(link) }
+        }
+        menu.addItem(.separator())
+        add("Clear Screen", enabled: canClearScreen) { [weak self] in _ = self?.performBindingAction("clear_screen") }
+        let workspace = TerminalRuntime.shared.workspace
+        if presentation == .workspace, let workspace {
+            add("Split Right", enabled: workspace.canSplitPane()) { workspace.splitPane(.columns) }
+            add("Split Down", enabled: workspace.canSplitPane()) { workspace.splitPane(.rows) }
+        }
+        if presentation == .workspace, let workspace {
+            let files = TerminalRuntime.shared.files, id = id
+            let modes = ModeSwitchMenuItem.items(files.switchState(id), files: files, id: id) { target in
+                workspace.selectSurface(id)
+                switch target {
+                case .mode(let mode): files.switchMode(id, to: mode)
+                case .files(let tab): files.showFiles(id, tab: tab)
+                }
+            }.filter(\.enabled)
+            // Only the terminal itself: nothing to switch to.
+            if modes.count > 1 {
+                menu.addItem(.separator())
+                for mode in modes { add(mode.title, checked: mode.checked) { mode.choose() } }
+            }
+        }
+        return menu
+    }
+
+    /// ⌘K and the menus' Clear Screen: not while a full-screen program shows (the engine leaves its screen alone), nor
+    /// in a tmux or herdr tab, whose history is the server's and stays there.
+    var canClearScreen: Bool {
+        guard let surface, !surface.alternateScreen else { return false }
+        guard let workspace = TerminalRuntime.shared.workspace,
+              let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(id) } }),
+              let helper = workspace.helper(space), let backend = space.backend else { return true }
+        return !helper.external(backend)
+    }
+}
+
+// MARK: - Services
+
+extension TerminalView: @preconcurrency NSServicesMenuRequestor {
+    /// The selection goes to Services (Search With, Open man Page, Make New Sticky Note); nothing comes back into the
+    /// terminal, whose input is typing.
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? {
+        if returnType == nil, sendType == .string, surface?.hasSelection == true { return self }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard types.contains(.string), let text = surface?.readSelection(), !text.isEmpty else { return false }
+        pboard.clearContents()
+        return pboard.setString(text, forType: .string)
+    }
+}
+
+/// A menu item that runs its closure.
+@MainActor final class TerminalMenuItem: NSMenuItem {
+    private let run: @MainActor () -> Void
+
+    init(title: String, run: @escaping @MainActor () -> Void) {
+        self.run = run
+        super.init(title: title, action: #selector(runAction(_:)), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
+
+    @objc private func runAction(_ sender: Any?) { run() }
 }
 
 // MARK: - Standard Edit menu (responder chain)

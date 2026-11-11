@@ -307,7 +307,10 @@ final class PadStripTests: XCTestCase {
                 .fixedSize(), "selected")
             measured(PadTabPill(title: "zsh", urgency: nil, agent: nil, shell: false, selected: false, select: {}, close: {})
                 .fixedSize(), "short")
-            measured(PadModeSwitch(modes: PadMode.allCases, selected: .files, review: 3) { _ in }, "modes")
+            measured(PadModeButton(modes: PadMode.allCases, selected: .review, review: 3) { _ in }
+                .environment(\.tabsColumnWidth, 514), "glyph")
+            measured(PadModeButton(modes: PadMode.allCases, selected: .review, review: 3) { _ in }
+                .environment(\.tabsColumnWidth, 890), "titled")
         }
         window.rootViewController = UIHostingController(rootView: row)
         window.isHidden = false
@@ -318,7 +321,9 @@ final class PadStripTests: XCTestCase {
         XCTAssertTrue((PadPills.width - 16...PadPills.width + 0.5).contains(capped), "\(capped)")
         XCTAssertTrue((PadPills.selectedWidth - 16...PadPills.selectedWidth + 0.5).contains(selected), "\(selected)")
         XCTAssertLessThan(frames.values["short"]?.width ?? .infinity, 120, "A short title keeps a short pill")
-        XCTAssertEqual(frames.values["modes"]?.width ?? 0, 5 * 40 + 4 * 2 + 6, accuracy: 1)
+        // The mode button: its glyph alone in an upright 11-inch's column, its title too on its side.
+        XCTAssertEqual(frames.values["glyph"]?.width ?? 0, 44, accuracy: 0.5)
+        XCTAssertGreaterThan(frames.values["titled"]?.width ?? 0, 80, "Review's glyph and title")
     }
 
     /// The sidebar's filter is Spaces' query (All, Needs you, Agents); its title gives way beside window controls.

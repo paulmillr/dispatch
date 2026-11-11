@@ -30,15 +30,15 @@ it's quite bad. There is no native scrolling (with history & search). No native 
 
 - **tmux and herdr** sessions / spaces displayed as native spaces / tabs
 - **Chat mode:** transform CLI into UI. Including SSH agents! Consistent experience across Codex/Claude/Pi. Queue and steer, approvals (permission cards), agent questions as forms, side questions, attachments, a model and effort picker, goals, drafts kept per tab, tool cards with diffs.
-- **Files mode:** a file browser with previews, an editor, uploads/downloads by drag and drop, and a git Changes/Commits view with a graph
-- **Review mode**: it's like GitHub Pull Requests, but for your agents!
+- **Files mode:** a file browser with previews, uploads/downloads by drag and drop, and a git Review/Commits view with a graph
+- **Review mode**: it's like GitHub Pull Requests, but for your agents! Comment on the lines of uncommitted changes and commits, then send the review to an agent
 - **Dictation and voice:** three **always-local** engines (Apple, Whisper, Parakeet), "Navigate by voice" with wake words, and "Read replies aloud"
 - **Per-host stats for SSH:** color-coded remote hosts, auto-reconnect with an overlay, and a slow-connection mode
 - Zero-dependency Swift port of libghostty. libghostty is great and fast engine, but on the Mac it requires 23 dependencies (14 C/C++, 9 Zig, plus the Zig compiler), and 10 more if we count non-Mac code. Our version has no third-party code dependencies.
 
 ### Secondary features
 
-- tmux-style ⌃B prefix keys, also in native spaces
+- tmux-style ⌃B prefix keys in tmux and herdr spaces; native spaces can have them too (Settings › Keyboard)
 - Single window to rule everything, for simplicity
 - Classic themes & OKLCH+P3 theme creator
 - Bundled coding fonts
@@ -48,7 +48,7 @@ it's quite bad. There is no native scrolling (with history & search). No native 
 ### Architecture & security
 
 - Dispatch targets Apple Silicon Macs on macOS 14+; we'll consider other architectures later
-- Our Rust helper does all the heavy lifting. It runs on macOS, Linux x86 + ARM. It's uploaded to SSH hosts with per
+- Our Rust helper does all the heavy lifting. It runs on macOS (Apple silicon), Linux x86-64 + ARM64. It's uploaded to SSH hosts with per
   requests. Many features still work without it. It opens NO ports - communcation is done via SSH stream
 - Reproducible builds
 

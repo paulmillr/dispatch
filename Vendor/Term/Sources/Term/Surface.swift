@@ -527,6 +527,10 @@ public final class Surface {
     }
 
     var isMouseReporting: Bool { config.mouseReporting && terminal.flags.mouseEvent != .none }
+    /// A program reads the mouse (ghostty_surface_mouse_captured): its clicks are its own, a ⌃-click included.
+    public var mouseCaptured: Bool { isMouseReporting }
+    /// The program draws on the alternate screen (a full-screen program: vim, less), which ⌘K's clear leaves alone.
+    public var alternateScreen: Bool { terminal.isAlternate }
 
     /// Surface pixels to a viewport cell (renderer Coordinate.convert: clamped to the grid).
     func viewport(_ x: Float, _ y: Float) -> (x: Int, y: Int) {

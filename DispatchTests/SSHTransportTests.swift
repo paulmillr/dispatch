@@ -466,6 +466,7 @@ final class SSHTransportTests: XCTestCase {
                 try await HelperChat.setup(endpoint, key: "codex", enabled: nil, terminal: nil)?.status
             }
             defer { chat.setHelperIntegration("codex", enabled: true) }
+            chat.localHooks["codex"] = true
             for (index, last) in [false, true].enumerated() {
                 for enabled in [true, false, true, false, true, false, true] + [last] { chat.setHelperIntegration("codex", enabled: enabled) }
                 await chat.integrationChanges?.value

@@ -90,7 +90,24 @@ final class WindowState {
     /// Where title-row content starts: 16 points after the green button, read once from the window.
     var controlsInset: CGFloat = 82
     var sidebarVisibilityOverride: Bool?
+    /// The sidebar's width, dragged at its trailing edge; kept across launches (`UserDefaults.app`, never under test).
+    var sidebarWidth: CGFloat = WindowState.savedSidebarWidth {
+        didSet { if abs(sidebarWidth - oldValue) >= 1 { UserDefaults.app?.set(Double(sidebarWidth), forKey: Self.widthKey) } }
+    }
     var spaceSearchFocusRequest: UUID?
     /// The ⌘/ sheet outside chat: on the sidebar, or the content area when it is hidden.
     var shortcutsPresented = false
+
+    private static let widthKey = "Dispatch.Local.SidebarWidth", shownKey = "Dispatch.Local.SidebarShown"
+    private static var savedSidebarWidth: CGFloat {
+        (UserDefaults.app?.object(forKey: widthKey) as? Double).map { CGFloat(min(max($0, 160), 800)) } ?? 264
+    }
+    /// The sidebar shown or hidden with ⌃⌘S, against the automatic choice; nil: automatic. Kept across launches.
+    static var savedSidebarChoice: Bool? { UserDefaults.app?.object(forKey: shownKey) as? Bool }
+
+    /// ⌃⌘S's choice (nil returns to the automatic one), remembered for the next launch.
+    func chooseSidebar(_ visible: Bool?) {
+        sidebarVisibilityOverride = visible
+        if let visible { UserDefaults.app?.set(visible, forKey: Self.shownKey) } else { UserDefaults.app?.removeObject(forKey: Self.shownKey) }
+    }
 }

@@ -211,12 +211,25 @@ private struct HostStatsPresentation: View {
                 .overlay(alignment: .top) { if !StatsStyle.glass { Rectangle().fill(StatsStyle.track).frame(height: 1) } } }
             if sample.state == .unavailable {
                 statisticsContent.hidden().overlay {
-                    Text("Stats unavailable")
-                        .font(typography, offset: 3.5, weight: .medium)
-                        .foregroundStyle(StatsStyle.muted)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("stats-unavailable")
+                    // Why, and where to change it: a remote host's own choices in Settings › Hosts.
+                    VStack(spacing: 8) {
+                        Text("Stats unavailable")
+                            .font(typography, offset: 3.5, weight: .medium)
+                            .accessibilityIdentifier("stats-unavailable")
+                        if host.id != .local {
+                            Text(TerminalRuntime.shared.ssh.statisticsUnavailable(host: host.id))
+                                .font(typography, .body)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("stats-unavailable-reason")
+                            Button("Open Hosts Settings") {
+                                SettingsNavigation.shared.hosts(host.id.rawValue)
+                                (NSApp.delegate as? AppDelegate)?.showSettings()
+                            }.accessibilityIdentifier("stats-open-host-settings")
+                        }
+                    }
+                    .foregroundStyle(StatsStyle.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 statisticsContent

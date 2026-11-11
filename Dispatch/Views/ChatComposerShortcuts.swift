@@ -33,7 +33,7 @@ struct ChatComposerShortcuts: View {
             .init("⌘E", multiline ? "editor · return to single-line mode" : "editor · Return inserts a newline"),
             .init("⌘S", "save draft"),
             .init("/", "commands · type / to browse agent commands"),
-            multiline ? .init("⎋", "exit editor · keep your draft")
+            multiline && !session.busy ? .init("⎋", "exit editor · keep your draft")
                 : .init("⎋ twice", "stop · end the current turn, keeping your draft"),
         ] + (DictationStore.shared.shortcut.map { key in [
             .init("hold \(key.name)", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
@@ -42,7 +42,7 @@ struct ChatComposerShortcuts: View {
     }
 
     private var queue: String { "queue · runs after the current turn" }
-    private var steer: String { "steer · interrupts and redirects the current turn" }
+    private var steer: String { "steer · adds it to the current turn now" }
 
     /// Only where the conversation's helper keeps attachments (the paperclip shows then too).
     private var attachmentRows: [ShortcutRow] {
@@ -55,14 +55,15 @@ struct ChatComposerShortcuts: View {
         .init("⇧⌘M", "choose model · in single-line mode"),
         .init("⇧⌘E", "choose effort · in single-line mode"),
         .init("⌥⇧⌘E", "cycle effort · in single-line mode"),
-        .init("↑↓ / ⇥", "select / complete an agent command"),
+        .init("↑↓ / ⇥ / ⏎", "select / complete an agent command"),
         .init("⇥ / ⇧⇥", "indent / outdent text"),
         .init("⌘[ / ⌘]", "outdent / indent lines in editor mode"),
         .init("↑ / ↓", "select queued messages when the draft is empty"),
-        .init("E", "edit the selected or hovered queued message"),
-        .init("⌥⌘⏎", "send the selected or hovered queued message now"),
-        .init("⌘⌫", "remove the selected or hovered queued message"),
+        .init("E", "edit the selected queued message"),
+        .init("⌥⌘⏎", "send the selected queued message now"),
+        .init("⌘⌫", "delete the selected queued message"),
         .init("⎋", "clear queue selection or cancel a queued edit first"),
+        .init("⇧⌘⏎ / ⇧⌘⌫", "allow once / deny the newest permission request"),
         .init("⌃D twice", "close tab and quit agent, or show Terminal if busy · empty single-line draft only"),
     ] }
 }
@@ -315,10 +316,13 @@ struct ChatComposerActivity: View {
                 .onChange(of: session.activeTurnID) { _, _ in appeared = .now }
                 .popover(isPresented: $details) {
                     VStack(alignment: .leading, spacing: 12) {
+                        // What the agent is doing and the session's counters; never a tool's output (the step's
+                        // own row shows that).
                         Text(state.label).foregroundStyle(theme.ink)
-                        if !state.fragment.isEmpty { Text(state.fragment).fixedSize(horizontal: false, vertical: true) }
                         ChatSessionStats(session: session)
-                    }.font(theme.typography.detail).foregroundStyle(theme.muted)
+                        ChatLimitsSection(session: session)
+                    }.task { await ChatLimitsStore.shared.describe(session) }
+                        .font(theme.typography.detail).foregroundStyle(theme.muted)
                         .padding(14).frame(width: 320)
                         // On glass the popover's own system glass shows through instead of the sidebar fill.
                         .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)

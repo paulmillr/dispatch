@@ -1,17 +1,25 @@
 import Foundation
 import Observation
 
-/// Verified machines group accounts; provisional logins use their resolved route.
-/// Neither identity authorizes helper operations or identifies a backend.
+/// A verified host is one login: a machine and the account on it, however many aliases reach them, as the iPhone keeps
+/// a host per login. Provisional logins use their resolved route. Neither identity authorizes helper operations or
+/// identifies a backend.
 struct HostID: Hashable, Codable, Sendable {
     let rawValue: String
     static let local = HostID(rawValue: "local")
     static func authenticated(_ identity: String) -> Self { .init(rawValue: "ssh:" + identity) }
+    static func authenticated(_ machine: String, uid: UInt32) -> Self { authenticated(machine + ":" + String(uid)) }
     static func provisional(_ generation: UUID) -> Self { .init(rawValue: "pending:" + generation.uuidString) }
     #if canImport(AppKit)
     static func login(_ scope: SSHIntegrationScope) -> Self { .init(rawValue: "login:" + scope.key) }
     #endif
     var isProvisional: Bool { rawValue.hasPrefix("pending:") || rawValue.hasPrefix("login:") }
+    /// The machine a login is on: what builds that kept one host per machine saved it under.
+    var machine: HostID {
+        guard rawValue.hasPrefix("ssh:"), let colon = rawValue.lastIndex(of: ":"), colon > rawValue.index(rawValue.startIndex, offsetBy: 3),
+              UInt32(rawValue[rawValue.index(after: colon)...]) != nil else { return self }
+        return HostID(rawValue: String(rawValue[..<colon]))
+    }
 }
 
 struct HostSystem: Equatable, Codable, Sendable {
@@ -64,6 +72,8 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     /// The automatic color given when the host was first remembered. A name, so a
     /// color later removed from HostColor costs only this choice, not the record.
     var colorName: String?
+    /// The login's account, which names it once its machine has another login (`nameLogins`).
+    var account: String? = nil
     var color: HostColor? { colorName.flatMap(HostColor.init(rawValue:)) }
     static let local = HostRecord(id: .local, name: "Local", system: .mac, destinations: [], order: -1)
     var details: String {
@@ -161,24 +171,30 @@ final class HostRegistry {
                 greeting: SSHGreeting? = nil, state: HostConnectionState) -> TerminalHostContext? {
         guard let previous = terminals[terminal], previous.generation == generation else { return nil }
         let identity = greeting.flatMap { value in
-            !value.host.isEmpty && value.host.utf8.count <= 256 ? HostID.authenticated(value.host) : nil
+            !value.host.isEmpty && value.host.utf8.count <= 256 ? HostID.authenticated(value.host, uid: value.uid) : nil
         }
         let id = identity ?? previous.host
         let destination = Self.label(destination)
+        if identity != nil { adoptMachine(of: id) }
         // A seeded connection can resolve to a different machine. Only a
         // provisional identity transfers its label/order to the verified host.
         let prior = previous.host == id || previous.host.isProvisional ? records[previous.host] : nil
         var record = records[id] ?? HostRecord(id: id, name: prior?.name ?? Self.displayName(destination),
                                               destinations: prior?.destinations ?? [], order: prior?.order ?? nextOrder)
         if records[id] == nil, prior == nil { nextOrder += 1 }
-        // A new machine keeps the color its connection previewed while it was identified, so it doesn't change color
-        // as it connects.
-        if records[id] == nil, identity != nil, let preview = previewColor(previous.host) { record.colorName = preview.rawValue }
+        // A new host shows its machine's color when another login has one, else keeps the color its connection
+        // previewed while it was identified, so it doesn't change color as it connects.
+        if records[id] == nil, identity != nil {
+            let machine = record.tint?.machine
+            record.colorName = records.values.first { $0.tint?.machine == machine && $0.colorName != nil }?.colorName
+                ?? previewColor(previous.host)?.rawValue
+        }
         if let prior, prior.order < record.order {
             record.name = prior.name; record.order = prior.order
         }
         for alias in prior?.destinations ?? [] where !record.destinations.contains(alias) { record.destinations.append(alias) }
         if !destination.isEmpty, !record.destinations.contains(destination) { record.destinations.append(destination) }
+        if identity != nil, let account = greeting.flatMap({ Self.account(destination: destination, home: $0.home) }) { record.account = account }
         if let hostname = greeting?.hostname.map(Self.label), !hostname.isEmpty { record.hostname = hostname }
         if let os = greeting?.os.map(Self.label), !os.isEmpty {
             record.system = HostSystem(os: os, distribution: greeting?.distribution.map(Self.label), name: greeting?.osName.map(Self.label))
@@ -241,6 +257,7 @@ final class HostRegistry {
             record.order = order; records[record.id] = record
         }
         nextOrder = ordered.count
+        nameLogins()
         assignColors()
     }
 
@@ -276,8 +293,30 @@ final class HostRegistry {
     }
 
     private func recordsChanged() {
+        nameLogins()
         assignColors()
         persist()
+    }
+
+    /// A record saved when a host was a machine passes to the first of its logins to come back: nothing saved says
+    /// whose it was. One a terminal still shows stays.
+    private func adoptMachine(of login: HostID) {
+        let machine = login.machine
+        guard machine != login, records[login] == nil, let saved = records[machine],
+              !terminals.values.contains(where: { $0.host == machine }) else { return }
+        records[login] = HostRecord(id: login, name: saved.name, hostname: saved.hostname, system: saved.system,
+                                    destinations: [], order: saved.order, colorName: saved.colorName)
+        records[machine] = nil
+    }
+
+    /// Logins on one machine would all read as the machine, so each says its account.
+    private func nameLogins() {
+        let remote = records.values.filter { $0.id.rawValue.hasPrefix("ssh:") }
+        for (_, logins) in Dictionary(grouping: remote, by: \.id.machine) where logins.count > 1 {
+            for login in logins where !login.name.contains("@") {
+                if let account = login.account { records[login.id]?.name = account + "@" + login.name }
+            }
+        }
     }
 
     /// Each verified host keeps the automatic color it was first given. A new host takes a color no connected host
@@ -311,9 +350,13 @@ final class HostRegistry {
             let candidates = HostColor.allCases.filter { rank($0) == best }
             return candidates[Int(seed % UInt32(candidates.count))]
         }
+        // Logins on one machine share its color.
+        var given = Dictionary(ordered.compactMap { record in record.tint.flatMap { tint in record.color.map { (tint.machine, $0) } } },
+                               uniquingKeysWith: { first, _ in first })
         for record in ordered where record.id.rawValue.hasPrefix("ssh:") && record.color == nil {
             guard let tint = record.tint else { continue }
-            let color = free(tint.seed)
+            let color = given[tint.machine] ?? free(tint.seed)
+            given[tint.machine] = color
             records[record.id]?.colorName = color.rawValue
             if store.choices[tint.machine] == nil { count(color, live: live.contains(record.id)) }
         }
@@ -337,11 +380,12 @@ final class HostRegistry {
     /// The app's own UUID for an identified host, which what it keeps per host is keyed by (Review's comments,
     /// `ReviewScope`), never the host's name nor what its helper reports. Made the first time it is asked for, kept
     /// across launches and when the host is forgotten (its reviews come back with it); nil for this Mac, a connection
-    /// not yet identified, or a host with no record.
+    /// not yet identified, or a host with no record. A login on a machine that has a key from when a host was a machine
+    /// uses that key, so the reviews made then stay with each of its logins.
     func key(for host: HostID) -> UUID? {
         guard host != .local, !host.isProvisional, records[host] != nil else { return nil }
         if let key = keys[host] { return key }
-        let key = System.uuid(for: "host-key")
+        let key = keys[host.machine] ?? System.uuid(for: "host-key")
         keys[host] = key
         defaults?.set(Dictionary(uniqueKeysWithValues: keys.map { ($0.key.rawValue, $0.value.uuidString) }), forKey: Self.keysKey)
         return key
@@ -358,6 +402,15 @@ final class HostRegistry {
         let value = destination.hasPrefix("ssh://") ? String(destination.dropFirst(6)) : destination
         let host = value.split(separator: "@", omittingEmptySubsequences: false).last.map(String.init) ?? value
         return host.isEmpty ? "Remote" : host
+    }
+
+    /// Who a login is: the destination's user, else its home folder's name (a destination can leave the user to ssh's
+    /// configuration).
+    nonisolated static func account(destination: String, home: String) -> String? {
+        let value = destination.hasPrefix("ssh://") ? String(destination.dropFirst(6)) : destination
+        if let at = value.lastIndex(of: "@"), at > value.startIndex { return String(value[..<at]) }
+        let name = (home as NSString).lastPathComponent
+        return name.isEmpty || name == "/" ? nil : name
     }
 
     private static func label(_ value: String) -> String {

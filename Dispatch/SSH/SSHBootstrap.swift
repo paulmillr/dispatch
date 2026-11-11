@@ -7,6 +7,8 @@ import Darwin
 /// setup log records). `given` is the reason a remote script gave; a failure without one (the channel dropped) may
 /// pass on another attempt.
 struct SSHSetupFailure: LocalizedError, Sendable {
+    /// The reason a host whose platform has no helper gives (SSHCoordinator remembers it for the login).
+    static let unsupportedPlatform = "unsupported host platform"
     let message: String
     let reason: String
     let given: String?
@@ -312,7 +314,7 @@ enum SSHBootstrap {
                 return Miss(helper: helper)
             case .unsupported?:
                 return SSHSetupFailure.permanent("SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon.",
-                                                 reason: "unsupported host platform")
+                                                 reason: SSHSetupFailure.unsupportedPlatform)
             case .unidentified?:
                 return SSHSetupFailure.permanent("Could not identify the SSH host platform.", reason: "unknown host platform")
             case nil:

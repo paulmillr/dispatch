@@ -201,7 +201,9 @@ struct TerminalContentView: View {
             }
             .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: mode)
             .overlay(alignment: .bottomTrailing) {
-                if let armed = workspace.prefixKeys.armed, tab.surfaceIDs.contains(armed) { PrefixIndicator() }
+                if let armed = workspace.prefixKeys.armed, tab.surfaceIDs.contains(armed) {
+                    PrefixIndicator(key: workspace.prefixKeys.armedKey?.symbol ?? "⌃B")
+                }
             }
         }
         // Translucent terminals: the strip's inset above the terminal takes its background too, so no band of bare
@@ -310,12 +312,14 @@ final class FloatingSwitchRevealView: NSView {
     }
 }
 
-/// Shown while ⌃B waits for the key that completes a tmux- or herdr-style binding.
+/// Shown while the prefix (⌃B, or the server's own, such as ⌃A) waits for the key that completes a tmux- or herdr-style
+/// binding.
 private struct PrefixIndicator: View {
     @Environment(\.appTypography) private var typography
+    let key: String
 
     var body: some View {
-        Text("⌃B").font(typography.shortcut()).foregroundStyle(Chrome.accent)
+        Text(key).font(typography.shortcut()).foregroundStyle(Chrome.accent)
             .padding(.horizontal, 7).padding(.vertical, 3)
             .modifier(PrefixIndicatorSurface())
             .padding(10)

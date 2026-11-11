@@ -12,6 +12,10 @@ use std::{collections::BTreeSet, os::fd::RawFd};
 pub(crate) const INTERACTION_OPTIONS: &str = "interaction.options";
 /// The `chat.list` operation.
 pub(crate) const CHAT_LIST: &str = "chat.list";
+/// The `chat.limits` operation: the agent's usage windows, read when asked.
+pub(crate) const CHAT_LIMITS: &str = "chat.limits";
+/// The `chat.limits.rows` operation: what a limits extension of the agent reports.
+pub(crate) const CHAT_LIMIT_ROWS: &str = "chat.limits.rows";
 /// The `projects.recent` operation.
 pub(crate) const PROJECTS_RECENT: &str = "projects.recent";
 /// multiplexers.list reports installed, version and paste readiness per multiplexer.
@@ -73,6 +77,8 @@ pub(crate) const LOGIN_RELEASE: &str = "login.release";
 pub(crate) const KNOWN: &[&str] = &[
     INTERACTION_OPTIONS,
     CHAT_LIST,
+    CHAT_LIMITS,
+    CHAT_LIMIT_ROWS,
     PROJECTS_RECENT,
     MULTIPLEXER_VERSIONS,
     TERMINALS_COALESCE,
@@ -119,6 +125,8 @@ pub(crate) fn legacy(interaction: &Interaction) -> Option<Interaction> {
 /// Operations that exist only for a client that named their feature, with that feature.
 pub(crate) const OPERATIONS: &[(&str, &str)] = &[
     (CHAT_LIST, CHAT_LIST),
+    (CHAT_LIMITS, CHAT_LIMITS),
+    (CHAT_LIMIT_ROWS, CHAT_LIMIT_ROWS),
     (PROJECTS_RECENT, PROJECTS_RECENT),
     (TERMINALS_ACTIVITY, TERMINALS_ACTIVITY),
     (ATTACHMENTS_PUT, ATTACHMENTS),
@@ -209,6 +217,12 @@ impl Request<'_> {
     pub(crate) fn extension(&mut self, method: &str, params: &Data<'_>) -> Result<(), Error> {
         if method == CHAT_LIST {
             return self.chat_list(params);
+        }
+        if method == CHAT_LIMITS {
+            return self.chat_limits(params);
+        }
+        if method == CHAT_LIMIT_ROWS {
+            return self.chat_limit_rows(params);
         }
         if method == PROJECTS_RECENT {
             return self.projects_recent(params);

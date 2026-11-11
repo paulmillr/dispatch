@@ -17,6 +17,15 @@ class ChatEditorTextView: ChatCaretTextView {
     private var highlightedText: String?
     private var highlightedTheme: ChatTheme?
     private var highlightedProvisional: NSRange?
+    /// Each fence's tokens by language and code, for the theme last applied: a keystroke re-tokenizes only the fence
+    /// it changed.
+    private var fenceTokens: [String: [SyntaxHighlight.Token]] = [:]
+    /// Text set as a whole (a restored or switched draft) may carry any attributes: the next highlight redoes them all.
+    private var needsFullHighlight = true
+    override var string: String {
+        get { super.string }
+        set { super.string = newValue; needsFullHighlight = true }
+    }
     /// Text that is not the user's yet (dictation still listening): drawn muted.
     var provisional: NSRange?
     var appliedTheme: ChatTheme?
@@ -236,8 +245,15 @@ class ChatEditorTextView: ChatCaretTextView {
     func highlight() {
         guard !hasMarkedText(), let theme = appliedTheme, let storage = textStorage,
               highlightedText != string || highlightedTheme != theme || highlightedProvisional != provisional else { return }
+        let restyle = needsFullHighlight || highlightedTheme != theme || highlightedProvisional != provisional || provisional != nil
+        if highlightedTheme != theme { fenceTokens = [:] }
         highlightedText = string; highlightedTheme = theme; highlightedProvisional = provisional
-        fences = ComposerFence.scan(string)
+        let scanned = ComposerFence.scan(string)
+        // Plain text typed into plain text already has the reply's font and ink (typingAttributes): nothing to redo.
+        if !restyle, fences.isEmpty, scanned.isEmpty { return }
+        needsFullHighlight = false
+        fences = scanned
+        var tokens: [String: [SyntaxHighlight.Token]] = [:]
         applyingState = true
         storage.beginEditing()
         storage.setAttributes([.font: theme.typography.reply, .foregroundColor: NSColor(theme.ink)], range: NSRange(location: 0, length: storage.length))
@@ -246,7 +262,10 @@ class ChatEditorTextView: ChatCaretTextView {
             storage.addAttribute(.foregroundColor, value: NSColor(theme.muted), range: fence.opening)
             if let closing = fence.closing { storage.addAttribute(.foregroundColor, value: NSColor(theme.muted), range: closing) }
             let code = (string as NSString).substring(with: fence.body)
-            for token in SyntaxHighlight.tokens(code, language: fence.language, theme: theme) {
+            let key = fence.language + "\u{0}" + code
+            let fenceTokens = tokens[key] ?? self.fenceTokens[key] ?? SyntaxHighlight.tokens(code, language: fence.language, theme: theme)
+            tokens[key] = fenceTokens
+            for token in fenceTokens {
                 storage.addAttribute(.foregroundColor, value: NSColor(token.color), range: NSRange(location: fence.body.location + token.range.location, length: token.range.length))
             }
         }
@@ -254,6 +273,7 @@ class ChatEditorTextView: ChatCaretTextView {
             storage.addAttribute(.foregroundColor, value: NSColor(theme.muted), range: provisional)
         }
         storage.endEditing()
+        fenceTokens = tokens
         typingAttributes = [.font: theme.typography.reply, .foregroundColor: NSColor(theme.ink)]
         applyingState = false; needsDisplay = true
     }

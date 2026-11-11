@@ -45,12 +45,12 @@ extension TabScreen where Terminal == AnyView, Chat == AnyView {
 }
 
 /// One tab, shared by Terminal, Chat and Files (M4a, M5a, M6a top area, B7): the header (`TabScreenHeader`) over the
-/// injected views; on a phone's stack its mode button (`TabModeButton`) switches them, in Files with the modes' capsule
-/// under it (`FilesModeCapsule`). The views get the pane to show: Terminal the active pane, Chat the pane running the
+/// injected views; on a phone's stack and beside the Duo's sidebar its mode button (`TabModeButton`) switches them and
+/// Files' modes. The views get the pane to show: Terminal the active pane, Chat the pane running the
 /// agent; Files shows the modes (`TabFilesSegment`) in the active pane's folder.
 /// A phone on its side (`MobileLandscape`, mockups L12–L15) gives the content the whole window: no header and no
 /// capsule, the chrome in a rail on the Dynamic Island's side (`TabRail`: Back and the menu disc, the five modes, the
-/// mode's action at its foot), the tab's name in a chip for a moment as it opens; Review and Commits beside their panes
+/// mode's action at its foot), the tab's title capsule for a moment as it opens; Review and Commits beside their panes
 /// with the mode's row heading the list.
 struct TabScreen<Terminal: View, Chat: View>: View {
     let model: MobileTabs
@@ -60,9 +60,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     let chat: @MainActor (MobileTab, MobilePane) -> Chat
     /// The Terminal segment's folder as the shell reports it (`TabsContent.terminalDirectory`); nil: the topology's.
     var terminalDirectory: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
-    /// The Chat segment's trailing header controls around the host disc (`TabsContent.chatTrailing`); nil: the disc.
-    /// `keepsDisc`: the given view is the Duo header's switch, which stays.
-    var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView, _ keepsDisc: Bool) -> AnyView)? = nil
+    /// The Chat segment's trailing header control around the mode button (`TabsContent.chatTrailing`); nil: the button.
+    var chatTrailing: (@MainActor (MobileTab, MobilePane, AnyView) -> AnyView)? = nil
     /// The Chat segment's items in the tab's menu (`TabsContent.chatMenu`).
     var chatMenu: (@MainActor (MobileTab, MobilePane) -> AnyView)? = nil
     /// The Files segment's modes (`FilesModeContent`): placeholders until the areas fill them.
@@ -91,12 +90,10 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     @Environment(\.tabsNavigator) private var navigator
     /// Where the software keyboard is, while on its side (the rail keeps Back and the disc above a docked one).
     @State private var keyboard = TerminalAdaptation.Keyboard.hidden
-    /// The switch sits in the header beside the Duo's sidebar, where the column is a phone's; an iPad's detail column
-    /// keeps it under the header, at its own width (`TabSegmentCapsule.maxWidth`), and the host pill in the header.
-    private var segmentInHeader: Bool { splitDetail && UIDevice.current.userInterfaceIdiom == .phone }
-    /// Upright on a phone's stack (B7): Back and the host's menu share a capsule, the mode button (`TabModeButton`) is the
-    /// header's trailing control, and no switch sits under the header (Files' modes do, `FilesModeCapsule`).
-    private var modeButton: Bool { !splitDetail && !strip && !sideways }
+    /// Upright on a phone's stack and beside the Duo's sidebar (B7): the title capsule opens the tab's menu, the mode
+    /// button (`TabModeButton`) is the header's trailing control and the one switch, Files' modes in its menu: no
+    /// switch sits under the header.
+    private var modeButton: Bool { !strip && !sideways }
     /// A phone on its side (`MobileLandscape`): the rail beside the content, the strip's bodies.
     private var sideways: Bool { landscape && !strip && !splitDetail }
     /// The strip's layout, on an iPad or on a phone's side: the five modes are the model's (`MobileTabs.modes`).
@@ -146,8 +143,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         }
     }
 
-    /// Upright, on an iPad, beside the Duo's sidebar: the header and the capsule (or the strip's context row) over the
-    /// segment.
+    /// Upright, on an iPad, beside the Duo's sidebar: the header (or the strip's context row) over the segment.
     @ViewBuilder private func standardBody(_ tab: MobileTab?, workspace: MobileWorkspace?) -> some View {
         Group {
             if let tab, strip {
@@ -164,7 +160,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                     if let workspace {
                         TabFilesSegment(context: filesContext(tab, host: workspace.host), content: files,
                                         mode: Binding(get: { currentMode }, set: { pick($0) }),
-                                        repository: repository(tab) == true, modesOnTop: modeButton,
+                                        repository: repository(tab) == true,
                                         notNow: { notNow(tab) }, changeIntegration: { changeIntegration(ref.host) })
                     } else {
                         TabGone()
@@ -175,35 +171,18 @@ struct TabScreen<Terminal: View, Chat: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // The switch is part of the bar, under the header: the thread scrolls beneath both, through the system's
-        // scroll edge effect, as content does under the system's bars; the terminal, a fixed grid, starts below them.
-        // On a phone's stack the mode button is in the header (`modeButton`), Files' modes under it; beside the Duo's
-        // sidebar the switch is in the header itself, where the host pill was (`segmentInHeader`).
+        // The mode's row (Files' folder, Review's branch) is part of the bar, under the header: the content scrolls
+        // beneath both, through the system's scroll edge effect, as it does under the system's bars. The mode button in
+        // the header is the one switch (`modeButton`): nothing else sits under it.
         .safeAreaBar(edge: .top, spacing: 0) {
             if let tab, strip {
                 stripContext(tab, workspace: workspace)
-            } else if let tab {
-                let bar = current(tab) == .files ? workspace.flatMap { filesBar(tab, host: $0.host) } : nil
-                VStack(spacing: 10) {
-                    if !segmentInHeader && !modeButton {
-                        TabSegmentCapsule(selection: Binding(get: { current(tab) }, set: { choose($0) }),
-                                          segments: TabSegment.available(for: tab), badge: filesBadge)
-                    }
-                    // With the mode button Files' modes leave the system tab bar for the capsule's place.
-                    if modeButton, current(tab) == .files, let modes = filesModesOnTop(tab) {
-                        FilesModeCapsule(selection: Binding(get: { modes.shown }, set: { pick($0) }), modes: modes.available,
-                                         badge: filesBadge)
-                    }
-                    if let bar {
-                        HStack(spacing: 10) { bar }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .padding(.horizontal, 16)
-                // Beside the Duo's sidebar, or with the mode button, the switch is in the header: the Files bar row keeps
-                // its own margins.
-                .padding(.top, (segmentInHeader || modeButton) && bar == nil && !filesCapsule(tab) ? 0 : 4)
-                .padding(.bottom, (segmentInHeader || modeButton) && bar == nil && !filesCapsule(tab) ? 0 : 10)
+            } else if let tab, current(tab) == .files, let bar = workspace.flatMap({ filesBar(tab, host: $0.host) }) {
+                HStack(spacing: 10) { bar }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 10)
             }
         }
         .tabsPushedScreen()
@@ -217,12 +196,11 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                                 segment: current(tab),
                                 terminalDirectory: tab.activePane.flatMap { terminalDirectory(tab, $0) },
                                 column: column, showsBack: !splitDetail,
-                                segmentSelection: segmentInHeader ? Binding(get: { current(tab) }, set: { choose($0) }) : nil,
-                                segments: TabSegment.available(for: tab), filesBadge: filesBadge,
                                 sidebar: splitDetail ? sidebar : nil,
                                 chatTrailing: chatControls(tab, host: workspace.host),
                                 modeButton: modeButton ? AnyView(modeButtonView(tab)) : nil,
                                 menuChat: modeButton && current(tab) == .chat ? tab.agentPane.flatMap { chatMenu?(tab, $0) } : nil,
+                                capsuleMenu: navigator != nil,
                                 back: back)
             } else if !strip, !splitDetail {
                 ToolbarItem(placement: .topBarLeading) {
@@ -233,22 +211,13 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         }
     }
 
-    /// The Chat segment's header controls around the host disc (`chatTrailing`), nil elsewhere: the tab's menu holding
-    /// the conversation's items, which conversation mode's waveform replaces while on. Beside the Duo's sidebar the
-    /// switch is the header's trailing control: the conversation's ⋯ menu goes before it. On a phone's stack the
-    /// conversation's items are in the host's menu beside Back, and the waveform takes the mode button's place.
+    /// The Chat segment's control, nil elsewhere, which conversation mode's waveform replaces while on: in the header
+    /// the mode button (the conversation's items are in the title capsule's menu); on a phone's side the rail's menu
+    /// disc, holding the conversation's items.
     private func chatControls(_ tab: MobileTab, host: TabsHost) -> AnyView? {
         guard current(tab) == .chat, let pane = tab.agentPane, let chatTrailing else { return nil }
-        if modeButton { return chatTrailing(tab, pane, AnyView(modeButtonView(tab)), false) }
-        if segmentInHeader {
-            let segments = TabSegment.available(for: tab)
-            let capsule = TabSegmentCapsule(selection: Binding(get: { current(tab) }, set: { choose($0) }), segments: segments,
-                                            badge: filesBadge, compact: true)
-                .frame(width: TabSegmentCapsule.headerWidth(segments.count))
-            return chatTrailing(tab, pane, AnyView(capsule), true)
-        }
-        let menu = TabHeaderMenu(tab: tab, host: host, segment: .chat, chat: chatMenu?(tab, pane))
-        return chatTrailing(tab, pane, AnyView(menu), false)
+        if modeButton { return chatTrailing(tab, pane, AnyView(modeButtonView(tab))) }
+        return chatTrailing(tab, pane, AnyView(TabHeaderMenu(tab: tab, host: host, segment: .chat, chat: chatMenu?(tab, pane))))
     }
 
     /// The mode button: Terminal to Chat (or Files), back to Terminal; held, every mode (`TabModeButton`).
@@ -263,17 +232,6 @@ struct TabScreen<Terminal: View, Chat: View>: View {
             choose(segment)
         }
     }
-
-    /// Files' modes for the capsule at the top (`FilesModeCapsule`), with the mode button: while the host can show them and
-    /// the tab is inside a repository (outside one Files is alone, and there is no capsule, as there was no tab bar).
-    private func filesModesOnTop(_ tab: MobileTab) -> (available: [FilesMode], shown: FilesMode)? {
-        guard let host = model.workspace(ref.host)?.host, MobileFilesAvailability(host).showsModes else { return nil }
-        let available = FilesMode.available(repository: repository(tab) == true)
-        guard available.count > 1 else { return nil }
-        return (available, available.contains(currentMode) ? currentMode : .files)
-    }
-
-    private func filesCapsule(_ tab: MobileTab) -> Bool { modeButton && current(tab) == .files && filesModesOnTop(tab) != nil }
 
     /// The five modes' switch in a phone's landscape rail: the iPad strip's, stood on end, its slots held while the
     /// repository is not known.
@@ -369,7 +327,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     // MARK: A phone on its side
 
     /// The rail on the island's side and the content from the window's top to its bottom, into the other side's inset
-    /// (L12–L15). No navigation bar: Back, the menu and the modes are the rail's; the tab's name shows in a chip for a
+    /// (L12–L15). No navigation bar: Back, the menu and the modes are the rail's; the tab's title capsule shows for a
     /// moment.
     @ViewBuilder private func sidewaysBody(_ tab: MobileTab, workspace: MobileWorkspace?) -> some View {
         let leading = railEdge == .leading
@@ -474,10 +432,16 @@ struct TabScreen<Terminal: View, Chat: View>: View {
             if !compact {
                 modeSwitch(tab)
                 Spacer(minLength: MobileLandscape.railGap)
-                railAction(tab, workspace: workspace)
+                // Its place kept when the mode has none: the modes stay where they are from mode to mode.
+                ZStack {
+                    Color.clear.frame(width: MobileLandscape.railAction, height: MobileLandscape.railAction)
+                    railAction(tab, workspace: workspace)
+                }
             }
         }
+        // The window's height whatever the mode shows, so the modes' place never depends on the content beside them.
         .frame(width: MobileLandscape.railWidth)
+        .frame(maxHeight: .infinity)
         .padding(.vertical, MobileLandscape.railMargin)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-rail")
@@ -618,10 +582,10 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     }
 }
 
-/// The top of a tab. On the phone (B7): Back and the host's glyph in one capsule, the glyph the tab's menu
-/// (`TabHeaderBackAndMenu`, `TabHeaderMenu`), the title block (`TabsTitleBlock`: host · folder under a title that fits
-/// one line, else the title on two), and the mode button (`TabModeButton`). Beside the Duo's sidebar (M4a): no Back,
-/// the title over its subtitle or pane switcher, and the glyph switch in the mode button's place.
+/// The top of a tab. On the phone (B7): Back in its own circle, then one capsule with the host's disc, the title and
+/// host · folder under it (`TabsTitleCapsuleView`), which opens the tab's menu (`TabMenuItems`: the conversation's
+/// items, its panes, the tab's actions, the host's Stats), and the mode button (`TabModeButton`). Beside the Duo's sidebar
+/// (M4a) the same, without Back.
 struct TabScreenHeader: ToolbarContent {
     let tab: MobileTab
     /// The tab's shown name (`MobileTabs.label(of:)`).
@@ -636,47 +600,40 @@ struct TabScreenHeader: ToolbarContent {
     var terminalDirectory: String? = nil
     /// The column the bar is in (`TabsScreenHeader.column`).
     var column: CGFloat? = nil
+    /// False beside the Duo's sidebar, which is where Back would return.
     var showsBack = true
-    /// The split's detail column: the capsule, glyphs only, in place of the host pill, one header row (the space's
-    /// details stay a row away in the sidebar).
-    var segmentSelection: Binding<TabSegment>? = nil
-    /// The capsule's segments (`TabSegment.available(for:)`) and the Files badge.
-    var segments: [TabSegment] = TabSegment.allCases
-    var filesBadge = 0
     /// The iPad split's sidebar button, in the back pill's place (`TabsSidebarPill`).
     var sidebar: TabsSidebarToggle? = nil
-    /// The Chat segment's controls in the disc's place (the tab's menu with the conversation's items, conversation
-    /// mode's waveform; beside the Duo's sidebar the ⋯ menu before the switch).
+    /// The Chat segment's control in the mode button's place (the button, or conversation mode's waveform).
     var chatTrailing: AnyView? = nil
-    /// The mode button (`TabModeButton`), the trailing control on a phone's stack: Back and the host's menu then share
-    /// the leading capsule (`TabHeaderBackAndMenu`), the menu holding `menuChat`, the conversation's items.
+    /// The mode button (`TabModeButton`), the trailing control on a phone's stack: Back then has its own circle and the
+    /// title its capsule (`TabsTitleCapsuleView`).
     var modeButton: AnyView? = nil
+    /// The conversation's items, on Chat, for the capsule's menu.
     var menuChat: AnyView? = nil
+    /// The capsule opens the tab's menu; false (a preview without the stack) leaves it none.
+    var capsuleMenu = true
     let back: () -> Void
 
-    /// The phone's header (B7): Back and the tab's menu, the title block, the mode button.
-    private var stack: Bool { segmentSelection == nil && sidebar == nil }
+    /// The phone's header (B7), also beside the Duo's sidebar: Back (on the phone), the title capsule, the mode button.
+    private var stack: Bool { sidebar == nil }
 
-    /// The trailing slot's width: the split's switch (with the chat's ⋯ before it), the mode button's bar item (52: the
-    /// bar's glass around conversation mode's 44 point waveform, the wider of the two), else the 44 point disc.
-    private var trailingWidth: CGFloat {
-        if modeButton != nil { return 52 }
-        guard segmentSelection != nil else { return 44 }
-        let switchWidth = TabSegmentCapsule.headerWidth(segments.count)
-        return chatTrailing != nil ? ChatHeaderControls<EmptyView>.width(disc: switchWidth) : switchWidth
-    }
+    /// The trailing slot's width: the mode button's bar item (52: the bar's glass around conversation mode's 44 point
+    /// waveform, the wider of the two), else the 44 point disc.
+    private var trailingWidth: CGFloat { modeButton != nil ? 52 : 44 }
 
     var body: some ToolbarContent {
+        // The phone's bar and the Duo's tab column both end at the screen's trailing edge, the Duo's status in its row.
         TabsScreenHeader(title: title ?? tab.name, column: column, showsBack: showsBack || sidebar != nil,
                          trailingWidth: trailingWidth,
-                         atTrailingEdge: column == nil || segmentSelection != nil, titleBlock: stack,
-                         trailingGlass: modeButton != nil) {
+                         atTrailingEdge: column == nil || !showsBack, titleBlock: stack,
+                         trailingGlass: modeButton != nil,
+                         titleCapsule: modeButton == nil ? nil
+                            : TabsTitleCapsule(glyph: AnyView(TabHostDisc(host: host)),
+                                               menu: capsuleMenu ? AnyView(TabMenuItems(tab: tab, host: host, segment: segment, chat: menuChat))
+                                                   : nil)) {
             if let sidebar {
                 TabsSidebarPill(toggle: sidebar, needsYou: needsYou)
-            } else if modeButton != nil {
-                TabHeaderBackAndMenu(back: backTitle, needsYou: needsYou, action: back) {
-                    TabHeaderMenu(tab: tab, host: host, segment: segment, chat: menuChat, inCapsule: true)
-                }
             } else {
                 TabsBackDisc(back: backTitle, needsYou: needsYou, action: back)
             }
@@ -704,9 +661,6 @@ struct TabScreenHeader: ToolbarContent {
                 chatTrailing
             } else if let modeButton {
                 modeButton
-            } else if let segmentSelection {
-                TabSegmentCapsule(selection: segmentSelection, segments: segments, badge: filesBadge, compact: true)
-                    .frame(width: TabSegmentCapsule.headerWidth(segments.count))
             } else {
                 TabHeaderMenu(tab: tab, host: host, segment: segment)
             }
@@ -766,10 +720,10 @@ struct TabScreenHeader: ToolbarContent {
     }
 }
 
-/// A tab's menu: the host's glyph, beside Back in their capsule in a phone's header (B7), or on a 44 point glass disc
-/// with a ⋯ badge on its lower trailing edge at a landscape rail, as on an avatar that opens a menu. One menu for the conversation (Chat's items, on the Chat segment), the tab's panes
-/// when it has splits (the subtitle that switched them may be gone), the tab (its row's menu: Rename…, Close,
-/// Detach, Terminate…) and the host (Stats).
+/// A tab's menu: the host's glyph on a 44 point glass disc with a ⋯ badge on its lower trailing edge (a landscape rail,
+/// an iPad's header), as on an avatar that opens a menu; upright on a phone the title capsule opens the same menu
+/// (`TabMenuItems`): the conversation (Chat's items, on the Chat segment), the tab's panes when it has splits, the tab
+/// (its row's menu: Rename…, Close, Detach) and the host (Stats).
 struct TabHeaderMenu: View {
     let tab: MobileTab
     let host: TabsHost
@@ -777,20 +731,16 @@ struct TabHeaderMenu: View {
     let segment: TabSegment
     /// The Chat segment's items (`ChatThreadMenuItems`).
     var chat: AnyView? = nil
-    /// Beside Back in their capsule (`TabHeaderBackAndMenu`): the capsule is the glass, and no ⋯ badge.
-    var inCapsule = false
     @Environment(\.tabsNavigator) private var navigator
 
     static let identifier = "tab-menu"
-    /// The menu opened (a tap felt, `menuOpenHaptic`).
-    @State private var opened = 0
 
     private var picksPane: Bool { TabScreenHeader.panes(tab, segment: segment).count > 1 }
 
     var body: some View {
         if chat == nil && !picksPane && navigator == nil {
             // Nothing to offer (a preview without the stack): the host's disc alone, no empty menu.
-            disc.glassEffect(inCapsule ? .identity : .regular, in: Circle())
+            disc.glassEffect(.regular, in: Circle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(host.name)
         } else {
@@ -806,87 +756,79 @@ struct TabHeaderMenu: View {
     }
 
     private var menu: some View {
+        // A tap opens it, so no haptic: that is for menus a hold reveals (`menuHoldHaptic`).
         Menu {
-            // Its items appearing count the opening, for the haptic.
-            Group {
-                if let chat { chat }
-                if picksPane {
-                    Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
-                }
-                if let navigator {
-                    Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
-                    Section(host.name) {
-                        Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = host.id }
-                    }
-                }
-            }
-            .menuOpened($opened)
+            TabMenuItems(tab: tab, host: host, segment: segment, chat: chat)
         } label: {
             disc
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .tint(Color.primary)
-        .menuOpenHaptic(opened)
-        .glassEffect(inCapsule ? .identity : .regular.interactive(), in: Circle())
+        .glassEffect(.regular.interactive(), in: Circle())
         .contentShape(.hoverEffect, Circle())
         .hoverEffect(.highlight)
-        .overlay(alignment: .bottomTrailing) { if !inCapsule { TabHeaderMenuBadge().offset(x: 2, y: 2) } }
+        .overlay(alignment: .bottomTrailing) { TabHeaderMenuBadge().offset(x: 2, y: 2) }
         .accessibilityLabel("Tab menu")
         .accessibilityValue(host.name)
         .accessibilityIdentifier(Self.identifier)
     }
 }
 
-/// Back and the host's menu in one glass capsule (B7, a phone tab's header): the chevron, then the host's glyph
-/// that opens the tab's menu (`TabHeaderMenu` in its capsule). The needs-you count on Back's corner, as `TabsBackDisc`'s.
-struct TabHeaderBackAndMenu<Content: View>: View {
-    /// The screen Back returns to.
-    let back: String
-    var needsYou = 0
-    let action: () -> Void
-    @ViewBuilder var menu: Content
+/// The tab's one menu, from the title capsule (B7) or the menu disc (`TabHeaderMenu`): on Chat Search, the host's Stats
+/// and the conversation's other items; the panes the segment can show when there are several; the tab's (Rename…,
+/// Detach, Close Tab).
+struct TabMenuItems: View {
+    let tab: MobileTab
+    let host: TabsHost
+    let segment: TabSegment
+    var chat: AnyView? = nil
+    @Environment(\.tabsNavigator) private var navigator
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button(action: action) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color.dispatchPink)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .contentShape(.hoverEffect, Circle())
-            .hoverEffect(.highlight)
-            .overlay(alignment: .topTrailing) {
-                if needsYou > 0 {
-                    TabsCountBadge(label: "\(needsYou)")
-                        .offset(x: 6, y: -4)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-            }
-            .accessibilityLabel("Back to \(back)")
-            .accessibilityValue(TabsBackDisc.value(needsYou))
-            // The badge over the menu's half of the capsule.
-            .zIndex(1)
-            menu
+        // The host's Stats right under Search on Chat, else first.
+        if let chat {
+            chat.environment(\.chatMenuAfterSearch, stats.map { AnyView($0) })
+        } else if let stats {
+            stats
         }
-        .glassEffect(.regular.interactive(), in: Capsule())
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        if TabScreenHeader.panes(tab, segment: segment).count > 1 {
+            Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
+        }
+        if let navigator {
+            Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
+        }
+    }
+
+    private var stats: (some View)? {
+        navigator.map { navigator in
+            Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = host.id }
+        }
     }
 }
 
-/// A phone tab's mode button (B7), the Mac strip's (`ChatModeSwitch`) on the phone: one system bar item for Terminal, Chat
-/// and Files, a menu with a primary action, so the bar draws its glass and a hold opens the menu. Away from Terminal it
-/// is on, as a bar button that filters is (Mail's): the symbol filled, in the accent; in Terminal off, its outline in
-/// the label colour naming where a tap goes: Chat on a tab that runs an agent, else Files. A tap from Chat or Files
-/// returns to Terminal. Held, every mode: Terminal, Chat, then Files, Review and Commits (those two inside a
-/// repository), the shown one checked. (A button-style Toggle draws on as a pink prominent disc and takes no menu.)
+/// The host's glyph on a disc of its colour: the title capsule's leading circle (B7), as a contact's avatar heads a
+/// conversation in Messages.
+struct TabHostDisc: View {
+    let host: TabsHost
+    var size: CGFloat = 36
+
+    var body: some View {
+        HostGlyph(host: host.glyphRecord, size: (size * 0.5).rounded())
+            .foregroundStyle(host.tint)
+            .frame(width: size, height: size)
+            .background(host.tint.opacity(0.18), in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+/// A phone tab's mode button (B7), the Mac strip's (`ChatModeSwitch`) on the phone: one system bar item, a menu, so the
+/// bar draws its glass. A tap opens it on every segment, as the Mac's click does: Terminal, Chat, then Files, Review and
+/// Commits (those two inside a repository), the shown one checked. Away from Terminal it is on, as a bar button that
+/// filters is (Mail's): the symbol filled, in the accent; in Terminal off, its outline in the label colour naming where
+/// the tab would go: Chat on a tab that runs an agent, else Files. (A button-style Toggle draws on as a pink prominent
+/// disc and takes no menu.)
 struct TabModeButton: View {
-    /// The hold opened every mode (a tap felt, `menuOpenHaptic`).
-    @State private var modesOpened = 0
     let shown: TabSegment
     /// An agent runs in the tab (`MobileTab.isChat`).
     let agent: Bool
@@ -903,7 +845,8 @@ struct TabModeButton: View {
 
     static let identifier = "tab-mode-button"
 
-    /// Where a tap goes (`ModeSwitchState.next` on the Mac); nil: nowhere (the button dims).
+    /// The step a switch would take (`ModeSwitchState.next` on the Mac), which the glyph names in Terminal; nil:
+    /// nowhere to go (the button dims). A tap opens the menu whatever the segment.
     static func next(shown: TabSegment, agent: Bool, segments: [TabSegment]) -> TabSegment? {
         switch shown {
         case .terminal: agent && segments.contains(.chat) ? .chat : segments.contains(.files) ? .files : nil
@@ -911,13 +854,21 @@ struct TabModeButton: View {
         }
     }
 
-    /// Chat shown, or Terminal with an agent to go to: the bubble; else the folder.
-    static func symbol(shown: TabSegment, agent: Bool) -> String {
+    /// Chat shown, or Terminal with an agent to go to: the bubble; Files the shown mode's glyph (the folder, Review's
+    /// clipboard, Commits' clock); else the folder.
+    static func symbol(shown: TabSegment, agent: Bool, filesMode: FilesMode? = nil) -> String {
         switch shown {
         case .chat: TabSegment.chat.symbol
-        case .files: TabSegment.files.symbol
+        case .files: (filesMode ?? .files).symbol
         case .terminal: agent ? TabSegment.chat.symbol : TabSegment.files.symbol
         }
+    }
+
+    /// `symbol`'s filled form where it has one: the app's own symbols their `.fill` asset, the system's their `.fill`
+    /// name when the system has it (Commits' clock has none and stays outlined).
+    static func filled(_ symbol: String) -> String {
+        if symbol.hasPrefix("dispatch.") { return symbol + ".fill" }
+        return UIImage(systemName: symbol + ".fill") == nil ? symbol : symbol + ".fill"
     }
 
     private var next: TabSegment? { Self.next(shown: shown, agent: agent, segments: segments) }
@@ -926,7 +877,6 @@ struct TabModeButton: View {
     var body: some View {
         Menu {
             item("Terminal", TabSegment.terminal.symbol, checked: shown == .terminal) { choose(.terminal, nil) }
-                .menuOpened($modesOpened)
             if segments.contains(.chat) {
                 item("Chat", TabSegment.chat.symbol, checked: shown == .chat) { choose(.chat, nil) }
                     .disabled(!agent && shown != .chat)
@@ -940,18 +890,16 @@ struct TabModeButton: View {
                 }
             }
         } label: {
-            Label(next.map { "Show \($0.title)" } ?? shown.title,
-                  symbol: Self.symbol(shown: shown, agent: agent) + (on ? ".fill" : ""))
-        } primaryAction: {
-            if let next { choose(next, nil) }
+            // A tap opens the menu, on every segment, as the Mac's button's click does.
+            let symbol = Self.symbol(shown: shown, agent: agent, filesMode: filesMode)
+            Label("Mode", symbol: on ? Self.filled(symbol) : symbol)
         }
-        .menuOpenHaptic(modesOpened)
         // The bar draws its items in their tint: the accent when on, the label colour when off.
         .tint(on ? Color.dispatchPink : Color.primary)
         .disabled(next == nil && !segments.contains(.chat) && !segments.contains(.files))
-        .accessibilityLabel(next.map { "Show \($0.title)" } ?? shown.title)
-        .accessibilityValue("\(shown.title) selected")
-        .accessibilityHint("Hold for every mode")
+        .accessibilityLabel("Mode")
+        .accessibilityValue("\(shown == .files ? (filesMode ?? .files).title : shown.title) selected")
+        .accessibilityHint("Lists Terminal, Chat and Files")
         .accessibilityIdentifier(Self.identifier)
     }
 
@@ -979,129 +927,6 @@ private struct TabHeaderMenuBadge: View {
             .overlay { Circle().stroke(Color.canvas, lineWidth: 2) }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-    }
-}
-
-/// The tab screen's switch (H0): a glass capsule of glyph-and-title segments, the selected one on the lens, the Files
-/// segment with the tab's review comment count. Beside the Duo's sidebar it sits in the header, glyphs only (`compact`).
-/// Each segment is a button labelled with its title (the UI tests find them so), the capsule a container.
-struct TabSegmentCapsule: View {
-    @Binding var selection: TabSegment
-    var segments: [TabSegment] = TabSegment.allCases
-    /// The Files segment's badge: the tab's review comments; zero draws none.
-    var badge = 0
-    /// Glyphs for the header; the titles stay the segments' accessibility labels.
-    var compact = false
-
-    /// In a header beside the split's sidebar (`TabScreenHeader`): glyphs only, 40 points a segment.
-    static func headerWidth(_ count: Int) -> CGFloat { CGFloat(count) * 40 + 4 }
-
-    /// The capsule's widest on an iPad, centred over the column: three segments across a 1,000-point column (a 13-inch
-    /// split, a hidden sidebar) read as a phone's control stretched; iPadOS keeps its segmented controls this narrow.
-    /// The phone's spans its column.
-    static func maxWidth(idiom: UIUserInterfaceIdiom) -> CGFloat { idiom == .pad ? 400 : .infinity }
-
-    var body: some View {
-        TabSegmentRow(selection: $selection, segments: segments, badged: .files, badge: badge, compact: compact)
-            .modifier(TabCapsuleGlass(label: "View", identifier: Self.identifier))
-    }
-
-    static let identifier = "tab-segments"
-}
-
-/// Files' modes at the top of the Files segment on a phone's stack (`TabFilesSegment.modesOnTop`): the
-/// capsule the Terminal · Chat · Files switch was, Files · Review · Commits in it, Review with its comment count.
-struct FilesModeCapsule: View {
-    @Binding var selection: FilesMode
-    let modes: [FilesMode]
-    var badge = 0
-
-    var body: some View {
-        TabSegmentRow(selection: $selection, segments: modes, badged: .review, badge: badge, compact: false)
-            .modifier(TabCapsuleGlass(label: "Files", identifier: Self.identifier))
-    }
-
-    static let identifier = "files-modes"
-}
-
-/// What a capsule's segment shows: its title and glyph.
-protocol TabCapsuleItem: Identifiable, Hashable {
-    var title: String { get }
-    var symbol: String { get }
-}
-
-extension TabSegment: TabCapsuleItem {}
-extension FilesMode: TabCapsuleItem {}
-
-/// The capsules' glass and width (`TabSegmentCapsule`, `FilesModeCapsule`).
-private struct TabCapsuleGlass: ViewModifier {
-    let label: String
-    let identifier: String
-
-    func body(content: Content) -> some View {
-        content
-            .padding(2)
-            .glassEffect(.regular, in: Capsule())
-            .frame(maxWidth: TabSegmentCapsule.maxWidth(idiom: UIDevice.current.userInterfaceIdiom))
-            // The bar keeps its height: the titles grow to xxxLarge; larger sizes show the large content viewer.
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(label)
-            .accessibilityIdentifier(identifier)
-    }
-}
-
-/// The capsule's segments, in their own view so their height scales under the capsule's Dynamic Type cap. `badged`
-/// carries the count: Files in the switch, Review in Files' modes.
-private struct TabSegmentRow<Item: TabCapsuleItem>: View {
-    @Binding var selection: Item
-    let segments: [Item]
-    let badged: Item
-    let badge: Int
-    let compact: Bool
-    @ScaledMetric(relativeTo: .subheadline) private var height: CGFloat = 30
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(segments) { segment in
-                let on = segment == selection
-                Button {
-                    selection = segment
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(symbol: segment.symbol)
-                            .font(.subheadline.weight(.medium))
-                        if !compact {
-                            Text(segment.title)
-                                .font(.subheadline.weight(on ? .semibold : .medium))
-                        }
-                        if segment == badged, badge > 0 {
-                            Text("\(badge)")
-                                .font(.caption2.weight(.bold))
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .frame(minWidth: 16, minHeight: 16)
-                                .background(Color.stateUnread, in: Capsule())
-                        }
-                    }
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: max(30, height))
-                    .background { if on { Capsule().fill(Color.lens) } }
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .contentShape(.hoverEffect, Capsule())
-                .hoverEffect(.highlight)
-                .accessibilityShowsLargeContentViewer { Label(segment.title, symbol: segment.symbol) }
-                .accessibilityLabel(segment.title)
-                .accessibilityValue(segment == badged && badge > 0 ? "\(badge) \(badge == 1 ? "comment" : "comments")" : "")
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
-        }
     }
 }
 
@@ -1200,22 +1025,19 @@ struct TabRailKeyboardButton: View {
     }
 }
 
-/// The tab's name on a phone's side, where the header said it: in a glass chip over the content's top for a moment as
-/// the tab opens (`MobileLandscape.titleDuration`).
+/// The tab's title on a phone's side, where the header said it: the upright header's title capsule (the host's disc, the
+/// title over host · folder, `TabsTitleCapsuleView`) over the content's top for a moment as the tab opens
+/// (`MobileLandscape.titleDuration`). No menu: the rail's disc has it.
 struct TabTitleChip: View {
     let title: String
     let host: TabsHost
     let folder: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
-            TabsHostPath(host: host, path: folder, mono: false).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        TabsTitleCapsuleView(title: title, capsule: TabsTitleCapsule(glyph: AnyView(TabHostDisc(host: host)), menu: nil)) {
+            TabsHostPath(host: host, path: folder, mono: false)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 32)
-        .glassEffect(.regular, in: Capsule())
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("tab-title-chip")
+        // As wide as it needs, a long title cut short of the content's edges.
+        .padding(.horizontal, 24)
     }
 }

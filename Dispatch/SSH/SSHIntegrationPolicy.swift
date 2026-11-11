@@ -305,6 +305,9 @@ final class SSHIntegrationPermissions {
         let scope: SSHIntegrationScope
         var grant: SSHIntegrationGrant
         var hooks: [String: Bool]?
+        /// The helper has no build for the host's platform (a login said so): logins go plain until a choice for it
+        /// changes. Absent from older entries.
+        var unsupported: Bool?
         var id: String { scope.key }
     }
     private(set) var entries: [String: Entry] = [:]
@@ -312,8 +315,9 @@ final class SSHIntegrationPermissions {
     private struct PendingChoice<Value: Sendable> {
         let id = System.uuid()
         let task: Task<Value?, Never>
-        var waiters: Set<UUID> = []
+        var waiters: Set<String> = []
     }
+    @ObservationIgnored private var waiterCount = 0
     @ObservationIgnored private var pending: [String: PendingChoice<SSHIntegrationSelection>] = [:]
     @ObservationIgnored private var pendingHooks: [String: [SSHHookAgent: PendingChoice<Bool>]] = [:]
     @ObservationIgnored var onChange: ((SSHIntegrationScope, SSHIntegrationGrant) -> Void)?
@@ -340,7 +344,21 @@ final class SSHIntegrationPermissions {
             choice = PendingChoice(task: Task { @MainActor in await present(scope) })
             pending[scope.key] = choice
         }
-        let selection = await choice.task.value
+        // A waiter that gives up (its login timed out: SSHCoordinator.consent) leaves; the last one closes the sheet,
+        // whose answer could connect nothing. A counter, not an id: no recorded I/O.
+        waiterCount += 1
+        let waiter = "login \(waiterCount)"
+        pending[scope.key]?.waiters.insert(waiter)
+        let selection = await withTaskCancellationHandler {
+            await choice.task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, pending[scope.key]?.id == choice.id else { return }
+                pending[scope.key]?.waiters.remove(waiter)
+                if pending[scope.key]?.waiters.isEmpty == true { pending.removeValue(forKey: scope.key)?.task.cancel() }
+            }
+        }
+        guard !Task.isCancelled else { return nil }
         // Settings may have changed while the shared prompt was open. Only its
         // current generation may persist a result; every waiter uses the latest
         // remembered decision, never a superseded prompt's permission increase.
@@ -351,6 +369,18 @@ final class SSHIntegrationPermissions {
         // Cancellation aborts the login and saves no choice. Ordinary SSH is
         // an explicit, remembered decision from the separate Don't install action.
         return remembered(scope)
+    }
+
+    /// The helper can't run on `scope`'s host: its logins go plain without trying, until a choice for it is saved.
+    func markUnsupported(_ scope: SSHIntegrationScope) {
+        guard var entry = entries[scope.key], entry.scope == scope, entry.unsupported != true else { return }
+        entry.unsupported = true
+        entries[scope.key] = entry
+        persist()
+    }
+
+    func unsupported(_ scope: SSHIntegrationScope) -> Bool {
+        remembered(scope) != nil && entries[scope.key]?.unsupported == true
     }
 
     /// Forget the remembered choice and revoke live enhancement permissions.
@@ -415,7 +445,7 @@ final class SSHIntegrationPermissions {
             choice = PendingChoice(task: Task { @MainActor in await present() })
             pendingHooks[scope.key, default: [:]][agent] = choice
         }
-        let waiter = System.uuid()
+        let waiter = System.uuid().uuidString
         pendingHooks[scope.key]?[agent]?.waiters.insert(waiter)
         let answer = await withTaskCancellationHandler {
             await choice.task.value

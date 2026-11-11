@@ -40,7 +40,7 @@ struct ChatToolOutput: View {
                 }
             }
             if preview.truncated {
-                Text("Preview shortened · Copy includes the full output")
+                Text(TextRendering.shortenedNote)
                     .font(theme.typography.detail).foregroundStyle(theme.muted)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)

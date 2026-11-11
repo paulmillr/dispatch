@@ -24,6 +24,11 @@ struct GitDiffView: View {
     /// The Review tab's comments on this file: each line takes one (the gutter's + on hover, or ⏎ on the keyboard's
     /// row), and they show under their lines. Nil (Commits) draws none.
     var review: GitDiffReview?
+    /// The files tab showing the diff: ⌘F finds in the diff while it has the keyboard (`FilesSession.diffFocused`), as
+    /// the preview's find does on Files.
+    var session: FilesSession?
+    /// The diff takes the keyboard when it appears (a commit's file opened with ⏎ while its diff was loading).
+    var focusOnAppear = false
 
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
@@ -39,6 +44,9 @@ struct GitDiffView: View {
     @State private var loaded: GitSourceText?
     @State private var cursor: Int?
     @FocusState private var focused: Bool
+    /// ⌘F's find in the diff's lines: "n of m", ⏎ and ⇧⏎ step, esc closes.
+    @State private var find = FilePreviewFind()
+    @FocusState private var findFocused: Bool
 
     private struct SourceKey: Equatable {
         let reading: Bool
@@ -60,6 +68,20 @@ struct GitDiffView: View {
         return VStack(spacing: 0) {
             header
             Rectangle().fill(theme.border).frame(height: 1)
+            // Until the review holds a comment, one line says the lines take them and where they go.
+            if let review, review.showsHint, !isBinary {
+                Text(verbatim: review.commit == nil
+                     ? "Click + beside a line (or press ⏎ on it) to comment for the agent · Create Review sends the comments"
+                     : "Click + beside a line of this commit (or press ⏎ on it) to comment for the agent · Create Review sends the comments")
+                    .font(typography, .caption)
+                    .foregroundStyle(theme.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                    .background(theme.blue.opacity(0.06))
+                    .accessibilityIdentifier("git-diff-review-hint")
+            }
             content(layout)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -82,6 +104,10 @@ struct GitDiffView: View {
         }
         .onChange(of: mode) { cursor = nil }
         .onChange(of: focusRequest) { focused = true }
+        .onChange(of: focused || findFocused) { _, has in session?.diffFocused = has }
+        .onChange(of: session?.findRequest) { if session?.diffFocused == true { openFind() } }
+        .onDisappear { if focused || findFocused { session?.diffFocused = false } }
+        .onAppear { if focusOnAppear { DispatchQueue.main.async { focused = true } } }
         // A comment saved or cancelled gives the keyboard back to the diff.
         .onChange(of: review?.draft?.id) { old, new in if old != nil, new == nil { focused = true } }
         .accessibilityElement(children: .contain)
@@ -124,6 +150,17 @@ struct GitDiffView: View {
                 .font(typography, .body)
                 .accessibilityIdentifier("git-diff-meta")
             Spacer(minLength: 0)
+            if find.open { findField }
+            if !isBinary {
+                // The file's whole diff as git prints it: a line's selection takes one line at a time.
+                Button { GitPasteboard.copy(diff.text) } label: {
+                    Image(systemName: "doc.on.clipboard").font(.system(size: 11)).frame(width: 14, height: 14)
+                }
+                .buttonStyle(FilePreviewIconButtonStyle(on: false))
+                .help("Copy the diff")
+                .accessibilityLabel("Copy diff")
+                .accessibilityIdentifier("git-diff-copy")
+            }
             Button { wrap = !wraps } label: {
                 FileWrapGlyph().frame(width: 14, height: 14)
             }
@@ -145,8 +182,63 @@ struct GitDiffView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
+        .background {
+            // ⌘F while the diff has the keyboard, wherever the menu routes Edit › Find; opening twice is harmless.
+            Button(action: openFind) { Color.clear.frame(width: 0, height: 0) }
+                .buttonStyle(.plain).opacity(0).allowsHitTesting(false)
+                .keyboardShortcut(focused && !isBinary ? KeyboardShortcut("f", modifiers: .command) : nil)
+                .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-diff-header")
+    }
+
+    private var findField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(theme.muted)
+            TextField("Find in diff", text: $find.query)
+                .textFieldStyle(.plain)
+                .focused($findFocused)
+                .onSubmit { if NSEvent.modifierFlags.contains(.shift) { find.previous() } else { find.next() } }
+                .onKeyPress(.escape) { closeFind(); return .handled }
+                .onExitCommand { closeFind() }
+                .onChange(of: find.query) { find.current = 0; find.step += 1 }
+                .accessibilityIdentifier("git-diff-find")
+            if !find.query.isEmpty {
+                Text(find.total == 0 ? "none" : "\(min(find.current + 1, find.total)) of \(find.total)")
+                    .foregroundStyle(theme.muted)
+                    .fixedSize()
+                    .accessibilityIdentifier("git-diff-find-count")
+            }
+        }
+        .font(typography, .label)
+        .padding(.horizontal, 8)
+        .frame(width: 190, height: 22)
+        .background(theme.window, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.border))
+    }
+
+    private func openFind() {
+        guard !isBinary else { return }
+        find.open = true
+        DispatchQueue.main.async { findFocused = true }
+    }
+
+    private func closeFind() {
+        find.open = false
+        find.query = ""
+        focused = true
+    }
+
+    /// The query's matches among the rows shown, in reading order (the row each is on): only while the find is open.
+    private func findMatches(_ rows: [GitDiffDisplayRow]) -> [TextOccurrences.Match] {
+        guard find.open, !find.query.isEmpty else { return [] }
+        return TextOccurrences.scan(of: find.query, in: rows.lazy.map { model.text(of: $0) ?? "" }, limit: 10_000)
+    }
+
+    /// The find's query marked in a line's code.
+    private func marked(_ code: AttributedString) -> AttributedString {
+        find.open ? ChatSearchHighlight.text(code, query: find.query, theme: theme) : code
     }
 
     // MARK: Body
@@ -232,6 +324,8 @@ struct GitDiffView: View {
         let gapLines = !single && rows.contains { if case .diff(.gapLine) = $0 { return true }; return false }
         let widest = gapLines ? max(model.widest(source: false), model.widest(source: true)) : model.widest(source: whole)
         let contentWidth = codeLeading + CGFloat(widest) * metrics.digitWidth + 14
+        let matches = findMatches(rows)
+        let found = matches.indices.contains(find.current) ? matches[find.current].line : nil
         return GeometryReader { geometry in
             // Every row as wide as the widest line, so the tints run the whole width when scrolled sideways (the code
             // font is monospaced: characters times the digit's advance); wrapped, as wide as the pane.
@@ -242,8 +336,10 @@ struct GitDiffView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(rows, id: \.self) { row in
                             self.row(row, gutter: gutter, width: width, metrics: metrics, layout: layout,
-                                     leading: codeLeading, pane: geometry.size.width)
-                                .background(focused && cursorRow(rows) == row ? theme.ink.opacity(0.06) : .clear)
+                                     leading: codeLeading, pane: geometry.size.width,
+                                     cursor: focused && cursorRow(rows) == row)
+                                .background(found.map { rows[$0] == row } == true ? theme.yellow.opacity(0.18)
+                                            : focused && cursorRow(rows) == row ? theme.ink.opacity(0.06) : .clear)
                         }
                     }
                     // A comment or the composer coming or going opens or closes its place: the lines below slide
@@ -275,12 +371,30 @@ struct GitDiffView: View {
                     onEscape()
                     return .handled
                 }
+                .onChange(of: find.step) { if let found { proxy.scrollTo(rows[found], anchor: .center) } }
+                .onChange(of: matches.count, initial: true) {
+                    if find.total != matches.count { find.total = matches.count }
+                    if find.current >= matches.count, find.current != 0 { find.current = 0 }
+                }
                 .onAppear { reveal(review?.session.reviewReveal, rows, proxy) }
                 .onChange(of: review?.session.reviewReveal) { _, request in reveal(request, rows, proxy) }
             }
         }
         .font(theme.typography.codeFont())
         .accessibilityIdentifier("git-diff-rows")
+    }
+
+    /// One hunk as git prints it: its header, then each line with its mark (`+`, `-`, a space).
+    static func hunkText(_ presentation: GitDiffPresentation, _ index: Int) -> String {
+        guard presentation.hunks.indices.contains(index) else { return "" }
+        let hunk = presentation.hunks[index]
+        var lines = [hunk.section.isEmpty ? hunk.range : hunk.range + " " + hunk.section]
+        for line in presentation.lines[hunk.lines] {
+            let mark = switch line.kind { case .added: "+"; case .removed: "-"; case .context: " " }
+            lines.append(mark + line.text)
+            if line.noNewline { lines.append("\\ No newline at end of file") }
+        }
+        return lines.joined(separator: "\n") + "\n"
     }
 
     /// A gutter at 11 pt: the design's 34 pt, wider only for line numbers past four digits.
@@ -388,9 +502,9 @@ struct GitDiffView: View {
 
     /// A line that takes a comment: its + on hover, its tint while the comment being written spans it.
     @ViewBuilder private func commentable<Line: View>(_ line: Line, _ row: GitDiffDisplayRow,
-                                                      layout: GitDiffReviewLayout) -> some View {
+                                                      layout: GitDiffReviewLayout, cursor: Bool = false) -> some View {
         if review != nil, let target = layout.lines[row] {
-            line.modifier(ReviewLineAction(highlighted: layout.highlighted.contains(row),
+            line.modifier(ReviewLineAction(highlighted: layout.highlighted.contains(row), cursor: cursor,
                                            identifier: "git-diff-comment-\(target.line.side.rawValue)-\(target.line.number)") { extend in
                 comment(on: row, layout: layout, extend: extend)
             })
@@ -446,7 +560,7 @@ struct GitDiffView: View {
 
     @ViewBuilder private func row(_ row: GitDiffDisplayRow, gutter: CGFloat, width: CGFloat,
                                   metrics: FilePreviewMetrics.Metrics, layout: GitDiffReviewLayout, leading: CGFloat,
-                                  pane: CGFloat) -> some View {
+                                  pane: CGFloat, cursor: Bool = false) -> some View {
         switch row {
         case .diff(.hunk(let index)):
             let hunk = model.presentation.hunks[index]
@@ -460,11 +574,18 @@ struct GitDiffView: View {
             .padding(.horizontal, 14)
             .frame(minWidth: width, minHeight: 22, maxHeight: 22, alignment: .leading)
             .background(theme.blue.opacity(0.07))
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Copy Hunk") { GitPasteboard.copy(Self.hunkText(model.presentation, index)) }
+                Button("Copy Diff") { GitPasteboard.copy(diff.text) }
+            }
+            .help("Right-click to copy the hunk")
             .padding(.vertical, 4)
             .accessibilityElement(children: .combine)
+            .accessibilityAction(named: "Copy Hunk") { GitPasteboard.copy(Self.hunkText(model.presentation, index)) }
             .accessibilityIdentifier("git-diff-hunk-\(index)")
         case .diff(.line(let index)):
-            commentable(diffLine(index, gutter: gutter, width: width, metrics: metrics), row, layout: layout)
+            commentable(diffLine(index, gutter: gutter, width: width, metrics: metrics), row, layout: layout, cursor: cursor)
         case .diff(.fold(let start, let count)):
             Button {
                 open(start, all: NSEvent.modifierFlags.contains(.option))
@@ -488,7 +609,8 @@ struct GitDiffView: View {
         case .diff(.gap(let hunk, let count)):
             gapRow(hunk, count: count, width: width)
         case .diff(.gapLine(let old, let new)):
-            commentable(gapLine(old: old, new: new, gutter: gutter, width: width, metrics: metrics), row, layout: layout)
+            commentable(gapLine(old: old, new: new, gutter: gutter, width: width, metrics: metrics), row, layout: layout,
+                        cursor: cursor)
         case .diff(.noNewline(let index)):
             Text("No newline at end of file")
                 .font(typography, .caption)
@@ -505,7 +627,7 @@ struct GitDiffView: View {
                 .background(Chrome.window)
                 .accessibilityIdentifier("git-diff-omitted-\(after)")
         case .source(let index):
-            commentable(sourceLine(index, gutter: gutter, width: width, metrics: metrics), row, layout: layout)
+            commentable(sourceLine(index, gutter: gutter, width: width, metrics: metrics), row, layout: layout, cursor: cursor)
         case .comment, .composer:
             if let review { reviewRow(row, review: review, layout: layout, leading: leading, pane: pane) }
         case .truncated:
@@ -527,7 +649,7 @@ struct GitDiffView: View {
         default: .clear
         }
         let sign = line.kind == .added ? "+" : line.kind == .removed ? "−" : ""
-        let code = model.attributed(index, theme: theme)
+        let code = marked(model.attributed(index, theme: theme))
         // The 11 pt numbers sit on the 12.5 pt code's baseline.
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if inset > 0 { Color.clear.frame(width: inset, height: 1) }
@@ -562,7 +684,7 @@ struct GitDiffView: View {
     /// An unmodified line of an opened gap, from the read file, numbered on both sides like the diff's own.
     private func gapLine(old: Int, new: Int, gutter: CGFloat, width: CGFloat,
                          metrics: FilePreviewMetrics.Metrics) -> some View {
-        let code = model.sourceAttributed(new - 1, theme: theme)
+        let code = marked(model.sourceAttributed(new - 1, theme: theme))
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if inset > 0 { Color.clear.frame(width: inset, height: 1) }
             if !oneGutter { number(old, width: gutter) }
@@ -582,7 +704,7 @@ struct GitDiffView: View {
     }
 
     private func sourceLine(_ index: Int, gutter: CGFloat, width: CGFloat, metrics: FilePreviewMetrics.Metrics) -> some View {
-        let code = model.sourceAttributed(index, theme: theme)
+        let code = marked(model.sourceAttributed(index, theme: theme))
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if inset > 0 { Color.clear.frame(width: inset, height: 1) }
             number(index + 1, width: gutter).padding(.leading, 14).padding(.trailing, 10 + 14)
@@ -788,6 +910,9 @@ struct GitSourceText: Equatable {
     }
 
     private func sourceLine(_ index: Int) -> String? { source.lines.indices.contains(index) ? source.lines[index] : nil }
+
+    /// A row's line of code, as the find reads it; nil for a row with none (a hunk's header, a fold, a comment).
+    func text(of row: GitDiffDisplayRow) -> String? { reviewLine(row)?.quote.text }
 
     /// The draft as a comment to place: a new one on lines (one on the file, or an edit, has its place already).
     private static func pending(_ draft: ReviewDraft?) -> ReviewComment? {

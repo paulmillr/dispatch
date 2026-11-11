@@ -1,8 +1,9 @@
 import AppKit
 
 /// Files dropped on a terminal type their paths at the cursor, shell-quoted and space-separated (F2c): Finder's
-/// files as this Mac's paths, rows of a files view as the paths on their host, which is the host the tab's shell
-/// usually runs on. Nothing is copied.
+/// files as this Mac's paths (asking first when the tab's shell runs on another host), rows of a files view as the
+/// paths on their host, which is the host the tab's shell usually runs on. Nothing is copied. Finder drops work with
+/// Files off; a files view's rows need its drag and drop.
 @MainActor enum TerminalDrop {
     static let types: [NSPasteboard.PasteboardType] = [.filesPaths, .fileURL]
 
@@ -76,16 +77,50 @@ extension TerminalView {
         let files = FilesDragController.droppedFiles(pasteboard)
         Task { @MainActor [weak self] in
             let paths = await Task.detached { FilesDragController.resolve(files) }.value
-            guard let self, !self.inputParked, let surface = self.surface, let text = TerminalDrop.text(paths) else { return }
+            guard let self, !self.inputParked, self.surface != nil, let text = TerminalDrop.text(paths) else { return }
+            // This Mac's paths mean nothing to a shell on another host: say so before typing them there.
+            if let host = self.remoteHostName, !self.confirmMacPaths(paths, host: host) { return }
+            guard !self.inputParked, let surface = self.surface else { return }
             surface.text(text)
         }
         return true
     }
 
-    /// A parked terminal (reconnecting, an overlay holding input) takes no typing, so no drop either.
+    /// The host this tab's shell runs on when it is not this Mac (an SSH login or a remote space), by its name.
+    var remoteHostName: String? {
+        guard let workspace = TerminalRuntime.shared.workspace,
+              let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(id) } }) else { return nil }
+        let host = workspace.hosts.terminals[id]?.host ?? space.hostID
+        return host == .local ? nil : workspace.hosts.record(host).name
+    }
+
+    /// Asks before typing Finder's paths into a shell on `host`; true: type them. Show Files opens the tab's files view,
+    /// where a drop copies the files to the host.
+    private func confirmMacPaths(_ paths: [String], host: String) -> Bool {
+        let alert = NSAlert()
+        let name = paths.count == 1 ? "“\((paths[0] as NSString).lastPathComponent)” is" : "These \(paths.count) files are"
+        alert.messageText = "Type this Mac's paths on \(host)?"
+        alert.informativeText = "\(name) on this Mac. The shell in this tab runs on \(host), where these paths don't exist. To copy files there, drop them on the tab's Files view."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Type Paths")
+        let files = TerminalRuntime.shared.files, canShow = files.canShowFiles(id)
+        if canShow { alert.addButton(withTitle: "Show Files") }
+        switch AppDelegate.runSheet(alert, in: window) {
+        case .alertSecondButtonReturn: return true
+        case .alertThirdButtonReturn:
+            TerminalRuntime.shared.workspace?.selectSurface(id)
+            files.showFiles(id, tab: .files)
+            return false
+        default: return false
+        }
+    }
+
+    /// A parked terminal (reconnecting, an overlay holding input) takes no typing, so no drop either. Finder's files
+    /// always type their paths; a files view's rows need Files' drag and drop, which made them.
     private func dropOperation(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard FilesTransferSettings.enabled(), !inputParked, surface != nil,
-              TerminalDrop.accepts(sender.draggingPasteboard) else { return [] }
+        let pasteboard = sender.draggingPasteboard
+        guard !inputParked, surface != nil, TerminalDrop.accepts(pasteboard),
+              FilesDragPayload.read(pasteboard) == nil || FilesTransferSettings.enabled() else { return [] }
         return .copy
     }
 }

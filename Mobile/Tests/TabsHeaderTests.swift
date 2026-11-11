@@ -3,9 +3,8 @@ import UIKit
 import XCTest
 @testable import DispatchMobile
 
-/// The phone's tab header (B7): Back and the host's glyph that is the tab's menu in one capsule, the title block two
-/// lines tall (host · folder under a title that fits on one line, else the title on two lines and no subtitle), and the
-/// mode button. Rendered in
+/// The phone's tab header (B7): Back in its own circle, then one capsule with the host's disc, the title and host ·
+/// folder under it (one line each), which opens the tab's sheet, and the mode button. Rendered in
 /// a window of the test host's scene at each width, the column the stack's bar is in (`tabsColumnWidth`), with the
 /// app's Chat header (`TabsContent.chatHeader`: `ChatHeaderControls` with the disc as the tab's menu) and the stack's
 /// navigator (`tabsNavigator`), as `MobileComposition` and `MobileRoot` give the tab screen.
@@ -17,29 +16,36 @@ final class TabsHeaderTests: XCTestCase {
     static let short = "ciphers"
     static let long = "See how we can speed-up sha3 without writing new code yet, and keep the tests green."
 
-    /// A title that fits on one line keeps the host line under it ("mba2" alone: the title is the folder's name, and VoiceOver
-    /// reads the whole path); a long one takes two lines and drops it.
-    func testATitleThatFitsKeepsTheHostLineALongOneTakesTwoLines() async throws {
+    /// The title capsule holds the title and the host line under it, one line each whatever the title's length (a long
+    /// one truncates; VoiceOver reads all of it), and stays in the bar.
+    func testTheTitleCapsuleHoldsTheTitleAndTheHostLine() async throws {
         AccessibilityLabelTests.enableAccessibility()
         for width in Self.widths {
-            var heights: [String: CGFloat] = [:]
+            var heights: [CGFloat] = []
             for title in [Self.short, Self.long] {
                 let name = "\(title == Self.short ? "short" : "long"), \(width)"
                 let (model, tab, space) = headerModel(tab: title)
-                let (window, _) = try assertInTheBar(screen(model, tab: tab, space: space, width: width), name, width: width)
+                let (window, bar) = try assertInTheBar(screen(model, tab: tab, space: space, width: width), name, width: width)
                 defer { window.isHidden = true }
                 var labels: [String: CGRect] = [:]
                 try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "\(name): \(labels.keys.sorted())") {
                     labels = Self.labels(in: window)
-                    return labels[title] != nil && labels["Tab menu"] != nil
+                    return Self.capsule(labels, title: title) != nil
                 }
-                XCTAssertEqual(labels["mba2, ~/src/ciphers"] != nil, title == Self.short, "\(name): the host line, \(labels.keys.sorted())")
-                heights[title] = labels[title]?.height
+                let capsule = try XCTUnwrap(Self.capsule(labels, title: title))
+                XCTAssertTrue(capsule.label.contains("mba2"), "\(name): the host line, \(capsule.label)")
+                XCTAssertNil(labels["Tab menu"], "\(name): the capsule is the menu's way in, no disc beside Back")
+                XCTAssertLessThanOrEqual(capsule.frame.maxX, bar.convert(bar.bounds, to: window).maxX, "\(name)")
+                heights.append(capsule.frame.height)
                 try write(window, "header-\(title == Self.short ? "short" : "long")-\(Int(width))")
             }
-            let one = try XCTUnwrap(heights[Self.short]), two = try XCTUnwrap(heights[Self.long])
-            XCTAssertGreaterThan(two, one * 1.6, "\(width): the long title takes two lines (\(one), \(two))")
+            XCTAssertEqual(heights[0], heights[1], accuracy: 1, "\(width): one line each, long title or short")
         }
+    }
+
+    /// The title capsule: its accessibility label begins with the title (the host line follows it).
+    private static func capsule(_ labels: [String: CGRect], title: String) -> (label: String, frame: CGRect)? {
+        labels.first { $0.key.hasPrefix(title + ",") || $0.key == title }.map { ($0.key, $0.value) }
     }
 
     /// The subtitle's folder is the path's last component, the home folder "~".
@@ -142,11 +148,11 @@ final class TabsHeaderTests: XCTestCase {
     }
 }
 
-/// The mode button (B7): Back and the host's menu in one capsule, the mode button at the trailing end, no capsule under
-/// the header.
+/// The mode button (B7): Back, the title capsule, the mode button at the trailing end, no capsule under the header.
 extension TabsHeaderTests {
     /// A tap goes where the Mac strip's button goes: Terminal to Chat with an agent, else to Files; Chat and Files back
-    /// to Terminal. The glyph is the bubble on Chat or toward it, else the folder.
+    /// to Terminal. The glyph is the bubble on Chat or toward it; on Files the shown mode's (Files' modes are in its
+    /// menu, no capsule names them), filled where the symbol has a filled form.
     func testTheModeButtonGoesWhereTheMacsDoes() {
         let all = TabSegment.allCases, shell: [TabSegment] = [.terminal, .files]
         XCTAssertEqual(TabModeButton.next(shown: .terminal, agent: true, segments: all), .chat)
@@ -159,11 +165,16 @@ extension TabsHeaderTests {
         XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: true), "dispatch.chat")
         XCTAssertEqual(TabModeButton.symbol(shown: .terminal, agent: false), "folder")
         XCTAssertEqual(TabModeButton.symbol(shown: .files, agent: true), "folder")
+        XCTAssertEqual(TabModeButton.symbol(shown: .files, agent: true, filesMode: .review), "pencil.and.list.clipboard")
+        XCTAssertEqual(TabModeButton.symbol(shown: .files, agent: false, filesMode: .commits), "clock.arrow.circlepath")
+        XCTAssertEqual(TabModeButton.filled("dispatch.chat"), "dispatch.chat.fill")
+        XCTAssertEqual(TabModeButton.filled("folder"), "folder.fill")
+        XCTAssertEqual(TabModeButton.filled("clock.arrow.circlepath"), "clock.arrow.circlepath", "No filled clock")
     }
 
     /// Short or long title, with or without the needs-you badge, on Chat (the app's Chat controls, and conversation
-    /// mode's waveform in the mode button's place) or Terminal: Back and the host's menu lead, the title after them, the
-    /// mode button (or waveform) at the trailing edge, all in the bar (no "…" overflow menu), and no capsule under it.
+    /// mode's waveform in the mode button's place) or Terminal: Back leads, the title capsule after it, the mode button
+    /// (or waveform) at the trailing edge, all in the bar (no "…" overflow menu), and no capsule under it.
     func testTheHeaderNeverOverflowsTheBar() async throws {
         AccessibilityLabelTests.enableAccessibility()
         let shared = MobileVoiceConversation.shared
@@ -179,31 +190,28 @@ extension TabsHeaderTests {
                     model.segments[tab] = segment
                     let session = Self.session()
                     if listening { voice.start(session) } else { voice.stop() }
-                    let trailing = listening ? "End conversation mode" : segment == .chat ? "Show Terminal" : "Show Chat"
+                    let trailing = listening ? "End conversation mode" : "Mode"
                     let (window, bar) = try assertInTheBar(screen(model, tab: tab, space: space, width: width, session: session), name, width: width)
                     defer { window.isHidden = true }
                     let edges = bar.convert(bar.bounds, to: window)
                     var labels: [String: CGRect] = [:]
                     try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "\(name): \(labels.keys.sorted())") {
                         labels = Self.labels(in: window)
-                        return labels["Back to ciphers"] != nil && labels["Tab menu"] != nil && labels[trailing] != nil && labels[title] != nil
+                        return labels["Back to ciphers"] != nil && Self.capsule(labels, title: title) != nil && labels[trailing] != nil
                     }
                     XCTAssertNil(labels["View"], "\(name): no capsule under the header")
-                    XCTAssertEqual(labels["Show Terminal"] == nil && labels["Show Chat"] == nil, listening,
+                    XCTAssertEqual(labels["Mode"] == nil, listening,
                                    "\(name): the waveform takes the mode button's place")
-                    let back = try XCTUnwrap(labels["Back to ciphers"]), menu = try XCTUnwrap(labels["Tab menu"])
-                    let mode = try XCTUnwrap(labels[trailing]), shown = try XCTUnwrap(labels[title])
+                    let back = try XCTUnwrap(labels["Back to ciphers"]), capsule = try XCTUnwrap(Self.capsule(labels, title: title))
+                    let mode = try XCTUnwrap(labels[trailing]), shown = capsule.frame
                     XCTAssertGreaterThanOrEqual(back.minX, edges.minX, "\(name): \(back)")
-                    XCTAssertLessThanOrEqual(back.maxX, menu.minX + 7, "\(name): the menu after Back, \(back) \(menu)")
-                    XCTAssertLessThan(menu.maxX, shown.minX, "\(name): the title after the menu")
-                    XCTAssertLessThan(shown.maxX, mode.minX, "\(name): the title before the mode button")
+                    XCTAssertLessThanOrEqual(back.maxX, shown.minX, "\(name): the capsule after Back, \(back) \(shown)")
+                    XCTAssertLessThan(shown.maxX, mode.minX, "\(name): the capsule before the mode button")
                     // A system bar item: the bar sizes it (36 points on iOS 26 and 27); the waveform's disc is 44.
                     XCTAssertEqual(mode.width, 40, accuracy: 8, "\(name): the mode button, \(mode)")
                     XCTAssertLessThanOrEqual(mode.maxX, edges.maxX, "\(name): \(mode)")
                     XCTAssertGreaterThan(mode.minX, edges.midX, "\(name): the mode button at the trailing edge, \(mode)")
-                    if title == Self.short {
-                        XCTAssertNotNil(labels["mba2, ~/src/ciphers"], "\(name): a short title keeps the host line")
-                    }
+                    XCTAssertTrue(capsule.label.contains("mba2"), "\(name): the host line, \(capsule.label)")
                     try write(window, "header-\(title == Self.short ? "short" : "long")-\(segment)\(listening ? "-listening" : "")-\(Int(width))")
                 }
             }

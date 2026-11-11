@@ -124,6 +124,8 @@ struct ChatMarkdownBlock: Equatable {
 /// Bounds rich-text work and makes controls that can visually reorder or conceal source explicit. The underlying
 /// file/message stays unchanged for copying and actions; this is only the string handed to text layout and Markdown.
 enum TextRendering {
+    /// Under a code block or tool output shown in part: one sentence for both, as both copy all of it.
+    static let shortenedNote = "Preview shortened · Copy includes all of it"
     static let richScalarLimit = 131_072
     static let richLineLimit = 2_000
 

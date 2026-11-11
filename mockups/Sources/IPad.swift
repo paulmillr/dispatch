@@ -325,7 +325,6 @@ struct PadReviewDetail: View {
     var body: some View {
         PadFilesShell(mode: .review) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 8 files").font(.subheadline).foregroundStyle(.secondary)
                 Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.subheadline, design: .monospaced))
@@ -389,7 +388,6 @@ struct PadCommitsDetail: View {
     var body: some View {
         PadFilesShell(mode: .commits) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 148 commits").font(.subheadline).foregroundStyle(.secondary)
             }

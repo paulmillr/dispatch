@@ -167,13 +167,15 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(check, GitSignatureCheck(verdict: .good(certified: true), kind: .gpg,
                                                 signer: "Sam Example <sam@example.com>",
                                                 key: "0123456789ABCDEF0123456789ABCDEF89ABCDEF"))
-        XCTAssertEqual(GitSignatureText.short(check), "Signed")
+        XCTAssertEqual(GitSignatureText.short(check), "Verified")
         XCTAssertEqual(GitSignatureText.detail(check, kind: .gpg),
                        "Sam Example <sam@example.com> · GPG key ID: 0123456789ABCDEF0123456789ABCDEF89ABCDEF")
         XCTAssertEqual(GitSignatureText.detail(nil, kind: .gpg), "Checking the GPG signature…")
-        XCTAssertEqual(GitSignatureText.short(nil), "Signed")
+        XCTAssertEqual(GitSignatureText.short(nil), "Checking…")
         var uncertified = check
         uncertified.verdict = .good(certified: false)
+        XCTAssertEqual(GitSignatureText.short(uncertified), "Signed · key not certified",
+                       "an uncertified key reads apart from a certified one, not by colour alone")
         XCTAssertEqual(GitSignatureText.detail(uncertified, kind: .gpg),
                        "Good GPG signature, key not certified · Sam Example <sam@example.com> · GPG key ID: 0123456789ABCDEF0123456789ABCDEF89ABCDEF")
         XCTAssertEqual(GitSignatureText.detail(GitSignatureCheck(verdict: .good(certified: true)), kind: .gpg), "Good GPG signature")

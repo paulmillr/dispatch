@@ -49,8 +49,7 @@ struct StripModel {
     var titleRow = false
     /// Other spaces to switch to (Workspace.lastingSpaceCount > 1): a local strip leading the window shows its mark.
     var otherSpaces = false
-    /// Proposed (Screens/NarrowPanes.swift): the mode button's glyph in place of ChatModeSwitch's, naming the files tab
-    /// that shows (Review, Commits).
+    /// The mode button's glyph in place of ChatModeSwitch's, naming the files tab that shows (Review, Commits).
     var modeSymbol: String?
 
     var isSplit: Bool { split ?? (paneBadge != nil) }

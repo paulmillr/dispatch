@@ -23,8 +23,9 @@ struct FilesPreviewActions {
 /// (or Markdown's source), Copy path, Copy contents, Share, Save to Photos (an image's), Attach to chat and Open in
 /// terminal. Code has line numbers and the syntax palette, scrolls both ways and zooms with a pinch (kept as the diff
 /// viewer's, `CodeFontSize`); Find counts and steps through matches; Ask attaches the file to the tab's chat (not shown
-/// under an image). Markdown renders as chat does, images zoom with a pinch or a double tap, a binary shows its kind and
-/// size with Share, a long text its head with Load all.
+/// under an image). Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…";
+/// images zoom with a pinch or a double tap, a binary shows its kind and size with Share, a long text its head with Load
+/// all.
 struct FilePreviewScreen: View {
     @State private var preview: FilePreview
     let host: TabsHost
@@ -38,6 +39,9 @@ struct FilePreviewScreen: View {
     @State private var pinchBase: Double?
     @State private var wrap = true
     @State private var showsSource = false
+    /// The rendered Markdown's folded sections and the heading the outline asked for (`FileMarkdownReader`).
+    @State private var folds: Set<String> = []
+    @State private var reveal: String?
     @State private var finding = false
     @State private var find = FileFind()
     @State private var sharing: FilesShareItem?
@@ -133,24 +137,9 @@ struct FilePreviewScreen: View {
             if showsSource {
                 code
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        MobileChatMarkdownView(text: text)
-                            .textSelection(.enabled)
-                            .environment(\.openURL, MobileChatMarkdown.openURL)
-                        if preview.markdownCapped {
-                            Button("Show source for all of it") { showsSource = true }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(Color.dispatchPink)
-                                .buttonStyle(.plain)
-                                .padding(.top, 8)
-                        }
-                        truncation
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .accessibilityIdentifier("file-markdown")
+                FileMarkdownReader(document: FileMarkdownDocuments.document(text), folded: $folds, reveal: $reveal,
+                                   footer: preview.markdownCapped || preview.truncated ? AnyView(markdownFooter) : nil)
+                    .accessibilityIdentifier("file-markdown")
             }
         case .image(let data):
             FilesImageView(data: data, name: preview.name)
@@ -159,6 +148,22 @@ struct FilePreviewScreen: View {
         case .failed(let message):
             FilesStateView(symbol: "exclamationmark.triangle", title: "\(preview.name) could not be shown", message: message,
                            action: ("Try again", { Task { await preview.load() } }))
+        }
+    }
+
+    /// Under rendered Markdown longer than renders: what is left out, and Show source for all of it.
+    private var markdownFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if preview.markdownCapped {
+                Text("The rest is not rendered: the source shows the whole file.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Show source for all of it") { showsSource = true }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.dispatchPink)
+                    .buttonStyle(.plain)
+            }
+            truncation
         }
     }
 
@@ -420,14 +425,46 @@ struct FilePreviewScreen: View {
         .onChange(of: preview.version) { find.search(preview.lines) }
     }
 
+    /// Rendered Markdown's headings, indented under the ones they belong to: one scrolls to its section (opening the
+    /// folded ones around it); then Fold All (a heading alone at its level, a file's title, stays open) and Unfold All.
+    @ViewBuilder private func outline(_ document: FileMarkdownDocument) -> some View {
+        if !document.headings.isEmpty {
+            let all = document.allFolded
+            let current = document.folds(in: folds)
+            Menu {
+                ForEach(document.headings) { heading in
+                    Button {
+                        folds = document.revealing(heading, in: folds)
+                        reveal = heading.id
+                    } label: {
+                        // Em spaces: a menu keeps them where it trims plain ones.
+                        Text(verbatim: String(repeating: "\u{2003}", count: min(heading.depth, 5)) + heading.title)
+                    }
+                }
+                Section {
+                    Button("Fold All", systemImage: "chevron.right") { folds = all }
+                        .disabled(all.isEmpty || current == all)
+                    Button("Unfold All", systemImage: "chevron.down") { folds = [] }
+                        .disabled(current.isEmpty)
+                }
+            } label: {
+                Label("Outline", systemImage: "list.bullet.indent")
+            }
+        }
+    }
+
     private var menu: some View {
         Menu {
             switch preview.content {
             case .text:
                 Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") }
-            case .markdown:
+            case .markdown(let text, _):
                 Toggle(isOn: $showsSource) { Label("Show source", systemImage: "chevron.left.forwardslash.chevron.right") }
-                if showsSource { Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") } }
+                if showsSource {
+                    Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") }
+                } else {
+                    outline(FileMarkdownDocuments.document(text))
+                }
             default:
                 EmptyView()
             }

@@ -124,17 +124,21 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["In another space…"].exists)
     }
 
-    /// B7: a tab's host glyph beside Back is its menu: the conversation's items on Chat, the tab's (Rename… opens the
-    /// rename dialog), the host's Stats. No space switcher on the phone: Back returns to the space.
+    /// B7: a tab's title capsule is its menu: the conversation's items on Chat, the tab's (Rename… opens the rename
+    /// dialog), the host's Stats. No space switcher on the phone: Back returns to the space.
     func testTabMenu() {
         let app = launch(Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1"])
-        let disc = app.buttons["tab-menu"]
+        let disc = app.descendants(matching: .any).matching(identifier: "tab-title-capsule").firstMatch
         wait(disc)
         XCTAssertFalse(app.buttons["space-switcher"].exists, "no switcher on a phone's tab")
         disc.tap()
         wait(app.buttons["Search"], "the conversation's items")
         XCTAssertTrue(app.buttons["Side Conversation"].exists)
-        XCTAssertTrue(app.buttons["Side Conversation with Changes"].exists)
+        XCTAssertFalse(app.buttons["Side Conversation with Changes"].exists, "a side conversation with changes is /side's")
+        // Search, then Stats, then the side conversation; Detach before Close Tab.
+        XCTAssertLessThan(app.buttons["Search"].frame.minY, app.buttons["Stats"].frame.minY)
+        XCTAssertLessThan(app.buttons["Stats"].frame.minY, app.buttons["Side Conversation"].frame.minY)
+        XCTAssertLessThan(app.buttons["Detach"].frame.minY, app.buttons["Close Tab"].frame.minY)
         XCTAssertFalse(app.buttons["Conversation Mode"].exists, "conversation mode is the composer's")
         XCTAssertTrue(app.buttons["Rename…"].exists)
         XCTAssertTrue(app.buttons["Close Tab"].exists)
@@ -146,6 +150,8 @@ final class SpacesUITests: XCTestCase {
         app.alerts["Rename tab"].buttons["Cancel"].tap()
         XCTAssertTrue(app.alerts["Rename tab"].waitForNonExistence(timeout: 3))
         app.buttons["tab-mode-button"].tap()
+        wait(app.buttons["Terminal"], "the mode menu")
+        app.buttons["Terminal"].tap()
         disc.tap()
         wait(app.buttons["Rename…"], "Terminal's menu")
         XCTAssertFalse(app.buttons["Search"].exists, "the conversation's items only on Chat")
@@ -174,7 +180,7 @@ final class SpacesUITests: XCTestCase {
         }),
         Screen(id: "X9b", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1"]),
         Screen(id: "X9b-menu", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1"], then: { app in
-            app.buttons["tab-menu"].tap()
+            app.descendants(matching: .any).matching(identifier: "tab-title-capsule").firstMatch.tap()
         }),
     ]
 

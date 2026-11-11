@@ -528,9 +528,10 @@ private struct FilesListState: View {
             }
         } else if empty {
             if session.filter.isEmpty {
-                centred("Empty folder", identifier: "files-empty")
+                centred(FilesFormatting.empty(hidden: session.showsHidden(default: FilesView.hiddenSetting)),
+                        identifier: "files-empty")
             } else {
-                centred("No names contain “\(session.filter)”", identifier: "files-no-matches")
+                centred("No names in this folder contain “\(session.filter)”", identifier: "files-no-matches")
             }
         }
     }

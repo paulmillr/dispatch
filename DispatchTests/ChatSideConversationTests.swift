@@ -93,6 +93,27 @@ final class ChatSideConversationTests: XCTestCase {
         }
     }
 
+    /// Closing ends the side conversation and its replies: once an answer is in (or coming), Esc closes only when
+    /// pressed again within a second; an unanswered sheet still closes on one.
+    func testEscapeTwiceClosesAnAnsweredSideSheet() async throws {
+        let side = ChatSideConversation(mode: .btw, parentID: "parent", agentID: "codex", model: "model")
+        side.ready = true
+        side.messages = [.init(id: "q", user: true, text: "Fixture question"), .init(id: "a", user: false, text: "Fixture answer")]
+        var closes = 0
+        let host = NSHostingView(rootView: ChatSideSheet(side: side, close: { closes += 1 }, maximumHeight: 300, shortcutsEnabled: true))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(host.performKeyEquivalent(with: TerminalTestSupport.keyEvent(53, "\u{1b}", in: window)))
+        XCTAssertEqual(closes, 0, "One Escape must not end an answered side conversation")
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(host.performKeyEquivalent(with: TerminalTestSupport.keyEvent(53, "\u{1b}", in: window)))
+        XCTAssertEqual(closes, 1)
+    }
+
     func testModesHaveSeparatePermissionBoundaries() throws {
         XCTAssertEqual(ChatSideMode.parse("/btw what happened?")?.mode, .btw)
         XCTAssertEqual(ChatSideMode.parse("/side change it")?.mode, .side)
@@ -176,7 +197,7 @@ final class ChatSideConversationTests: XCTestCase {
             XCTAssertFalse(session.turns.flatMap(\.items).contains { $0.text.contains("side-only question") })
             try await Task.sleep(for: .milliseconds(400))
             let capture = try await PresentationTestSupport.capture(app.window, named: "side-\(mode.rawValue)", in: "btw-queue-validation")
-            XCTAssertTrue(try capture.text().contains("back to main"))
+            XCTAssertTrue(try capture.text().contains("Back to Main"))
             side.draft = "DISPATCH_SIDE_QUESTION " + mode.rawValue + "\nPlease clarify."
             let sideEditor = try XCTUnwrap(PresentationTestSupport.views(of: ChatSideComposer.SideTextView.self,
                 in: try XCTUnwrap(app.window.contentView)).first)

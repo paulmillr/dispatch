@@ -117,6 +117,9 @@ the build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` 
   which chips are selected, and an invalid custom answer never falls back to an old option.
 - Helper capability groups (`HelperCapabilities`), hello validation/configuration and multiplexer descriptors.
   Platform grants and opt-in hello feature lists remain distinct; the phone still has no file-write capability.
+- A Markdown file as a document (`FileMarkdownDocument`: paragraphs flowed, front matter, headings for the outline
+  and folds) and how a page sets it (`FileMarkdownLayout`: the 36 em measure, six heading sizes, the gaps); the phone's
+  `FileMarkdownReader` and the Mac's `FileMarkdownView` draw it each in their own fonts.
 - Files wire shapes and error classification (`FilesWire`, `FilesSourceFailure`), strict UTF-8 prefix decoding,
   orientation-aware image metadata/thumbnail bounds, occurrence scanning, and naming a binary's format from its
   first bytes (`FileFormat`; every read bounds-checked). Preview byte/pixel limits stay with
@@ -324,8 +327,11 @@ The policies below are the ones a change must keep; the screens themselves are d
 - **Windows.** A window at least 600 points both ways (the unfolded iPhone Duo) or an iPad window from 655.5 points
   wide shows the Spaces tree in a sidebar beside the open tab (`MobileSplit`, by window size, never size class or
   screen); narrower windows are the phone's stack. Both columns show the one `SpacesNavigator.path`, so folding and
-  unfolding keep the screens. The iPad's detail column has a strip of the space's tabs and a mode switch (Terminal,
-  Chat, Files, Review, Commits; `PadStrip`, `PadMode`); the sidebar can hide (⌃⌘S) and comes back when no tab is
+  unfolding keep the screens. The unfolded Duo held as a book gives the sidebar the iPad's 320 points and the tab the
+  rest, across the fold (`MobileSplit.bookSidebar`); its tab's header is the phone's without Back. The iPad's detail
+  column has a strip of the space's tabs and one mode button (`PadStrip`, `PadModeButton`, `PadMode`): the shown mode's
+  glyph, with its title where the column is 640 points or wider, whose menu lists Terminal, Chat, Files, Review (its
+  comment count) and Commits, as the Mac's and the phone's do; the sidebar can hide (⌃⌘S) and comes back when no tab is
   left. An iPad remembers the shown tab, mode and sidebar state across launches (`restoreSplit`, before the first
   body), keyed by topology key. The vertical bar of iOS 27.1 is off on windows wide enough for the split
   (`MobileVerticalBar`).
@@ -340,9 +346,10 @@ The policies below are the ones a change must keep; the screens themselves are d
   glass. The rail holds Back with the needs-you count and the menu disc, the five modes stood on end (`PadModeSwitch`),
   and the mode's action at its foot: Terminal's keyboard button (a tap raises the keyboard with the key row riding it;
   held, Esc, Ctrl-C, Ctrl-D, Tab, Previous Command and Paste), Chat's Reply (the composer while empty and unfocused is
-  folded into it; Reply unfolds and focuses it), Review's Create review with the comment count (`FilesRailAction`).
+  folded into it; Reply unfolds and focuses it), Review's Create review with the comment count (`FilesRailAction`); a mode without one (Files, Commits, Chat with
+  its composer open) keeps the foot's place empty and the rail spans the window's height, so the modes never move.
   Above a docked keyboard the rail keeps only Back and the disc. Review and Commits list beside their panes (a
-  300-point list headed by the mode's row); Files lists under its row. The tab's name shows in a chip for 2.5 s as
+  300-point list headed by the mode's row); Files lists under its row. The tab's title capsule (the upright header's, without its menu) shows for 2.5 s as
   the tab opens. The segment and Files mode chosen on its side are the ones upright shows. Mockups L12–L15.
 - **Spaces.** herdr workspaces and tmux sessions are spaces; windows and tabs are tabs. A split tmux window shows one
   pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
@@ -369,30 +376,33 @@ The policies below are the ones a change must keep; the screens themselves are d
   handles keep it. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
-- **A tab's header** (phone stack, B7). Back and the host's glyph share one glass capsule at the leading end: Back
-  carries the needs-you count as a badge on its corner, and VoiceOver reads "Back to <screen>" and the count as its
-  value (other pushed screens keep their labelled pill). The host's glyph is the tab's one menu: the conversation's
-  items on Chat (Search, Side Conversation (read-only) and Side Conversation with Changes, or the open one, Manage
-  goal), the pane picker when the segment can show more than one pane (on Chat only the panes running an agent, the
-  shown one checked), the tab's row menu (Rename…, Close, Detach) and the host's Stats. The title block is two lines
-  tall and top-aligned: a title that fits one line keeps `host · folder` under it (the folder's last component;
-  Terminal adds `· shell`), a longer one takes both lines and the subtitle goes. The same `host · folder` (the
+- **A tab's header** (phone stack, B7), as Messages heads a conversation. Back is its own glass circle at the leading
+  end: it carries the needs-you count as a badge on its corner, and VoiceOver reads "Back to <screen>" and the count as
+  its value (other pushed screens keep their labelled pill). Beside it one glass capsule holds the host's glyph on a
+  disc of its colour, the tab's title and `host · folder` under it, one line each (a long title truncates; VoiceOver
+  reads all of it); a tap opens the tab's one menu (`TabMenuItems`, the landscape rail's and iPad's disc opens the
+  same): on Chat Search, the host's Stats, Side Conversation (read-only; one with changes is the composer's `/side`)
+  or the open one, and Manage goal; elsewhere Stats first; the pane picker when the segment can show more than one pane
+  (on Chat only the panes running an agent, the shown one checked); the tab's row menu (Rename…, Detach, Close Tab). The
+  folder in `host · folder` is its last component;
+  Terminal adds `· shell`. The same `host · folder` (the
   folder's name, never its path) heads a space's screen, the switcher's space and the iPad's header beside its sidebar,
   names a space on the watch (its Spaces rows and a space's header, `SpacesText.folder`), and is a tab row's line when it has
   nothing else to say; a folder whose name is the title beside it goes unsaid (the host alone, never "app" under "app";
   `TabScreenHeader.distinct`), and VoiceOver reads the full path. The Mac's hover card leads with it too. The trailing control is the mode
-  button (`TabModeButton`), as the Mac strip's: a system bar item (a menu with a primary action, so the bar draws its
-  glass and a hold opens the menu; a button-style Toggle draws on as a pink prominent disc and takes no menu). On Chat
-  or Files it is on, its symbol filled in the accent, and a tap returns to Terminal; in Terminal it is off, its outline
-  in the label colour naming where a tap goes: Chat on a tab running an agent, else Files. Held, it lists Terminal,
-  Chat (dimmed without an agent), Files, and Review (with its comment count) and Commits inside a repository.
-  Conversation mode's waveform takes its place while on. No switch sits under the header; in Files the modes do, as a
-  capsule (`FilesModeCapsule`: Files · Review · Commits, Review's count), in place of the system tab bar, and the
-  mode's accessory (Create review, offline) sits in a glass capsule at the bottom (`TabFilesSegment.modesOnTop`). The
+  button (`TabModeButton`), as the Mac strip's: a system bar item, a menu (so the bar draws its glass; a button-style
+  Toggle draws on as a pink prominent disc and takes no menu). A tap opens it on every segment, as the Mac's click
+  does: Terminal, Chat (dimmed without an agent), Files, and Review (with its comment count) and Commits inside a
+  repository, the shown one checked; VoiceOver reads it as Mode, the shown one its value. On Chat or Files it is on,
+  its symbol filled in the accent; in Terminal it is off, its outline in the label colour naming where the tab would
+  go: Chat on a tab running an agent, else Files.
+  Conversation mode's waveform takes its place while on. No switch sits under the header, in Files neither: Files,
+  Review and Commits are the mode button's menu, its glyph the shown mode's (the folder, Review's clipboard, Commits'
+  clock), and the mode's accessory (Create review, offline) sits in a glass capsule at the bottom (`TabFilesSegment`). The
   header never overflows into the bar's "…" menu (`TabsScreenHeader.leadingWidth`). The phone has no space switcher
   (Back returns to the space); the iPad strip's space capsule opens it. Beside the unfolded Duo's sidebar the header
-  keeps its glyph switch, the conversation's ⋯ menu and the subtitle's pane picker, and Files its system tab bar; the
-  iPad strip and a phone on its side keep their own switches.
+  is the same without Back (its title capsule holds the conversation's items and the panes); the iPad strip has its
+  own mode button and a phone on its side its rail.
 - **Times.** A chat tab's time is its agent's newest record (the conversation's own timestamps). A terminal's, and a
   chat's whose agent has written nothing yet, is the last change the phone saw between two live snapshots of one
   connection: a new title (shell integration names a pane after the running command, then its folder), folder, agent
@@ -429,6 +439,12 @@ The policies below are the ones a change must keep; the screens themselves are d
   turns out to be a folder (the helper's `is_directory`) shows its listing. A folder row's item count waits while the
   host is offline and is asked again when it reconnects, for every row still on screen in their order (four at a
   time, none dropped).
+- **Markdown files** render as a page, as the Mac's preview does (`FileMarkdownReader`, the shared
+  `FileMarkdownDocument`): prose two points over chat's text in chat's font (San Francisco for Same as code), scaling
+  with Dynamic Type, at most 36 em wide; six heading sizes; code highlighted, tables and quotes in the Mac's rhythm. A
+  tap on a heading with a section folds it ("…" after its title) and another opens it; "…" › Outline lists the
+  headings, goes to one (opening the folded sections around it), and has Fold All (a lone title stays open) and
+  Unfold All. Folds belong to the screen. Show source still shows the file's text, with Find and Wrap lines.
 - **Chat.** `chat.open` only for a bound terminal; the conversation is accepted once `chat.history` names the same
   process. Losing link or binding pauses input and keeps transcript and drafts. Dots follow Mail: blue for needs you
   or unseen, amber for working; a conversation's first sight is its baseline; seen markers stay per device. Needs you
@@ -449,7 +465,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's or Pi's thinking), as the Mac's live tool group counts them, and it holds Stop
   beside the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware
-  keyboard still stops). Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
+  keyboard still stops). Its log's kind badges are all as wide as the widest word, so what each step acted on starts
+  at one place. A step opened there or from message details shows what it did as the Mac's opened step does
+  (`ChatStepOutput`, from the shared `ToolPresentation`): its title, summary and status, folder, the command unless the
+  summary says it, changed files' diffs, the output (a read's source at its own line numbers) with Copy, and Tool
+  details with the raw input and output. Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
   Messages' Send Later (`ChatQueuedBubbles`; while the link is down the same bubbles, held): under the last, "3 queued ·
   sends after this turn" (with Resume after Stop), under one that waits for the user its status. A tap or long press
   on one is its menu, each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
@@ -464,7 +484,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   end (another device's prompt) shows the row at once, and a turn left open by an idle agent shows neither.
   The thread follows its end until something other than the app scrolls it toward older rows (`ChatFollow`): a drag
   stops following as it starts, and VoiceOver's scroll, the status bar's tap or Page Up leave it too; rows, the keyboard
-  and the composer changing height never do (the thread goes back to the end), a drag that only took the keyboard down
+  and the composer changing height never do (the thread goes back to the end, exactly: following, the scroll view sits
+  at its last row whatever the rows' real heights turn out to be, `pinToEnd`), a drag that only took the keyboard down
   keeps following, a send or the pill returns to the end, and "Jump to latest" shows only while not following with
   newer rows below, never at the end. Left scrolled up (the space, a segment switch), the thread opens again where it
   was read (`MobileChatSession.readingPosition`, in memory): the row at the visible top and how far past its top, kept
@@ -486,9 +507,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   now while the agent can take the draft into its turn; Queue in the long press (and ⌥⌘Return) then queues it.
   Hardware keyboards follow the Mac: Return sends in compact mode, Option-Return and Shift-Return insert a newline,
   Command-Return and Control-Return send in either mode, and Command-Option-Return takes the alternate send action
-  (steer by default, queue when ordinary send steers). A typed newline leaves editor mode as it is. Settings ›
-  Chat's other options, as the Mac's Chat mode: Editor mode by default (new drafts start in editor mode; a multi-line
-  paste or ⌘E turns it on, a typed newline never does), Open agents in (an agent tab's first segment,
+  (steer by default, queue when ordinary send steers). A draft starts out of editor mode; a multi-line paste or ⌘E turns
+  it on, and a typed newline leaves it as it is. Settings ›
+  Chat's other options, as the Mac's Chat mode: Open agents in (an agent tab's first segment,
   `TabSegment.initial`; a pick on the tab sticks). A hardware keyboard's first Esc arms the stop for a second, shown
   above the field; a second Esc stops the agent. There is no Escape setting, and its removed saved choice is ignored. The code keys above
   the field show only once picked under "+" (Show code keys, `MobileSettings.composerCodeKeysKey`, kept app-wide; not
@@ -511,7 +532,12 @@ The policies below are the ones a change must keep; the screens themselves are d
   (`MobileMessageReader`): all of it, Markdown's marks gone, each code block and table said in a few words instead of
   read ("Swift code, 12 lines.", "Shell command.", "A table, 3 rows."; `SpokenMarkdown.message`). "Reading aloud ·
   0:08" and Stop show under the message; another message's Read Aloud takes over, and leaving the conversation stops
-  it. It is spoken audio that ducks other audio, and hides while conversation mode reads replies itself. Both keep
+  it. It is spoken audio that ducks other audio, and hides while conversation mode reads replies itself. Both speak
+  in Settings › Chat › Voice (`SpeechVoice`, `MobileSettings.speechVoiceKey`): by default Spoken Content's voice,
+  speed and pitch from the Settings app (`prefersAssistiveTechnologySettings`), which is also the fallback when the
+  chosen voice is deleted; or one of the phone's voices by identifier, listed for the user's languages without the
+  novelty voices, grouped Personal Voice (after its permission), Premium, Enhanced and Default, a tap playing a
+  sample. Both keep
   the phone from auto-locking while they run (`ScreenAwake`): the lock would send the app to the background, where it
   may neither listen nor speak and conversation mode ends. Composers are
   `ChatEditorTextView`-based, as on the Mac.
@@ -562,16 +588,17 @@ The policies below are the ones a change must keep; the screens themselves are d
   within 10 s. Permission is asked once a run. There is no Allow or Deny in a banner: an approval belongs to a live
   subscription.
 - **Settings.** Everything is `MobileSettings` in UserDefaults. Removed `terminal.contrast` and the `chats` filter are ignored; use `terminal.textContrast` and `agents`. Spaces reads per-host state only from `spaces.json`, without importing the old `tabs.recent`, `tabs.collapsed` or `tabs.spaceOrder` defaults (Remove all data still clears them). The Settings app's Dispatch page
-  (`Mobile/App/Settings.bundle`) mirrors the fixed choices on the same keys (appearance, theme, line spacing, the
+  (`Mobile/App/Settings.bundle`) mirrors the fixed choices on the same keys (appearance, line spacing, the
   terminal's contrast, ligatures, bold, cursor, chat's font and size, the notification switches and sound, colour
   vision, Color-code hosts, unsafe pastes; not the font lists, colour schemes, dictation or background refresh, which need live lists or a permission
   prompt). What it changes arrives as `UserDefaults.didChangeNotification` when the app is back and goes through the
-  setters (`MobileSettings.reload`), so terminals restyle and the badge follows; `SettingsTests` keeps the page's
+  setters (`MobileSettings.reload`), so terminals restyle and notifications follow; `SettingsTests` keeps the page's
   values and defaults equal to the models'. Per host (Edit host, not Settings): Chat, Files & git, multiplexer. Unsafe
   pastes sit under Hosts. Terminal
   font (`TerminalFont.all`: the Mac's list in its order, Source Code Pro, Menlo, then every font the Mac bundles, in
   `TermFonts`), Ligatures (on, the Mac's `fontLigatures`: off writes `font-feature = -calt, -liga, -dlig`), colour scheme (Ghostty's bundled
-  themes, `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
+  themes and Dispatch's two, by side and `SchemeGroup`: Dispatch, true black, leads Dark · OLED, Dispatch Gray leads
+  Dark · Graphite; `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
   (`LineSpacing`, shared, one key for terminal and chat); each change posts `TerminalStyle.changed` and every open
   presence restyles at once, keeping its own size. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
   at the standard text size and drawn scaled as body text scales (`TerminalAdaptation.fontSize`, capped at XXXL's
@@ -590,8 +617,10 @@ The policies below are the ones a change must keep; the screens themselves are d
   `UIColor.change`), Color scheme lists only the schemes made for it (`ColorVision.bundledSchemes`, shared), and
   turning it on, off or over swaps the terminal's scheme for the vision's on the same side, or `dispatch-black`.
   Color-code hosts (`hosts.colors`, on) off draws every host gray, as the Mac's `showHostColors`.
-  Theme (the Mac's `SidebarPalette`s, resolved through `UIColor.themed` so UIKit and SwiftUI recolour live).
-  Notifications, Background refresh, the Apple Watch status row.
+  Notifications (the app icon's badge always counts the conversations waiting for you), Background refresh, the Apple
+  Watch status row. There is no app theme: the chrome and chat take the asset catalog's colours for Appearance, and
+  only the terminal has a scheme. Whether Spaces lists the offline hosts is its filter menu's (Show offline hosts),
+  not a setting.
 - **Appearance.** Dark by default, every colour with a light variant. System menus and segmented controls replace
   the mockups' custom ones.
 

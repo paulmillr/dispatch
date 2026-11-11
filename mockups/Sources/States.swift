@@ -12,7 +12,6 @@ struct FilesUnavailableScreen: View {
         if reason == .offline {
             HybridShell(mode: .review, hasAccessory: true) {
                 HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text(MockGit.branch).font(.subheadline.weight(.semibold))
                     Text("· 8 files").font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -74,11 +73,8 @@ struct FilesUnavailableScreen: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.canvas)
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    SegmentCapsule().padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-                }
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { TabHeader(title: "Sidebar theme toggle") }
+                .toolbar { CapsuleTabHeader(title: "Sidebar theme toggle", state: ModeButtonState(shown: .files, agent: true)) }
             }
         }
     }
@@ -89,7 +85,6 @@ struct ReviewSentScreen: View {
     var body: some View {
         HybridShell(mode: .review, hasAccessory: true) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 8 files").font(.subheadline).foregroundStyle(.secondary)
                 Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.subheadline, design: .monospaced))
@@ -234,17 +229,34 @@ struct DiffFoldOutdatedScreen: View {
     }
 }
 
+/// A message as the app's `ChatBubble` draws it: callout in SF Rounded (Settings' chat font and size by default),
+/// 20-point corners with a 6-point one at the speaker's bottom, the user's in the accent on the right (78% of the
+/// column at most), the agent's grey on the left (86%). Nothing in the corner: times come in on a swipe.
 struct Bubble: View {
     let text: String
     let user: Bool
+    var body: some View { MessageBubble(user: user) { Text(text) } }
+}
+
+struct MessageBubble<Content: View>: View {
+    let user: Bool
+    @ViewBuilder var content: Content
     var body: some View {
-        HStack {
-            if user { Spacer(minLength: 60) }
-            Text(text).font(.body)
+        HStack(spacing: 0) {
+            if user { Spacer(minLength: 0) }
+            content
+                .font(.system(.callout, design: .rounded))
+                .lineSpacing(2)
                 .foregroundStyle(user ? Color("BubbleUserText") : .primary)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(user ? Color("BubbleUser") : Color.bubbleAgent, in: RoundedRectangle(cornerRadius: 18))
-            if !user { Spacer(minLength: 60) }
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(user ? Color("BubbleUser") : Color.bubbleAgent,
+                            in: UnevenRoundedRectangle(cornerRadii: user
+                                ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
+                                : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
+                                style: .continuous))
+                .frame(maxWidth: 370 * (user ? 0.78 : 0.86), alignment: user ? .trailing : .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if !user { Spacer(minLength: 0) }
         }
     }
 }

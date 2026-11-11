@@ -36,8 +36,10 @@ struct GitChangesView: View {
         } else if let repository = session.git.repository {
             if let status = session.status {
                 if status.changes.isEmpty {
-                    // Comments written before the changes were committed can still go out: the header keeps Create review.
-                    GitCentredNote(text: "No changes · the working tree matches HEAD", identifier: "git-changes-empty")
+                    // Comments written before the changes were committed (or on commits) can still go out: the header
+                    // keeps Create Review, and the note says so.
+                    GitCentredNote(text: GitChangesText.empty(comments: session.reviewCommentCount ?? 0),
+                                   identifier: "git-changes-empty")
                 } else {
                     let shown = status.matching(session.changesFilter)
                     FilesSplit(session: session,
@@ -54,9 +56,17 @@ struct GitChangesView: View {
                                listIdeal: GitChangesList.height(shown, typography: typography),
                                opensOnDetail: session.changesSelection != nil)
                 }
+            } else if let error = session.statusError {
+                // git failed after the repository was found (a lock, a corrupt index, the helper's deadline on a
+                // large tree): what it said, rather than a spinner that never ends.
+                GitFailureNote(title: "The changes could not be read", message: error, identifier: "git-changes-error",
+                               retry: { TerminalRuntime.shared.files.refresh(session.id) })
             } else {
                 GitDelayedSpinner()
             }
+        } else if let reason = session.gitUnavailable {
+            GitFailureNote(title: "Git can’t run here", message: reason, identifier: "git-unavailable",
+                           retry: { TerminalRuntime.shared.files.refresh(session.id) })
         } else {
             GitDelayedSpinner()
         }
@@ -77,10 +87,13 @@ private struct GitChangesList: View {
     /// One column: a chosen change's diff takes the list's place (`FilesSplit`).
     @Environment(\.filesSplitNarrow) private var narrow
     @FocusState private var listFocused: Bool
+    /// The list's height, for Page Up and Page Down.
+    @State private var height: CGFloat = 0
 
     var body: some View {
         let ordered = GitChangesText.ordered(shown)
-        let comments = session.reviewScope.map { ReviewRepository.shared.review($0).comments } ?? []
+        // The working tree's comments: those on commits show in Commits.
+        let comments = session.reviewScope.map { ReviewRepository.shared.review($0).uncommitted } ?? []
         // One group needs no name: the summary line says it all.
         let grouped = GitChangeArea.allCases.filter { !shown.changes(in: $0).isEmpty }.count > 1
         VStack(spacing: 0) {
@@ -126,6 +139,11 @@ private struct GitChangesList: View {
                 // ⌥↑↓: the previous or next review comment, on whichever file it is.
                 .onKeyPress(.upArrow) { NSEvent.modifierFlags.contains(.option) ? comment(-1) : move(-1, ordered) }
                 .onKeyPress(.downArrow) { NSEvent.modifierFlags.contains(.option) ? comment(1) : move(1, ordered) }
+                // A page at a time, and to either end, as the Files list does.
+                .onKeyPress(.pageUp) { move(-page, ordered) }
+                .onKeyPress(.pageDown) { move(page, ordered) }
+                .onKeyPress(.home) { move(-ordered.count, ordered) }
+                .onKeyPress(.end) { move(ordered.count, ordered) }
                 .onKeyPress(.return) {
                     guard session.changesSelection != nil else { return .ignored }
                     if narrow { session.narrowDetail = true }
@@ -137,6 +155,13 @@ private struct GitChangesList: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { height = geometry.size.height }
+                        .onChange(of: geometry.size.height) { _, value in height = value }
+                }
+            }
         }
         // ⌘C while the list has the keyboard: the selected change's repository-relative path.
         .gitCopyShortcut(active: listFocused) {
@@ -205,6 +230,9 @@ private struct GitChangesList: View {
               GitChangesDetail.matches(state, change, in: status) else { return nil }
         return state.diff
     }
+
+    /// The rows a page holds.
+    private var page: Int { max(1, Int(height / typography.expanded(28)) - 1) }
 
     private func move(_ delta: Int, _ ordered: [GitChange]) -> KeyPress.Result {
         guard let next = GitChangesText.moved(session.changesSelection, by: delta, in: ordered) else { return .ignored }
@@ -296,7 +324,7 @@ private struct GitChangesDetail: View {
                                     review: session.reviewScope.map {
                                         GitDiffReview(session: session, scope: $0, path: change.path, area: change.area,
                                                       status: status)
-                                    })
+                                    }, session: session)
                             // Each change gets its own folds, scroll and Source read.
                             .id(change.id)
                     } else if let error = state.error {
@@ -338,6 +366,14 @@ private struct GitChangesDetail: View {
 }
 
 extension GitChangesText {
+    /// Review with nothing uncommitted: that, and the comments still held (on changes since committed, or on commits)
+    /// that Create Review still sends; and where a commit's lines take comments.
+    static func empty(comments: Int) -> String {
+        let clean = "No changes · the working tree matches HEAD"
+        guard comments > 0 else { return clean + "\nComment on a commit’s lines in Commits (⌃⌘3)" }
+        return clean + "\n\(ReviewText.count(comments)) still to send · Create Review"
+    }
+
     /// Source shows text up to the preview's 2 MB; past it, or for a file that is not text, it says so.
     static let sourceLimit: UInt64 = 2_000_000
 

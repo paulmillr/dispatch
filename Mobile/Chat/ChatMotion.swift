@@ -167,11 +167,13 @@ class CompositorView: UIView {
     }
 
     /// A keyframe loop of `keyPath` over one `period`: `value` sampled at `count` + 1 points, linear between them (33
-    /// points keep an eased curve within 0.3% of itself, as the Mac's).
+    /// points keep an eased curve within 0.3% of itself, as the Mac's). The last point is the period's end as reached
+    /// from within it, never the next period's start: a sweep's value wraps there, and the step between them would
+    /// draw it running back across its track (the thinking light did, in the last 70 ms of every pass).
     static func keyframes(_ keyPath: String, period: TimeInterval, count: Int = 32, _ value: (Double) -> Double) -> CAKeyframeAnimation {
         let times = (0...count).map { Double($0) / Double(count) }
         let animation = CAKeyframeAnimation(keyPath: keyPath)
-        animation.values = times.map { value($0 * period) }
+        animation.values = times.map { value($0 < 1 ? $0 * period : period * (1 - 1e-9)) }
         animation.keyTimes = times.map { NSNumber(value: $0) }
         animation.calculationMode = .linear
         animation.duration = period

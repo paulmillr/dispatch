@@ -335,6 +335,15 @@ extension FilesCoordinator {
             }
         }
         if !Self.sameStates(listings, session.listings) { session.listings = listings }
+        // The previewed file changed on disk (an agent edited it, the user saved it elsewhere): the preview reads it
+        // again, as the list beside it already shows its new size and time.
+        if let preview = session.preview, let entry = FilePreviewLoader.changedEntry(of: preview, in: session.listings) {
+            Task { @MainActor [weak session] in
+                await FilePreviewLoader.refresh(preview, entry: entry, from: source) {
+                    session?.preview === preview && session?.source === source
+                }
+            }
+        }
         if offline {
             if session.staleSince == nil { session.staleSince = session.lastRefresh ?? now }
             watch.offline = ObjectIdentifier(source)

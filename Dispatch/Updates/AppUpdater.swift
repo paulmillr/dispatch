@@ -16,6 +16,8 @@ final class AppUpdater {
         var install: (UpdateInstaller.Prepared) async throws -> Void
         /// Removes what interrupted updates left beside the app.
         var sweep: () async -> Void = {}
+        /// The running app's version, which a copy that can't update itself (no `context`) compares the feed's with.
+        var installedVersion: () -> String? = { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }
 
         static func live(_ installer: UpdateInstaller = UpdateInstaller()) -> Self {
             Self(context: { try await installer.context() }, latest: { try await installer.latest() },
@@ -31,6 +33,9 @@ final class AppUpdater {
     private(set) var progress: UpdateInstaller.Progress?
     /// What the last failure was doing ("check for updates", "download Dispatch 0.2.0"), and when.
     private(set) var failure: (step: String, at: Date)?
+    /// A newer release this copy can't install itself (not in a writable folder, or not a signed release): the last
+    /// check says so and Settings offers its download.
+    private(set) var available: UpdateRelease?
     /// An update the daily check downloaded is ready. One started in Settings shows there instead.
     @ObservationIgnored var onReady: (() -> Void)?
     @ObservationIgnored var onRestart: (() -> Void)?
@@ -75,7 +80,8 @@ final class AppUpdater {
         case .installing: "Installing the update…"
         case .upToDate: "Dispatch is up to date."
         case .failed(let message):
-            if let failure { "Could not \(failure.step) (\(Self.time(failure.at))): \(message)" } else { message }
+            if available != nil { message }
+            else if let failure { "Could not \(failure.step) (\(Self.time(failure.at))): \(message)" } else { message }
         }
     }
 
@@ -137,6 +143,7 @@ final class AppUpdater {
 
     private func reset() {
         release = nil
+        available = nil
         progress = nil
         failure = nil
         state = .idle
@@ -152,6 +159,7 @@ final class AppUpdater {
         guard !busy, state != .ready else { return }
         daily = announce
         failure = nil
+        available = nil
         transient = false
         state = .checking
         // A cancelled download may still be cleaning up its files; it finishes before the next one starts.
@@ -163,7 +171,23 @@ final class AppUpdater {
             let feed = Task { try await operations.latest() }
             defer { feed.cancel() } // once answered, a no-op
             do {
-                let context = try await operations.context()
+                let context: UpdateInstaller.Context
+                do { context = try await operations.context() } catch {
+                    // A copy that can't update itself still says whether a newer one is out, and how to get it.
+                    try Task.checkCancellation()
+                    guard let latest = try? await withTaskCancellationHandler(operation: { try await feed.value }, onCancel: { feed.cancel() }),
+                          let installed = operations.installedVersion(),
+                          let order = try? UpdateRelease.compare(latest.version, installed) else { throw error }
+                    try Task.checkCancellation()
+                    guard order == .orderedDescending else {
+                        release = nil; state = .upToDate
+                        checked()
+                        return
+                    }
+                    available = latest
+                    throw UpdateFailure("Dispatch \(latest.version) is available, but this copy can’t update itself: \(error.localizedDescription) "
+                        + "Update with Homebrew (brew upgrade --cask paulmillr/tap/dispatch), or download it.")
+                }
                 try Task.checkCancellation()
                 let latest = try await withTaskCancellationHandler { try await feed.value } onCancel: { feed.cancel() }
                 try Task.checkCancellation()

@@ -101,7 +101,7 @@ final class AppUpdaterTests: XCTestCase {
     }
 
     /// Settings › Troubleshooting › Reset deletes Dispatch's data (settings with the setup sheet's record, spaces,
-    /// drafts…), your color schemes and diagnostics, and this build's defaults; the dictation models and another
+    /// drafts…), its diagnostics and this build's defaults; the dictation models, your color schemes and another
     /// build's defaults stay.
     func testResetDeletesDataButDictationModels() throws {
         let root = System.temporary.appendingPathComponent("reset-" + System.uuid().uuidString)
@@ -113,7 +113,8 @@ final class AppUpdaterTests: XCTestCase {
         }
         let targets = DispatchRemoval.resetTargets(support: support, home: home)
         XCTAssertEqual(targets.map(\.path), ["Local", "drafts.json", "host-session.json"].map { support.appendingPathComponent($0).path }
-            + [CustomThemes.directory.path, home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics").path])
+            + [home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics").path])
+        XCTAssertFalse(targets.contains(CustomThemes.directory), "Your color schemes are kept")
         let suite = "ResetTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let otherSuite = suite + "-other", other = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
         defer { other.removePersistentDomain(forName: otherSuite) }
@@ -172,6 +173,45 @@ final class AppUpdaterTests: XCTestCase {
                         "https://raw.githubusercontent.com/cask", "https://assets-next.githubusercontent.com/release", "https://github.com/release"] {
             XCTAssertTrue(UpdateDownloadDelegate.allowed(try XCTUnwrap(URL(string: address))), address)
         }
+    }
+
+    /// Restore All Defaults resets every setting, host colors and the space order included, but never this Mac's
+    /// answers: automatic updates stay as chosen (an update stays downloaded) and the setup sheet doesn't come back.
+    func testRestoreAllDefaultsKeepsUpdatesAndTheSetupSheetsRecord() {
+        var current = Preferences()
+        current.automaticUpdates = true
+        current.setupShown = true
+        current.fontSize = 18
+        current.spaceOrder = .tree
+        current.hostColors = ["build.example": .red]
+        let restored = SettingsView.restoredDefaults(keeping: current)
+        XCTAssertEqual(restored.automaticUpdates, true)
+        XCTAssertTrue(restored.setupShown)
+        XCTAssertEqual(restored.fontSize, Preferences().fontSize)
+        XCTAssertEqual(restored.spaceOrder, Preferences().spaceOrder)
+        XCTAssertEqual(restored.hostColors, [:])
+    }
+
+    /// A copy that can't update itself (not writable, not a signed release) still checks the feed: it says a newer
+    /// release is out, offering its download, or that it is up to date.
+    func testACopyThatCannotUpdateItselfStillReportsNewerReleases() async throws {
+        let release = try UpdateRelease(cask: cask)
+        var ops = operations(release)
+        ops.context = { throw UpdateFailure("Move Dispatch to a writable Applications folder before updating.") }
+        ops.installedVersion = { "0.1.0" }
+        let older = AppUpdater(operations: ops, defaults: nil)
+        older.check()
+        try await TestSupport.eventually { older.state != .checking }
+        XCTAssertEqual(older.available?.version, release.version)
+        XCTAssertTrue(older.status.hasPrefix("Dispatch \(release.version) is available"), older.status)
+        await older.stop()
+        ops.installedVersion = { release.version }
+        let current = AppUpdater(operations: ops, defaults: nil)
+        current.check()
+        try await TestSupport.eventually { current.state != .checking }
+        XCTAssertEqual(current.state, .upToDate)
+        XCTAssertNil(current.available)
+        await current.stop()
     }
 
     /// A network failure is retried sooner than daily and is not saved as a check, so a relaunch tries again; a

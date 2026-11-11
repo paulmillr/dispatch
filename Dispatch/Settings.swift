@@ -47,6 +47,19 @@ enum TerminalCursor: String, Codable, CaseIterable {
     var title: String { rawValue.capitalized }
 }
 
+/// What a program's bell (BEL, `tput bel`) does in the tab that shows it; a tab not on screen is marked with a bell
+/// instead, until you type in it (all but Off). Terminal.app's default is its alert sound.
+enum TerminalBell: String, Codable, CaseIterable {
+    case sound, flash, off
+    var title: String {
+        switch self {
+        case .sound: "Sound"
+        case .flash: "Flash"
+        case .off: "Off"
+        }
+    }
+}
+
 /// Which Option keys act as Alt in the terminal (Ghostty's macos-option-as-alt); the other types characters.
 enum OptionKeys: String, Codable, CaseIterable {
     case both, left, right, off
@@ -68,7 +81,7 @@ enum OptionKeys: String, Codable, CaseIterable {
     }
 }
 
-/// The key that dictates (Settings › Keyboard › Voice; DictationShortcut): held alone, one message; tapped,
+/// The key that dictates (Settings › Keyboard › Dictate; DictationShortcut): held alone, one message; tapped,
 /// conversation mode. With another key or a click it is an ordinary modifier.
 enum VoiceKey: String, Codable, CaseIterable {
     case rightCommand, rightOption, function, off
@@ -259,13 +272,20 @@ struct Preferences: Codable, Equatable {
     }
     /// Colorblind-friendly: the scheme pickers offer only schemes made for this vision, and new schemes are made for it.
     var colorVision = ColorVision.typical
+    /// The dark and light schemes chosen before colorblind mode replaced them, which turning it off brings back; nil
+    /// outside colorblind mode (`ColorSchemes.conform`).
+    var typicalTheme: String?
+    var typicalLightTheme: String?
     /// How opaque terminals' backgrounds are, `terminalOpacityRange`; below 1 the desktop shows through terminals only.
     var terminalOpacity = 1.0
     /// Lower and text over a busy desktop stops reading, whatever the scheme.
     static let terminalOpacityRange = 0.6...1.0
-    var optionAsAlt = OptionKeys.both
+    /// Left only by default: the left Option key is Alt for the shell (⌥B, ⌥F), the right one still types é, @, { and [ on
+    /// layouts that need it (German, French, Nordic), as iTerm2 and Ghostty users usually set it.
+    var optionAsAlt = OptionKeys.left
     var cursor = TerminalCursor.block
     var cursorBlink = true
+    var bell = TerminalBell.sound
     /// The terminal's rows and chat's lines together (Settings › General › Text).
     var lineSpacing = LineSpacing.normal
     var scrollback = Scrollback.automatic
@@ -315,7 +335,7 @@ struct Preferences: Codable, Equatable {
     var attentionNotifications = true
     var attentionDockBadge = true
     var attentionSound = true
-    /// Banners carry the agent's text and the pane's folder; off, only the pane and what happened.
+    /// Banners carry the agent's text and where the tab is (its space and host); off, only the tab and what happened.
     var attentionTextContent = true
     /// Nautical only: a ship's double bell, instead of the attention sound, when an agent finishes in the background.
     var shipsBell = false
@@ -349,8 +369,6 @@ struct Preferences: Codable, Equatable {
     var gitEnabled = true
     /// Chat's Return while the agent works: queue the message (⌥⌘⏎ steers) or steer it into the turn (⌥⌘⏎ queues).
     var chatSendWhileWorking = ChatSendWhileWorking.queue
-    /// New chat drafts start in editor mode (`ChatDraft.editorByDefault`): Return inserts a newline, ⌘⏎ sends.
-    var chatEditorByDefault = false
     /// A tab whose terminal starts an agent shows Chat, or stays on the terminal (`ChatCoordinator.agentStart`).
     var chatAgentStart = ChatAgentStart.chat
     /// How tool groups show in the transcript until opened or closed (`ChatSession.toolSteps`).
@@ -397,10 +415,10 @@ struct Preferences: Codable, Equatable {
         case hideSingleSpace, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
         case enableDiagnostics, outputWindow
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
-        case textContrast, colorVision, terminalOpacity
+        case textContrast, colorVision, typicalTheme, typicalLightTheme, terminalOpacity
         case spaces, enableKittyGraphics
         case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, filesRenderMarkdown, gitEnabled
-        case chatSendWhileWorking, chatEditorByDefault, chatAgentStart, chatToolSteps
+        case chatSendWhileWorking, chatAgentStart, chatToolSteps
         case dictationEnabled, dictationKey, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
@@ -410,6 +428,7 @@ struct Preferences: Codable, Equatable {
         case allowClipboardWrites = "allowRemoteClipboardWrites"
         case optionAsAlt = "optionKeysAsAlt"
         case prefixKeys = "prefixSpaces"
+        case bell = "terminalBell"
     }
 
     init(from decoder: Decoder) throws {
@@ -451,6 +470,8 @@ struct Preferences: Codable, Equatable {
         textContrast = try fields.decodeIfPresent(String.self, forKey: .textContrast).flatMap(TextContrast.init(rawValue:))
             ?? textContrast
         colorVision = try fields.decodeIfPresent(String.self, forKey: .colorVision).flatMap(ColorVision.init(rawValue:)) ?? colorVision
+        typicalTheme = try fields.decodeIfPresent(String.self, forKey: .typicalTheme)
+        typicalLightTheme = try fields.decodeIfPresent(String.self, forKey: .typicalLightTheme)
         terminalOpacity = (try fields.decodeIfPresent(Double.self, forKey: .terminalOpacity)).map {
             $0.isFinite ? min(max($0, Self.terminalOpacityRange.lowerBound), 1) : 1
         } ?? terminalOpacity
@@ -458,6 +479,7 @@ struct Preferences: Codable, Equatable {
             ?? optionAsAlt
         cursor = try fields.decodeIfPresent(String.self, forKey: .cursor).flatMap(TerminalCursor.init(rawValue:)) ?? cursor
         cursorBlink = try fields.decodeIfPresent(Bool.self, forKey: .cursorBlink) ?? cursorBlink
+        bell = try fields.decodeIfPresent(String.self, forKey: .bell).flatMap(TerminalBell.init(rawValue:)) ?? bell
         lineSpacing = try fields.decodeIfPresent(String.self, forKey: .lineSpacing).flatMap(LineSpacing.init(rawValue:)) ?? lineSpacing
         scrollback = try fields.decodeIfPresent(String.self, forKey: .scrollback).flatMap(Scrollback.init(rawValue:)) ?? scrollback
         prefixKeys = try fields.decodeIfPresent(String.self, forKey: .prefixKeys).flatMap(PrefixSpaces.init(rawValue:))
@@ -484,7 +506,6 @@ struct Preferences: Codable, Equatable {
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
         chatSendWhileWorking = try fields.decodeIfPresent(String.self, forKey: .chatSendWhileWorking)
             .flatMap(ChatSendWhileWorking.init(rawValue:)) ?? chatSendWhileWorking
-        chatEditorByDefault = try fields.decodeIfPresent(Bool.self, forKey: .chatEditorByDefault) ?? chatEditorByDefault
         chatAgentStart = try fields.decodeIfPresent(String.self, forKey: .chatAgentStart).flatMap(ChatAgentStart.init(rawValue:)) ?? chatAgentStart
         chatToolSteps = try fields.decodeIfPresent(String.self, forKey: .chatToolSteps)
             .flatMap(ChatToolGroupDisclosure.init(rawValue:)) ?? chatToolSteps

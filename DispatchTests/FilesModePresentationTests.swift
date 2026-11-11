@@ -38,16 +38,14 @@ final class FilesModePresentationTests: XCTestCase {
         // a: a shell tab's muted folder opens files (its click lists the files tabs); an agent tab's muted bubble opens
         // chat.
         try await settle(["Show Chat", "Show Files"], "terminal")
-        // The trackers left to right, the agent's then the shell's: without an agent a click opens the menu.
+        // The trackers left to right, the agent's then the shell's.
         func trackers() -> [ModeSwitchPressTracker.TrackerView] {
             guard let root = window.contentView else { return [] }
             root.layoutSubtreeIfNeeded()
             return PresentationTestSupport.views(of: ModeSwitchPressTracker.TrackerView.self, in: root)
                 .sorted { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
         }
-        try await TestSupport.eventually(diagnostic: "trackers: \(trackers().map(\.opensMenu))") {
-            trackers().map(\.opensMenu) == [false, true]
-        }
+        try await TestSupport.eventually(diagnostic: "trackers: \(trackers().count)") { trackers().count == 2 }
         // b: chat lit; the click returns to the terminal, while the shell tab still offers files.
         files.cycle(agent.id)
         try await settle(["Show Terminal", "Show Files"], "chat")
@@ -56,12 +54,16 @@ final class FilesModePresentationTests: XCTestCase {
         XCTAssertEqual(files.mode(for: agent.id), .files); XCTAssertFalse(agent.showChat)
         try await settle(["Show Terminal", "Show Terminal"], "files")
 
-        // A click on the agent tab's button takes one step (the shell's would open its menu: it has no agent).
-        XCTAssertEqual(trackers().map(\.opensMenu), [false, true])
+        // A click on either button opens the modes menu, in chat, files or the terminal alike; nothing switches until a
+        // mode is picked from it.
+        var shown: [[String]] = []
+        for tracker in trackers() { tracker.presentMenu = { menu, _, _ in shown.append(menu.items.map(\.title)) } }
         let frame = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("chat-mode-switch", label: "Show Terminal", in: window)
             .min { $0.minX < $1.minX })
         try PresentationTestSupport.click(window, at: NSPoint(x: frame.midX, y: frame.midY))
-        try await TestSupport.eventually { files.mode(for: agent.id) == .terminal }
+        try await TestSupport.eventually(diagnostic: "menus: \(shown)") { shown.count == 1 }
+        XCTAssertEqual(shown.first?.prefix(2), ["Terminal", "Chat"])
+        XCTAssertEqual(files.mode(for: agent.id), .files, "a click alone switches nothing")
     }
 
     /// The menu a hold (or a right-click) opens lists the modes and the three files tabs, the shown one checked; Changes

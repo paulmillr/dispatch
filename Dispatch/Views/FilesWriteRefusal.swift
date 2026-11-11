@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Over the list of a host whose grant has Files without Copy files in, while a drop or paste is being refused: what
-/// is off, and where to turn it on. It takes no clicks, so the drag beneath it still ends where it is.
+/// is off, and where to turn it on; or, for rows dragged within their own list, that Files copies only, with ⌥. It
+/// takes no clicks, so the drag beneath it still ends where it is.
 struct FilesWriteRefusal: View {
     let session: FilesSession
     @Environment(\.appTypography) private var typography
@@ -13,31 +14,46 @@ struct FilesWriteRefusal: View {
             if let host = session.writeRefusal {
                 notice(host)
                     .transition(.opacity)
+            } else if session.moveRefused {
+                notice(title: "Hold ⌥ to copy here",
+                       detail: "Files copies and never moves: ⌥-drag makes a copy in this folder.", symbol: "plus.square.on.square",
+                       identifier: "files-move-refused")
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(false)
         .animation(.easeOut(duration: 0.15), value: session.writeRefusal)
-        .task(id: session.writeRefusal) {
-            guard session.writeRefusal != nil else { return }
+        .animation(.easeOut(duration: 0.15), value: session.moveRefused)
+        .task(id: session.writeRefusal ?? (session.moveRefused ? "move" : nil)) {
+            guard session.writeRefusal != nil || session.moveRefused else { return }
             var seen = session.writeRefusals
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.linger)
                 guard !Task.isCancelled else { return }
-                if session.writeRefusals == seen { session.writeRefusal = nil; return }
+                if session.writeRefusals == seen {
+                    session.writeRefusal = nil
+                    session.moveRefused = false
+                    return
+                }
                 seen = session.writeRefusals
             }
         }
     }
 
     private func notice(_ host: String) -> some View {
+        notice(title: "Copying in is off for \(host)", detail: "Turn on Copy files in under Settings › Hosts, then reconnect.",
+               symbol: "nosign", identifier: "files-write-refused")
+    }
+
+    private func notice(title: String, detail: String, symbol: String, identifier: String) -> some View {
         let palette = Chrome.palette
         return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "nosign").font(.system(size: typography.size(offset: 2), weight: .semibold))
+            Image(systemName: symbol).font(.system(size: typography.size(offset: 2), weight: .semibold))
                 .foregroundStyle(palette.warning).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Copying in is off for \(host)").foregroundStyle(Chrome.ink)
-                Text("Turn on Copy files in under Settings › Hosts, then reconnect.")
+                Text(title).foregroundStyle(Chrome.ink)
+                Text(detail)
                     .font(typography, .body).foregroundStyle(palette.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -49,7 +65,7 @@ struct FilesWriteRefusal: View {
         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(palette.warning.opacity(0.45)) }
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("files-write-refused")
+        .accessibilityIdentifier(identifier)
     }
 }
 

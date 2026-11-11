@@ -225,8 +225,9 @@ enum LayoutPreset: String, CaseIterable, Codable {
     /// The layouts a split of this many tabs can take.
     static func splits(_ count: Int) -> [LayoutPreset] { allCases.filter { $0 != .single && $0.count == count } }
 
-    /// A split's layout as the sidebar's menus name it.
-    var splitTitle: String {
+    /// The layout's one name, in title case, wherever it shows: the View menu, the layout picker, the ⌘/ sheet, Settings,
+    /// notes and accessibility.
+    var title: String {
         switch self {
         case .single: "Single"
         case .columns: "Side by Side"
@@ -235,15 +236,6 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .grid: "Grid"
         case .six: "Grid of Six"
         case .eight: "Grid of Eight"
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .columns: "columns"
-        case .rows: "rows"
-        case .grid: "grid"
-        case .single, .twoAbove, .six, .eight: rawValue
         }
     }
 }
@@ -627,9 +619,13 @@ struct Space: Identifiable, Equatable, Codable {
     var numberedTabIDs: [UUID] { !containers.isEmpty ? containers.map(\.id) : (activePane?.tabs.map(\.id) ?? []) }
     var numberedShortcutCount: Int { min(9, usesPaneShortcuts ? numberedPaneIDs.count : numberedTabIDs.count) }
 
+    /// ⌘1…8 the first eight tabs and ⌘9 the last, as in Safari and Terminal: with more than nine tabs the ninth has
+    /// no number and the last shows 9.
     func tabShortcutNumber(for id: UUID) -> Int? {
-        guard !usesPaneShortcuts, let index = numberedTabIDs.firstIndex(of: id), index < 9 else { return nil }
-        return index + 1
+        let ids = numberedTabIDs
+        guard !usesPaneShortcuts, let index = ids.firstIndex(of: id) else { return nil }
+        if index < 8 { return index + 1 }
+        return index == ids.count - 1 ? 9 : nil
     }
 
     enum TabShortcut: Equatable { case number(Int), next, previous }

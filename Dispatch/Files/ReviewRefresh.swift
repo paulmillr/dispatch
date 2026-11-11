@@ -3,7 +3,8 @@ import Foundation
 /// Create review's last look at the files before the review goes out: each comment's line found again where it is now,
 /// so the review's numbers are the file's as it is, not as it was when the comment was written; a comment whose lines are
 /// gone, or could be in more than one place, says so (`ReviewMatch`). Lines on the new side are found in the
-/// working-tree file, removed lines in the diff of the area the comment was written on.
+/// working-tree file, removed lines in the diff of the area the comment was written on. A comment on a commit's diff is
+/// found in the working-tree file too; its removed lines keep their numbers.
 enum ReviewRefresh {
     /// The working-tree file, as read: its lines, gone (deleted, or not a file now), or unknown (unreadable, too large,
     /// binary, the host unreachable: the comments keep their numbers).
@@ -28,6 +29,9 @@ enum ReviewRefresh {
         }
         return comments.map { comment in
             guard !comment.onFile else { return comment }
+            // A commit's comment: its lines are looked for in the file as it is now (found, they take today's numbers);
+            // removed lines were the commit's parent's, which no working-tree diff holds, so they keep theirs.
+            if comment.commit != nil { return result(comment, ReviewMatch.locate(comment, new: working, old: nil)) }
             // Without the status nothing is known of the areas: the working tree is the file, no diff is known.
             guard let areas else {
                 return result(comment, ReviewMatch.locate(comment, new: working, old: nil))
@@ -93,7 +97,7 @@ enum ReviewRefresh {
             // The diffs the comments need: their area's removed lines, and the index's lines while the file is staged
             // and changed again.
             var needed: Set<GitChangeArea> = []
-            for comment in fileComments where !comment.onFile {
+            for comment in fileComments where !comment.onFile && comment.commit == nil {
                 guard let areas, let area = area(of: comment, in: areas), area != .untracked else { continue }
                 if (area == .staged && areas.contains(.unstaged)) || ReviewMatch.anchors(comment)[.old] != nil {
                     needed.insert(area)

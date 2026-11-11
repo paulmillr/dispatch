@@ -3,7 +3,7 @@ import SwiftUI
 /// Variant D: Terminal / Chat / Files as the top capsule (glyph + title); inside Files, the system bottom tab bar
 /// carries Files / Review / Commits with the badge and the accessory slot. Terminal and Chat keep their bottoms.
 struct SegmentCapsule: View {
-    let items: [(String, String)] = [("Terminal", "apple.terminal"), ("Chat", "text.bubble"), ("Files", "folder")]
+    let items: [(String, String)] = [("Terminal", "apple.terminal"), ("Chat", "dispatch.chat"), ("Files", "folder")]
     var selected = 2
     var badge: Int? = nil
     var body: some View {
@@ -11,7 +11,7 @@ struct SegmentCapsule: View {
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in
                 let on = i == selected
                 HStack(spacing: 5) {
-                    Image(systemName: item.1).font(.subheadline.weight(.medium))
+                    Image(symbol: item.1).font(.subheadline.weight(.medium))
                     Text(item.0).font(.subheadline.weight(on ? .semibold : .medium))
                     if i == 2, let badge {
                         Text("\(badge)").font(.caption2.weight(.bold)).foregroundStyle(.white)
@@ -35,6 +35,9 @@ enum FilesTabMode: Int, CaseIterable, Identifiable {
     var symbol: String { switch self { case .files: "folder"; case .review: "pencil.and.list.clipboard"; case .commits: "clock.arrow.circlepath" } }
 }
 
+/// A tab in Files, as the app ships it (`TabFilesSegment`): the shipped header (Back, the title capsule, the mode button
+/// lit on the mode's glyph: the folder, Review's clipboard, Commits' clock; Files' modes are in its menu), under it the
+/// mode's own row (its place and its buttons); the mode's accessory (Create review) a glass capsule at the bottom.
 struct HybridShell<Content: View, Context: View, Trailing: View, Accessory: View>: View {
     let mode: FilesTabMode
     var hasAccessory = false
@@ -44,32 +47,26 @@ struct HybridShell<Content: View, Context: View, Trailing: View, Accessory: View
     @ViewBuilder var content: Content
 
     var body: some View {
-        if hasAccessory { tabs.tabViewBottomAccessory { accessory } } else { tabs }
-    }
-
-    private var tabs: some View {
-        TabView(selection: .constant(mode)) {
-            ForEach(FilesTabMode.allCases) { m in
-                Tab(m.title, systemImage: m.symbol, value: m) {
-                    NavigationStack {
-                        Group { if m == mode { content } else { Color.canvas } }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.canvas)
-                            .safeAreaBar(edge: .top, spacing: 0) {
-                                VStack(spacing: 10) {
-                                    SegmentCapsule()
-                                    if m == mode {
-                                        HStack(spacing: 10) { context; Spacer(minLength: 0); trailing }
-                                    }
-                                }
-                                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-                            }
-                            .navigationBarTitleDisplayMode(.inline)
-                            .toolbar { TabHeader(title: "Sidebar theme toggle") }
+        NavigationStack {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.canvas)
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    HStack(spacing: 10) { context; Spacer(minLength: 0); trailing }
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
+                }
+                .safeAreaBar(edge: .bottom) {
+                    if hasAccessory {
+                        accessory
+                            .frame(height: 52)
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                            .padding(.horizontal, 16).padding(.bottom, 4)
                     }
                 }
-                .badge(m == .review ? 3 : 0)
-            }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    CapsuleTabHeader(title: "Sidebar theme toggle", state: ModeButtonState(shown: .files, agent: true, filesMode: mode))
+                }
         }
     }
 }
@@ -100,7 +97,6 @@ struct HybridReviewScreen: View {
     var body: some View {
         HybridShell(mode: .review, hasAccessory: true) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 8 files").font(.subheadline).foregroundStyle(.secondary)
                 Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.subheadline, design: .monospaced))
@@ -143,7 +139,6 @@ struct HybridCommitsScreen: View {
     var body: some View {
         HybridShell(mode: .commits) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 148 commits").font(.subheadline).foregroundStyle(.secondary)
             }
@@ -156,7 +151,7 @@ struct HybridCommitsScreen: View {
     }
 }
 
-/// Terminal under the same top capsule: the key bar keeps the bottom, no tab bar.
+/// Terminal: the shipped header (the program in its subtitle, the mode button naming Files), the key bar at the bottom.
 struct HybridTerminalScreen: View {
     var body: some View {
         NavigationStack {
@@ -172,9 +167,6 @@ struct HybridTerminalScreen: View {
             .padding(.horizontal, 12).padding(.bottom, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .background(Color.black)
-            .safeAreaBar(edge: .top, spacing: 0) {
-                SegmentCapsule(selected: 0, badge: 3).padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 10)
-            }
             .safeAreaBar(edge: .bottom) {
                 HStack(spacing: 0) {
                     ForEach(["Ctrl", "Esc", "Tab", "Alt"], id: \.self) { k in
@@ -189,7 +181,7 @@ struct HybridTerminalScreen: View {
                 .padding(.horizontal, 12).padding(.bottom, 4)
             }
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { TabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm"))) }
+            .toolbar { CapsuleTabHeader(title: "dev", subtitle: AnyView(TabSubtitle(shell: "pnpm")), state: ModeButtonState(shown: .terminal, agent: false)) }
         }
     }
 }

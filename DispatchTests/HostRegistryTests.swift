@@ -24,23 +24,87 @@ final class HostRegistryTests: XCTestCase {
         XCTAssertEqual(malformed.map { (try? $0.validate()) == nil }, Array(repeating: true, count: malformed.count))
     }
 
-    func testIdentityMergesAliasesAndUsersWithoutMergingNames() {
+    func testIdentityMergesAliasesOfALoginAndSplitsItsMachinesAccounts() {
         let hosts = HostRegistry(defaults: nil)
-        let first = System.uuid(), second = System.uuid(), third = System.uuid(), a = System.uuid(), b = System.uuid(), c = System.uuid()
+        let first = System.uuid(), second = System.uuid(), third = System.uuid(), fourth = System.uuid()
+        let a = System.uuid(), b = System.uuid(), c = System.uuid(), d = System.uuid()
         hosts.begin(first, generation: a, destination: "alice@build")
-        hosts.begin(second, generation: b, destination: "root@build-alias")
+        hosts.begin(second, generation: b, destination: "alice@build-alias")
         XCTAssertNotEqual(hosts.terminals[first]?.host, hosts.terminals[second]?.host)
-        hosts.update(second, generation: b, destination: "root@build-alias", greeting: greeting("one", uid: 0), state: .connected)
+        hosts.update(second, generation: b, destination: "alice@build-alias", greeting: greeting("one"), state: .connected)
         hosts.update(first, generation: a, destination: "alice@build", greeting: greeting("one"), state: .connected)
-        let id = HostID.authenticated("one")
+        let id = HostID.authenticated("one", uid: 501)
         XCTAssertEqual(hosts.terminals[first]?.host, id)
         XCTAssertEqual(hosts.terminals[second]?.host, id)
         XCTAssertEqual(hosts.record(id).name, "build", "The earliest destination remains the display name, regardless of reply order")
-        XCTAssertEqual(Set(hosts.record(id).destinations), ["alice@build", "root@build-alias"])
-        hosts.begin(third, generation: c, destination: "alice@build")
-        hosts.update(third, generation: c, destination: "alice@build", greeting: greeting("two"), state: .connected)
-        XCTAssertNotEqual(hosts.terminals[third]?.host, id, "Identical display names do not prove machine identity")
-        XCTAssertEqual(hosts.ordered([id, .authenticated("two")]).map(\.id), [.local, id, .authenticated("two")])
+        XCTAssertEqual(Set(hosts.record(id).destinations), ["alice@build", "alice@build-alias"])
+
+        hosts.begin(third, generation: c, destination: "root@build")
+        hosts.update(third, generation: c, destination: "root@build", greeting: greeting("one", uid: 0), state: .connected)
+        let root = HostID.authenticated("one", uid: 0)
+        XCTAssertEqual(hosts.terminals[third]?.host, root, "Another account on the machine is another host")
+        XCTAssertEqual(hosts.record(root).destinations, ["root@build"])
+        XCTAssertEqual(hosts.record(id).name, "alice@build", "Logins on one machine say their account")
+        XCTAssertEqual(hosts.record(root).name, "root@build")
+        XCTAssertNotNil(hosts.record(id).color)
+        XCTAssertEqual(hosts.record(root).color, hosts.record(id).color, "Logins on one machine share its color")
+        XCTAssertEqual(hosts.record(root).tint?.machine, hosts.record(id).tint?.machine)
+
+        hosts.begin(fourth, generation: d, destination: "alice@build")
+        hosts.update(fourth, generation: d, destination: "alice@build", greeting: greeting("two"), state: .connected)
+        XCTAssertNotEqual(hosts.terminals[fourth]?.host, id, "Identical display names do not prove machine identity")
+        XCTAssertEqual(hosts.record(.authenticated("two", uid: 501)).name, "build", "A login alone on its machine needs no account")
+        XCTAssertEqual(hosts.ordered([id, .authenticated("two", uid: 501)]).map(\.id), [.local, id, .authenticated("two", uid: 501)])
+    }
+
+    func testALoginNamesItsMachineWithoutGuessingOtherIds() {
+        XCTAssertEqual(HostID.authenticated("one", uid: 501).machine, .authenticated("one"))
+        XCTAssertEqual(HostID.authenticated("one").machine, .authenticated("one"), "A machine's own id is left alone")
+        XCTAssertEqual(HostID.local.machine, .local)
+        XCTAssertEqual(HostID.provisional(System.uuid()).isProvisional, true)
+        let login = HostID(rawValue: "login:a:501")
+        XCTAssertEqual(login.machine, login, "Only verified ids carry a uid")
+    }
+
+    func testTheFirstLoginTakesOverAMachinesSavedRecordAndEveryLoginKeepsItsReviewKey() throws {
+        let suite = "HostRegistryTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let machine = HostID.authenticated("machine"), key = System.uuid(), color = try XCTUnwrap(HostColor.allCases.first)
+        let saved = HostRecord(id: machine, name: "build", destinations: ["alice@build", "root@build"], order: 0, colorName: color.rawValue)
+        defaults.set(try JSONEncoder().encode([saved]), forKey: "HostRegistry.v1")
+        defaults.set([machine.rawValue: key.uuidString], forKey: "HostRegistry.keys.v1")
+
+        let hosts = HostRegistry(defaults: defaults), first = System.uuid(), second = System.uuid(), a = System.uuid(), b = System.uuid()
+        hosts.begin(first, generation: a, destination: "alice@build")
+        hosts.update(first, generation: a, destination: "alice@build", greeting: greeting("machine"), state: .connected)
+        let alice = HostID.authenticated("machine", uid: 501)
+        XCTAssertNil(hosts.records[machine], "The machine's record passes to the login")
+        XCTAssertEqual(hosts.record(alice).name, "build")
+        XCTAssertEqual(hosts.record(alice).destinations, ["alice@build"], "The other account's destination is not this login's")
+        XCTAssertEqual(hosts.record(alice).color, color)
+        XCTAssertEqual(hosts.key(for: alice), key)
+
+        hosts.begin(second, generation: b, destination: "root@build")
+        hosts.update(second, generation: b, destination: "root@build", greeting: greeting("machine", uid: 0), state: .connected)
+        let root = HostID.authenticated("machine", uid: 0)
+        XCTAssertEqual(hosts.record(root).color, color)
+        XCTAssertEqual(hosts.key(for: root), key, "Reviews made while the logins were one host stay with both")
+        XCTAssertEqual(hosts.record(alice).name, "alice@build")
+    }
+
+    func testARecipeIsHeldToItsLogin() {
+        func recipe(_ host: HostID, uid: UInt32?) -> SSHReconnectController.Recipe {
+            .init(connection: SSHConnectionID(), host: host, shell: SSHShell(destination: "alice@build"), scope: nil,
+                  accountUID: uid, origin: System.uuid(), surfaces: [])
+        }
+        let login = HostID.authenticated("one", uid: 501)
+        XCTAssertTrue(recipe(login, uid: 501).isLogin(machine: "one", uid: 501))
+        XCTAssertFalse(recipe(login, uid: 501).isLogin(machine: "one", uid: 0), "Another account on the machine is another host")
+        XCTAssertFalse(recipe(login, uid: 501).isLogin(machine: "two", uid: 501))
+        XCTAssertTrue(recipe(login, uid: nil).isLogin(machine: "one", uid: 501))
+        XCTAssertFalse(recipe(login, uid: nil).isLogin(machine: "one", uid: 0))
+        XCTAssertTrue(recipe(.authenticated("one"), uid: nil).isLogin(machine: "one", uid: 501), "Saved without an account: held to the machine")
+        XCTAssertFalse(recipe(.authenticated("one"), uid: 501).isLogin(machine: "one", uid: 501), "An account is known: the host must be that login")
     }
 
     /// A glass strip leads with the active tab's host once any of its tabs is remote, and keeps that slot (showing
@@ -60,7 +124,7 @@ final class HostRegistryTests: XCTestCase {
         workspace.hosts.update(remote.focusedSurfaceID, generation: generation, destination: "strip-fixture",
                                greeting: greeting("strip-fixture"), state: .connected)
         let shown = try XCTUnwrap(runtime.ssh.stripHost(active: remote, among: [local, remote]))
-        XCTAssertEqual(shown.record?.id, .authenticated("strip-fixture"))
+        XCTAssertEqual(shown.record?.id, .authenticated("strip-fixture", uid: 501))
         XCTAssertFalse(shown.connecting)
         XCTAssertFalse(shown.provisional)
         XCTAssertNotEqual(shown.key, pending.key, "Connecting lands as a host switch")
@@ -78,7 +142,7 @@ final class HostRegistryTests: XCTestCase {
     /// them.
     func testHostMarkSpacePickerListsSpacesByHost() throws {
         let workspace = Workspace()
-        let remote = HostID.authenticated("menu-fixture")
+        let remote = HostID.authenticated("menu-fixture", uid: 501)
         var local = Space(name: "notes", directory: "/tmp"), first = Space(name: "api", directory: "/srv")
         var second = Space(name: "web", directory: "/srv")
         first.hostID = remote; second.hostID = remote
@@ -111,7 +175,7 @@ final class HostRegistryTests: XCTestCase {
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
             hosts.remove(terminal)
-            return .authenticated(name)
+            return .authenticated(name, uid: 501)
         }
         func color(_ id: HostID) throws -> HostColor { try XCTUnwrap(hosts.record(id).tint).automatic }
         // Every color twice over, none connected.
@@ -137,13 +201,13 @@ final class HostRegistryTests: XCTestCase {
         let other = System.uuid(), otherGeneration = System.uuid()
         hosts.begin(other, generation: otherGeneration, destination: "new-two")
         hosts.update(other, generation: otherGeneration, destination: "new-two", greeting: greeting("new-two"), state: .connected)
-        let otherColor = try color(.authenticated("new-two"))
+        let otherColor = try color(.authenticated("new-two", uid: 501))
         XCTAssertFalse(connected.contains(otherColor), "A new host takes a color no connected host shows")
         XCTAssertEqual(try color(pending), preview, "A preview holds while its connection lasts")
         connected.insert(otherColor)
 
         hosts.update(first, generation: generation, destination: "new-one", greeting: greeting("new-one"), state: .connected)
-        XCTAssertEqual(try color(.authenticated("new-one")), preview, "The new host keeps the color it connected with")
+        XCTAssertEqual(try color(.authenticated("new-one", uid: 501)), preview, "The new host keeps the color it connected with")
         XCTAssertNil(hosts.records[pending], "The placeholder goes once its connection is identified")
         hosts.begin(second, generation: System.uuid(), destination: "new-three")
         XCTAssertFalse(connected.contains(try color(try XCTUnwrap(hosts.terminals[second]?.host))))
@@ -211,7 +275,7 @@ final class HostRegistryTests: XCTestCase {
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
             hosts.remove(terminal)
-            return .authenticated(name)
+            return .authenticated(name, uid: 501)
         }
         func shown(_ id: HostID) throws -> HostColor { try XCTUnwrap(hosts.record(id).tint).automatic }
         let ids = HostColor.allCases.indices.map { connect("machine-\($0)") }
@@ -245,7 +309,7 @@ final class HostRegistryTests: XCTestCase {
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
         }
-        let one = HostID.authenticated("one"), two = HostID.authenticated("two"), live: Set<HostID> = [one, two]
+        let one = HostID.authenticated("one", uid: 501), two = HostID.authenticated("two", uid: 501), live: Set<HostID> = [one, two]
         XCTAssertEqual(hosts.ordered(live).map(\.id), [.local, one, two])
         hosts.move(two, relativeTo: one, after: false)
         XCTAssertEqual(hosts.ordered(live).map(\.id), [.local, two, one])
@@ -267,10 +331,10 @@ final class HostRegistryTests: XCTestCase {
         hosts.begin(other, generation: live, destination: "alias")
         hosts.update(other, generation: live, destination: "alias", greeting: greeting("same"), state: .connected)
         hosts.setState(.disconnected, generation: current)
-        XCTAssertEqual(hosts.state(.authenticated("same")), .connected)
+        XCTAssertEqual(hosts.state(.authenticated("same", uid: 501)), .connected)
         hosts.setState(.disconnected, generation: live)
-        XCTAssertEqual(hosts.state(.authenticated("same")), .disconnected)
-        XCTAssertEqual(hosts.terminals[terminal]?.host, .authenticated("same"), "Helper failure does not make a surviving SSH terminal local")
+        XCTAssertEqual(hosts.state(.authenticated("same", uid: 501)), .disconnected)
+        XCTAssertEqual(hosts.terminals[terminal]?.host, .authenticated("same", uid: 501), "Helper failure does not make a surviving SSH terminal local")
     }
 
     func testOldGreetingsMetadataPersistenceSeedsAndEmptyCards() throws {
@@ -283,12 +347,12 @@ final class HostRegistryTests: XCTestCase {
         var known = greeting("identity")
         known.hostname = "actual-host"; known.os = "Linux"; known.distribution = "ubuntu"; known.osName = "Ubuntu 26.04"
         hosts.update(terminal, generation: generation, destination: "user@server", greeting: known, state: .connected)
-        let id = HostID.authenticated("identity"), seed = System.uuid(), seedGeneration = System.uuid()
+        let id = HostID.authenticated("identity", uid: 501), seed = System.uuid(), seedGeneration = System.uuid()
         hosts.seed(seed, from: id, generation: seedGeneration)
         XCTAssertEqual(hosts.terminals[seed]?.host, id)
         XCTAssertEqual(hosts.terminals[seed]?.state, .connecting)
         hosts.update(seed, generation: seedGeneration, destination: "user@server", greeting: greeting("different"), state: .connected)
-        XCTAssertEqual(hosts.terminals[seed]?.host, .authenticated("different"))
+        XCTAssertEqual(hosts.terminals[seed]?.host, .authenticated("different", uid: 501))
         let restored = HostRegistry(defaults: defaults)
         XCTAssertEqual(restored.record(id).name, "server")
         XCTAssertEqual(restored.record(id).system?.distribution, "ubuntu")
@@ -305,7 +369,7 @@ final class HostRegistryTests: XCTestCase {
     func testPersistedExtremeOrderCannotOverflowWhenAnotherHostArrives() throws {
         let suite = "HostRegistryTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let saved = HostRecord(id: .authenticated("saved"), name: "saved", destinations: [], order: Int.max)
+        let saved = HostRecord(id: .authenticated("saved", uid: 501), name: "saved", destinations: [], order: Int.max)
         defaults.set(try JSONEncoder().encode([saved]), forKey: "HostRegistry.v1")
         let hosts = HostRegistry(defaults: defaults), generation = System.uuid()
         hosts.begin(System.uuid(), generation: generation, destination: "next")
@@ -325,7 +389,7 @@ final class HostRegistryTests: XCTestCase {
         XCTAssertEqual(hosts.terminals[first]?.host, hosts.terminals[second]?.host)
         XCTAssertNotEqual(hosts.terminals[first]?.generation, hosts.terminals[second]?.generation)
         hosts.update(first, generation: a, destination: scope.destination, greeting: greeting("one"), state: .connected)
-        XCTAssertEqual(hosts.terminals[second]?.host, .authenticated("one"))
+        XCTAssertEqual(hosts.terminals[second]?.host, .authenticated("one", uid: 501))
         XCTAssertEqual(hosts.terminals[second]?.authenticated, false)
         XCTAssertEqual(hosts.terminals[second]?.state, .unverified)
         hosts.update(second, generation: b, destination: scope.destination, greeting: greeting("two"), state: .connected)

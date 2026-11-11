@@ -20,6 +20,9 @@ struct GitCommitsView: View {
             if session.gitResolving {
                 // Another folder's repository is being resolved: the last log is not this folder's.
                 GitDelayedSpinner().accessibilityIdentifier("git-commits-resolving")
+            } else if let reason = session.gitUnavailable {
+                GitFailureNote(title: "Git can’t run here", message: reason, identifier: "git-unavailable",
+                               retry: { TerminalRuntime.shared.files.refresh(session.id) })
             } else {
                 // The Files tab's split: the same divider, widths and ⌥⌘P as its preview and the Review tab's diff.
                 FilesSplit(session: session,
@@ -50,6 +53,14 @@ struct GitCommitsView: View {
     /// The mockup opens the selected commit on its first file's diff; a file already picked in it stays.
     private func pickFirstFile() {
         guard let detail = session.commitDetail, detail.commit.hash == session.selectedCommit else { return }
+        // A review comment asked for this commit's file (Create Review's list).
+        if let wanted = session.commitFileRequest {
+            session.commitFileRequest = nil
+            if detail.files.contains(where: { $0.path == wanted }) {
+                session.commitFile = wanted
+                return
+            }
+        }
         if let file = session.commitFile, detail.files.contains(where: { $0.path == file }) { return }
         session.commitFile = detail.files.first?.path
     }
@@ -95,8 +106,8 @@ enum GitCommitsFocus: Hashable {
 /// The tab's texts, apart from the views so the fast tests read them.
 enum GitCommitsText {
     /// The footer's "200 loaded · scroll for more", "148 loaded · all".
-    static func footer(_ log: GitLog?) -> String {
-        guard let log else { return "Loading the log…" }
+    static func footer(_ log: GitLog?, failed: Bool = false) -> String {
+        guard let log else { return failed ? "The log could not be read" : "Loading the log…" }
         let count = FilesFormatting.count(log.commits.count)
         return log.exhausted ? "\(count) loaded · all" : "\(count) loaded · scroll for more"
     }
@@ -297,15 +308,16 @@ private struct GitCommitsList: View {
     var body: some View {
         // The list's width caps the graph's lanes and the rows' refs, so neither crowds out the subjects.
         GeometryReader { geometry in
-            rows(width: geometry.size.width)
+            rows(width: geometry.size.width, height: geometry.size.height)
         }
     }
 
-    private func rows(width: CGFloat) -> some View {
+    private func rows(width: CGFloat, height: CGFloat) -> some View {
         let commits = session.log?.commits ?? []
         let scale = typography.expanded(1)
         let layout = graph.graph(for: session, maxLanes: GitGraphCell.maxLanes(width: width, scale: scale))
         let rowHeight = typography.expanded(28)
+        let page = max(1, Int(height / rowHeight) - 1)
         let graphWidth = GitGraphCell.width(lanes: layout.lanes, scale: scale)
         let refsWidth = GitRefChips.maxWidth(list: width)
         let author = GitAuthorColumn.style(width: width, typography: typography)
@@ -362,13 +374,22 @@ private struct GitCommitsList: View {
                     }
                 }
                 // Over the rows' scroll view, so it lets clicks and scrolls through.
-                .overlay { state(empty: commits.isEmpty && uncommitted == 0).allowsHitTesting(false) }
+                // Clicks pass through, but to a failed log's Try Again.
+                .overlay {
+                    state(empty: commits.isEmpty && uncommitted == 0)
+                        .allowsHitTesting(session.log == nil && session.logError != nil)
+                }
                 .focusable()
                 .focusEffectDisabled()
                 .focused(focus, equals: .list)
                 // The uncommitted row opens the Review tab: it is another tab, not a row the arrows reach.
                 .onKeyPress(.upArrow) { move(-1, proxy: proxy) }
                 .onKeyPress(.downArrow) { move(1, proxy: proxy) }
+                // A page at a time, and to either end of what is loaded, as the Files list does.
+                .onKeyPress(.pageUp) { move(-page, proxy: proxy) }
+                .onKeyPress(.pageDown) { move(page, proxy: proxy) }
+                .onKeyPress(.home) { move(-commits.count, proxy: proxy) }
+                .onKeyPress(.end) { move(commits.count, proxy: proxy) }
                 .onKeyPress(.return) {
                     // Without the detail pane (hidden by ⌥⌘P) the list keeps the keyboard; one column shows the detail.
                     guard session.selectedCommit != nil, detailShown || narrow else { return .ignored }
@@ -412,7 +433,10 @@ private struct GitCommitsList: View {
     }
 
     @ViewBuilder private func state(empty: Bool) -> some View {
-        if session.log == nil {
+        if session.log == nil, let error = session.logError {
+            GitFailureNote(title: "The log could not be read", message: error, identifier: "git-commits-error",
+                           retry: { TerminalRuntime.shared.files.refresh(session.id) })
+        } else if session.log == nil {
             GitCentredNote(text: "Loading the log…", identifier: "git-commits-loading")
         } else if empty {
             GitCentredNote(text: GitLogFilterText.empty(search: session.logFilter, tagged: session.logTagged),
@@ -659,10 +683,13 @@ struct GitGraphCell: View, Animatable {
                     }
                 }
                 guard reveal > 0 else { continue }
+                // A line takes the colour of the lane it runs in: down the parent's lane for one leaving the dot.
+                let lane = line.kind == .out ? line.to : line.from
                 context.stroke(reveal < 1 ? path.trimmedPath(from: 0, to: reveal) : path,
-                               with: .color(line.current ? green : slate), lineWidth: 2 * scale)
+                               with: .color(line.current ? green : Self.laneColor(lane, fallback: slate)),
+                               lineWidth: 2 * scale)
             }
-            let color = row.current ? green : slate
+            let color = row.current ? green : Self.laneColor(row.lane, fallback: slate)
             if row.lane < lanes, dot > 0 {
                 let radius = 4.5 * scale * (1 - pow(1 - dot, 3))
                 let dot = Path(ellipseIn: CGRect(x: Self.x(row.lane, scale: scale) - radius, y: middle - radius,
@@ -682,7 +709,27 @@ struct GitGraphCell: View, Animatable {
             }
         }
         .frame(width: width, height: height)
-        .accessibilityHidden(true)
+        .help(row.map { $0.hidden > 0 ? Self.hiddenHelp($0.hidden) : "" } ?? "")
+        .accessibilityLabel(row.map { $0.hidden > 0 ? Self.hiddenHelp($0.hidden) : "" } ?? "")
+        .accessibilityHidden((row?.hidden ?? 0) == 0)
+    }
+
+    /// "+3" at the left edge: the branches folded there, the list being too narrow for their lanes.
+    static func hiddenHelp(_ count: Int) -> String {
+        "\(count) more \(count == 1 ? "branch" : "branches") here · widen the list to see their lanes"
+    }
+
+    /// The lanes other than the checked-out branch's (always green) cycle through colours told apart with any colour
+    /// vision (Okabe and Ito's: blue, orange, sky blue, vermilion, reddish purple), so crossing branches can be followed;
+    /// the first lane keeps the theme's slate.
+    static func laneColor(_ lane: Int, fallback: Color) -> Color {
+        guard lane > 0 else { return fallback }
+        let palette: [Color] = [Color(red: 0 / 255, green: 114 / 255, blue: 178 / 255),
+                                Color(red: 230 / 255, green: 159 / 255, blue: 0 / 255),
+                                Color(red: 86 / 255, green: 180 / 255, blue: 233 / 255),
+                                Color(red: 213 / 255, green: 94 / 255, blue: 0 / 255),
+                                Color(red: 204 / 255, green: 121 / 255, blue: 167 / 255)]
+        return palette[(lane - 1) % palette.count]
     }
 }
 
@@ -799,7 +846,7 @@ private struct GitCommitsFooter: View {
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 8) {
-            Text(verbatim: GitCommitsText.footer(session.log))
+            Text(verbatim: GitCommitsText.footer(session.log, failed: session.logError != nil))
                 .accessibilityIdentifier("git-commits-footer-summary")
             Spacer(minLength: 0)
             // Narrow lists keep the menu short: "All ▾", "Branch ▾", the shown branch's name.
@@ -1005,10 +1052,13 @@ private struct GitCommitDetailPane: View {
                 if !narrow {
                     GitCommitDetailStack {
                         summary
-                        GitCommitDiff(session: session)
+                        GitCommitDiff(session: session) { focus.wrappedValue = .files }
                     }
                 } else if session.drilledFile {
-                    GitCommitDiff(session: session, framed: false)
+                    GitCommitDiff(session: session, framed: false) {
+                        session.goBack()
+                        focus.wrappedValue = .files
+                    }
                         // Esc the diff did not take itself goes back to the commit's files.
                         .onExitCommand { session.goBack() }
                         .transition(.opacity)
@@ -1291,6 +1341,7 @@ private struct GitCommitFiles: View {
                         // A button, not a tap gesture, as for the log's rows.
                         Button {
                             session.commitFile = file.path
+                            session.commitDiffFocusPending = false
                             focus.wrappedValue = .files
                             if narrow { session.narrowFile = true }
                         } label: {
@@ -1305,7 +1356,10 @@ private struct GitCommitFiles: View {
                 .focused(focus, equals: .files)
                 .onKeyPress(.upArrow) { move(-1, in: files) }
                 .onKeyPress(.downArrow) { move(1, in: files) }
-                // One column: ⏎ and → open the picked file's diff in the commit's place.
+                .onKeyPress(.home) { move(-files.count, in: files) }
+                .onKeyPress(.end) { move(files.count, in: files) }
+                // ⏎ and → give the picked file's diff the keyboard (one column: in the commit's place); esc there
+                // comes back.
                 .onKeyPress(.return) { open() }
                 .onKeyPress(.rightArrow) { open() }
                 .onKeyPress(.leftArrow) { leave() }
@@ -1325,8 +1379,11 @@ private struct GitCommitFiles: View {
     }
 
     private func open() -> KeyPress.Result {
-        guard narrow, session.commitFile != nil else { return .ignored }
-        session.narrowFile = true
+        guard session.commitFile != nil else { return .ignored }
+        if narrow { session.narrowFile = true }
+        // The diff may still be loading, or mounting on one column: it takes the keyboard when it shows.
+        session.commitDiffFocusPending = true
+        session.commitDiffFocus = System.uuid()
         return .handled
     }
 
@@ -1335,6 +1392,7 @@ private struct GitCommitFiles: View {
         let current = session.commitFile.flatMap { path in files.firstIndex { $0.path == path } }
         let next = current.map { min(max($0 + step, 0), files.count - 1) } ?? 0
         session.commitFile = files[next].path
+        session.commitDiffFocusPending = false
         return .handled
     }
 }
@@ -1380,6 +1438,8 @@ private struct GitCommitDiff: View {
     @Bindable var session: FilesSession
     /// Under the commit's files, a rule between them; alone in their place (one column), none.
     var framed = true
+    /// esc in the diff: the commit's files take the keyboard back (one column: back to them).
+    var leave: () -> Void = {}
 
     /// The loaded diff when it is the picked file's in the selected commit: the data layer keys it "<hash>:<path>", so
     /// the same path in another commit, or a diff left from the file picked before, is never shown as this one.
@@ -1404,6 +1464,13 @@ private struct GitCommitDiff: View {
         }
     }
 
+    /// The commit's lines take comments into the repository's one review, as the Review tab's do.
+    private func review(_ diff: GitDiff) -> GitDiffReview? {
+        guard let scope = session.reviewScope, let hash = session.selectedCommit,
+              session.commitDetail?.commit.hash == hash else { return nil }
+        return GitDiffReview(session: session, scope: scope, path: diff.path, commit: hash)
+    }
+
     var body: some View {
         let palette = Chrome.palette
         let state = Self.shown(session)
@@ -1414,9 +1481,12 @@ private struct GitCommitDiff: View {
             if session.commitFile == nil {
                 Color.clear
             } else if let state, let diff = state.diff {
-                GitDiffView(diff: diff, mode: $session.diffMode, wrap: $session.diffWrap, source: reader(diff))
+                GitDiffView(diff: diff, mode: $session.diffMode, wrap: $session.diffWrap, source: reader(diff),
+                            focusRequest: session.commitDiffFocus, onEscape: leave,
+                            review: review(diff), session: session, focusOnAppear: session.commitDiffFocusPending)
                     // Each commit's file gets its own folds, scroll and cursor.
                     .id(state.key)
+                    .onChange(of: session.diffFocused) { _, focused in if focused { session.commitDiffFocusPending = false } }
             } else if let error = state?.error {
                 GitCentredNote(text: error, identifier: "git-commit-diff-error")
             } else {
@@ -1472,7 +1542,7 @@ struct GitSignatureBadge: View {
         .fixedSize()
         .help(detail)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(GitSignatureText.short(check)) · \(detail)")
+        .accessibilityLabel(check == nil ? detail : "\(GitSignatureText.short(check)) · \(detail)")
         .accessibilityIdentifier("git-commit-signature")
     }
 }
@@ -1488,16 +1558,21 @@ enum GitSignatureText {
         let palette = Chrome.palette
         switch check?.verdict {
         case nil, .unsigned?, .unchecked?: return Look(symbol: "seal", color: palette.detail)
-        case .good(let certified)?: return Look(symbol: "checkmark.seal.fill", color: certified ? palette.green : palette.secondary)
+        // A key nobody certified draws an outline: the word and the glyph differ, not only the colour.
+        case .good(let certified)?: return Look(symbol: certified ? "checkmark.seal.fill" : "checkmark.seal",
+                                                color: certified ? palette.green : palette.secondary)
         case .bad?, .revokedKey?: return Look(symbol: "xmark.seal.fill", color: ChatThemeStore.shared.current.red)
         case .unknownKey?, .expiredSignature?, .expiredKey?: return Look(symbol: "exclamationmark.triangle.fill", color: palette.warning)
         }
     }
 
-    /// The badge's word: "Signed" for a good signature (and while it is checked), else what is wrong with it.
+    /// The badge's words: "Verified" for a good signature from a certified key, "Signed · key not certified" for one
+    /// from a key nobody vouched for, "Checking…" while it is checked, else what is wrong with it.
     static func short(_ check: GitSignatureCheck?) -> String {
         switch check?.verdict {
-        case nil, .good?: "Signed"
+        case nil: "Checking…"
+        case .good(true)?: "Verified"
+        case .good(false)?: "Signed · key not certified"
         case .bad?: "Bad signature"
         case .unknownKey?: "Unknown key"
         case .expiredSignature?: "Expired signature"

@@ -32,7 +32,7 @@ struct LayoutPicker: View {
             LayoutOptions(space: space, workspace: workspace) { presented = false }
         }
     }
-    private var shortLabel: String { preset?.title ?? "custom" }
+    private var shortLabel: String { preset?.title ?? "Custom" }
 }
 
 struct LayoutOptions: View {

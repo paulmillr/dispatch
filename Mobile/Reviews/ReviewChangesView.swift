@@ -308,10 +308,6 @@ struct ReviewBar: View {
         let branch = context.branch ?? status.map(GitChangesText.branch)
         HStack(spacing: 4) {
             if let branch {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
                 Text(verbatim: branch).font(.subheadline.weight(.semibold))
             }
             if let status {

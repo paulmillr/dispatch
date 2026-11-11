@@ -2,15 +2,16 @@ import SwiftUI
 
 // iPad, third pass: the Mac's layout. The sidebar is the Spaces tree alone (no bottom bar; New and Edit in its bar
 // row). The detail column opens with the space's tab strip: one glass track of tab pills (state dot, agent or
-// terminal glyph, title, ⌘n), "+" after them, and the mode switch at the trailing end: Terminal · Chat · Files ·
-// Review · Commits as glyphs, the git two only inside a repository. No title header, no capsule.
+// terminal glyph, title, ⌘n), "+" after them, and the mode button at the trailing end (`PadModeButton`): the shown
+// mode's glyph and title, its menu Terminal, Chat, Files, Review (its count) and Commits, as the Mac's and the phone's.
+// No title header, no capsule.
 
 enum PadMode: Int, CaseIterable, Identifiable {
     case terminal, chat, files, review, commits
     var id: Int { rawValue }
     var symbol: String {
         switch self {
-        case .terminal: "apple.terminal"; case .chat: "text.bubble"; case .files: "folder"
+        case .terminal: "apple.terminal"; case .chat: "dispatch.chat"; case .files: "folder"
         case .review: "pencil.and.list.clipboard"; case .commits: "clock.arrow.circlepath"
         }
     }
@@ -19,7 +20,7 @@ enum PadMode: Int, CaseIterable, Identifiable {
     }
 }
 
-/// The strip: the space's tabs as pills in one glass track, "+" and the mode switch after it.
+/// The strip: the space's tabs as pills in one glass track, "+" and the mode button after it.
 struct PadStrip: View {
     var mode: PadMode = .files
     var selectedTab = 0
@@ -34,7 +35,6 @@ struct PadStrip: View {
                     Image(systemName: "apple.logo").font(.caption).foregroundStyle(hostTint)
                     Text("app").font(.subheadline.weight(.semibold))
                     HStack(spacing: 3) {
-                        Image(systemName: "arrow.triangle.branch").font(.caption2.weight(.semibold))
                         Text("dark-mode").font(.caption.weight(.semibold))
                     }
                     .foregroundStyle(.secondary)
@@ -65,25 +65,17 @@ struct PadStrip: View {
             Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 38, height: 38)
                 .glassEffect(.regular.interactive(), in: Circle())
             Spacer(minLength: 8)
-            HStack(spacing: 2) {
-                ForEach(PadMode.allCases) { m in
-                    let on = m == mode
-                    Image(systemName: m.symbol).font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(on ? Color.dispatchPink : .primary)
-                        .frame(width: 40, height: 32)
-                        .background { if on { Capsule().fill(Color.lens) } }
-                        .overlay(alignment: .topTrailing) {
-                            if m == .review, let reviewBadge {
-                                Text("\(reviewBadge)").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                                    .padding(.horizontal, 4).frame(height: 14).background(Color.stateUnread, in: Capsule())
-                                    .offset(x: 2, y: -2)
-                            }
-                        }
-                        .accessibilityLabel(m.title)
-                }
+            // The mode button: the shown mode's glyph, filled in the accent away from Terminal, and its title (the column
+            // is 640 points or wider beside the sidebar on its side).
+            HStack(spacing: 6) {
+                let lit = mode != .terminal
+                Image(symbol: lit ? ModeButtonState.filled(mode.symbol) : mode.symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(lit ? Color.dispatchPink : .primary)
+                Text(mode.title).font(.subheadline.weight(.semibold))
             }
-            .padding(3)
-            .glassEffect(.regular, in: Capsule())
+            .padding(.horizontal, 14).frame(minWidth: 44, minHeight: 38)
+            .glassEffect(.regular.interactive(), in: Capsule())
             .fixedSize()
         }
         .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 4)
@@ -192,7 +184,6 @@ struct PadStripReview: View {
     var body: some View {
         PadStripShell(mode: .review, selectedTab: 1) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 8 files").font(.subheadline).foregroundStyle(.secondary)
                 Counts(add: MockGit.additions, del: MockGit.deletions, font: .system(.subheadline, design: .monospaced))
@@ -212,7 +203,6 @@ struct PadStripCommits: View {
     var body: some View {
         PadStripShell(mode: .commits, selectedTab: 1) {
             HStack(spacing: 4) {
-                Image(systemName: "arrow.triangle.branch").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(MockGit.branch).font(.subheadline.weight(.semibold))
                 Text("· 148 commits").font(.subheadline).foregroundStyle(.secondary)
             }

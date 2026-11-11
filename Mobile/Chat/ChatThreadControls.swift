@@ -2,38 +2,17 @@ import CoreText
 import SwiftUI
 import UIKit
 
-/// The chat tab's header controls (C1, C3, C4b, C5): the conversation's menu (Search, the side conversations,
-/// Manage goal) and the host disc, which becomes a pink waveform disc while conversation mode is on (a tap
-/// ends it). Tabs' `TabScreen` puts them in the header's trailing slot on the Chat segment (`TabsContent.chatTrailing`).
-/// On the phone (X9b) the disc is the tab's menu and holds the conversation's items (`menuInDisc`); beside the Duo's
-/// sidebar, where the Terminal / Chat switch takes the disc's place, the ⋯ menu sits before the switch.
+/// The chat tab's header control (C5): the mode button, which becomes a pink waveform disc while conversation mode is on
+/// (a tap ends it). Tabs' `TabScreen` puts it in the header's trailing slot on the Chat segment
+/// (`TabsContent.chatTrailing`); the conversation's items (Search, the side conversations, Manage goal) are in the title
+/// capsule's menu (`chatMenu`).
 struct ChatHeaderControls<Disc: View>: View {
     let session: MobileChatSession
-    /// Beside the Duo's sidebar `disc` is the Terminal / Chat switch, which stays: the waveform disc takes the menu's
-    /// place instead of the disc's.
-    var keepsDisc = false
-    /// `disc` is the tab's menu with `ChatThreadMenuItems` in it (X9b), or the mode button with them in the host's menu
-    /// beside Back (a phone tab's header): no ⋯ beside it, and the waveform takes its place.
-    var menuInDisc = false
     @ViewBuilder var disc: Disc
     @State private var voice = MobileVoiceConversation.shared
 
-    /// The slot's width beside the Duo's sidebar: the menu (or the waveform disc), the bar's gap, the disc (`disc`
-    /// points wide). With the menu in the disc, the disc's 44 points.
-    static func width(disc: CGFloat = 44) -> CGFloat { 44 + 8 + disc }
-
     var body: some View {
-        HStack(spacing: 8) {
-            if menuInDisc {
-                if voice.active(for: session) { waveform } else { disc }
-            } else if keepsDisc {
-                if voice.active(for: session) { waveform } else { ChatThreadMenu(session: session) }
-                disc
-            } else {
-                ChatThreadMenu(session: session)
-                if voice.active(for: session) { waveform } else { disc }
-            }
-        }
+        if voice.active(for: session) { waveform } else { disc }
     }
 
     private var waveform: some View {
@@ -50,61 +29,30 @@ struct ChatHeaderControls<Disc: View>: View {
 }
 
 extension TabsContent {
-    /// The Chat segment's header for the conversation `session(tab, pane)` (`chatTrailing`, `chatMenu`): beside the
-    /// Duo's switch the ⋯ menu before it; on the phone the disc is the tab's menu with the conversation's items, and
-    /// conversation mode's waveform takes its place.
+    /// The Chat segment's header for the conversation `session(tab, pane)` (`chatTrailing`, `chatMenu`): the mode
+    /// button, which conversation mode's waveform replaces, and the conversation's items for the tab's menu.
     mutating func chatHeader(_ session: @escaping @MainActor (MobileTab, MobilePane) -> MobileChatSession) {
-        chatTrailing = { tab, pane, disc, keepsDisc in
-            AnyView(ChatHeaderControls(session: session(tab, pane), keepsDisc: keepsDisc, menuInDisc: !keepsDisc) { disc })
-        }
+        chatTrailing = { tab, pane, disc in AnyView(ChatHeaderControls(session: session(tab, pane)) { disc }) }
         chatMenu = { tab, pane in AnyView(ChatThreadMenuItems(session: session(tab, pane))) }
     }
 }
 
-/// The ⋯ menu of a conversation (beside the Duo's sidebar; the phone's tab menu holds its items, `ChatThreadMenuItems`).
-struct ChatThreadMenu: View {
-    let session: MobileChatSession
-
-    var body: some View {
-        Menu {
-            ChatThreadMenuItems(session: session)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
-        }
-        // 44 points, as `ChatHeaderControls.width` counts it (`SpaceMenu`'s note).
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .tint(Color.primary)
-        .glassEffect(.regular.interactive(), in: Circle())
-        .contentShape(.hoverEffect, Circle())
-        .hoverEffect(.highlight)
-        .accessibilityLabel("Conversation menu")
-    }
-}
-
-/// A conversation's menu items: Search, the side conversations (read-only, with changes; the open one instead while it
+/// A conversation's menu items: Search, the side conversations (read-only; the open one instead while it
 /// lasts), Manage goal. Conversation mode is the composer's ("+", and a long press on the mic).
 struct ChatThreadMenuItems: View {
     let session: MobileChatSession
+    /// What the tab's menu puts right under Search (the host's Stats, `TabMenuItems`).
+    @Environment(\.chatMenuAfterSearch) private var afterSearch
 
     var body: some View {
         Button("Search", systemImage: "magnifyingglass") { session.search.open() }
+        if let afterSearch { afterSearch }
         if session.side != nil {
             Button("Side Conversation", systemImage: "bubble.left.and.text.bubble.right") { session.showingSide = true }
-        } else {
-            Group {
-                if session.offersSide(.btw) {
-                    Button("Side Conversation", systemImage: "bubble.left.and.text.bubble.right") { session.openSide(.btw) }
-                }
-                if session.offersSide(.side) {
-                    Button("Side Conversation with Changes", systemImage: "pencil") { session.openSide(.side) }
-                }
-            }
-            .disabled(session.phase != .verified)
+        } else if session.offersSide(.btw) {
+            // The read-only side conversation only: one with changes is the composer's `/side`.
+            Button("Side Conversation", systemImage: "bubble.left.and.text.bubble.right") { session.openSide(.btw) }
+                .disabled(session.phase != .verified)
         }
         if session.goal != nil {
             Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
@@ -921,11 +869,28 @@ struct ChatLoadingLine: View {
     }
 }
 
-/// A tap felt as a menu opens on a long press (send's options, the mode button's modes, the tab's menu), as the
-/// system's context menus give one: a menu's items appearing are the only sign SwiftUI gives that it opened.
+/// A tap felt as a hold reveals a menu (Send's options), as the system's context menus give one. The hold itself is what
+/// is felt: SwiftUI builds a menu's items whenever the view draws, not as it opens, so counting their appearing buzzed
+/// at launch and on every plain tap (a send, a mode switch) and not on the hold. A plain tap gives none, nor does the tab's
+/// menu, which a tap opens. The mode button is a system bar item, which passes no gesture on: it has none of its own.
 extension View {
-    /// On a Menu: `opened` counts the openings, which the menu's items report (`menuOpened(_:)`).
-    func menuOpenHaptic(_ opened: Int) -> some View { sensoryFeedback(.impact(weight: .medium), trigger: opened) }
-    /// On a Menu's items: counts an opening.
-    func menuOpened(_ opened: Binding<Int>) -> some View { onAppear { opened.wrappedValue += 1 } }
+    func menuHoldHaptic() -> some View { modifier(MenuHoldHaptic()) }
+}
+
+struct MenuHoldHaptic: ViewModifier {
+    /// About when the system's menu opens under a held finger.
+    static let hold = 0.4
+    @State private var held = 0
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(LongPressGesture(minimumDuration: Self.hold).onEnded { _ in held += 1 })
+            .sensoryFeedback(.impact(weight: .medium), trigger: held)
+    }
+}
+
+extension EnvironmentValues {
+    /// A menu item the conversation's items show right under Search (`ChatThreadMenuItems`): the tab's menu puts the
+    /// host's Stats there.
+    @Entry var chatMenuAfterSearch: AnyView? = nil
 }

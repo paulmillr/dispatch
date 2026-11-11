@@ -72,7 +72,7 @@ struct WindowTabBar: View {
         return StripTab(title: title, activityIDs: tab.terminals.map(\.id),
                         connecting: tab.terminals.contains { workspace.hostMoveMotion.connecting.contains($0.id) }, shortcut: shortcut,
                         width: width, selected: selected == tab.id, hovered: hovered, hostTint: tabTint,
-                        closeHelp: "Close tab · detaches if jobs are running",
+                        closeHelp: "Close tab · detaches it if jobs are running",
                         select: { workspace.selectWindow(tab.id) }, close: { controller.closeWindow(tab.id) },
                         style: tabStyle, divider: tabStyle == .outlined && StripTab.divider(after: tab.id, in: tabs.map(\.id), selected: selected),
                         alone: tabs.count == 1)
@@ -106,6 +106,8 @@ struct WindowTabBar: View {
                     }
                 })
                 Divider()
+                // Close is the ×'s: it ends idle work and detaches busy work; Detach keeps it; Terminate… ends it.
+                Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
                 Button("Detach") { controller.detachWindow(tab.id) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminateWindow(tab.id) }
             }
@@ -129,7 +131,8 @@ struct MoveTargetsSection: View {
     let spaces: [MoveTarget]
 
     static let inlineSpaces = 4
-    static let detachHelp = "Remove from Dispatch; keep server work running"
+    static let detachHelp = "Keep it running on the server; it is listed under Detached"
+    static let closeHelp = "Ends it if nothing runs there; otherwise detaches it"
 
     var body: some View {
         Section("Move to") {

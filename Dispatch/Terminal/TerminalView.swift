@@ -27,6 +27,9 @@ final class TerminalView: NSView {
         return UInt32(exactly: tty)
     }
     var foregroundPIDOverride: UInt64? { helperDevice.map { $0.flatMap(AgentProcess.foregroundGroup(device:)) ?? 0 } }
+    /// The programs besides its shell on this terminal's tty (`AgentProcess.jobs`); nil when this Mac cannot see its tty
+    /// (a standalone view, a terminal on another machine).
+    var jobs: [String]? { helperDevice?.flatMap(AgentProcess.jobs(device:)) }
     /// The program here is reading a password, as far as this Mac can tell.
     private var atPasswordPrompt: Bool {
         guard let device = helperDevice else { return surface?.passwordInput ?? false }
@@ -53,6 +56,10 @@ final class TerminalView: NSView {
     let screenPublication = OSAllocatedUnfairLock(initialState: ScreenPublication())
     private var tracking: NSTrackingArea?
     private var rendererView: NSView?
+    /// The pointer over the terminal (`setPointer`): the I-beam, a link's pointing hand, or a program's choice.
+    var pointer: NSCursor = .iBeam
+    /// The URL of the link under the pointer, at the terminal's bottom left while it shows (`showLinkPreview`).
+    var linkPreview: NSTextField?
     var markedTextRange = NSRange(location: NSNotFound, length: 0)
     var selectedTextRange = NSRange(location: 0, length: 0)
     var markedText = ""
@@ -376,4 +383,100 @@ final class TerminalView: NSView {
 /// Rendering stays in a precisely sized child; input belongs to TerminalView.
 private final class TerminalRenderView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+extension TerminalView {
+    /// The engine's pointer shape by its CSS name (Ghostty's mouse_shape), as AppKit has it; the I-beam for the rest.
+    static func cursor(named name: String) -> NSCursor {
+        switch name {
+        case "default", "progress", "wait", "help", "all_scroll", "move", "cell", "zoom_in", "zoom_out": .arrow
+        case "context_menu": .contextualMenu
+        case "pointer": .pointingHand
+        case "crosshair": .crosshair
+        case "vertical_text": .iBeamCursorForVerticalLayout
+        case "alias": .dragLink
+        case "copy": .dragCopy
+        case "no_drop", "not_allowed": .operationNotAllowed
+        case "grab": .openHand
+        case "grabbing": .closedHand
+        case "col_resize", "ew_resize", "e_resize", "w_resize": .resizeLeftRight
+        case "row_resize", "ns_resize", "n_resize", "s_resize": .resizeUpDown
+        default: .iBeam
+        }
+    }
+
+    func setPointer(_ name: String) {
+        let cursor = Self.cursor(named: name)
+        guard cursor != pointer else { return }
+        pointer = cursor
+        window?.invalidateCursorRects(for: self)
+        // The pointer is over this terminal (the engine only reports shapes for motion here): show it now.
+        if let window, bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) { cursor.set() }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: pointer)
+    }
+
+    /// Where a ⌘-hovered link goes, in a small label at the terminal's bottom left, as Ghostty and browsers show it.
+    func showLinkPreview(_ url: String?) {
+        guard let url, !url.isEmpty else {
+            linkPreview?.removeFromSuperview(); linkPreview = nil
+            return
+        }
+        let label = linkPreview ?? {
+            let label = NSTextField(labelWithString: "")
+            label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            label.textColor = .labelColor
+            label.drawsBackground = true
+            label.backgroundColor = .windowBackgroundColor.withAlphaComponent(0.92)
+            label.lineBreakMode = .byTruncatingMiddle
+            label.wantsLayer = true
+            label.layer?.cornerRadius = 4
+            label.layer?.zPosition = 999
+            label.setAccessibilityIdentifier("terminal-link-preview")
+            addSubview(label)
+            linkPreview = label
+            return label
+        }()
+        label.stringValue = " " + String(url.prefix(2048)) + " "
+        let size = label.intrinsicContentSize
+        label.frame = NSRect(x: 6, y: 6, width: min(size.width, max(40, bounds.width - 12)), height: size.height)
+    }
+
+    /// A program rang the bell (Settings › General › Bell): on screen with Dispatch in front, the alert sound or a flash
+    /// over the terminal; otherwise its tab is marked with a bell until you type in it (`ProgramStatusStore.rang`).
+    func ringBell() {
+        let runtime = TerminalRuntime.shared, style = runtime.preferences.bell
+        guard style != .off else { return }
+        guard onScreen, NSApp.isActive, window?.isKeyWindow == true else { return runtime.programs.ring(id) }
+        switch style {
+        case .sound: NSSound.beep()
+        case .flash: flash()
+        case .off: break
+        }
+    }
+
+    /// The visual bell: the terminal briefly lightens, as Terminal.app's and iTerm2's do; with Reduce Motion it shows
+    /// and goes without fading.
+    private func flash() {
+        guard let layer else { return }
+        let overlay = CALayer()
+        overlay.frame = layer.bounds
+        overlay.backgroundColor = NSColor.labelColor.withAlphaComponent(0.18).cgColor
+        overlay.zPosition = 1000
+        layer.addSublayer(overlay)
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { overlay.removeFromSuperlayer() }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = reduce ? 0.12 : 0.25
+        fade.timingFunction = CAMediaTimingFunction(name: reduce ? .linear : .easeOut)
+        if reduce { fade.fromValue = 1; fade.toValue = 1 }
+        overlay.opacity = 0
+        overlay.add(fade, forKey: "flash")
+        CATransaction.commit()
+    }
 }

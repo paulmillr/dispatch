@@ -55,10 +55,10 @@ struct AgentWorkingState: Equatable {
                    text: Self.toolDescription(item).text)
         }
         if loading {
-            label = "Loading conversation…"; fragment = ""
+            label = "loading conversation…"; fragment = ""
         } else if waiting {
             let question = session.waitingForAnswer || session.nativePrompt != nil || session.approvals.contains { $0.pending && $0.questions != nil }
-            label = question ? "Waiting for your answer…" : "Waiting for your approval…"; fragment = ""
+            label = question ? "waiting for your answer…" : "waiting for your approval…"; fragment = ""
         } else if items.last?.kind == .reasoning {
             label = "thinking"; fragment = ""
         } else if let tool = items.last(where: { $0.kind == .tool && !$0.completed }) {

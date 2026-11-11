@@ -87,6 +87,44 @@ struct GitCentredNote: View {
     }
 }
 
+/// Why a git tab has nothing to show: what git (or the host) said, and Try again (⌘R) unless only a setting or the host
+/// can change it.
+struct GitFailureNote: View {
+    let title: String
+    let message: String
+    let identifier: String
+    /// Nil: no Try again.
+    var retry: (() -> Void)?
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let palette = Chrome.palette
+        VStack(spacing: 10) {
+            Text(verbatim: title)
+                .font(typography, .label, weight: .semibold)
+                .foregroundStyle(palette.ink)
+            Text(verbatim: message)
+                .font(typography, .body)
+                .foregroundStyle(palette.detail)
+                .multilineTextAlignment(.center)
+                .lineLimit(8)
+                .textSelection(.enabled)
+                .accessibilityIdentifier(identifier + "-message")
+            if let retry {
+                Button("Try Again", action: retry)
+                    .buttonStyle(FilePreviewButtonStyle())
+                    .help("Ask git again · ⌘R")
+                    .accessibilityIdentifier(identifier + "-retry")
+            }
+        }
+        .frame(maxWidth: 520)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
 /// A file's or a commit's "+8 −5" in the add and remove colours (F3a, F4a): "0" for a change of no lines, a binary's
 /// `binary` text in its place ("binary · 48 KB → 51 KB"), nothing before the counts load. `totals` shows both signs,
 /// "+26 −0", as the Changes header sums them. The caller sets the font.

@@ -181,7 +181,7 @@ final class NewSpacePresentationTests: XCTestCase {
         workspace.hosts.begin(terminal, generation: generation, destination: name)
         workspace.hosts.update(terminal, generation: generation, destination: name,
             greeting: SSHGreeting(version: 1, host: name, boot: "test", uid: 501, home: "/tmp", capabilities: []), state: .connected)
-        space.hostID = .authenticated(name)
+        space.hostID = .authenticated(name, uid: 501)
         workspace.spaces.append(space)
         return space.hostID
     }
@@ -329,7 +329,7 @@ final class NewSpacePresentationTests: XCTestCase {
             var greeting = SSHGreeting(version: 1, host: name, boot: "test", uid: 501, home: "/tmp", capabilities: [])
             greeting.os = os; greeting.distribution = distribution
             workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
-            space.hostID = .authenticated(name)
+            space.hostID = .authenticated(name, uid: 501)
             workspace.spaces.append(space)
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 356, height: 360),
@@ -368,7 +368,7 @@ final class NewSpacePresentationTests: XCTestCase {
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
-        remote.hostID = .authenticated("fixture")
+        remote.hostID = .authenticated("fixture", uid: 501)
         workspace.spaces.append(remote)
         workspace.selectSpace(local)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 356, height: 550),
@@ -425,7 +425,7 @@ final class NewSpacePresentationTests: XCTestCase {
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
-        remote.hostID = .authenticated("fixture")
+        remote.hostID = .authenticated("fixture", uid: 501)
         workspace.spaces.append(remote)
         workspace.selectSpace(local)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 356, height: 550),

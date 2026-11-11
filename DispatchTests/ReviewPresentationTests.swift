@@ -5,7 +5,8 @@ import XCTest
 
 /// The Review tab's comments as the user writes them, hosted in `FilesView` over the Changes mockup (a fake source, the
 /// status and diff the git data layer would leave in the session) with the comments in memory: the gutter's + opens
-/// the composer, ⏎ saves, Create review copies the review and clears it, Undo brings it back. Desktop cases.
+/// the composer, ⏎ saves; in Create Review's overall comment ⏎ adds a line and ⌘⏎ copies the review, which keeps the
+/// comments until Clear Comments, whose Undo brings them back. Desktop cases.
 @MainActor
 final class ReviewPresentationTests: XCTestCase {
     private let root = "/Users/ivan/src/api"
@@ -80,11 +81,11 @@ final class ReviewPresentationTests: XCTestCase {
         }, in: window, until: done, diagnostic: "\(identifier) clicked without effect", file: file, line: line)
     }
 
-    /// Types `text` into the review editor that has the keyboard in `window`, then presses ⏎.
-    private func type(_ text: String, in window: NSWindow) throws {
+    /// Types `text` into the review editor that has the keyboard in `window`, then presses ⏎ with `modifiers`.
+    private func type(_ text: String, in window: NSWindow, modifiers: NSEvent.ModifierFlags = []) throws {
         let editor = try XCTUnwrap(window.firstResponder as? ReviewTextEditor.EditorView)
         editor.insertText(text, replacementRange: editor.selectedRange())
-        let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
                                                    windowNumber: window.windowNumber, context: nil, characters: "\r",
                                                    charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
         window.sendEvent(enter)
@@ -127,33 +128,41 @@ final class ReviewPresentationTests: XCTestCase {
                     .contains { $0.contains("1 comment") }
         }
 
-        // Create review: the overall comment, ⏎ copies it, and the comments are gone with an Undo.
+        // Create Review: in the overall comment ⏎ adds a line (nothing goes out), ⌘⏎ copies; the comments stay.
         let pasteboard = NSPasteboard.general.string(forType: .string)
         addTeardownBlock { @MainActor in
             NSPasteboard.general.clearContents()
             if let pasteboard { NSPasteboard.general.setString(pasteboard, forType: .string) }
         }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("before the review", forType: .string)
         var popover: NSWindow?
         try await click("review-create", in: window, until: {
             popover = NSApp.windows.first { $0 !== window && $0.isVisible && $0.firstResponder is ReviewTextEditor.EditorView }
             return popover != nil
         })
-        try type("Looks close; run the tests after.", in: try XCTUnwrap(popover))
-        try await TestSupport.eventually { self.repository.review(scope).isEmpty }
+        try type("Looks close.", in: try XCTUnwrap(popover))
+        try await TestSupport.eventually { self.repository.review(scope).summary == "Looks close.\n" }
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "before the review", "⏎ in the summary sends nothing")
+        try type("Run the tests after.", in: try XCTUnwrap(popover), modifiers: .command)
+        try await TestSupport.eventually { NSPasteboard.general.string(forType: .string) != "before the review" }
+        XCTAssertEqual(repository.review(scope).comments.count, 1, "Copy keeps the comments")
         let copied = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
         XCTAssertTrue(copied.hasPrefix("Code review of the uncommitted changes in the repository below: 1 comment on 1 file.") && copied.contains("\"repository\": \"\(root)\",\n  \"branch\": \"main\",\n  \"head\": \"3f2c1a0\""),
                       copied)
-        XCTAssertTrue(copied.contains("Looks close; run the tests after."), copied)
+        XCTAssertTrue(copied.contains("Looks close.\nRun the tests after."), copied)
         // Create review read the file again: the fake tree's billing.ts is one export repeated, so the line is gone.
         XCTAssertTrue(copied.contains("## File 1: \"src/routes/billing.ts\"\n\nLine \(number) (the line has changed since; the quote is what it "
                                       + "said):\n```diff\n+\(presentation.lines[index].text)\n```\n"
                                       + "Wrap the find and the put in one transaction."), copied)
         _ = try await frame("review-copied", in: window)
-        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("review-comment", in: window).isEmpty }
 
+        // Clear Comments takes them, with an Undo that brings them back.
+        try await click("review-clear", in: window, until: { self.repository.review(scope).isEmpty })
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("review-comment", in: window).isEmpty }
         try await click("review-undo", in: window, until: { self.repository.review(scope).comments.count == 1 })
         _ = try await frame("review-comment", in: window)
-        XCTAssertEqual(repository.review(scope).summary, "Looks close; run the tests after.")
+        XCTAssertEqual(repository.review(scope).summary, "Looks close.\nRun the tests after.")
     }
 
     /// A comment on the file sits above the rows; Edit opens it in the composer and ⏎ saves the new text; Delete

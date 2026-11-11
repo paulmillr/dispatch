@@ -200,6 +200,68 @@ final class CustomThemeTests: XCTestCase {
         plan.changes.forEach { $0.apply(&restored) }
         XCTAssertEqual(restored, preferences)
     }
+
+    /// Colorblind mode keeps the schemes it replaces and gives them back when it is turned off, across its kinds;
+    /// one that is gone by then gives way to Dispatch.
+    func testColorblindModeGivesBackTheSchemesChosenBefore() throws {
+        var draft = Preferences()
+        draft.theme = "Gruvbox Dark"
+        draft.lightTheme = "Solarized Light"
+        let pair = try XCTUnwrap(ColorSchemes.colorblind[.redGreen])
+        ColorSchemes.conform(&draft, to: .redGreen) { _ in true }
+        XCTAssertEqual([draft.theme, draft.lightTheme], [pair.dark.first, pair.light.first].compactMap { $0 })
+        ColorSchemes.conform(&draft, to: .blueYellow) { _ in true }
+        XCTAssertEqual([draft.typicalTheme, draft.typicalLightTheme], ["Gruvbox Dark", "Solarized Light"])
+        ColorSchemes.conform(&draft, to: .typical) { _ in true }
+        XCTAssertEqual([draft.theme, draft.lightTheme], ["Gruvbox Dark", "Solarized Light"])
+        XCTAssertNil(draft.typicalTheme)
+        ColorSchemes.conform(&draft, to: .redGreen) { _ in true }
+        ColorSchemes.conform(&draft, to: .typical) { $0 != "Gruvbox Dark" }
+        XCTAssertEqual([draft.theme, draft.lightTheme], ["Default", "Solarized Light"], "a scheme that is gone gives way to Dispatch")
+    }
+
+    /// Importing a Dispatch export lists each setting that differs as its own row, the startup command and security
+    /// switches apart and unchecked by default, never this Mac's own answers; a scheme of yours with an exported one's
+    /// name but other colors is kept, the import's saved beside it under a free name, which its settings then use.
+    func testDispatchImportListsEachChangeAndKeepsYourSchemes() throws {
+        var exported = Preferences()
+        exported.fontSize = 16
+        exported.theme = "Harbor Night"
+        exported.startupCommand = "tmux new -A -s main"
+        exported.autoApproveUnsafePastes = false
+        exported.setupShown = true
+        exported.automaticUpdates = true
+        try CustomThemes.save(sample(), named: "Harbor Night")
+        let folder = System.home.appendingPathComponent("Shared Settings", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try SettingsExport.write(exported, to: folder)
+        // Yours changes after the export: the export's is now another scheme of the same name.
+        var mine = sample()
+        mine.background = try XCTUnwrap(ThemeColor(hex: "#203040"))
+        try CustomThemes.save(mine, named: "Harbor Night")
+
+        var current = Preferences()
+        current.automaticUpdates = false
+        let plan = try SettingsExport.plan(from: folder, current: current)
+        XCTAssertEqual(plan.themes.map(\.name), ["Harbor Night 2"])
+        XCTAssertNotNil(plan.themes.first?.note)
+        let rows = Dictionary(uniqueKeysWithValues: plan.changes.map { ($0.setting, $0) })
+        XCTAssertEqual(Set(rows.keys), ["Font size", "Dark color scheme", "Startup command", "Automatically approve unsafe pastes"],
+                       "one row per differing setting, without the setup sheet's or updates' answers")
+        XCTAssertEqual(rows["Dark color scheme"]?.value, "Harbor Night 2")
+        XCTAssertNil(rows["Font size"]?.caution)
+        XCTAssertNotNil(rows["Startup command"]?.caution)
+        XCTAssertNotNil(rows["Automatically approve unsafe pastes"]?.caution)
+
+        var applied = current
+        for change in plan.changes where change.caution == nil { change.apply(&applied) }
+        XCTAssertEqual(applied.fontSize, 16)
+        XCTAssertEqual(applied.theme, "Harbor Night 2")
+        XCTAssertEqual(applied.startupCommand, "", "unchecked by default")
+        XCTAssertEqual(applied.automaticUpdates, false, "this Mac's answer stays")
+        XCTAssertFalse(applied.setupShown)
+        XCTAssertEqual(CustomThemes.theme(named: "Harbor Night")?.background, mine.background, "yours is untouched")
+    }
 }
 
 /// Duplicate and Edit: the editor's slots fall back to what the terminal draws, and what it saves no longer carries a

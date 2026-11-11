@@ -99,9 +99,14 @@ final class HelperSession: @unchecked Sendable {
   /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's). `terminals.window` only with
   /// `outputWindow` on.
   static var features: [String] {
-    ["terminals.coalesce", ChatAttachment.feature, screensHost, terminalsFollow, requestsBacklog, membershipsAppend]
+    ["terminals.coalesce", ChatAttachment.feature, screensHost, terminalsFollow, requestsBacklog, membershipsAppend, chatLimits]
       + (outputWindow ? [terminalsWindow] : [])
   }
+  /// `chat.limits`: the activity popover reads the agent's plan limits (`ChatLimitsStore`).
+  static let chatLimits = "chat.limits"
+  /// `chat.limits.rows`: the activity popover shows what a Pi limits extension reports (extras/pi). Not named in
+  /// `features` yet: it needs a Pi bridge that answers `limits`, which ships with a replay migration.
+  static let chatLimitRows = "chat.limits.rows"
   /// `memberships.append`: a `memberships.move` without `before` puts the node after its new parent's last member.
   /// Without it herdr's helper sends the last tab's index, and herdr inserts before that tab (one short of the end).
   static let membershipsAppend = "memberships.append"

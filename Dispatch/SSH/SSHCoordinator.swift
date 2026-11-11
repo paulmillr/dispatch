@@ -98,17 +98,46 @@ final class SSHCoordinator {
             publish(SSHConsentResponse(grant: .init(profile: .ordinary)), to: reply)
             return
         }
+        // A login here found no helper for the host's platform: plain SSH, without trying (and saying so) again. The
+        // saved choice stays; changing it in Settings › Hosts tries again.
+        if permissions.unsupported(request.scope) {
+            publish(SSHConsentResponse(grant: .init(profile: .ordinary)), to: reply)
+            return
+        }
         Task { [weak self] in
             guard let self else { return }
             let runtime = TerminalRuntime.shared
             let window = runtime.views[request.tabID]?.window ?? runtime.workspace?.activeSurfaceID.flatMap { runtime.views[$0]?.window }
-            let grant = await permissions.choose(request.scope) { [weak self] scope in
-                await self?.newHostSelection(scope, window: window)
+            let permissions = permissions
+            let choosing = Task { @MainActor in
+                await permissions.choose(request.scope) { [weak self] scope in
+                    await self?.newHostSelection(scope, window: window)
+                }
             }
+            // The login stops waiting after SSHLauncherCommand.consentTimeout and says so on its terminal; this one stops then too,
+            // so a sheet no login waits for closes instead of taking a choice that would connect nothing.
+            let deadline = Task { @MainActor in
+                do { try await Task.sleep(for: SSHLauncherCommand.consentTimeout + .seconds(1)) } catch { return }
+                choosing.cancel()
+            }
+            let grant = await choosing.value
+            deadline.cancel()
             guard HostProcessWatcher.alive(request.origin), !Task.isCancelled else { return }
             if grant != nil { terminalScopes[request.tabID] = request.scope.key }
             publish(SSHConsentResponse(grant: grant), to: reply)
         }
+    }
+
+    /// Why `host` shows no stats, for its popover: what its logins allow, or that it isn't connected.
+    func statisticsUnavailable(host: HostID) -> String {
+        let entries = integrationEntries(for: host)
+        if entries.contains(where: { permissions.unsupported($0.scope) }) {
+            return "The Dispatch helper doesn’t run on this host’s platform, so it connects with plain SSH."
+        }
+        if !entries.isEmpty, entries.allSatisfy({ $0.grant.profile == .ordinary }) { return "This host connects with plain SSH, without the helper that reads stats." }
+        if !entries.isEmpty, !entries.contains(where: { $0.grant.selectedFeatures.contains(.statistics) }) { return "Stats is off for this host." }
+        if TerminalRuntime.shared.workspace?.hosts.state(host) != .connected { return "The host isn’t connected." }
+        return "The helper hasn’t sent stats yet."
     }
 
     /// UI restoration only. This value never authorizes helper access.
@@ -309,6 +338,7 @@ final class SSHCoordinator {
                 // to the requested shell/command without repeating login, saying why.
                 let reason = SSHSetupFailure.reason(error)
                 SSHSetupLog.shared.fellBack(reason)
+                if reason == SSHSetupFailure.unsupportedPlatform, let scope = request.integrationScope { permissions.markUnsupported(scope) }
                 let release = SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil, reason: reason)
                 _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: release),
                                               timeout: Self.seconds(SSHLinkTimeout.reply(for: request.connectionID)),
@@ -459,8 +489,7 @@ final class SSHCoordinator {
             restored = pending
         }
         if let restored {
-            guard restored.host == .authenticated(greeting.host),
-                  restored.accountUID == nil || restored.accountUID == greeting.uid else {
+            guard restored.isLogin(machine: greeting.host, uid: greeting.uid) else {
                 started.session.close()
                 throw HerdrFailure("The authenticated host or account changed. Open a new connection.")
             }
@@ -486,12 +515,12 @@ final class SSHCoordinator {
         state.greeting = greeting
         if let scope = request.integrationScope, grant.selectedFeatures.contains(.statistics) {
             _ = SSHStatisticsStore.shared.register(HelperStatisticsProvider(id: request.connectionID, scope: scope, greeting: greeting),
-                                                   grant: grant, hostID: .authenticated(greeting.host))
+                                                   grant: grant, hostID: .authenticated(greeting.host, uid: greeting.uid))
         }
         state.helperPath = SSHBootstrap.hostPath(started.relativePath, home: greeting.home)
         if let terminal = started.session.info.terminal {
             TerminalRuntime.shared.connect(request.connectionID, terminal: terminal, tab: request.tabID,
-                                           granted: Set(grant.selectedFeatures.map(\.rawValue)), host: .authenticated(greeting.host),
+                                           granted: Set(grant.selectedFeatures.map(\.rawValue)), host: .authenticated(greeting.host, uid: greeting.uid),
                                            previous: state.workspace ?? restored.flatMap { runtime.helpers[.remote($0.connection)] },
                                            retained: restored?.backends ?? [])
             state.workspace = nil
@@ -513,7 +542,7 @@ final class SSHCoordinator {
         let disabled = connections[id]?.granted?.selectedFeatures.contains(.chat) == false
         if let state = connections[id], let helper = TerminalRuntime.shared.helpers[.remote(id)],
            !helper.detachedRoutes.isEmpty, let greeting = state.greeting {
-            helper.recovery = .init(connection: id, host: .authenticated(greeting.host), shell: state.request.shell,
+            helper.recovery = .init(connection: id, host: .authenticated(greeting.host, uid: greeting.uid), shell: state.request.shell,
                 scope: state.request.integrationScope, accountUID: greeting.uid, boot: greeting.boot,
                 origin: state.request.tabID, surfaces: [], restored: true, backends: helper.detachedRoutes)
         }
@@ -676,8 +705,7 @@ final class SSHCoordinator {
             try Task.checkCancellation()
             // Its spaces may all be detached (restored from the Detached list): no tab of them is in the workspace yet.
             guard let identity = info.identity, let account = info.account,
-                  HostID.authenticated(identity.host) == recipe.host,
-                  recipe.accountUID == nil || recipe.accountUID == account.uid,
+                  recipe.isLogin(machine: identity.host, uid: account.uid),
                   runtime.hosts.reconnect.contains(recipe.connection.rawValue) else {
                 throw HerdrFailure("The authenticated host or account changed. Open a new connection.")
             }
@@ -827,8 +855,7 @@ final class SSHCoordinator {
         launch(request, recovering: true) { [self] path, info in
             try Task.checkCancellation()
             guard let identity = info.identity, let account = info.account,
-                  HostID.authenticated(identity.host) == recipe.host,
-                  recipe.accountUID == nil || recipe.accountUID == account.uid,
+                  recipe.isLogin(machine: identity.host, uid: account.uid),
                   !recipe.surfaces.isDisjoint(with: runtime.workspace?.allSurfaceIDs ?? []),
                   runtime.hosts.reconnect.contains(recipe.connection.rawValue) else {
                 throw HerdrFailure("The authenticated host changed or the retained tabs were closed.")
@@ -853,8 +880,7 @@ final class SSHCoordinator {
             try Task.checkCancellation()
             guard committed, let state = connections[id], state.granted == grant,
                   state.helper?.info.process != nil, let greeting = state.greeting,
-                  HostID.authenticated(greeting.host) == recipe.host,
-                  recipe.accountUID == nil || recipe.accountUID == greeting.uid,
+                  recipe.isLogin(machine: greeting.host, uid: greeting.uid),
                   permissions.remembered(scope) == grant else {
                 throw SSHRecoveryIncomplete("The replacement SSH shell did not start. Retry to reconnect.")
             }

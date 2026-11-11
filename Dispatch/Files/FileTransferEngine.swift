@@ -55,6 +55,8 @@ import Observation
     var limits = Limits()
     /// How long a finished or cancelled row stays before it slides away.
     var dismissDelay: Duration = .seconds(4)
+    /// A row that ended while its Files list was not on screen stays until it is; tests of the timing alone turn it off.
+    var holdsUnseenRows = true
     /// The rate is averaged over this much recent sending.
     var rateWindow: TimeInterval = 2
     /// Waits for the dismissal; the recording's clock, so a replay dismisses where its capture did.
@@ -243,6 +245,9 @@ import Observation
         var respelling: [(listed: String, dragged: String)] = []
         var conflict: CheckedContinuation<FileTransfer.ConflictResolution, Never>?
         var samples: [(date: Date, bytes: UInt64)] = []
+        /// The top-level names that arrive under their own name (new, or replacing): what the list selects once the
+        /// copy is done. A name kept beside an existing one arrives renamed and is not among them.
+        var landed: [String] = []
 
         init(id: UUID, items: [String], source: any FilesSource, target: any FilesSource, directory: String, rows: [Row],
              sourceSession: FilesSession?, targetSession: FilesSession?, retryable: Bool,
@@ -356,6 +361,7 @@ import Observation
                               respelled: replaced.flatMap { $0.name.utf8.elementsEqual(names[index].utf8) ? nil : $0.name }))
         }
         update(run) { $0.skipped = skipped }
+        run.landed = items.filter { !present.contains(key($0.name)) || $0.policy == .replace }.map(\.name)
         guard !items.isEmpty else { return }
         if let bytes = try await planned(run, items) {
             let rest = try await writeFiles(run, items, bytes: bytes, taken: present, rule: rule, parent: parent)
@@ -864,13 +870,26 @@ import Observation
         if orphaned(run) {
             dismiss(run)
         } else if stage == .done {
-            // The new entries show without waiting for the next poll.
-            if let session = run.targetSession { coordinator().refresh(session.id) }
+            // The new entries show without waiting for the next poll, selected as Finder selects what was dropped.
+            if let session = run.targetSession {
+                coordinator().refresh(session.id)
+                selectLanded(run, in: session)
+            }
             scheduleDismissal(run)
         } else if stage == .cancelled {
             scheduleDismissal(run)
         }
         run.finished?(run.primary)
+    }
+
+    /// The copied items selected (and scrolled to) in the list of the tab they were copied into, while that tab shows
+    /// the folder they went to.
+    private func selectLanded(_ run: Run, in session: FilesSession) {
+        guard run.primary.kind != .copyOut, !run.landed.isEmpty, session.visible, session.tab == .files,
+              session.listings[FilesPath.normalized(run.directory)] != nil else { return }
+        let paths = run.landed.map { FilesPath.join(run.directory, $0) }
+        session.selection = Set(paths)
+        session.anchor = paths.last
     }
 
     private func cancel(_ run: Run?) {
@@ -932,13 +951,47 @@ import Observation
         .failed(message: source.hostLabel.map { "\($0) is not connected" } ?? "The connection changed", retryable: true)
     }
 
+    /// A finished or cancelled row goes `dismissDelay` after it ends, if its Files list shows then; one that ended while
+    /// the user was elsewhere (the terminal, Review, another tab) stays until a tab of it shows its Files list again,
+    /// then for `dismissDelay` more, so the user learns how the copy ended (`holdsUnseenRows`).
     private func scheduleDismissal(_ run: Run) {
         let delay = dismissDelay
         Task { [weak run] in
             do { try await self.sleep(delay, "files.transfer.dismiss") } catch { return }
-            guard let run, run.primary.stage == .done || run.primary.stage == .cancelled else { return }
+            guard let run, Self.ended(run) else { return }
+            if self.holdsUnseenRows, !Self.shown(run) { return self.dismissOnceShown(run) }
             self.dismiss(run)
         }
+    }
+
+    /// Waits, without polling, for a tab of the run to show its Files list, then dismisses the row as usual.
+    private func dismissOnceShown(_ run: Run) {
+        withObservationTracking {
+            _ = Self.shown(run)
+        } onChange: { [weak self, weak run] in
+            Task { @MainActor [weak self, weak run] in
+                guard let self, let run, Self.ended(run), self.runs[run.id] === run else { return }
+                if Self.shown(run) { self.scheduleDismissal(run) } else { self.dismissOnceShown(run) }
+            }
+        }
+    }
+
+    private static func ended(_ run: Run) -> Bool { run.primary.stage == .done || run.primary.stage == .cancelled }
+
+    /// A tab of the run shows its Files list, where the rows are, in a window the user can see.
+    private static func shown(_ run: Run) -> Bool {
+        run.rows.contains { $0.session.visible && $0.session.presented && $0.session.tab == .files }
+    }
+
+    /// How many copies are under way (or waiting for a conflict's answer) with a row in one of `tabs`: what closing
+    /// those tabs, or quitting, would stop.
+    func running(in tabs: Set<UUID>) -> Int {
+        runs.values.filter { run in
+            switch run.primary.stage {
+            case .done, .failed, .cancelled: return false
+            default: return run.rows.contains { tabs.contains($0.session.id) }
+            }
+        }.count
     }
 
     private func dismiss(_ run: Run) {

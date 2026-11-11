@@ -306,7 +306,7 @@ final class ThinkingAnimationTests: XCTestCase {
             let state = AgentWorkingState(session)
             XCTAssertTrue(state.visible)
             XCTAssertTrue(state.loading)
-            XCTAssertEqual(state.label, "Loading conversation…")
+            XCTAssertEqual(state.label, "loading conversation…")
             XCTAssertNil(state.started)
             XCTAssertTrue(state.fragment.isEmpty)
             XCTAssertTrue(state.details.isEmpty)

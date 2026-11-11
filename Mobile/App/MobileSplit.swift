@@ -54,6 +54,8 @@ enum MobileSplit {
     static let laptopTab: CGFloat = 405
     /// The sidebar's narrowest: the narrow sidebar's tab bar (glyphs only) and rows still fit.
     static let narrowestSidebar: CGFloat = 250
+    /// The sidebar in book posture: the iPad's (`padSidebar`), so the tab gets the rest of the window across the fold.
+    static let bookSidebar: CGFloat = 320
 
     /// The sidebar, the gap after it (the hairline, or the fold) and the tab's column, across `width`.
     struct Columns: Equatable {
@@ -63,11 +65,10 @@ enum MobileSplit {
     }
 
     /// Laptop posture (taller than wide, the fold across both columns whatever they do): the tab keeps a phone's
-    /// width (263-point sidebar unfolded). Book posture (wider than tall): the hairline is the fold, Spaces on one side
-    /// and the tab on the other; a fold down the tab's column (as the 380-point sidebar had it) split its header, the
-    /// Terminal / Chat control and the thread. `fold` is where it runs in the columns' space (`MobileFoldReader`:
-    /// the division region's middle, off centre on the Duo, 517.5 of 951 points held one way); without one the
-    /// halves meet in the middle.
+    /// width (263-point sidebar unfolded). Book posture (wider than tall): the iPad's 320-point sidebar (`bookSidebar`)
+    /// and the tab across the fold (631 points of the Duo's 951), never wider than the fold's side leaves it. `fold` is
+    /// where the fold runs in the columns' space (`MobileFoldReader`: the division region's middle, off centre on the
+    /// Duo, 517.5 of 951 points held one way); without one the halves meet in the middle.
     ///
     /// On an iPad (`Device.pad`) the posture and the fold do not apply: the sidebar takes the system's width
     /// (`padSidebar`, less as the window narrows, never under `padNarrowestSidebar`) either way up, the tab the rest.
@@ -81,7 +82,8 @@ enum MobileSplit {
             return Columns(sidebar: sidebar, gap: 0.5, tab: max(0, width - sidebar - 0.5))
         }
         let line = fold.flatMap { $0 >= narrowestSidebar && width - $0 >= narrowestSidebar ? $0 : nil } ?? width / 2
-        return Columns(sidebar: line - 0.25, gap: 0.5, tab: width - line - 0.25)
+        let sidebar = min(bookSidebar, line - 0.25)
+        return Columns(sidebar: sidebar, gap: 0.5, tab: width - sidebar - 0.5)
     }
 
     static func sidebarWidth(for size: CGSize, device: Device = .phone) -> CGFloat {

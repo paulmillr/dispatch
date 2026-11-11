@@ -47,6 +47,19 @@ pub fn strip_launch_name(command: &mut Command) {
     }
 }
 
+/// One usage window of `chat.limits`: its name, the percent used and when it resets (Unix seconds). A tuple: it is
+/// encoded field by field and never reaches the wire schema (dispatch/features.rs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitWindow(pub String, pub u64, pub u64);
+
+/// One row of `chat.limits.rows`: label, detail, value, and the percent used when there is a limit to measure against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitRow(pub String, pub String, pub String, pub Option<u64>);
+
+/// `chat.limits.rows`: the extension that reports limits for the session's provider, if any, and its rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitRows(pub Option<String>, pub Vec<LimitRow>);
+
 pub fn deferred<T: 'static>(done: Done<T>) -> Done<T> {
     Box::new(move |io, result| io.defer(Box::new(move |io| done(io, result))))
 }
@@ -1378,6 +1391,18 @@ pub trait Harness {
     );
     /// End a side conversation; c1654cc Dispatch/Chat/ChatSideConversation.swift:428-437.
     fn side_close(&mut self, io: &mut dyn Io, side: &Binding, done: Done<()>);
+    /// The account's usage windows, read now (`chat.limits`); only a harness that can report them overrides this.
+    fn limits(&mut self, io: &mut dyn Io, _binding: &Binding, done: Done<Vec<LimitWindow>>) {
+        deferred(done)(io, Err(Error { code: "unsupported", message: "This agent reports no limits".into() }));
+    }
+    /// Which extension reports limits for this session (`read` none), or that extension's rows (`read` its name).
+    fn limit_rows(&mut self, io: &mut dyn Io, _binding: &Binding, _read: Option<&str>, done: Done<LimitRows>) {
+        deferred(done)(io, Err(Error { code: "unsupported", message: "This agent has no limits extensions".into() }));
+    }
+    /// Whether `limits` gets its answer through the agent's hooks, and so needs them on and granted.
+    fn limits_use_hooks(&self) -> bool {
+        false
+    }
     /// Hook/config edits: None = audit, Some(on) = install or remove; c1654cc Dispatch/Chat/PiChatSetup.swift:84-104, Dispatch/Chat/CodexHookSetup.swift:45.
     /// With `agent`, the target is that running agent's own config root (its environment,
     /// e.g. CODEX_HOME) instead of the helper's account default; c51466a

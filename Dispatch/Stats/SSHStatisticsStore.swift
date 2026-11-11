@@ -40,7 +40,7 @@ final class SSHLatency {
         case .loading: text += " Measuring…"
         case .ready: break
         case .stale: text += " Stale: the last reading is not current."
-        case .unavailable: text += " Unavailable. Requires a connected Stats or All features helper with latency support."
+        case .unavailable: text += " Unavailable: needs the Dispatch helper connected, with Stats allowed for this host (Settings › Hosts)."
         }
         return text
     }

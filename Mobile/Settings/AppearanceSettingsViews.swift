@@ -28,7 +28,7 @@ struct TerminalFontSettingsView: View {
                     Toggle("Blinking cursor", isOn: $settings.cursorBlink)
                 }
             }
-            // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
+            // The cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)
         }
         .scrollContentBackground(.hidden)
@@ -70,8 +70,9 @@ struct TerminalFontSettingsView: View {
     }
 }
 
-/// Settings › Terminal › Color scheme: Dispatch's two, then Ghostty's bundled themes, dark then light, each side by
-/// `SchemeGroup`, each with a swatch of its background, text and colours. The terminal's scheme alone: the app's theme does not change it.
+/// Settings › Terminal › Color scheme: Ghostty's bundled themes and Dispatch's two, dark then light, each side by
+/// `SchemeGroup`, each with a swatch of its background, text and colours. Dispatch's lead their groups: Dispatch (true
+/// black) Dark · OLED, Dispatch Gray Dark · Graphite.
 struct TerminalSchemeSettingsView: View {
     @Bindable var settings: MobileSettings
     @State private var schemes: [TerminalSchemes.Scheme] = []
@@ -84,8 +85,8 @@ struct TerminalSchemeSettingsView: View {
         let others = shown.filter { TerminalSchemes.dispatch[$0.file] == nil }
         List {
             Group {
-                if !own.isEmpty { Section("Dispatch") { rows(own) } }
-                sections(others.filter { $0.side != true || SchemeGroup.bothSides.contains($0.file) }, light: false)
+                // Dispatch's are dark: each in its group's first rows.
+                sections(own + others.filter { $0.side != true || SchemeGroup.bothSides.contains($0.file) }, light: false)
                 sections(others.filter { $0.side != false || SchemeGroup.bothSides.contains($0.file) }, light: true)
                 if settings.colorVision != .typical {
                     Section {} footer: {
@@ -93,7 +94,7 @@ struct TerminalSchemeSettingsView: View {
                     }
                 }
             }
-            // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
+            // The cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)
         }
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic))
@@ -107,8 +108,18 @@ struct TerminalSchemeSettingsView: View {
     /// One side's schemes, a section per group: "Dark · OLED", "Light · Cream".
     private func sections(_ schemes: [TerminalSchemes.Scheme], light: Bool) -> some View {
         ForEach(light ? SchemeGroup.light : SchemeGroup.dark, id: \.self) { group in
-            let shown = group.ordered(schemes.filter { $0.group(light: light) == group }, name: \.file)
+            let shown = group.ordered(schemes.filter { Self.group($0, light: light) == group }, name: \.file)
             if !shown.isEmpty { Section("\(light ? "Light" : "Dark") · \(group.title)") { rows(shown) } }
+        }
+    }
+
+    /// A scheme's section: Dispatch's by name (Dispatch is true black, Dispatch Gray a near-black grey), the rest by
+    /// `SchemeGroup`.
+    static func group(_ scheme: TerminalSchemes.Scheme, light: Bool) -> SchemeGroup {
+        switch scheme.file {
+        case "dispatch-black": .oled
+        case "dispatch": .graphite
+        default: scheme.group(light: light)
         }
     }
 
@@ -215,83 +226,12 @@ struct ChatFontSettingsView: View {
                     Text("Relative to Dynamic Type.")
                 }
             }
-            // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
+            // The cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)
         }
         .scrollContentBackground(.hidden)
         .background(Color.canvas)
         .navigationTitle("Chat font")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// Settings › Appearance › Theme (G4): the themes as tiles in two columns, each drawn in its own palette.
-struct ThemeSettingsView: View {
-    @Bindable var settings: MobileSettings
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(MobileTheme.allCases) { theme in
-                    ThemeTile(theme: theme, selected: settings.theme == theme) { settings.theme = theme }
-                }
-            }
-            .padding(16)
-            Text("Themes color the app's chrome and chat. The terminal keeps its own color scheme.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 32)
-        }
-        .background(Color.canvas)
-        .navigationTitle("Theme")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// One theme's tile: a small window in its canvas with its accent and two lines of text, its name and what it is.
-struct ThemeTile: View {
-    let theme: MobileTheme
-    let selected: Bool
-    let select: () -> Void
-
-    var body: some View {
-        let palette = theme.palette
-        // Automatic is drawn in the catalog's own colours, whatever theme is chosen now.
-        let canvas = palette.map { Color(uiColor: $0.canvas) } ?? Color("Canvas")
-        let accent = palette.map { Color(uiColor: $0.accent) } ?? Color("AccentColor")
-        let line = palette.map { Color(uiColor: $0.line) } ?? Color.primary.opacity(0.18)
-        Button(action: select) {
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(canvas)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(accent).frame(width: 60, height: 10)
-                        Capsule().fill(line).frame(width: 90, height: 8)
-                        Capsule().fill(line).frame(width: 70, height: 8)
-                    }
-                    .padding(12)
-                }
-                .frame(height: 96)
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(selected ? Color.dispatchPink : Color.hairline, lineWidth: selected ? 2 : 1))
-                HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(theme.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        Text(theme.subtitle).font(.caption).foregroundStyle(.secondary).fittingLine()
-                    }
-                    Spacer(minLength: 0)
-                    if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.dispatchPink) }
-                }
-            }
-            .padding(10)
-            .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(theme.title)
-        .accessibilityValue(theme.subtitle)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }

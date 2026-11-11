@@ -1,45 +1,51 @@
 import SwiftUI
 
-// Settings: the existing Form with the new rows (terminal font, chat font, app theme, notifications).
+// Settings, as the app's (G1 to G3, G5): no app theme, only the terminal's color scheme.
 
+/// G1, as the app's Settings: Appearance with the terminal's color scheme (no app theme), Terminal, Chat, Notifications
+/// with Background refresh, Hosts, and Remove all data.
 struct SettingsScreen: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Appearance") {
-                    Picker("Appearance", selection: .constant(0)) {
+                Section {
+                    Picker("Appearance", selection: .constant(1)) {
                         Text("System").tag(0); Text("Dark").tag(1); Text("Light").tag(2)
                     }
                     .pickerStyle(.segmented).labelsHidden()
-                    NavigationLink { AppThemeScreen() } label: {
-                        LabeledContent("Theme") { Text("Automatic") }
+                    NavigationLink { Text("Color schemes") } label: {
+                        LabeledContent("Color scheme") { Text("Dispatch") }
                     }
-                }
+                    Toggle("Colorblind-friendly", isOn: .constant(false))
+                } header: { Text("Appearance") }
                 Section {
                     NavigationLink { TerminalFontScreen() } label: {
-                        LabeledContent("Font") { Text("JetBrains Mono") }
+                        LabeledContent("Font") { Text("Source Code Pro") }
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        LabeledContent("Font size") { Text("13 pt").monospacedDigit() }
-                        Slider(value: .constant(13), in: 9...24, step: 1) { Text("Font size") } minimumValueLabel: {
+                        LabeledContent("Font size") { Text("12 pt").monospacedDigit() }
+                        Slider(value: .constant(12), in: 8...24, step: 1) { Text("Font size") } minimumValueLabel: {
                             Image(systemName: "textformat.size.smaller")
                         } maximumValueLabel: {
                             Image(systemName: "textformat.size.larger")
                         }
                     }
-                    NavigationLink { Text("Color schemes") } label: {
-                        LabeledContent("Color scheme") { Text("Dispatch Black") }
-                    }
-                    Toggle("Improve text contrast", isOn: .constant(true))
+                    Picker("Line spacing", selection: .constant(1)) { Text("Tight").tag(0); Text("Normal").tag(1); Text("Relaxed").tag(2) }
+                    Picker("Improve text contrast", selection: .constant(1)) { Text("Never").tag(0); Text("Light themes").tag(1); Text("Always").tag(2) }
                 } header: { Text("Terminal") } footer: {
-                    Text("Terminals open at this size. Pinch a terminal to zoom it; the last size becomes the default.")
+                    Text("Terminals open at this size, larger or smaller with the system text size. Pinch a terminal to zoom it; the last size becomes the default.")
                 }
                 Section {
                     NavigationLink { ChatFontScreen() } label: {
                         LabeledContent("Font") { Text("San Francisco") }
                     }
+                    Picker("While the agent works", selection: .constant(0)) { Text("Queue").tag(0); Text("Steer").tag(1) }
+                    Picker("Open agents in", selection: .constant(0)) { Text("Chat").tag(0); Text("Terminal").tag(1) }
                     NavigationLink { Text("Dictation") } label: {
-                        LabeledContent("Dictation") { Text("Whisper small") }
+                        LabeledContent("Dictation") { Text("Apple") }
+                    }
+                    NavigationLink { Text("Voice") } label: {
+                        LabeledContent("Voice") { Text("Spoken Content") }
                     }
                 } header: { Text("Chat") }
                 Section {
@@ -48,13 +54,18 @@ struct SettingsScreen: View {
                     }
                     Toggle("Background refresh", isOn: .constant(true))
                 } footer: {
-                    Text("About every 15 minutes, as iOS allows, Dispatch connects to the hosts with Chat on and notifies you when an agent needs you.")
+                    Text("About every 15 minutes, as iOS allows, Dispatch connects to the hosts with Chat on and notifies you as Notifications says.")
                 }
                 Section {
-                    LabeledContent("mba2") { Text("Chat on") }
-                    LabeledContent("studio") { Text("Chat on") }
-                    LabeledContent("ai") { Text("Plain SSH") }
-                } header: { Text("Hosts") }
+                    Toggle("Color-code hosts", isOn: .constant(true))
+                    Toggle("Automatically approve unsafe pastes", isOn: .constant(true))
+                } header: { Text("Hosts") } footer: {
+                    Text("With Color-code hosts off, every host is gray.")
+                }
+                Section {
+                    Button("Remove all data", role: .destructive) {}
+                    Button("Remove all data except SSH keys", role: .destructive) {}
+                }
             }
             .navigationTitle("Settings")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") {} } }
@@ -134,54 +145,7 @@ struct ChatFontScreen: View {
     }
 }
 
-/// App theme: Automatic, Dark, Light, plus Graphite, Lavender and Nautical as swatch tiles.
-struct AppThemeScreen: View {
-    let themes: [(String, Color, Color, String)] = [
-        ("Automatic", Color.canvas, Color.dispatchPink, "Follows Appearance"),
-        ("Graphite", Color(white: 0.12), Color(white: 0.6), "Neutral greys"),
-        ("Lavender", Color(red: 0.12, green: 0.10, blue: 0.18), Color(red: 0.66, green: 0.54, blue: 0.88), "Purple accent"),
-        ("Nautical", Color(red: 0.05, green: 0.12, blue: 0.14), Color(red: 0.3, green: 0.8, blue: 0.5), "Radar green, engine room"),
-    ]
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(Array(themes.enumerated()), id: \.offset) { i, t in
-                    VStack(alignment: .leading, spacing: 8) {
-                        ZStack(alignment: .topLeading) {
-                            RoundedRectangle(cornerRadius: 12).fill(t.1)
-                            VStack(alignment: .leading, spacing: 6) {
-                                Capsule().fill(t.2).frame(width: 60, height: 10)
-                                Capsule().fill(Color.white.opacity(0.18)).frame(width: 90, height: 8)
-                                Capsule().fill(Color.white.opacity(0.18)).frame(width: 70, height: 8)
-                            }
-                            .padding(12)
-                        }
-                        .frame(height: 96)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(i == 0 ? Color.dispatchPink : Color.clear, lineWidth: 2))
-                        HStack {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(t.0).font(.subheadline.weight(.semibold))
-                                Text(t.3).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if i == 0 { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.dispatchPink) }
-                        }
-                    }
-                    .padding(10)
-                    .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 16))
-                }
-            }
-            .padding(16)
-            Text("Themes color the app's chrome and chat. The terminal keeps its own color scheme.")
-                .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 32)
-        }
-        .background(Color.canvas)
-        .navigationTitle("Theme")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-/// Notifications: what to notify on, sound, text in the banner, the badge.
+/// Notifications: what to notify on, the sound and text in the banner (the badge always counts), the watch.
 struct NotificationsScreen: View {
     var body: some View {
         List {
@@ -195,13 +159,12 @@ struct NotificationsScreen: View {
             Section {
                 Picker("Sound", selection: .constant(0)) { Text("Default").tag(0); Text("Ship's bell").tag(1); Text("None").tag(2) }
                 Toggle("Show message text", isOn: .constant(true))
-                Toggle("Badge app icon", isOn: .constant(true))
             } footer: {
                 Text("Off, banners say only which conversation needs you. The badge counts conversations waiting for you across hosts.")
             }
             Section {
-                Toggle("Apple Watch", isOn: .constant(true))
-            } footer: { Text("Mirror the same notifications on your watch, with Allow and Deny in the banner.") }
+                LabeledContent("Apple Watch") { Text("Paired") }
+            } footer: { Text("iOS shows the same notifications on your watch while this iPhone is locked and the watch is on your wrist.") }
         }
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)

@@ -191,7 +191,7 @@ final class FilesPresentationTests: XCTestCase {
             !PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty
                 && window.firstResponder is NSTextView
         }
-        try await read(["Search"], in: window, named: "files-search-open")
+        try await read(["Filter"], in: window, named: "files-search-open")
         session.filter = "bill"
         session.focusRequest = System.uuid()
         try await TestSupport.eventually(diagnostic: "a search with text stays open") {
@@ -473,7 +473,9 @@ final class FilesPresentationTests: XCTestCase {
         try await load(source, session, root + "/empty")
         session.pinnedRoot = root + "/empty"
         let window = window(session)
-        try await read(["Empty folder", "items"], in: window, named: "files-empty")
+        // With hidden items left out the line says how to show them; with them shown, the folder is empty.
+        let empty = FilesFormatting.empty(hidden: session.showsHidden(default: FilesView.hiddenSetting))
+        try await read([String(empty.prefix { $0 != "·" }).trimmingCharacters(in: .whitespaces)], in: window, named: "files-empty")
         try await says("0 items", "files-footer-summary", in: window)
         session.availability = .loading
         try await read(["Loading"], in: window, named: "files-loading")

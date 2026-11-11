@@ -107,15 +107,16 @@ extension Workspace {
     selectTab(pane.tabs[(index + delta + pane.tabs.count) % pane.tabs.count].id)
   }
 
+  /// ⌘1…9: a pane while split, else a tab, ⌘9 the last one (`Space.tabShortcutNumber`).
   func selectNumberedItem(at index: Int) {
-    guard let space = current, index >= 0, index < space.numberedShortcutCount else { return }
+    guard let space = current, index >= 0, index < 9 else { return }
     if space.usesPaneShortcuts {
-      selectPane(at: index)
-    } else if !space.containers.isEmpty {
-      selectContainer(space.numberedTabIDs[index])
-    } else {
-      selectTab(space.numberedTabIDs[index])
+      if index < space.numberedShortcutCount { selectPane(at: index) }
+      return
     }
+    let ids = space.numberedTabIDs, target = index == 8 ? ids.count - 1 : index
+    guard ids.indices.contains(target) else { return }
+    if !space.containers.isEmpty { selectContainer(ids[target]) } else { selectTab(ids[target]) }
   }
 
   func selectPane(at index: Int) {

@@ -226,7 +226,7 @@ struct MobileRoot: View {
                     .mobileCompactWidth(device == .pad)
                     .environment(\.tabsColumnWidth, columns.sidebar)
                     .environment(\.tabsSelectTab, { navigator.select($0) })
-                // The hairline: on the fold in book posture.
+                // The hairline between the sidebar and the tab.
                 Rectangle()
                     .fill(Color.hairline)
                     .frame(width: 0.5)

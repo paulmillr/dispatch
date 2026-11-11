@@ -174,6 +174,9 @@ final class PendingApproval: Identifiable {
     /// Present only for an explicit native-draft submission; string-payload callers keep their own semantics.
     private(set) var structuredAnswers: [HelperChat.Answer]?
     private(set) var decision: Decision?
+    /// When the producer retires it unanswered, as far as the app knows (Claude's questions: 180 s from their arrival
+    /// here); the card counts down its last minute. Nil when the producer names no limit.
+    var expires: Date?
     @ObservationIgnored private let complete: (PendingApproval) -> Void
     init(key: String, interaction: String? = nil, operation: String, item: ChatItem? = nil, turnID: String? = nil, toolItemID: String? = nil,
          anchorTurnID: String? = nil, questions: ClaudeQuestions? = nil, complete: @escaping (PendingApproval) -> Void) {
@@ -1459,7 +1462,7 @@ final class ChatSession: Identifiable {
     // a failed send must remain visible until the user acts or identity ends.
     var submissionFailure: String?
     /// Text in the agent's own prompt that did not move to the draft and is in the way of sending: the strip above the
-    /// composer says so and offers Clear and Open in terminal. Mac only; until a send lands or the terminal shows.
+    /// composer says so and offers Clear and Open in Terminal. Mac only; until a send lands or the terminal shows.
     var terminalPromptNotice: String?
     var clearingTerminalPrompt = false
     /// `adoptTerminalTypeahead` is running: one at a time, or the text would be erased and moved twice.
@@ -1468,6 +1471,12 @@ final class ChatSession: Identifiable {
     var status: String? {
         get { terminalAttention ?? submissionFailure ?? activityStatus }
         set { activityStatus = newValue }
+    }
+    /// The status row offers Open in Terminal for the terminal's own states (attention, an exit, discovery) and for a
+    /// refused send whose remedy is there; a reason such as a full queue or a pending request has nothing to do there.
+    var statusOffersTerminal: Bool {
+        guard terminalAttention == nil, let failure = submissionFailure else { return true }
+        return failure.localizedCaseInsensitiveContains("terminal")
     }
     /// Until the agent reports a model, its title: a fresh agent reports none before its first reply.
     var model: String {

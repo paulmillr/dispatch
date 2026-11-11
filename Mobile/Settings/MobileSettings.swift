@@ -27,7 +27,8 @@ final class MobileSettings {
     static let backgroundRefreshKey = "background.refresh"
     static let dictationEngineKey = "dictation.engine"
     static let whisperModelKey = "dictation.whisperModel"
-    nonisolated static let themeKey = "theme"
+    /// The voice that reads aloud (`SpeechVoice`): an `AVSpeechSynthesisVoice` identifier, or empty for Spoken Content's.
+    nonisolated static let speechVoiceKey = "speech.voice"
     nonisolated static let terminalFontKey = "terminal.font"
     nonisolated static let terminalSchemeKey = "terminal.scheme"
     nonisolated static let textContrastKey = "terminal.textContrast"
@@ -42,8 +43,6 @@ final class MobileSettings {
     /// Send's tap (and Return) while the agent works, as the Mac's Settings › Chat mode; the composer reads it
     /// (`@AppStorage`).
     nonisolated static let chatSendWhileWorkingKey = "chat.sendWhileWorking"
-    /// New drafts start in editor mode (`ChatDraft.editorByDefault`), as the Mac's Settings › Chat mode.
-    nonisolated static let chatEditorByDefaultKey = "chat.editorByDefault"
     /// What an agent tab opens on (`TabSegment.initial`), as the Mac's Settings › Chat mode.
     nonisolated static let chatAgentStartKey = "chat.agentStart"
     /// The composer's code keys row ("+" › Show code keys), off by default; the composer reads it (`@AppStorage`).
@@ -53,7 +52,6 @@ final class MobileSettings {
     nonisolated static let notifyFailedKey = "notify.failed"
     nonisolated static let notificationSoundKey = "notify.sound"
     nonisolated static let notificationTextKey = "notify.text"
-    nonisolated static let notificationBadgeKey = "notify.badge"
     nonisolated static let colorVisionKey = "colorVision"
     nonisolated static let hostColorsKey = "hosts.colors"
 
@@ -92,10 +90,9 @@ final class MobileSettings {
         didSet { if whisperModel != oldValue { defaults.set(whisperModel.rawValue, forKey: Self.whisperModelKey) } }
     }
 
-    /// The app's theme (G4): Automatic follows Appearance; Graphite, Lavender and Nautical each have
-    /// their own scheme (`MobileTheme`). The root reads the same key (`mobileAppearance()`).
-    var theme: MobileTheme {
-        didSet { if theme != oldValue { defaults.set(theme.rawValue, forKey: Self.themeKey) } }
+    /// Conversation mode's and Read Aloud's voice (`SpeechVoice`); empty, the default, is Spoken Content's.
+    var speechVoice: String {
+        didSet { if speechVoice != oldValue { defaults.set(speechVoice, forKey: Self.speechVoiceKey) } }
     }
 
     // The terminal (G1, G2): each change reaches the open terminals at once (`TerminalStyle.changed`); the font size
@@ -160,14 +157,6 @@ final class MobileSettings {
         }
     }
 
-    /// New drafts start in editor mode: a hardware keyboard's Return adds a line and ⌘Return sends.
-    var chatEditorByDefault: Bool {
-        didSet {
-            ChatDraft.editorByDefault = chatEditorByDefault
-            if chatEditorByDefault != oldValue { defaults.set(chatEditorByDefault, forKey: Self.chatEditorByDefaultKey) }
-        }
-    }
-
     /// Queue (send's long press steers) or steer (its long press queues) a message while the agent works.
     var chatSendWhileWorking: ChatSendWhileWorking {
         didSet {
@@ -196,11 +185,6 @@ final class MobileSettings {
     /// Banners carry the agent's last line; off, only which conversation and what happened.
     var notificationText: Bool {
         didSet { if notificationText != oldValue { defaults.set(notificationText, forKey: Self.notificationTextKey) } }
-    }
-
-    /// The app icon's badge counts the conversations waiting for the user, across hosts.
-    var notificationBadge: Bool {
-        didSet { if notificationBadge != oldValue { defaults.set(notificationBadge, forKey: Self.notificationBadgeKey) } }
     }
 
     /// Colorblind-friendly (the Mac's `colorVision`): hosts take that vision's colours (`HostColor.look`), diffs its
@@ -255,7 +239,7 @@ final class MobileSettings {
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init(rawValue:)) ?? .dark
         backgroundRefresh = defaults.bool(forKey: Self.backgroundRefreshKey)
         (dictationEngine, whisperModel) = Self.dictation(defaults)
-        theme = MobileTheme(stored: defaults.string(forKey: Self.themeKey))
+        speechVoice = Self.speechVoice(defaults)
         let style = TerminalStyle(defaults)
         terminalFont = style.font.name
         terminalScheme = style.scheme
@@ -268,18 +252,15 @@ final class MobileSettings {
         chatFont = defaults.string(forKey: Self.chatFontKey).flatMap(MobileChatFont.init(rawValue:)) ?? .system
         chatTextSize = defaults.string(forKey: Self.chatTextSizeKey).flatMap(ChatTextSize.init(rawValue:)) ?? .standard
         chatSendWhileWorking = defaults.string(forKey: Self.chatSendWhileWorkingKey).flatMap(ChatSendWhileWorking.init(rawValue:)) ?? .queue
-        chatEditorByDefault = defaults.bool(forKey: Self.chatEditorByDefaultKey)
         chatAgentStart = defaults.string(forKey: Self.chatAgentStartKey).flatMap(ChatAgentStart.init(rawValue:)) ?? .chat
         notifyNeedsYou = defaults.object(forKey: Self.notifyNeedsYouKey) as? Bool ?? true
         notifyFinished = defaults.object(forKey: Self.notifyFinishedKey) as? Bool ?? true
         notifyFailed = defaults.object(forKey: Self.notifyFailedKey) as? Bool ?? true
         notificationSound = defaults.string(forKey: Self.notificationSoundKey).flatMap(NotificationSound.init(rawValue:)) ?? .standard
         notificationText = defaults.object(forKey: Self.notificationTextKey) as? Bool ?? true
-        notificationBadge = defaults.object(forKey: Self.notificationBadgeKey) as? Bool ?? true
         colorVision = defaults.string(forKey: Self.colorVisionKey).flatMap(ColorVision.init(rawValue:)) ?? .typical
         showHostColors = defaults.object(forKey: Self.hostColorsKey) as? Bool ?? true
         // What the shared models read (`didSet` does not run in an initializer).
-        ChatDraft.editorByDefault = chatEditorByDefault
         TabSegment.agentStart = chatAgentStart
     }
 
@@ -317,7 +298,7 @@ final class MobileSettings {
         take(\.backgroundRefresh)
         take(\.dictationEngine)
         take(\.whisperModel)
-        take(\.theme)
+        take(\.speechVoice)
         take(\.terminalFont)
         take(\.terminalScheme)
         take(\.textContrast)
@@ -329,14 +310,12 @@ final class MobileSettings {
         take(\.chatFont)
         take(\.chatTextSize)
         take(\.chatSendWhileWorking)
-        take(\.chatEditorByDefault)
         take(\.chatAgentStart)
         take(\.notifyNeedsYou)
         take(\.notifyFinished)
         take(\.notifyFailed)
         take(\.notificationSound)
         take(\.notificationText)
-        take(\.notificationBadge)
         take(\.showHostColors)
         // After the scheme: a new vision conforms the scheme, which the saved one must not undo.
         take(\.colorVision)
@@ -352,7 +331,7 @@ final class MobileSettings {
     /// The notification policy's switches (`AgentAlerts.Policy`).
     var alertPolicy: AgentAlerts.Policy {
         AgentAlerts.Policy(needsYou: notifyNeedsYou, finished: notifyFinished, failed: notifyFailed, sound: notificationSound,
-                           text: notificationText, badge: notificationBadge)
+                           text: notificationText, badge: true)
     }
 
     /// Settings' Notifications row (G1): "Sound, text", "Ship's bell", "Off".
@@ -364,7 +343,7 @@ final class MobileSettings {
         case .none: break
         }
         if notificationText { parts.append(parts.isEmpty ? "Text" : "text") }
-        if parts.isEmpty { return notificationBadge ? "Badge" : "Silent" }
+        if parts.isEmpty { return "Badge" }
         return parts.joined(separator: ", ")
     }
 
@@ -372,6 +351,11 @@ final class MobileSettings {
     static func dictation(_ defaults: UserDefaults = .standard) -> (engine: DictationEngine, model: WhisperModel) {
         (defaults.string(forKey: dictationEngineKey).flatMap(DictationEngine.init(rawValue:)) ?? .apple,
          defaults.string(forKey: whisperModelKey).flatMap(WhisperModel.init(rawValue:)) ?? .small)
+    }
+
+    /// The voice as saved: what the speakers read each time they speak.
+    nonisolated static func speechVoice(_ defaults: UserDefaults = .standard) -> String {
+        defaults.string(forKey: speechVoiceKey) ?? ""
     }
 
     /// The slider's range in whole points: the terminal's zoom range. A pinch may leave a half point (13.5); the

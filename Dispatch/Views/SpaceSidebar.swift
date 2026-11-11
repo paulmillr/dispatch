@@ -257,13 +257,13 @@ struct SpaceSidebar: View {
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(typography.symbol(.caption))
-                .foregroundStyle(Chrome.palette.detail).accessibilityHidden(true)
+                .foregroundStyle(Chrome.palette.detailText).accessibilityHidden(true)
             let prompt = "Search spaces…"
             TextField(prompt,
                       text: Binding(get: { searchQuery }, set: { setSearchQuery($0) }),
-                      prompt: Text(prompt).foregroundColor(Chrome.palette.detail))
+                      prompt: Text(prompt).foregroundColor(Chrome.palette.detailText))
                 .textFieldStyle(.plain)
-                .foregroundStyle(searchQuery.isEmpty ? Chrome.palette.detail : Chrome.ink)
+                .foregroundStyle(searchQuery.isEmpty ? Chrome.palette.detailText : Chrome.ink)
                 .focused($searchFocused)
                 .help("Search spaces · ⌘P")
                 .accessibilityLabel("Search spaces")
@@ -276,10 +276,10 @@ struct SpaceSidebar: View {
             if !searchQuery.isEmpty {
                 Button { setSearchQuery("") } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(Chrome.palette.detail)
+                        .foregroundStyle(Chrome.palette.detailText)
                 }.accessibilityLabel("Clear space search")
             }
-            Text("⌘P").font(typography.shortcut()).foregroundStyle(Chrome.palette.detail).fixedSize()
+            Text("⌘P").font(typography.shortcut()).foregroundStyle(Chrome.palette.detailText).fixedSize()
         }
         .font(typography, .body)
         .padding(.horizontal, 8)
@@ -314,7 +314,7 @@ struct SpaceSidebar: View {
     private var shortcutsButton: some View {
         ShortcutSheetButton(presented: Binding(get: { controller.windowState.shortcutsPresented && controller.sidebarVisible },
                                                set: { controller.windowState.shortcutsPresented = $0 }),
-                            keyFont: typography.shortcut(), ink: Chrome.ink, muted: Chrome.palette.detail,
+                            keyFont: typography.shortcut(), ink: Chrome.ink, muted: Chrome.palette.detailText,
                             label: "Keyboard shortcuts", identifier: "sidebar-shortcuts",
                             symbol: "keyboard", accent: Chrome.accent) { WorkspaceShortcutSheet() }
     }
@@ -659,7 +659,7 @@ struct SpaceSidebar: View {
                             Image(systemName: flatDetachedExpanded ? "chevron.down" : "chevron.right")
                                 .font(AppFont.ui(size: metrics.detailSize - 2)).frame(width: metrics.activitySize)
                             Text("Detached")
-                            Text("\(entries.count)").foregroundStyle(Chrome.palette.faint)
+                            Text("\(entries.count)").foregroundStyle(Chrome.palette.detailText)
                         }.contentShape(Rectangle())
                     }.accessibilityIdentifier("detached-section-flat")
                     Spacer(minLength: 4)
@@ -742,7 +742,7 @@ struct SpaceSidebar: View {
                         HStack(spacing: 5) {
                             Image(systemName: expandedDetached.contains(host) ? "chevron.down" : "chevron.right")
                             Text("Detached")
-                            Text("\(entries.count)").foregroundStyle(Chrome.palette.faint)
+                            Text("\(entries.count)").foregroundStyle(Chrome.palette.detailText)
                         }
                     }.accessibilityIdentifier("detached-section-\(host.rawValue)")
                     Spacer(minLength: 4)
@@ -845,7 +845,7 @@ struct SpaceSidebar: View {
                 .help(MoveTargetsSection.detachHelp)
             Button(harbour ? "Scuttle (Terminate)…" : "Terminate…") { controller.terminateSpace(space.id) }
         } else {
-            Button(harbour ? "Lay Up (Close)" : "Close") { controller.closeSpace(space.id) }
+            Button(harbour ? "Lay Up (Close Space)" : "Close Space") { controller.closeSpace(space.id) }
         }
     }
 
@@ -1096,7 +1096,7 @@ private struct FlatHeaderControl: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .foregroundStyle(active ? Chrome.accent : hovering ? Chrome.ink : Chrome.palette.detail)
+            .foregroundStyle(active ? Chrome.accent : hovering ? Chrome.ink : Chrome.palette.detailText)
             .background(hovering ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
@@ -1753,7 +1753,7 @@ private struct HarbourTrafficList: View {
                     Text(vessel.host).foregroundStyle(vessel.selected ? Chrome.muted : Chrome.palette.detail)
                         .truncationMode(.tail).layoutPriority(-1)
                     if let heading = vessel.heading {
-                        Text("⎇ " + heading).foregroundStyle(Chrome.palette.faint)
+                        Text("⎇ " + heading).foregroundStyle(Chrome.palette.detailText)
                             .truncationMode(.tail).layoutPriority(-2)
                     }
                 },

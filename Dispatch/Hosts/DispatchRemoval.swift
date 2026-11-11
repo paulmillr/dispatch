@@ -120,11 +120,12 @@ enum DispatchRemoval {
     static let resetKeeps: Set<String> = ["Whisper", "Parakeet"]
 
     /// What Reset deletes: the support folder (settings, the setup sheet's record, spaces, terminal output, drafts,
-    /// reviews) but `resetKeeps`, your color schemes and the diagnostics logs.
+    /// reviews) but `resetKeeps`, and the diagnostics logs. Your color schemes (`CustomThemes.directory`) are yours, as
+    /// the models are: Reset keeps them, as Remove Dispatch does.
     static func resetTargets(support: URL = Home.support, home: URL = System.home) -> [URL] {
         let entries = ((try? System.list(support)) ?? []).filter { !resetKeeps.contains($0) }.sorted()
         return entries.map { support.appendingPathComponent($0) }
-            + [CustomThemes.directory, home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics")]
+            + [home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics")]
     }
 
     /// Deletes `resetTargets` and this build's defaults (SSH grants, host records, chat and hook switches, the window

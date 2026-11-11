@@ -22,6 +22,8 @@ final class HelperChat {
     var answers: [String: Answer]?
     var question: String?
     var read_only: Bool?
+    /// `chat.limits.rows`: the extension to read.
+    var read: String?
     var item: String?
     var revision: UInt64?
     var items: [String]?

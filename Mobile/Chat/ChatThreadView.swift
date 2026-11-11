@@ -276,7 +276,8 @@ struct ChatThreadView: View {
                 ChatScrollSample(offset: geometry.contentOffset.y,
                                  atEnd: geometry.contentOffset.y + geometry.contentInsets.top + geometry.containerSize.height
                                      >= geometry.contentSize.height - 40,
-                                 insets: geometry.contentInsets, height: geometry.containerSize.height)
+                                 insets: geometry.contentInsets, height: geometry.containerSize.height,
+                                 content: geometry.contentSize.height)
             }) { old, sample in
                 // A layout before the scroll view is in its window (a pushed thread's first passes, more of them on a
                 // busy phone) reports the content at its top: no scroll of anyone's, so it neither ends the follow nor
@@ -289,7 +290,12 @@ struct ChatThreadView: View {
                 // the thread goes back rather than counting what comes meanwhile (`ChatFollow.moved`).
                 let resized = old.insets != sample.insets || old.height != sample.height
                 if updateFollow({ $0.moved(offset: sample.offset, atEnd: sample.atEnd, resized: resized) }) {
-                    scroll.scrollTo(Self.bottom, anchor: .bottom)
+                    if !pinToEnd() { scroll.scrollTo(Self.bottom, anchor: .bottom) }
+                } else if resized || old.content != sample.content {
+                    // Within the end's 40 points the follow sees no need to move, and the anchor and a scroll to the
+                    // last row leave the thread short of it as rows' real heights replace their estimates: following,
+                    // the thread sits exactly at its end.
+                    pinToEnd()
                 }
             }
             // Older rows were laid out above (`reachedTop`).
@@ -302,8 +308,6 @@ struct ChatThreadView: View {
                 if near { reachedTop() }
             }
             .onChange(of: pinned) { _, _ in scroll.scrollTo(Self.bottom, anchor: .bottom) }
-            // A light tap as a message goes.
-            .sensoryFeedback(.impact(weight: .light), trigger: pinned)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
             .environment(\.chatColumnWidth, column)
             .environment(\.chatMeasure, measure)
@@ -351,7 +355,7 @@ struct ChatThreadView: View {
             }
         }
         .sheet(item: $step) { step in
-            ChatStepOutputSheet(session: session, step: step)
+            ChatStepOutputSheet(session: session, step: step, directory: directory)
         }
         .sheet(isPresented: $settings) {
             ChatSettingsSheet(session: session, memory: memory)
@@ -930,6 +934,21 @@ struct ChatThreadView: View {
         if scroll.contentOffset.y < end - 0.5 { scroll.contentOffset.y = end }
     }
 
+    /// While the thread follows its end and nothing else moves it (no finger, no fling, the pill's animated scroll, a
+    /// place being put back), puts it exactly at its end: its last row's bottom at the composer, not a few points (or the
+    /// 40 the follow lets pass as "at the end") above. False without a laid-out scroll view.
+    @discardableResult
+    private func pinToEnd() -> Bool {
+        guard let scroll = follower.scrollView, scroll.window != nil, scroll.contentSize.height > 0 else { return false }
+        let follow = follower.model ?? ChatFollow(following: !startsAtTop)
+        guard follower.restoring == nil, follow.following, !follow.dragging, !follow.scrollingToEnd,
+              !scroll.isTracking, !scroll.isDecelerating else { return true }
+        let end = max(-scroll.adjustedContentInset.top,
+                      scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
+        if abs(scroll.contentOffset.y - end) > 0.5 { scroll.contentOffset.y = end }
+        return true
+    }
+
     /// Keeps where the thread is being read (`MobileChatSession.readingPosition`): the first row drawn whose bottom is
     /// below the visible top, and how far it is scrolled past; nothing while the thread follows its end.
     private func saveReading() {
@@ -1156,4 +1175,6 @@ struct ChatScrollSample: Equatable {
     /// The insets and the visible height: a change in them moves the offset without the user (`ChatFollow.moved`).
     var insets: EdgeInsets
     var height: CGFloat
+    /// The content's height: rows drawn, grown or gone, which a following thread keeps its end through (`pinToEnd`).
+    var content: CGFloat = 0
 }

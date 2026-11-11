@@ -7,6 +7,9 @@ struct ChatSideSheet: View {
     let close: () -> Void
     var maximumHeight: CGFloat = 360
     var shortcutsEnabled = true
+    /// Esc once an answer is in (or one is coming): a second press within `ChatEscapeStop.window` closes, as Esc twice
+    /// stops the agent, since closing ends the side conversation and its replies.
+    @State private var escapeArmedAt: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -33,8 +36,10 @@ struct ChatSideSheet: View {
                         Label(permission.title, systemImage: "diamond.fill").foregroundStyle(theme.accent)
                         ChatCodeBlock(code: permission.operation, language: permission.language, title: "Requested operation")
                         HStack {
-                            Button("Allow once") { side.resolvePermission(true) }
-                            Button("Deny") { side.resolvePermission(false) }
+                            Button { side.resolvePermission(true) } label: { ApprovalKeyLabel(title: "Allow Once", key: shortcutsEnabled ? "⇧⌘⏎" : nil) }
+                                .accessibilityLabel("Allow Once")
+                            Button { side.resolvePermission(false) } label: { ApprovalKeyLabel(title: "Deny", key: shortcutsEnabled ? "⇧⌘⌫" : nil) }
+                                .accessibilityLabel("Deny")
                         }.buttonStyle(ApprovalButtonStyle())
                     }.font(theme.typography.detail).padding(10).chatPanel()
                 }.scrollBounceBehavior(.basedOnSize)
@@ -47,7 +52,7 @@ struct ChatSideSheet: View {
         .background(theme.terminal, in: RoundedRectangle(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(theme.muted.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 3])) }
         .font(theme.typography.body).foregroundStyle(theme.ink)
-        .onExitCommand { if canCloseWithEscape { close() } }
+        .onExitCommand { escape() }
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: side.messages.map(\.id))
         .accessibilityIdentifier("chat-side-sheet")
     }
@@ -109,7 +114,7 @@ struct ChatSideSheet: View {
 
     private var composer: some View {
         VStack(spacing: 6) {
-            ChatSideComposer(side: side, focused: shortcutsEnabled && side.ready && !side.hasQuestions, close: close)
+            ChatSideComposer(side: side, focused: shortcutsEnabled && side.ready && !side.hasQuestions, close: escape)
                 .id(side.id)
                 .frame(height: min(max(theme.typography.replyLineHeight + 10, side.composerHeight),
                                    theme.typography.replyLineHeight * CGFloat(composerLineLimit) + 10))
@@ -139,12 +144,36 @@ struct ChatSideSheet: View {
             .background(theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
     }
     private var back: some View {
-        Button(canCloseWithEscape ? "⎋ back to main" : "back to main", action: close).buttonStyle(.plain).foregroundStyle(theme.muted)
-            .keyboardShortcut(canCloseWithEscape ? .cancelAction : nil)
-            .accessibilityLabel("Back to main")
+        Button(backTitle, action: close).buttonStyle(.plain).foregroundStyle(theme.muted)
+            .help("Ends the side conversation; its replies are not kept")
+            .background {
+                // Esc, through `escape`: a click on the button closes at once, the key may need a second press.
+                Button(action: escape) { Color.clear.frame(width: 0, height: 0) }
+                    .buttonStyle(.plain).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                    .keyboardShortcut(canCloseWithEscape ? .cancelAction : nil)
+            }
+            .accessibilityLabel("Back to Main")
             .accessibilityIdentifier("chat-side-close")
+    }
+    private var backTitle: String {
+        guard canCloseWithEscape else { return "Back to Main" }
+        if escapeArmedAt != nil { return "⎋ Again to Close" }
+        return keepsAnswer ? "⎋⎋ Back to Main" : "⎋ Back to Main"
     }
     private var canCloseWithEscape: Bool {
         shortcutsEnabled && !side.draftMultiline && !side.composingText
+    }
+    /// An answer to keep, or one on its way: one Esc must not throw it away.
+    private var keepsAnswer: Bool { side.busy || side.messages.contains { !$0.user } }
+    /// Esc from the sheet or its composer: closes an unanswered sheet at once, an answered one on the second press.
+    private func escape() {
+        guard canCloseWithEscape else { return }
+        let now = System.date()
+        if !keepsAnswer { return close() }
+        if let armed = escapeArmedAt, now.timeIntervalSince(armed) <= ChatEscapeStop.window { escapeArmedAt = nil; return close() }
+        escapeArmedAt = now
+        DispatchQueue.main.asyncAfter(deadline: .now() + ChatEscapeStop.window) {
+            if escapeArmedAt == now { escapeArmedAt = nil }
+        }
     }
 }

@@ -114,7 +114,8 @@ enum FilesOpenAction: Hashable, Sendable {
                 out.append(contentsOf: below)
             }
             if query.isEmpty {
-                if base.isEmpty { out += placeholder(.empty, "Empty folder") }
+                // With hidden items left out of the listing, the folder may hold some: say how to show them.
+                if base.isEmpty { out += placeholder(.empty, FilesFormatting.empty(hidden: hidden)) }
                 if listing.truncated {
                     out.append(FilesRow(id: FilesRow.placeholderID(.truncated, in: folder), parent: folder, depth: depth,
                                         kind: .truncated, entry: nil, title: "showing the first 10,000", modified: "",

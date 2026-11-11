@@ -267,7 +267,44 @@ pub(crate) fn seen(mux: usize, times: Vec<(Id, u64)>, nodes: &BTreeMap<Id, (usiz
     rows
 }
 
+impl crate::encode::Encode for LimitWindow {
+    fn encode(&self, out: &mut Vec<u8>) {
+        crate::encode::object(out, &[("name", &self.0), ("used", &self.1), ("resets_at", &self.2)]);
+    }
+}
+
+impl crate::encode::Encode for LimitRow {
+    fn encode(&self, out: &mut Vec<u8>) {
+        crate::encode::object(out, &[("label", &self.0), ("detail", &self.1), ("value", &self.2), ("used", &self.3)]);
+    }
+}
+
+impl crate::encode::Encode for LimitRows {
+    fn encode(&self, out: &mut Vec<u8>) {
+        crate::encode::object(out, &[("source", &self.0), ("rows", &self.1)]);
+    }
+}
+
 impl Request<'_> {
+    /// Protocol result: {source, rows} (feature chat.limits.rows): the extension reporting limits for this session, and
+    /// with `read` naming it, its rows.
+    pub(super) fn chat_limit_rows(&mut self, p: &Data<'_>) -> Result<(), Error> {
+        let (_, _, harness, binding) = self.agent(p)?;
+        let read = p.get("read").and_then(Data::string);
+        let done = self.done::<LimitRows>(None);
+        harness.borrow_mut().limit_rows(self.io, &binding, read, done);
+        Ok(())
+    }
+
+    /// Protocol result: Vec of {name, used, resets_at} (feature chat.limits): the usage windows the agent reports,
+    /// read now; empty when it reports none.
+    pub(super) fn chat_limits(&mut self, p: &Data<'_>) -> Result<(), Error> {
+        let (_, _, harness, binding) = self.agent(p)?;
+        let done = self.done::<Vec<LimitWindow>>(None);
+        harness.borrow_mut().limits(self.io, &binding, done);
+        Ok(())
+    }
+
     /// Protocol result: Vec of {node, key, kind, time_ms} (feature terminals.activity): when the
     /// server last saw activity in each published node whose multiplexer reports one (tmux: its
     /// windows), by node.

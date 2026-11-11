@@ -113,6 +113,28 @@ final class ChatThinkingSweepTests: XCTestCase {
         }
     }
 
+    /// The compositor's loops, which the app runs (the cases above draw SwiftUI's frames): the light only ever moves
+    /// leading to trailing, its last keyframe the trailing end, so it leaves the line and comes back at the leading end
+    /// with nothing drawn between. The last keyframe was the next pass's start, and the light ran back across the label.
+    func testTheLoopsNeverRunBack() throws {
+        let scan = ChatScanLoop.ScanView()
+        scan.frame = CGRect(x: 0, y: 0, width: Self.line, height: 2)
+        let shimmer = ChatShimmerLoop.ShimmerView()
+        shimmer.frame = CGRect(x: 0, y: 0, width: 90, height: 24)
+        shimmer.track = ChatSweepTrack(lineWidth: Self.line, labelX: Self.labelX)
+        let plain = ChatShimmerLoop.ShimmerView()
+        plain.frame = CGRect(x: 0, y: 0, width: 90, height: 24)
+        for (name, view, layer) in [("the scan", scan as CompositorView, scan.band as CALayer), ("the shimmer on a track", shimmer, shimmer.band),
+                                    ("the shimmer", plain, plain.band)] {
+            view.start()
+            defer { view.stop() }
+            let animation = try XCTUnwrap(layer.animation(forKey: CompositorView.animationKey) as? CAKeyframeAnimation, name)
+            let values = try XCTUnwrap(animation.values as? [Double], name)
+            XCTAssertEqual(values, values.sorted(), "\(name) never runs back: \(values)")
+            XCTAssertGreaterThan(values.last ?? 0, values.dropLast().last ?? 0, "\(name) ends at the trailing end")
+        }
+    }
+
     /// One clock for both, from the media time: two rows drawn at the same instant are at the same point.
     func testTheSweepIsAFunctionOfTheInstant() {
         let date = Self.start.addingTimeInterval(0.7)

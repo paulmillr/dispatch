@@ -65,6 +65,7 @@ extension FilesFormatting {
         if preview.entry?.isDirectory == true { return "folder" }
         var parts: [String] = []
         if let bytes = preview.revision?.size ?? preview.entry?.size { parts.append(size(bytes)) }
+        if let encoding = preview.encoding { parts.append(encoding) }
         if case .binary(_, _, let format?) = preview.kind { parts.append(format) }
         if case .image(_, let pixels) = preview.kind {
             if let kind = kindName(preview.name) { parts.append(kind) }
@@ -142,7 +143,6 @@ private struct FilePreviewDetail: View {
     // MARK: Header
 
     private var header: some View {
-        let notice = FilesEditorNotices.shared.notice(for: session.id)
         // One column: the files header gives way to this one, which is then the pane's bar and looks like it.
         let bar = session.drilled && session.tab == .files
         return HStack(spacing: 10) {
@@ -187,14 +187,6 @@ private struct FilePreviewDetail: View {
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("file-preview-meta")
-            if let notice {
-                Text(notice)
-                    .font(typography, .body)
-                    .foregroundStyle(theme.yellow)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .accessibilityIdentifier("file-preview-notice")
-            }
             if find.open { findField }
             // The buttons keep their room before the folder takes any; with previews off there is no content to set.
             if !infoOnly { controls.fixedSize().layoutPriority(1) }
@@ -214,6 +206,14 @@ private struct FilePreviewDetail: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("file-preview-header")
+    }
+
+    /// The text the preview holds whole: a text or Markdown file (not the first 64 KB of a larger one).
+    private var copyableText: String? {
+        switch preview.kind {
+        case .text(let text, _), .markdown(let text): text
+        default: nil
+        }
     }
 
     private var isFolder: Bool {
@@ -239,6 +239,16 @@ private struct FilePreviewDetail: View {
                     FileMarkdownOutlineButton(session: session, path: preview.path, document: document)
                 }
             }
+            if let text = copyableText {
+                // The whole file, as the per-line selection cannot take more than a line at a time.
+                Button { GitPasteboard.copy(text) } label: {
+                    Image(systemName: "doc.on.clipboard").font(.system(size: 11))
+                }
+                .buttonStyle(FilePreviewIconButtonStyle(on: false))
+                .help("Copy the file’s text")
+                .accessibilityLabel("Copy text")
+                .accessibilityIdentifier("file-preview-copy-text")
+            }
             if case .markdown = preview.kind {
                 Button { session.previewRendered = !rendered } label: {
                     Image(systemName: "eye").font(.system(size: 11))
@@ -248,16 +258,6 @@ private struct FilePreviewDetail: View {
                 .accessibilityLabel("Rendered")
                 .accessibilityValue(rendered ? "on" : "off")
                 .accessibilityIdentifier("file-preview-rendered")
-            }
-            if editable {
-                Button { files.openInEditor(session.id, path: preview.path) } label: {
-                    Image(systemName: "square.and.pencil").font(.system(size: 11))
-                }
-                .buttonStyle(FilePreviewIconButtonStyle(on: false))
-                .keyboardShortcut(focused ? KeyboardShortcut("o", modifiers: .command) : nil)
-                .help("Open in editor · ⌘O")
-                .accessibilityLabel("Open in editor")
-                .accessibilityIdentifier("file-preview-open-editor")
             }
         }
     }
@@ -309,13 +309,6 @@ private struct FilePreviewDetail: View {
     /// Settings › Files › Disable file previews: a file shows what its listing entry says of it (its kind, size and
     /// date), never its contents, whatever was read before the setting changed. A folder still shows its summary.
     private var infoOnly: Bool { !FilesSession.previews && !isFolder }
-
-    private var editable: Bool {
-        switch preview.kind {
-        case .folder, .image: false
-        default: preview.entry?.isDirectory != true
-        }
-    }
 
     // MARK: Body
 

@@ -234,7 +234,10 @@ extension ChatCoordinator {
             let shells = ChatShell.merge(state.shells ?? [], previous: session.shells)
             if session.shells != shells { session.shells = shells }
             let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
-            if session.busy != busy { session.busy = busy }
+            if session.busy != busy {
+                if session.busy, !busy { ChatAnnouncement.post("\(session.agentTitle) finished", for: session) }
+                session.busy = busy
+            }
             if session.starting { session.starting = false }
             if session.nativeActivity != state.activity { session.nativeActivity = state.activity }
             if !state.busy, state.dialog == nil, session.retiredInteraction { session.retiredInteraction = false }
@@ -659,7 +662,10 @@ extension ChatCoordinator {
         guard inputReady(session, immediately: immediately || command), let helper = session.helper else {
             print("Helper input waiting: active=\(session.active), history=\(session.loadingHistory), busy=\(session.busy), ack=\(session.awaitingPromptAck), blocked=\(session.inputBlocked), command=\(session.command != nil), interaction=\(session.waitingForAnswer)")
             if queued != nil { session.queueWaiting = "Waiting for the terminal to be ready…" }
-            if sendingNow { session.submissionFailure = notSentNow("\(session.agentTitle) cannot safely take input right now.") }
+            let reason = inputBlockReason(session, immediately: immediately || command) ?? "\(session.agentTitle) cannot safely take input right now."
+            if sendingNow { session.submissionFailure = notSentNow(reason) }
+            // A steer, or a command sent from the composer: say why nothing happened; the draft stays.
+            else if queued == nil, session.active, !disabledIntegrations.contains(session.agentID) { session.submissionFailure = "Not sent: \(reason) Your draft is preserved." }
             return
         }
         session.queueWaiting = nil
@@ -881,6 +887,9 @@ extension ChatCoordinator {
         picker.start(cycle: cycle)
     }
 
+    /// How long Claude's helper keeps a question open (`helper/harnesses/claude/src/interactions.rs`).
+    static let claudeQuestionLifetime: TimeInterval = 180
+
     private func receiveHelper(_ interaction: HelperChat.Interaction, session: ChatSession) {
         guard let helper = session.helper else { return }
         restoreRemotePresentation(session)
@@ -915,20 +924,27 @@ extension ChatCoordinator {
                 guard let self, let session else { return }
                 self.completeHelper($0, interaction: interaction, helper: helper, session: session)
             })
+            ChatAnnouncement.post("Permission requested: \(interaction.questions.first?.header ?? session.agentTitle)", for: session)
         } else if case .toolQuestions = interaction.presentation {
             let questions = ClaudeQuestions(interaction.questions.map { question in
                 ClaudeQuestions.Question(text: question.text, header: question.header,
                                          options: question.options.map { .init(label: $0.label, description: $0.detail ?? "", preview: nil) },
                                          multiple: question.multiple)
             })
-            session.approvals.append(PendingApproval(key: interaction.id, interaction: interaction.id, operation: interaction.questions.map(\.text).joined(separator: "\n"),
-                                                     turnID: interaction.turn, toolItemID: interaction.record, anchorTurnID: session.turns.last?.id,
-                                                     questions: questions) { [weak self, weak session] in
+            let approval = PendingApproval(key: interaction.id, interaction: interaction.id, operation: interaction.questions.map(\.text).joined(separator: "\n"),
+                                           turnID: interaction.turn, toolItemID: interaction.record, anchorTurnID: session.turns.last?.id,
+                                           questions: questions) { [weak self, weak session] in
                 guard let self, let session else { return }
                 self.completeHelper($0, interaction: interaction, helper: helper, session: session)
-            })
+            }
+            // Claude's helper hands a question back to the terminal 180 s after its hook asked (docs/integrations.md);
+            // counted from its arrival here, so a card shown again after a reconnect may end sooner than it says.
+            if session.agentID == "claude" { approval.expires = System.date().addingTimeInterval(Self.claudeQuestionLifetime) }
+            session.approvals.append(approval)
+            ChatAnnouncement.post("Question from \(session.agentTitle)", for: session)
         } else if let id = session.sessionID, let question = ChatSideQuestion(interaction: interaction, session: id) {
             session.questions.append(question)
+            ChatAnnouncement.post("Question from \(session.agentTitle)", for: session)
         }
     }
 
@@ -1130,23 +1146,31 @@ extension ChatCoordinator {
     }
 
     /// The first-launch answer to whether agents run on this Mac (LocalAgentsConsent). Yes (the launch keys whose
-    /// CLIs were found) installs their integrations here, Pi's extension too. No (nil) turns this Mac's agent hooks
-    /// off, leaving the agents' settings as they are.
+    /// CLIs were found) allows and installs their integrations here, Pi's extension too. No (nil) turns this Mac's
+    /// agent hooks off, leaving the agents' settings as they are.
     func adoptLocalAgents(_ found: Set<String>?) {
         loadLaunches()
         integrationWork { chat in
             for launch in chat.helperLaunches ?? [] {
                 guard let found else { chat.setLocalHooks(launch.key, allowed: false); continue }
                 guard found.contains(launch.key) else { continue }
-                if !chat.localHooksAllowed(launch.key) { chat.localHooks[launch.key] = nil }
+                chat.localHooks[launch.key] = true
                 chat.setHelperIntegration(launch.key, enabled: true)
             }
         }
     }
 
-    /// Settings defaults: every integration on.
-    func restoreHelperIntegrations() {
-        for launch in helperLaunches ?? [] { setHelperIntegration(launch.key, enabled: true) }
+    /// Settings › Restore All Defaults, whose confirmation names the files: Chat mode and every agent on, and their
+    /// hooks allowed and installed on this Mac again.
+    func restoreDefaults() {
+        // From any page: the launches may not be loaded yet.
+        loadLaunches()
+        integrationWork { chat in
+            var hooks = chat.localHooks
+            for launch in chat.helperLaunches ?? [] { hooks[launch.key] = true }
+            chat.localHooks = hooks
+            chat.setEnabled(true)
+        }
     }
 
     /// The helper's agents in its own order, except Codex listed just above Claude Code. Only the list moves: a
@@ -1166,7 +1190,11 @@ extension ChatCoordinator {
             let channel = HarbourRadio.channel(for: session.id)
             return session.active ? "Transmit on \(channel)…" : "Hail \(agents) on \(channel)…"
         }
-        if session.active { return "Reply…" }
+        // Commands are found by typing "/": the empty composer says so.
+        if session.active { return session.helperCommands.isEmpty ? "Reply…" : "Reply… · / for commands" }
+        // Chat shows this conversation, not the terminal: what is left to do there.
+        if session.agentExited { return "Read-only · Open in Terminal to start \(agents) again" }
+        if session.sessionID != nil { return "Read-only · sending is paused" }
         return "Start \(agents) in this terminal…"
     }
 
@@ -1181,8 +1209,11 @@ extension ChatCoordinator {
             var missing: [String] = []
             for launch in launches {
                 // A new helper starts with every integration enabled: repeat the user's turned-off ones.
-                let off = chat.disabledIntegrations.contains(launch.key) || !chat.enabled || !chat.localHooksAllowed(launch.key)
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
+                // Hooks installed before unanswered meant no (an earlier version installed them without asking) are
+                // kept as a yes: a launch never removes what is working.
+                if chat.localHooks[launch.key] == nil, install.status != nil, install.status != "off" { chat.localHooks[launch.key] = true }
+                let off = chat.disabledIntegrations.contains(launch.key) || !chat.enabled || !chat.localHooksAllowed(launch.key)
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed
                 } else if !off, install.optional == true, install.installed == true, install.restart {

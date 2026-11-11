@@ -15,6 +15,10 @@ struct AgentActivity: Equatable {
     var finished = false
     /// A program reported an error the user hasn't seen.
     var failed = false
+    /// A terminal rang its bell (BEL) while it was not shown, and nobody has typed in it since.
+    var bell = false
+    /// The bell is all that is unread: the mark and its words say so.
+    var bellOnly = false
     var working = false
     /// Some agent is attached but reports nothing.
     var idle = false
@@ -30,7 +34,10 @@ struct AgentActivity: Equatable {
         // Unseen output also piles up while an agent works, so only an idle tab counts as finished.
         // A finished tab outranks a working one: it needs you, the working one doesn't yet.
         failed = programs.contains { $0.state == .error }
-        finished = sessions.contains { $0.hasNewMessages && !($0.active && $0.busy) } || failed || programs.contains { $0.state == .done }
+        bell = tabIDs.contains { TerminalRuntime.shared.programs.rang.contains($0) }
+        let unread = sessions.contains { $0.hasNewMessages && !($0.active && $0.busy) } || programs.contains { $0.state == .done }
+        finished = unread || failed || bell
+        bellOnly = bell && !unread && !failed
         let controller = TerminalRuntime.shared.hosts.reconnect
         offline = tabIDs.contains { controller.state(for: $0) != nil }
         reconnecting = connecting || tabIDs.contains { controller.state(for: $0)?.reconnecting == true }
@@ -40,12 +47,13 @@ struct AgentActivity: Equatable {
     /// The status in a word, for the Large sidebar's pill; nil while there's nothing to report.
     var label: String? {
         reconnecting ? "Connecting" : offline ? "Offline" : blocked ? (approval ? "Needs approval" : blockedLabel(short: true))
-            : failed ? "Failed" : finished ? "Unread" : working ? "Working" : nil
+            : failed ? "Failed" : bellOnly ? "Bell" : finished ? "Unread" : working ? "Working" : nil
     }
 
     var accessibilityLabel: String {
         reconnecting ? "Connecting to host" : offline ? "Host offline" : blocked ? (approval ? "Awaiting approval" : blockedLabel(short: false))
-            : failed ? "Program failed" : finished ? "Unread output" : working ? "Working" : idle ? "Idle" : "No reported agent activity"
+            : failed ? "Program failed" : bellOnly ? "Bell rang" : finished ? "Unread output" : working ? "Working"
+            : idle ? "Idle" : "No reported agent activity"
     }
 
     private func blockedLabel(short: Bool) -> String {
@@ -61,7 +69,7 @@ struct AgentActivity: Equatable {
 /// An activity status's mark: SF Symbols, the same shapes and sizes in every interface font. San Francisco has none of
 /// ◌ ◆ ◐ itself and would draw them from three unrelated fallback fonts, oversized; quiet is a small dot.
 enum ActivityMark: Hashable {
-    case quiet, working, blocked, finished, offline
+    case quiet, working, blocked, finished, failed, bell, offline
 
     init(_ urgency: PaneUrgency) {
         switch urgency { case .waiting: self = .blocked; case .unread: self = .finished; case .running: self = .working; case .idle: self = .quiet }
@@ -73,6 +81,9 @@ enum ActivityMark: Hashable {
         case .working: "circle.lefthalf.filled"
         case .blocked: "circle.fill"
         case .finished: "diamond.fill"
+        // Its own shape, not only its colour, tells a failure and a bell from unread output.
+        case .failed: "exclamationmark.triangle.fill"
+        case .bell: "bell.fill"
         case .offline: "circle.dotted"
         }
     }
@@ -107,8 +118,10 @@ struct AgentActivityGlyph: View {
         let activity = AgentActivity(tabIDs: tabIDs, connecting: connecting)
         let (blocked, working, finished, failed) = (activity.blocked, activity.working, activity.finished, activity.failed)
         let (offline, reconnecting) = (activity.offline, activity.reconnecting)
-        let state: ActivityMark = offline ? .offline : blocked ? .blocked : finished ? .finished : working ? .working : .quiet
-        let tint = offline ? Chrome.muted : blocked ? (tile ? Chrome.palette.warning : Chrome.palette.green)
+        let state: ActivityMark = offline ? .offline : blocked ? .blocked : failed ? .failed : activity.bellOnly ? .bell
+            : finished ? .finished : working ? .working : .quiet
+        // Needs you is green everywhere (strips, tiles, the attention banner, the sidebar's "needs you").
+        let tint = offline ? Chrome.muted : blocked ? Chrome.palette.green
             : failed ? Chrome.palette.warning : finished ? Chrome.accent : working ? Chrome.ink : Chrome.muted
         Group {
             if reconnecting {

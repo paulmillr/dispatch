@@ -10,6 +10,8 @@ final class ProgramStatusStore {
     private(set) var records: [UUID: [ProgramStatus]] = [:]
     /// Per surface, the newest done/error record the user has seen: older ones stop showing.
     private var seen: [UUID: UInt64] = [:]
+    /// Terminals whose bell (BEL) rang while they were not shown, until the user types in them.
+    private(set) var rang: Set<UUID> = []
 
     func update(_ id: UUID, _ new: [ProgramStatus]) {
         records[id] = new.isEmpty ? nil : new
@@ -23,8 +25,14 @@ final class ProgramStatusStore {
 
     func visible(_ ids: [UUID]) -> [ProgramStatus] { ids.flatMap(visible) }
 
-    /// The user typed in the terminal: its done and error records have been seen.
+    /// A terminal not on screen rang its bell: its tab is marked until the user types in it.
+    func ring(_ id: UUID) {
+        if !rang.contains(id) { rang.insert(id) }
+    }
+
+    /// The user typed in the terminal: its done and error records have been seen, and its bell heard.
     func acknowledge(_ id: UUID) {
+        if rang.contains(id) { rang.remove(id) }
         guard let newest = records[id]?.filter(\.finished).map(\.serial).max(), newest > seen[id] ?? 0 else { return }
         seen[id] = newest
     }
@@ -33,6 +41,7 @@ final class ProgramStatusStore {
     func close(_ id: UUID) {
         records[id] = nil
         seen[id] = nil
+        if rang.contains(id) { rang.remove(id) }
     }
 }
 

@@ -54,9 +54,9 @@ final class ChatDictation {
         return !conversation || live.heard != nil
     }
 
-    /// The microphone button: conversation mode on or off.
+    /// The microphone button: one message (a second click inserts it), or ends conversation mode.
     func toggle(_ session: ChatSession) {
-        if conversation || dictating(session.id) { stop(session) } else { startConversation(session) }
+        if conversation || dictating(session.id) { stop(session) } else { start(session) }
     }
 
     /// One message, into `session`'s draft.

@@ -182,6 +182,8 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(captured.executable, process.executable)
         XCTAssertEqual(captured.start, [process.startedSeconds, process.startedMicroseconds])
         defer { if process.alive { System.signal(process.pid, SIGTERM) } }
+        // This Mac's hooks were allowed (the setup sheet's Yes, or Install in Hosts › This Mac).
+        for key in ["codex", "claude", "pi"] { chat.localHooks[key] = true }
         chat.setEnabled(true)
         await chat.integrationChanges?.value
         XCTAssertNil(chat.error)
@@ -554,6 +556,8 @@ final class ChatTests: XCTestCase {
             try await TestSupport.eventually(timeout: .seconds(10)) { ["codex", "claude"].allSatisfy { next.helperInstalls[$0] != nil } }
             return next
         }
+        // This Mac's hooks were allowed (the setup sheet's Yes, or Install in Hosts › This Mac); unanswered installs nothing.
+        for key in ["codex", "claude"] { chat.localHooks[key] = true }
         chat.setEnabled(true)
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: chat.error ?? "no error") {
             chat.hookStatus("codex") != .off && chat.hookStatus("claude") != .off
@@ -745,7 +749,7 @@ final class ChatTests: XCTestCase {
     }
 
     /// The fresh-install answer (LocalAgentsConsent): no turns this Mac's agent hooks off without writing any agent
-    /// settings; yes installs the integrations of the agents found, Pi's extension with them, leaving the others alone.
+    /// settings; yes installs the integrations of the agents found, Pi's extension too, leaving the others alone.
     func testLocalAgentsAnswerInstallsFoundAgentsOrTurnsHooksOff() async throws {
         let claude = System.home.appendingPathComponent(".claude/settings.json")
         let pi = System.home.appendingPathComponent(".pi/agent/extensions/dispatch-chat.js")
@@ -765,7 +769,7 @@ final class ChatTests: XCTestCase {
         await on.integrationChanges?.value
         XCTAssertTrue(System.exists(claude))
         XCTAssertFalse(System.exists(codexHooks), "An agent not found is left alone")
-        XCTAssertTrue(System.exists(pi), "Yes installs Pi's extension like the other agents' hooks")
+        XCTAssertTrue(System.exists(pi), "Pi's extension installs with the others it found (44cd3463)")
     }
 
     /// Pi's extension on in Settings but never installed on this Mac (a Yes from a build that kept Pi opt-in, or an install
@@ -807,6 +811,34 @@ final class ChatTests: XCTestCase {
         again.setHelperIntegration("pi", enabled: false)
         await again.integrationChanges?.value
         XCTAssertFalse(System.exists(pi))
+    }
+
+    /// Unanswered is no on this Mac: turning Chat mode on writes no agent's config until its hooks are allowed (the
+    /// setup sheet's Yes, Install in Hosts › This Mac); hooks found installed at launch, by an earlier version that
+    /// didn't ask, count as allowed and stay.
+    func testUnansweredLocalHooksInstallNothingAndInstalledOnesStay() async throws {
+        let claude = System.home.appendingPathComponent(".claude/settings.json")
+        try? FileManager.default.removeItem(at: claude)
+        defer { try? FileManager.default.removeItem(at: claude) }
+        let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        try await TestSupport.integrations(["claude"], enabled: false, chat: chat)
+        chat.localHooks = [:]
+        chat.setEnabled(true)
+        await chat.integrationChanges?.value
+        XCTAssertFalse(System.exists(claude), "Chat mode on installs nothing unasked")
+        XCTAssertEqual(chat.hookStatus("claude"), .off)
+        chat.setLocalHooks("claude", allowed: true)
+        try await TestSupport.eventually(timeout: .seconds(10)) { chat.hookStatus("claude") != .off }
+        XCTAssertTrue(System.exists(claude))
+        let later = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        later.loadLaunches()
+        try await TestSupport.eventually(timeout: .seconds(10)) { later.helperInstalls["claude"] != nil }
+        await later.integrationChanges?.value
+        XCTAssertEqual(later.localHooks["claude"], true, "installed hooks count as allowed")
+        XCTAssertNotEqual(later.hookStatus("claude"), .off)
+        chat.setHelperIntegration("claude", enabled: false)
+        await chat.integrationChanges?.value
+        chat.setEnabled(false)
     }
 
     /// A hooks.json the integration cannot read as hooks is never rewritten: the install fails instead.

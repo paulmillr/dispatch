@@ -143,13 +143,11 @@ final class AppearanceUITests: XCTestCase {
         case .textClipped:
             // Row previews clamp to one or two lines as Mail's do (M2a, M3a: the list reports them without an
             // element), and New host's address placeholder is the system field's, truncated by the Form.
-            // A space's title with its branch (P2) is one text with the branch glyph in it: the check measures the glyph's
-            // spoken name ("branch") as text, wider than the glyph drawn.
             // Manage goal's rows below its medium sheet's edge (C4b), as above. Conversation mode's listening bar (C5,
             // C5r): its live words wrap and keep their end, but the audit measures them against the whole capsule,
             // waveform included, and reports them clipped however short.
             return issue.element == nil || (screen == "M8a" && issue.element?.elementType == .textField)
-                || (frame.maxY <= 120 && label.contains("  branch ")) || screen == "C4b"
+                || screen == "C4b"
                 || (screen.hasPrefix("C5") && frame.height <= 60 && frame.minY > 600)
         case .elementDetection where screen == "C4b":
             // The thread dimmed behind the medium sheet, which is modal: its text is not reachable while it is up.

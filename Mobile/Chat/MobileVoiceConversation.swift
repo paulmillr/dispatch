@@ -411,7 +411,64 @@ final class MobileVoiceConversation {
     func stop() { if dictation.active(Self.owner) { dictation.cancel() } }
 }
 
-/// Reads aloud with the system's voice.
+/// The voice conversation mode and Read Aloud speak in (Settings › Chat › Voice, `MobileSettings.speechVoice`): one
+/// of the phone's voices by its identifier, or none, the voice, speed and pitch of the Settings app's Accessibility ›
+/// Spoken Content (the default, and what a chosen voice since deleted falls back to).
+enum SpeechVoice {
+    /// An utterance of `text` in the voice saved in `defaults`.
+    static func utterance(_ text: String, defaults: UserDefaults = .standard) -> AVSpeechUtterance {
+        utterance(text, voice: MobileSettings.speechVoice(defaults))
+    }
+
+    /// An utterance of `text` in voice `id`, or in Spoken Content's when `id` is empty or names no installed voice.
+    static func utterance(_ text: String, voice id: String) -> AVSpeechUtterance {
+        let utterance = AVSpeechUtterance(string: text)
+        if let voice = installed(id) {
+            utterance.voice = voice
+        } else {
+            utterance.prefersAssistiveTechnologySettings = true
+        }
+        return utterance
+    }
+
+    static func installed(_ id: String) -> AVSpeechSynthesisVoice? {
+        id.isEmpty ? nil : AVSpeechSynthesisVoice(identifier: id)
+    }
+
+    /// The voices the picker offers: Personal Voice (once allowed) and every voice in the user's languages but the
+    /// novelty ones (Bells, Zarvox…), with the one in use even if it is in another language.
+    static func offered(current: String) -> [AVSpeechSynthesisVoice] {
+        let languages = Set(Locale.preferredLanguages.map { Locale(identifier: $0).language.languageCode?.identifier ?? $0 })
+        return AVSpeechSynthesisVoice.speechVoices().filter { voice in
+            if voice.identifier == current || voice.voiceTraits.contains(.isPersonalVoice) { return true }
+            guard !voice.voiceTraits.contains(.isNoveltyVoice) else { return false }
+            let language = Locale(identifier: voice.language).language.languageCode?.identifier ?? voice.language
+            return languages.contains(language)
+        }
+        .sorted { ($0.name, $0.language) < ($1.name, $1.language) }
+    }
+
+    /// "Ava (Premium)": the name and quality, as the Settings app lists voices.
+    static func title(_ voice: AVSpeechSynthesisVoice) -> String {
+        switch voice.quality {
+        case .premium: "\(voice.name) (Premium)"
+        case .enhanced: "\(voice.name) (Enhanced)"
+        default: voice.name
+        }
+    }
+
+    /// "English (United States)".
+    static func language(_ voice: AVSpeechSynthesisVoice) -> String {
+        Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language
+    }
+
+    /// Settings' Voice row: the chosen voice's title, or Spoken Content.
+    static func label(_ id: String) -> String {
+        installed(id).map(title) ?? "Spoken Content"
+    }
+}
+
+/// Reads aloud with the system's voice (`SpeechVoice`).
 @MainActor final class SystemVoiceSpeaker: NSObject, VoiceSpeaker, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     private var finished: (@MainActor () -> Void)?
@@ -423,7 +480,7 @@ final class MobileVoiceConversation {
 
     func speak(_ text: String, finished: @escaping @MainActor () -> Void) {
         self.finished = finished
-        synthesizer.speak(AVSpeechUtterance(string: text))
+        synthesizer.speak(SpeechVoice.utterance(text))
     }
 
     func stop() {
@@ -498,8 +555,8 @@ final class MobileMessageReader {
     func stop()
 }
 
-/// The system's voice for Read Aloud, on the audio session as spoken audio that ducks others; the session is given
-/// back when nothing is left to read.
+/// The system's voice for Read Aloud (`SpeechVoice`), on the audio session as spoken audio that ducks others; the
+/// session is given back when nothing is left to read. Settings › Chat › Voice plays its samples through one too.
 @MainActor final class SystemMessageSpeaker: NSObject, MessageSpeaker, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
     /// Each utterance's end, by the utterance: a stopped one's cancel arrives after the next has started.
@@ -511,11 +568,19 @@ final class MobileMessageReader {
     }
 
     func speak(_ text: String, finished: @escaping @MainActor () -> Void) {
+        speak(SpeechVoice.utterance(text), finished: finished)
+    }
+
+    /// `text` in voice `id` (empty: Spoken Content's), whatever voice is saved.
+    func speak(_ text: String, voice id: String, finished: @escaping @MainActor () -> Void = {}) {
+        speak(SpeechVoice.utterance(text, voice: id), finished: finished)
+    }
+
+    private func speak(_ utterance: AVSpeechUtterance, finished: @escaping @MainActor () -> Void) {
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? session.setActive(true)
-        let utterance = AVSpeechUtterance(string: text)
         endings[ObjectIdentifier(utterance)] = finished
         synthesizer.speak(utterance)
     }

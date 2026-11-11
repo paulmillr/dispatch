@@ -36,6 +36,49 @@ final class TabCloseSelectionTests: XCTestCase {
         XCTAssertFalse(app.workspace.allTabIDs.contains(id))
     }
 
+    /// At a prompt with a job in the background, or one stopped with ⌃Z, closing still asks, and names the job.
+    func testCloseConfirmationCountsBackgroundAndStoppedJobs() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let id = try XCTUnwrap(app.workspace.activeTab?.id)
+        try await app.wait { app.runtime.views[id]?.surface != nil }
+        let terminal = try XCTUnwrap(app.runtime.views[id])
+        TerminalTestSupport.send("printf 'JOBS_%s\\n' READY", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("JOBS_READY") }
+        try await app.wait { app.controller.runningPrograms([id]) == nil }
+        TerminalTestSupport.send("sleep 60 &", to: terminal)
+        try await app.wait { app.controller.runningPrograms([id]) == ["sleep"] }
+        XCTAssertNotNil(app.controller.runningPrograms([id], detaching: true), "Window close and Quit protect background jobs")
+        TerminalTestSupport.send("kill %1; printf 'JOBS_%s\\n' GONE", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("JOBS_GONE") && app.controller.runningPrograms([id]) == nil }
+        TerminalTestSupport.send("sleep 61", to: terminal)
+        try await app.wait { app.controller.needsCloseConfirmation([id]) }
+        TerminalTestSupport.key(6, "z", terminal, modifiers: .control)
+        try await app.wait { app.runtime.views[id]?.surface?.needsConfirmQuit == false && app.controller.runningPrograms([id]) == ["sleep"] }
+        TerminalTestSupport.send("kill -9 %1; printf 'JOBS_%s\\n' DONE", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("JOBS_DONE") && app.controller.runningPrograms([id]) == nil }
+    }
+
+    /// Right-click's menu: the edit items, Clear Screen and splitting, then the modes the tab offers; Clear Screen is
+    /// off while a full-screen program shows.
+    func testTerminalContextMenuOffersEditingClearAndModes() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        let id = try XCTUnwrap(app.workspace.activeTab?.id)
+        try await app.wait { app.runtime.views[id]?.surface != nil }
+        let terminal = try XCTUnwrap(app.runtime.views[id])
+        TerminalTestSupport.send("printf 'MENU_%s\\n' READY", to: terminal)
+        try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("MENU_READY") }
+        let titles = terminal.contextMenu().items.map(\.title)
+        for title in ["Copy", "Paste", "Select All", "Clear Screen", "Split Right", "Split Down", "Terminal"] {
+            XCTAssertTrue(titles.contains(title), "\(title) in \(titles)")
+        }
+        XCTAssertTrue(terminal.canClearScreen)
+        TerminalTestSupport.send("printf '\\033[?1049h'; sleep 30", to: terminal)
+        try await app.wait { terminal.surface?.alternateScreen == true }
+        XCTAssertFalse(terminal.canClearScreen)
+        XCTAssertEqual(terminal.contextMenu().items.first { $0.title == "Clear Screen" }?.isEnabled, false)
+        TerminalTestSupport.key(8, "c", terminal, modifiers: .control)
+    }
+
     func testTmuxDetachDoesNotRequireConfirmation() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
         try await app.attach(); try await app.ready()

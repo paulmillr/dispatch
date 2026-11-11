@@ -80,6 +80,43 @@ import ImageIO
         }
     }
 
+    /// The previewed file changed on disk (the listing shows another size or time than the one read): it is read again
+    /// into a state of its own and shown in place once read, so the pane keeps its view and nothing blanks meanwhile.
+    /// `current` says whether the preview still shows when the read is done. Folders and hex views are left alone (the
+    /// hex view reads again by itself when a page finds the file changed).
+    static func refresh(_ preview: FilePreviewState, entry: FileEntry, from source: any FilesSource,
+                        current: @MainActor () -> Bool) async {
+        switch preview.kind {
+        case .text, .markdown, .image, .tooLarge, .error: break
+        default: return
+        }
+        guard !preview.refreshing else { return }
+        preview.refreshing = true
+        defer { preview.refreshing = false }
+        let fresh = FilePreviewState(path: preview.path, entry: entry)
+        await load(fresh, from: source)
+        guard !Task.isCancelled, current() else { return }
+        if case .loading = fresh.kind { return }
+        preview.encoding = fresh.encoding
+        preview.revision = fresh.revision
+        preview.kind = fresh.kind
+    }
+
+    /// The entry `listings` show for the previewed file when it is another version than the one read: another size or
+    /// modification time. Nil when it is the same, not listed, or not a plain file (a symlink's entry describes the
+    /// link, not what was read).
+    static func changedEntry(of preview: FilePreviewState, in listings: [String: FileListingState]) -> FileEntry? {
+        guard let revision = preview.revision, revision.kind == .file, let parent = FilesPath.parent(preview.path),
+              let listing = listings[FilesPath.normalized(parent)]?.listing ?? listings[parent]?.listing,
+              let entry = listing.entries.first(where: { $0.name == preview.name }), entry.kind == .file else { return nil }
+        let moved: Bool = switch (entry.modified, revision.modified) {
+        case let (listed?, read?): abs(listed.timeIntervalSince(read)) > 0.001
+        case (nil, nil): false
+        default: true
+        }
+        return entry.size != revision.size || moved ? entry : nil
+    }
+
     /// "Show first 64 KB" of text too large to show; bytes that are not text after all show as hex.
     static func loadHead(_ preview: FilePreviewState, from source: any FilesSource) async {
         guard case .tooLarge(let size, .none) = preview.kind else { return }
@@ -127,7 +164,10 @@ import ImageIO
                 tail = try? await source.read(preview.path, offset: size - length, length: length, revision: revision).data
             }
         }
-        return .binary(size: size, head: head, format: FileFormat.describe(head, tail: tail))
+        // Bytes with no NUL that are not UTF-8 are likely text in an encoding the preview does not read: say so, rather
+        // than show hex as if the file were a program or an archive.
+        let format = FileFormat.describe(head, tail: tail) ?? (!head.isEmpty && !head.contains(0) ? "Not UTF-8 text" : nil)
+        return .binary(size: size, head: head, format: format)
     }
 
     private static func loadFolder(_ preview: FilePreviewState, from source: any FilesSource) async {
@@ -161,7 +201,12 @@ import ImageIO
               UInt64(first.data.count) == min(sniffLength, size) else {
             throw FilesSourceError.changed(preview.path)
         }
-        let decision = decide(name: preview.name, size: size, head: first.data)
+        var decision = decide(name: preview.name, size: size, head: first.data)
+        // Text in another encoding than UTF-8 (a UTF-16 `.strings` file, a Latin-1 config) shows as text, read-only,
+        // its encoding named in the header.
+        let encoding = decision == .binary && !isImageName(preview.name) && size <= textLimit
+            ? FilePreviewContent.otherEncoding(first.data) : nil
+        if encoding != nil { decision = .text(language: SyntaxHighlight.language(preview.name)) }
         switch decision {
         case .binary:
             preview.revision = first.revision
@@ -211,6 +256,15 @@ import ImageIO
             }
             preview.kind = .markdown(text)
         case .text(let language):
+            if let encoding {
+                guard let text = FilePreviewContent.text(data, encoding: encoding) else {
+                    preview.kind = .binary(size: size, head: data, format: FileFormat.describe(data))
+                    return
+                }
+                preview.encoding = encoding.title
+                preview.kind = .text(text, language: language)
+                return
+            }
             guard let text = text(data) else {
                 preview.kind = .binary(size: size, head: data, format: FileFormat.describe(data))
                 return

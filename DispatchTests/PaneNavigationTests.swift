@@ -41,7 +41,17 @@ final class PaneNavigationTests: XCTestCase {
         workspace.spaces = [space]
         let entries = AttentionEntry.entries(workspace: workspace, sessions: [:])
         XCTAssertEqual(Set(entries.map(\.id)), [first.id, second.id])
-        XCTAssertTrue(entries.first { $0.id == second.id }!.path.contains("hidden"))
+        XCTAssertEqual(entries.first { $0.id == second.id }!.title, "hidden", "a pane in a hidden window is named by its window")
+        // A window tmux named after Dispatch's launcher (an agent typed in a Dispatch shell): the agent names it, as
+        // in the sidebar, and nothing says dispatch-helper.
+        var launched = space
+        launched.containers[1].name = TerminalTab.launcher
+        launched.containers[1].arrangement.panes[0].tabs[0].agent = "claude"
+        workspace.spaces = [launched]
+        let agent = AttentionEntry.entries(workspace: workspace, sessions: [:]).first { $0.id == second.id }
+        XCTAssertEqual(agent?.title, "claude")
+        XCTAssertEqual(agent?.place, "tmux")
+        workspace.spaces = [space]
         // A herdr tab holding two panes.
         var herdr = Space(name: "herdr", directory: "/tmp")
         herdr.structure([TerminalTab(directory: "/tmp")], selected: 0, backend: 2)

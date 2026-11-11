@@ -116,8 +116,8 @@ extension SidebarColumn {
 
 /// The traffic lights' row (SpaceSidebar.windowRow, headerControls), icons only: the sidebar toggle and the tree toggle,
 /// then at the end the shortcuts button and, in tree order, New Space (a glass circle, as New Tab inside a space, ending
-/// where the rows' shortcuts do; flat order has "+ space" under its list); tight, the shortcuts button goes. No mode menu: the sidebar is the spaces, or inside one its tabs
-/// (Screens/VerticalTabs.swift), never a list of every tab. On glass each control is a GlassPanelControl (a track-sized
+/// where the rows' shortcuts do; flat order has "+ space" under its list); tight, the shortcuts button goes. No mode menu: the sidebar is the spaces, or inside one its tabs,
+/// never a list of every tab. On glass each control is a GlassPanelControl (a track-sized
 /// square, a capsule when lit); flat, a 24-point square with a 4-point corner.
 struct SidebarTopRow: View {
     var tree = false

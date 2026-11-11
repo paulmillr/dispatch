@@ -465,7 +465,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
-        remote.hostID = .authenticated("fixture")
+        remote.hostID = .authenticated("fixture", uid: 501)
         workspace.spaces.append(remote)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -546,7 +546,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
-        remote.hostID = .authenticated("fixture")
+        remote.hostID = .authenticated("fixture", uid: 501)
         workspace.spaces.append(remote)
         let pending = TerminalRuntime.shared.chat.session(for: terminal)
         pending.approvals = [PendingApproval(key: "sidebar-size", operation: "Run tests?") { _ in }]

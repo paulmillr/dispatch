@@ -107,8 +107,10 @@ extension FilesCoordinator {
             // `git add` or a commit changes the blobs a binary's sizes describe.
             watch.sizes = [:]
         } else if tick {
-            // Commits reads the status too: its uncommitted row and the branch's ahead and behind come from it.
-            watch.statusDue = true
+            // Commits reads the status too: its uncommitted row and the branch's ahead and behind come from it. After
+            // failures (a status that hits the helper's deadline on a large tree, a lock) the reads back off, a tick
+            // more each time up to about a minute; ⌘R or a prompt asks at once.
+            if watch.statusSkip > 0 { watch.statusSkip -= 1 } else { watch.statusDue = true }
             if session.showsLog { watch.refsDue = true }
         }
         sync(watch)
@@ -233,6 +235,10 @@ extension FilesCoordinator {
         watch.head = nil
         if session.status != nil { session.status = nil }
         if session.log != nil { session.log = nil }
+        if session.statusError != nil { session.statusError = nil }
+        if session.logError != nil { session.logError = nil }
+        watch.statusFailures = 0
+        watch.statusSkip = 0
         if session.changesSelection != nil { session.changesSelection = nil }
         if session.changesDiff != nil { session.changesDiff = nil }
         if session.selectedCommit != nil { session.selectedCommit = nil }
@@ -348,6 +354,19 @@ extension FilesCoordinator {
         apply(.none, session, watch)
     }
 
+    /// How many failed status reads the back-off grows over: 1, 3, 7, 15, then 31 ticks skipped (about a minute).
+    static let statusBackoff = 5
+
+    /// A failure the git tabs show: git's own error or the source's, not a cancel, nor what replaces the tab's state
+    /// (no repository, git unavailable).
+    nonisolated static func reports(_ error: GitError) -> Bool {
+        switch error {
+        case .failed: true
+        case .source(let reason): reason != .cancelled
+        case .notRepository, .unavailable: false
+        }
+    }
+
     private func failed(_ error: GitError, _ session: FilesSession, _ watch: Watch) {
         switch error {
         case .notRepository: lost(session, watch)
@@ -396,10 +415,17 @@ extension FilesCoordinator {
                 } else {
                     session.status = status
                 }
+                if session.statusError != nil { session.statusError = nil }
+                watch.statusFailures = 0
+                watch.statusSkip = 0
                 self.reconcileSelection(session, previous: previous)
                 watch.marks = read.marks
             case .failure(let error):
                 self.failed(error, session, watch)
+                guard Self.reports(error) else { return }
+                if session.statusError != error.message { session.statusError = error.message }
+                watch.statusFailures = min(watch.statusFailures + 1, Self.statusBackoff)
+                watch.statusSkip = (1 << watch.statusFailures) - 1
             }
         }
     }
@@ -573,6 +599,7 @@ extension FilesCoordinator {
                 } else {
                     session.log = log
                 }
+                if session.logError != nil { session.logError = nil }
                 if moved {
                     // A commit, checkout or fetch: the detail's chips may have changed too.
                     if let detail = session.commitDetail {
@@ -583,7 +610,12 @@ extension FilesCoordinator {
             case .failure(let error):
                 self.failed(error, session, watch)
                 // A busy helper (its git queue full of other tabs' status reads) or a dropped request: ask again
-                // shortly rather than on the next tick, a few times.
+                // shortly rather than on the next tick, a few times. git's own error, or the retries spent, shows.
+                let retrying: Bool = if case .source(let reason) = error, reason != .cancelled,
+                                        watch.logRetries < Self.logRetries { true } else { false }
+                if !retrying, session.log == nil, Self.reports(error), session.logError != error.message {
+                    session.logError = error.message
+                }
                 guard case .source(let reason) = error, reason != .cancelled, watch.logRetries < Self.logRetries else { return }
                 watch.logRetries += 1
                 Task { [weak self, weak watch] in
@@ -904,6 +936,9 @@ extension FilesCoordinator {
         var failed: Key?
 
         var statusDue = false
+        /// Status reads failed in a row (at most `statusBackoff`), and the ticks still to skip before the next one.
+        var statusFailures = 0
+        var statusSkip = 0
         /// The repository the last status read was for, so a failing one is retried on the tick, not in a loop.
         var statusAttempt: GitRepository?
         var statusTask: Task<Void, Never>?

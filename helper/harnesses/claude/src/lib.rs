@@ -4,6 +4,7 @@ pub mod hooks;
 pub mod identity;
 mod install;
 mod interactions;
+mod limits;
 pub mod menu;
 pub mod paging;
 pub mod process;

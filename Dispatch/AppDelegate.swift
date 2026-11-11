@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Recent keystrokes in the Settings window, matched against `AppTheme.nauticalCode`.
     private var settingsKeystrokes = ""
     private var settingsKeyMonitor: Any?
+    /// The update offer waiting for a sheet over the main window to end.
+    private var pendingUpdateOffer: NSObjectProtocol?
     private var dictationShortcut: DictationShortcut?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
@@ -137,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let visible = !sidebarVisible
         // Returning to the automatic state releases the manual exception, so
         // adding/removing spaces can control visibility again.
-        windowState.sidebarVisibilityOverride = visible == automaticSidebarVisible ? nil : visible
+        windowState.chooseSidebar(visible == automaticSidebarVisible ? nil : visible)
         DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
     }
 
@@ -182,6 +184,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             // Keep restored offline hosts visible; local-only sessions follow the usual sidebar rules.
             if workspace.spaces.contains(where: { $0.hostID != .local }) { windowState.sidebarVisibilityOverride = true }
         } else { workspace.newSpace() }
+        // A sidebar shown or hidden with ⌃⌘S stays so after a relaunch.
+        if let choice = WindowState.savedSidebarChoice { windowState.sidebarVisibilityOverride = choice }
         window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 740),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "Dispatch"
@@ -287,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
-        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else {
+        guard confirmClosing(Array(workspace.allTabIDs), .quit, detaching: true) else {
             removalOnQuit = nil; updateOnQuit = false; resetOnQuit = false
             return .terminateCancel
         }
@@ -351,7 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { ChatAttachmentPreview.shared.end(panel) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === window else { return true }
-        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { return false }
+        guard confirmClosing(Array(workspace.allTabIDs), .quit, detaching: true) else { return false }
         saveHostSession()
         // A window close ends the client presentation; multiplexer sessions survive.
         workspace.spaces.map(\.id).forEach { workspace.detachSpace($0) }
@@ -360,39 +364,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return true
     }
 
-    func confirmClosing(_ ids: [UUID], detaching: Bool = false) -> Bool {
-        guard needsCloseConfirmation(ids, detaching: detaching) else { return true }
-        return Self.confirmClose()
+    /// Closing tabs (or quitting) asks first while a process runs in them or a copy in Files is still under way.
+    func confirmClosing(_ ids: [UUID], _ subject: CloseSubject, detaching: Bool = false) -> Bool {
+        let programs = runningPrograms(ids, detaching: detaching)
+        let copies = FileTransferEngine.shared.running(in: Set(ids))
+        guard programs != nil || copies > 0 else { return true }
+        return Self.confirmClose(subject, programs: programs, copies: copies, in: window)
     }
 
-    static func confirmClose() -> Bool {
+    /// What a close confirmation names: one tab, one space, or quitting (⌘Q and the window's close button).
+    enum CloseSubject {
+        case tab(String), space(String), quit
+
+        var isQuit: Bool { if case .quit = self { true } else { false } }
+    }
+
+    /// Asks before ending running work, naming it and the action ("Close “api”?", "Quit Dispatch?"); true: go ahead. A
+    /// sheet on `window` while it shows, else a modal alert; either way it returns once answered. `programs` nil: no
+    /// process runs, only `copies` in Files.
+    static func confirmClose(_ subject: CloseSubject, programs: [String]?, copies: Int = 0, in window: NSWindow?) -> Bool {
+        let text = closeConfirmation(subject, programs: programs, copies: copies)
         let alert = NSAlert()
-        alert.messageText = "Close running processes?"
-        alert.informativeText = "Closing these terminals will end the processes running inside them."
+        alert.messageText = text.message
+        alert.informativeText = text.information
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Close")
-        return alert.runModal() == .alertSecondButtonReturn
+        alert.addButton(withTitle: text.action).hasDestructiveAction = true
+        alert.window.identifier = NSUserInterfaceItemIdentifier(closeConfirmationIdentifier)
+        return runSheet(alert, in: window) == .alertSecondButtonReturn
     }
 
+    /// The close question's words for the processes still running (nil: none) and the copies in Files a close would
+    /// stop. A copy stopped keeps the files it already wrote (`FileTransferRow.cancelHelp`).
+    static func closeConfirmation(_ subject: CloseSubject, programs: [String]?, copies: Int)
+        -> (message: String, information: String, action: String) {
+        let named = (programs ?? []).filter { !$0.isEmpty }.map { "“\($0)”" }
+        let list = named.count > 3 ? named.prefix(3).joined(separator: ", ") + " and \(named.count - 3) more"
+            : named.count > 1 ? named.dropLast().joined(separator: ", ") + " and " + named.last! : named.first
+        let running = list.map { "\($0) \(named.count > 1 ? "are" : "is") still running" } ?? "A process is still running"
+        let them = named.count > 1 ? "them" : "it"
+        let copiesText = copies == 1 ? "1 copy" : "\(copies) copies"
+        let message: String, place: String, ending: String, action: String
+        switch subject {
+        case .tab(let name):
+            (message, place, ending, action) = ("Close “\(name)”?", "this tab", "Closing the tab", "Close")
+        case .space(let name):
+            (message, place, ending, action) = ("Close space “\(name)”?", "this space", "Closing the space", "Close")
+        case .quit:
+            (message, place, ending, action) = ("Quit Dispatch?", "Dispatch's tabs", "Quitting", "Quit")
+        }
+        let copyNote = copies == 1 ? "A copy in Files is still running" : "\(copiesText) in Files are still running"
+        let information: String
+        switch (programs != nil, copies > 0) {
+        case (true, true):
+            information = "\(running) in \(place), and \(copiesText) in Files. \(ending) ends \(them) and stops "
+                + "\(copies == 1 ? "the copy" : "the copies"). Files already copied stay."
+        case (false, true):
+            information = "\(copyNote). \(ending) stops \(copies == 1 ? "it" : "them"). Files already copied stay."
+        default:
+            information = "\(running) in \(place). \(ending) ends \(them)."
+        }
+        let tmux = subject.isQuit ? " tmux and herdr sessions keep running." : ""
+        return (message, information + tmux, action)
+    }
+
+    /// The close confirmation's window, for tests that answer it.
+    static let closeConfirmationIdentifier = "close-confirmation"
+
+    /// An alert as a sheet on `window`, waited for as a modal alert is (callers such as `windowShouldClose` and the quit
+    /// need the answer before they return); a modal alert when the window is hidden or already has a sheet.
+    static func runSheet(_ alert: NSAlert, in window: NSWindow?) -> NSApplication.ModalResponse {
+        guard let window, window.isVisible, !window.isMiniaturized, window.attachedSheet == nil else { return alert.runModal() }
+        var running = true
+        alert.beginSheetModal(for: window) { response in
+            if running { NSApp.stopModal(withCode: response) }
+        }
+        let response = NSApp.runModal(for: alert.window)
+        running = false
+        // Stopped from outside (a test answering it): the sheet is still attached.
+        if alert.window.sheetParent != nil { window.endSheet(alert.window, returnCode: response) }
+        return response
+    }
+
+    /// What closing these tabs would end, or nil when nothing needs asking: an empty list when something runs that this
+    /// Mac cannot name. A tab is busy when its program is not at a shell prompt, or when its tty has other processes
+    /// (a job stopped with ⌃Z or sent to the background), as the helper checks a single tab's close.
     /// Detaching a multiplexer session preserves its work. A parked SSH launcher
     /// has no active SSH channel to interrupt; the renderer still sees the launcher
     /// as a foreground command, so its generic process check is insufficient.
-    func needsCloseConfirmation(_ ids: [UUID], detaching: Bool = false) -> Bool {
+    func runningPrograms(_ ids: [UUID], detaching: Bool = false) -> [String]? {
         let runtime = TerminalRuntime.shared
         let kept = Set(workspace.spaces.filter(\.structured).flatMap(\.tabs).map(\.id))
         let tabs = workspace.spaces.flatMap(\.tabs)
-        return ids.contains { id in
-            guard let tab = tabs.first(where: { $0.id == id }) else { return false }
-            if detaching, kept.contains(id) { return false }
+        var busy = false, names: [String] = []
+        for id in ids {
+            guard let tab = tabs.first(where: { $0.id == id }) else { continue }
+            if detaching, kept.contains(id) { continue }
             // Closing a multiplexer client's tab (an attach, or a restore waiting for it) ends only
             // that client; the server keeps its work.
-            if workspace.helpers.values.contains(where: { $0.controls(id) }) { return false }
-            return tab.surfaceIDs.contains { surfaceID in
-                if runtime.hosts.reconnect.state(for: surfaceID) != nil { return false }
-                return runtime.views[surfaceID]?.surface?.needsConfirmQuit ?? false
+            if workspace.helpers.values.contains(where: { $0.controls(id) }) { continue }
+            for surfaceID in tab.surfaceIDs {
+                guard runtime.hosts.reconnect.state(for: surfaceID) == nil, let view = runtime.views[surfaceID],
+                      let surface = view.surface else { continue }
+                let jobs = view.jobs ?? []
+                guard surface.needsConfirmQuit || !jobs.isEmpty else { continue }
+                busy = true
+                for name in jobs where !names.contains(name) { names.append(name) }
             }
         }
+        return busy ? names : nil
     }
+
+    func needsCloseConfirmation(_ ids: [UUID], detaching: Bool = false) -> Bool { runningPrograms(ids, detaching: detaching) != nil }
 
     /// Explicit Detach always preserves the native server, even at an idle prompt.
     func detachTab(_ id: UUID) {
@@ -400,7 +482,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             workspace.closeTab(id, policy: .detach)
             return
         }
-        if confirmClosing([id], detaching: true) { workspace.closeTab(id) }
+        let name = workspace.spaces.flatMap(\.tabs).first { $0.id == id }.map { workspace.liveTab($0.id)?.label ?? $0.label } ?? "Terminal"
+        if confirmClosing([id], .tab(name), detaching: true) { workspace.closeTab(id) }
     }
 
     func closeTab(_ id: UUID) {
@@ -446,7 +529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard let space = workspace.spaces.first(where: { $0.id == id }) else { return }
         // Multiplexer sessions keep running when their space closes.
         if space.structured { workspace.detachSpace(id) }
-        else if confirmClosing(space.tabs.map(\.id)) { workspace.closeSpace(id) }
+        else if confirmClosing(space.tabs.map(\.id), .space(workspace.liveName(space))) { workspace.closeSpace(id) }
     }
 
     private func confirmTermination(_ subject: String) -> Bool {
@@ -620,13 +703,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// Dispatch › Check for Updates…: Settings › General › Updates, checking there.
+    @objc func checkForUpdates() {
+        SettingsNavigation.shared.page = .general
+        showSettings()
+        updater.check()
+    }
+
     private func offerUpdate() {
-        guard termination == nil, let window, window.attachedSheet == nil else { return }
+        guard termination == nil, let window, updater.state == .ready else { return }
+        // A sheet over the window (SSH consent, a close confirmation) keeps the offer until it ends.
+        if window.attachedSheet != nil {
+            guard pendingUpdateOffer == nil else { return }
+            pendingUpdateOffer = NotificationCenter.default.addObserver(forName: NSWindow.didEndSheetNotification, object: window,
+                                                                        queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let pending = self.pendingUpdateOffer { NotificationCenter.default.removeObserver(pending) }
+                    self.pendingUpdateOffer = nil
+                    // The sheet's end comes before the window lets go of it.
+                    DispatchQueue.main.async { self.offerUpdate() }
+                }
+            }
+            return
+        }
         let alert = NSAlert()
         alert.messageText = "Dispatch \(updater.release?.version ?? "") is ready"
         alert.informativeText = "Restart Dispatch to install the update. You can also do this later in Settings › General › Updates."
         alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "Restart and install")
+        alert.addButton(withTitle: "Restart and Install")
         alert.beginSheetModal(for: window) { [weak self] response in
             if response == .alertSecondButtonReturn { self?.updater.restart() }
         }
@@ -647,7 +752,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch item.action {
         case #selector(clearScreen):
             guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return false }
-            return TerminalRuntime.shared.files.mode(for: id) == .terminal && TerminalRuntime.shared.views[id] != nil
+            // Not while a full-screen program shows, nor in a tmux or herdr tab (`TerminalView.canClearScreen`).
+            return TerminalRuntime.shared.files.mode(for: id) == .terminal && TerminalRuntime.shared.views[id]?.canClearScreen == true
         case #selector(findInContent), #selector(findNext), #selector(findPrevious):
             guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return false }
             // Files filters its list (or finds in its preview) on ⌘F; ⌘G has nothing to step through there.
@@ -661,6 +767,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return workspace.current != nil
         case #selector(focusSpaceSearch), #selector(showKeyboardShortcuts):
             return NSApp.keyWindow === window
+        case #selector(nextAttention), #selector(previousAttention):
+            return attention.navigable
+        case #selector(closeMainWindow):
+            return window?.isVisible == true
         case #selector(toggleSidebar):
             item.title = sidebarVisible ? "Hide Sidebar" : "Show Sidebar"
             return NSApp.keyWindow === window
@@ -673,7 +783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case #selector(applyLayout(_:)):
             guard LayoutPreset.allCases.indices.contains(item.tag) else { return false }
             let preset = LayoutPreset.allCases[item.tag]
-            item.title = preset.title.capitalized
+            item.title = preset.title
             // As the layout picker offers them (`LayoutOptions.shown`): hidden with no room on this screen at all.
             item.isHidden = !LayoutOptions.shown(space: workspace.current, workspace: workspace).contains(preset)
             guard workspace.hasRoom(for: preset) else { return false }
@@ -708,8 +818,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case #selector(nextSpace), #selector(previousSpace):
             return NSApp.keyWindow === window && workspace.spaces.count > 1
         case #selector(selectNumberedItem(_:)):
-            item.title = "\(workspace.current?.usesPaneShortcuts == true ? "Pane" : "Tab") \(item.tag + 1)"
-            return NSApp.keyWindow === window && item.tag >= 0 && item.tag < (workspace.current?.numberedShortcutCount ?? 0)
+            // ⌘9 is the last tab, as in Safari and Terminal; split, the digits are the panes'.
+            let panes = workspace.current?.usesPaneShortcuts == true
+            item.title = !panes && item.tag == 8 ? "Last Tab" : "\(panes ? "Pane" : "Tab") \(item.tag + 1)"
+            let count = workspace.current?.numberedShortcutCount ?? 0
+            return NSApp.keyWindow === window && item.tag >= 0 && (item.tag < count || (!panes && item.tag == 8 && count > 0))
         case #selector(selectSpace(_:)):
             return NSApp.keyWindow === window && (item.tag == 8 ? !workspace.spaces.isEmpty : workspace.spaces.indices.contains(item.tag))
         default: return true

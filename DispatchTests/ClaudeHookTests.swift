@@ -333,7 +333,7 @@ final class ClaudeHookTests: XCTestCase {
                 for _ in 0..<12 where !visible {
                     try await Task.sleep(for: .milliseconds(100))
                     let snapshot = try await PresentationTestSupport.capture(window)
-                    if try snapshot.text().contains("Allow once") {
+                    if try snapshot.text().contains("Allow Once") {
                         try PresentationTestSupport.save(snapshot.bitmap, named: "claude-permission", in: "claude-chat-audit")
                         visible = true
                     }

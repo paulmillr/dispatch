@@ -4,11 +4,11 @@ import SwiftUI
 /// The first-launch setup sheet, in the SSH consent sheet's style. A fresh install pages through what to type for Chat
 /// (an agent in any tab), for tabs (`tmux -CC`, `herdr`, `ssh`), then answers two questions: will agents run on this Mac,
 /// and should Dispatch keep itself up to date. Back, the steps (Chat · Tabs · Prefs) and Next move between the pages;
-/// Skip (Escape) on the first two goes to the questions. Yes to agents installs the integrations of the agent CLIs found
-/// here, or, with none found, shows how to install Claude Code and Codex and sets up the first one a later launch
-/// finds; no turns this Mac's agent hooks off. Automatic updates come checked, but nothing is requested until Let's
-/// roll! saves the choice. Skip on the questions saves neither; Settings answers them later (Updates; Hosts › This
-/// Mac). An existing installation that has not answered the updates question gets that question alone, with Continue.
+/// Skip to Setup (Escape) on the first two goes to the questions. Yes to agents installs the integrations of the agent
+/// CLIs found here, or, with none found (or a login shell that could not be asked, which it says apart), shows how to
+/// install Claude Code, Codex and Pi and sets up every one a later launch finds; no turns this Mac's agent hooks off.
+/// Automatic updates come checked, but nothing is requested until Let's roll! saves the choice. Not Now on the
+/// questions saves neither; Settings answers them later (General › Updates; Hosts › This Mac), as the page says. An existing installation that has not answered the updates question gets that question alone, with Continue.
 /// Either sheet shows once per Mac (`shouldAsk`). The pages are Onboarding's (OnboardingPages.swift), drawn after
 /// mockups/Mac's Onboarding screens.
 @MainActor
@@ -112,6 +112,8 @@ enum LocalAgentsConsent {
         private var pagesHeight: NSLayoutConstraint!
         private var choices: NSStackView!
         private var warning: NSStackView!
+        private var warningTitle: NSTextField!
+        private var warningDetail: NSTextField!
         private var column: NSStackView!
         private let footer = Onboarding.FooterModel()
         private var checking = false { didSet { footer.busy = checking } }
@@ -174,10 +176,11 @@ enum LocalAgentsConsent {
                 choices.setCustomSpacing(6, after: choices.arrangedSubviews[choices.arrangedSubviews.count - 1])
             }
             choices.addArrangedSubview(Self.group([updates], width: contentWidth))
-            let explanation = Style.label(agents ? "Change either later in Settings." : "Change this later in Settings › General › Updates.", size: 11)
+            let explanation = Style.label(agents ? "Not Now saves neither. Change them later in Settings › General › Updates and Settings › Hosts › This Mac."
+                                                 : "Change this later in Settings › General › Updates.", size: 11)
             explanation.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
             choices.addArrangedSubview(explanation)
-            warning = Self.warning(width: contentWidth)
+            (warning, warningTitle, warningDetail) = Self.warning(width: contentWidth)
             warning.isHidden = true
             choices.addArrangedSubview(warning)
 
@@ -289,8 +292,9 @@ enum LocalAgentsConsent {
             return rows
         }
 
-        /// No CLI found: what to install, as commands to copy.
-        private static func warning(width: CGFloat) -> NSStackView {
+        /// No CLI found: what to install, as commands to copy; its title and detail, which a shell that could not be asked
+        /// changes.
+        private static func warning(width: CGFloat) -> (NSStackView, NSTextField, NSTextField) {
             let title = Style.label("⚠ No Claude Code, Codex or Pi CLI found on this Mac", size: 12, bold: true)
             title.textColor = NSColor(Chrome.palette.warning)
             let detail = Style.label("Dispatch looked in your login shell’s PATH. Install one with npm, then check again:", size: 11)
@@ -308,14 +312,14 @@ enum LocalAgentsConsent {
             code.layer?.cornerRadius = 6
             code.layer?.borderWidth = 1
             code.layer?.borderColor = NSColor(Chrome.border).cgColor
-            let footnote = Style.label("npm comes with Node.js (brew install node). Dispatch sets up the first agent it finds on a later launch.", size: 11)
+            let footnote = Style.label("npm comes with Node.js (brew install node). On a later launch, Dispatch sets up every agent it finds then.", size: 11)
             for view in [title, detail, code, footnote] { view.widthAnchor.constraint(equalToConstant: width).isActive = true }
             let warning = NSStackView(views: [title, detail, code, footnote])
             warning.orientation = .vertical
             warning.alignment = .leading
             warning.spacing = 6
             warning.setAccessibilityIdentifier("local-agents-warning")
-            return warning
+            return (warning, title, detail)
         }
 
         @objc private func choose(_ sender: NSButton) {
@@ -362,7 +366,15 @@ enum LocalAgentsConsent {
                     chat.adoptLocalAgents(found)
                     return end("yes")
                 }
-                // Unknown (the shell could not be asked) warns like none found; a later launch looks again.
+                // Unknown (the shell could not be asked) says so, rather than that nothing is installed; a later launch
+                // looks again either way.
+                if found == nil {
+                    warningTitle.stringValue = "⚠ Dispatch couldn’t ask your login shell"
+                    warningDetail.stringValue = "Your shell’s startup files failed or took over 30 seconds, so Dispatch couldn’t tell which agents are installed. Fix them and check again, or install one with npm:"
+                } else {
+                    warningTitle.stringValue = "⚠ No Claude Code, Codex or Pi CLI found on this Mac"
+                    warningDetail.stringValue = "Dispatch looked in your login shell’s PATH. Install one with npm, then check again:"
+                }
                 answer = "waiting"
                 showWarning()
             }

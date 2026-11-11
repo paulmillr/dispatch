@@ -196,12 +196,12 @@ enum TabMode: String, Hashable, Sendable {
     }
     /// ⌘R: list the root and the expanded folders again now.
     func refresh(_ id: UUID) { refreshNow(id) }
-    // openInEditor(_:path:) and changeDirectory(_:to:) live in FilesCoordinator+Editor.swift, paste(_:) in
+    // changeDirectory(_:to:) lives in FilesCoordinator+Terminal.swift, paste(_:) in
     // FilesCoordinator+Transfers.swift, the loading in FilesCoordinator+Loading.swift.
 
     func forget(_ id: UUID) {
         sessions[id] = nil
         FilesOutlineController.forget(id)
-        FilesEditorNotices.shared.clear(id)
+        FilesTerminalNotices.shared.clear(id)
     }
 }

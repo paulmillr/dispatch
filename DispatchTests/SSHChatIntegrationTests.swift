@@ -244,7 +244,7 @@ final class SSHChatIntegrationTests: XCTestCase {
                     XCTAssertEqual(approval.key, session.approvals[0].key, "Identical remote hook metadata must still receive separate decisions")
                     try await Task.sleep(for: .milliseconds(350))
                     let visible = try await PresentationTestSupport.capture(app.window, named: "ssh-tmux-repeated-approval", in: "chat-validation").text()
-                    XCTAssertTrue(visible.contains("Allow once"), visible)
+                    XCTAssertTrue(visible.contains("Allow Once"), visible)
                 }
                 approval.resolve(.allow)
             }

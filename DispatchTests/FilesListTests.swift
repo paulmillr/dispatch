@@ -116,6 +116,9 @@ final class FilesListTests: XCTestCase {
         let empty = try XCTUnwrap(rows.firstIndex { $0.title == "empty" })
         XCTAssertEqual(rows[empty + 1].kind, .empty)
         XCTAssertEqual(rows[empty + 1].title, "Empty folder")
+        // With hidden items left out, the folder may hold some: the line says how to show them.
+        XCTAssertEqual(session.rows(root: root, settingHidden: false).first { $0.kind == .empty }?.title,
+                       "No visible items · ⇧⌘. shows hidden ones")
         let many = try XCTUnwrap(rows.firstIndex { $0.title == "many" })
         XCTAssertEqual(Array(titles(rows)[(many + 1)...(many + 4)]),
                        ["file0.txt", "file1.txt", "file2.txt", "showing the first 10,000"])
@@ -615,8 +618,8 @@ final class FilesListTests: XCTestCase {
         XCTAssertNotNil(controller.outlineView(outline, child: 0, ofItem: file) as? FilesOutlineController.Node)
     }
 
-    /// The row menu: Copy (the files) and Copy Path, Download…, and on a host Copy scp Command; nothing opens the
-    /// terminal.
+    /// The row menu: Copy (the files) and Copy Path, Download…, on this Mac Reveal in Finder and on a host Copy scp
+    /// Command; nothing opens the terminal or an editor.
     func testRowMenuCopiesDownloadsAndOffersScpOnAHost() async throws {
         let source = FakeFilesSource.mockupAPI()
         let session = await session(source)
@@ -625,14 +628,16 @@ final class FilesListTests: XCTestCase {
         let menu = NSMenu()
         controller.menuNeedsUpdate(menu)
         let titles = { menu.items.filter { !$0.isSeparatorItem }.map(\.title) }
-        XCTAssertEqual(titles(), ["Preview", "Open in Editor", "Copy", "Copy Path", "Download…", "Show Enclosing Folder", "Refresh"])
+        XCTAssertEqual(titles(), ["Preview", "Copy", "Copy Path", "Download…", "Show Enclosing Folder", "Reveal in Finder",
+                                  "Refresh"])
         XCTAssertEqual(menu.items.first { $0.title == "Copy" }?.keyEquivalentModifierMask, [.command])
         XCTAssertEqual(menu.items.first { $0.title == "Copy Path" }?.keyEquivalentModifierMask, [.command, .option])
         session.availability = .available(FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "homelab"))
         controller.menuNeedsUpdate(menu)
-        XCTAssertEqual(titles(), ["Preview", "Open in Editor", "Copy", "Copy Path", "Copy scp Command", "Download…",
+        XCTAssertEqual(titles(), ["Preview", "Copy", "Copy Path", "Copy scp Command", "Download…",
                                   "Show Enclosing Folder", "Refresh"])
         XCTAssertFalse(titles().contains { $0.localizedCaseInsensitiveContains("terminal") })
+        XCTAssertFalse(titles().contains { $0.localizedCaseInsensitiveContains("editor") })
     }
 
     func testCopyPathsCopiesTheSelectedRowsThatShow() async throws {

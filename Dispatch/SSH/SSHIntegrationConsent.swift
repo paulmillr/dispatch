@@ -150,7 +150,9 @@ enum SSHIntegrationConsent {
             icon.heightAnchor.constraint(equalToConstant: 28).isActive = true
             // Keep the full account and configuration in the authorization scope.
             let host = scope.destination.split(separator: "@", omittingEmptySubsequences: false).last.map(String.init) ?? scope.destination
-            let heading = label(current == nil ? "Connect to \(host)" : "Helper on \(host)", size: 13, bold: true)
+            // The account too: grants are per account, so root@web and deploy@web are asked apart.
+            let login = scope.account.isEmpty ? host : "\(scope.account)@\(host)"
+            let heading = label(current == nil ? "Connect to \(login)" : "Helper on \(login)", size: 13, bold: true)
             heading.textColor = foreground
             heading.maximumNumberOfLines = 2
             heading.lineBreakMode = .byTruncatingMiddle
@@ -185,8 +187,8 @@ enum SSHIntegrationConsent {
             rows.layer?.cornerRadius = 8
             rows.layer?.borderWidth = 1
             rows.layer?.borderColor = accent.withAlphaComponent(0.35).cgColor
-            helper = ChoiceButton(title: "Upload the Dispatch helper", detail: "to ~/.dispatch/bin/versions/<hash>/", parent: true)
-            let helperPathHelp = "Installed in your home directory on the SSH host, or in its runtime folder ($XDG_RUNTIME_DIR/dispatch) when the home folder cannot run programs. <hash> is the helper binary’s SHA-256 hash, used to verify and reuse cached copies."
+            helper = ChoiceButton(title: "Upload the Dispatch helper", detail: "to a versioned folder in ~/.dispatch on the host", parent: true)
+            let helperPathHelp = "Installed in ~/.dispatch/bin/versions on the SSH host, in a folder named for the helper binary’s SHA-256 hash, which verifies and reuses cached copies; or in its runtime folder ($XDG_RUNTIME_DIR/dispatch) when the home folder cannot run programs."
             helper.toolTip = helperPathHelp
             helper.setAccessibilityHelp(helperPathHelp)
             helper.target = self

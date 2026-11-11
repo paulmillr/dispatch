@@ -9,6 +9,8 @@ struct ChatComposer: NSViewRepresentable {
     let submit: () -> Void
     /// Esc stops the agent (`ChatCoordinator.escapeStop`), given the key's timestamp; true when it took the key.
     var interrupt: ((TimeInterval) -> Bool)?
+    /// The agent works and can be stopped: Esc then stops (twice) in editor mode too, rather than leaving it.
+    var canStop: () -> Bool = { false }
     var exitChat: (() -> Void)?
     var exitPrompt: (() -> String)?
     var pickModel: ((ChatModelPicker.Column, Bool) -> Void)?
@@ -40,7 +42,7 @@ struct ChatComposer: NSViewRepresentable {
         text.autoresizingMask = [.width]; text.isVerticallyResizable = true
         text.textContainer?.widthTracksTextView = true
         text.delegate = context.coordinator; text.submit = submit; text.pickModel = pickModel
-        text.interrupt = interrupt; text.exitChat = exitChat; text.exitPrompt = exitPrompt
+        text.interrupt = interrupt; text.canStop = canStop; text.exitChat = exitChat; text.exitPrompt = exitPrompt
         text.sendNow = sendNow; text.queueAction = queueAction; text.showShortcuts = showShortcuts
         text.canAttach = canAttach; text.attach = attach; text.chooseAttachments = chooseAttachments
         text.session = session
@@ -102,6 +104,7 @@ struct ChatComposer: NSViewRepresentable {
             text.fadeInPlaceholder()
         }
         text.placeholder = placeholder
+        text.badge = drafts.shape.multiline ? ChatComposer.badgeSize(theme) : nil
         let provisional = ChatDictation.shared.provisional(session.id)
         text.provisional = provisional
         text.highlight()
@@ -115,7 +118,7 @@ struct ChatComposer: NSViewRepresentable {
             text.needsDisplay = true
         }
         text.submit = submit; text.pickModel = pickModel
-        text.interrupt = interrupt; text.exitChat = exitChat; text.exitPrompt = exitPrompt
+        text.interrupt = interrupt; text.canStop = canStop; text.exitChat = exitChat; text.exitPrompt = exitPrompt
         text.sendNow = sendNow; text.queueAction = queueAction; text.showShortcuts = showShortcuts
         text.canAttach = canAttach; text.attach = attach; text.chooseAttachments = chooseAttachments
         text.session = session
@@ -143,6 +146,15 @@ struct ChatComposer: NSViewRepresentable {
         text.didFocus = {
             (workspace ?? TerminalRuntime.shared.workspace)?.selectSurface(session.id)
         }
+    }
+    /// The Editor badge over the composer's top-trailing corner (`ChatView`): its text in the detail face, padded 6
+    /// by 2.
+    static let badgeTitle = "Editor"
+    static func badgeSize(_ theme: ChatTheme) -> NSSize {
+        let typography = theme.typography
+        let font = NSFont(name: typography.fontName, size: typography.detailSize) ?? .systemFont(ofSize: typography.detailSize)
+        let width = ceil((badgeTitle as NSString).size(withAttributes: [.font: font]).width)
+        return NSSize(width: width + 12, height: typography.detailLineHeight + 4)
     }
     func makeCoordinator() -> Coordinator { Coordinator(session) }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
@@ -173,6 +185,7 @@ struct ChatComposer: NSViewRepresentable {
         weak var session: ChatSession?
         var editorGeneration: UUID?
         var interrupt: ((TimeInterval) -> Bool)?
+        var canStop: () -> Bool = { false }
         var exitChat: (() -> Void)?
         var exitPrompt: (() -> String)?
         private var exitArmedAt: TimeInterval?
@@ -229,6 +242,26 @@ struct ChatComposer: NSViewRepresentable {
             get { session?.drafts.current.multiline ?? false }
             set { session?.drafts.edit(multiline: newValue) }
         }
+        /// The Editor badge's size while it shows: the first line wraps before it rather than running under it.
+        var badge: NSSize? { didSet { if badge != oldValue { excludeBadge() } } }
+        override func setFrameSize(_ newSize: NSSize) {
+            let widthChanged = newSize.width != frame.width
+            super.setFrameSize(newSize)
+            if widthChanged, badge != nil { excludeBadge() }
+        }
+        /// The badge sits at the text container's top-trailing corner (both 12 pt in and 5 pt down), with a 6 pt gap.
+        private func excludeBadge() {
+            guard let textContainer else { return }
+            if let badge {
+                let width = textContainer.size.width > 0 && textContainer.size.width < .greatestFiniteMagnitude / 2
+                    ? textContainer.size.width : max(0, bounds.width - 2 * textContainerInset.width)
+                textContainer.exclusionPaths = [NSBezierPath(rect: NSRect(x: max(0, width - badge.width - 6), y: 0,
+                                                                          width: badge.width + 6, height: badge.height))]
+            } else if !textContainer.exclusionPaths.isEmpty {
+                textContainer.exclusionPaths = []
+            }
+            measure()
+        }
         override var displayedPlaceholder: String {
             if exitArmedAt != nil { return exitPrompt?() ?? "Press Ctrl+D again to exit chat" }
             return placeholder
@@ -246,9 +279,9 @@ struct ChatComposer: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             // Chat tabs answer the same prefix keys as their terminal; ⌃B twice keeps the editor's ⌃B.
             if let session, !hasMarkedText(), TerminalRuntime.shared.workspace?.prefixKeys.handle(event, surface: session.id) == true { return }
-            if latestMessagesShortcut(event) || commandReturnShortcut(event) { return }
-            if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event)
-                || attachShortcut(event) { return }
+            if commandCompletionShortcut(event) || latestMessagesShortcut(event) || commandReturnShortcut(event) { return }
+            if editorStopShortcut(event) || editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event)
+                || commandShortcut(event) || attachShortcut(event) { return }
             if event.keyCode == 53, !hasMarkedText(), !multiline,
                event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
                interrupt?(event.timestamp) == true { return }
@@ -269,9 +302,9 @@ struct ChatComposer: NSViewRepresentable {
                     keyDown(with: event); return true
                 }
             }
-            if latestMessagesShortcut(event) { return true }
-            if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event)
-                || modelShortcut(event) || attachShortcut(event) { return true }
+            if commandCompletionShortcut(event) || latestMessagesShortcut(event) { return true }
+            if editorStopShortcut(event) || editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event)
+                || commandShortcut(event) || modelShortcut(event) || attachShortcut(event) { return true }
             return super.performKeyEquivalent(with: event)
         }
         private func latestMessagesShortcut(_ event: NSEvent) -> Bool {
@@ -332,6 +365,15 @@ struct ChatComposer: NSViewRepresentable {
             exitArmedAt = nil
             needsDisplay = true
         }
+        /// With the command list open, Return accepts the highlighted command, as Tab does, unless the draft already
+        /// is that command: then it sends.
+        private func commandCompletionShortcut(_ event: NSEvent) -> Bool {
+            guard event.keyCode == 36 || event.keyCode == 76, !hasMarkedText(), let session,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+            let commands = session.matchingCommands
+            guard !commands.isEmpty, commands[min(session.commandSelection, commands.count - 1)] != string else { return false }
+            session.completeCommand(); return true
+        }
         private func commandShortcut(_ event: NSEvent) -> Bool {
             guard !hasMarkedText(), let session, !session.matchingCommands.isEmpty,
                   event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
@@ -347,8 +389,9 @@ struct ChatComposer: NSViewRepresentable {
             guard !hasMarkedText(), let session, string.isEmpty,
                   !session.drafts.current.multiline, session.editingQueuedID == nil else { return false }
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            // Match the shortcuts to the row whose hover actions are visible.
-            if let id = session.hoveredQueuedID ?? session.selectedQueuedID,
+            // Only a keyboard selection takes these keys: a row under the pointer shows its buttons, but typing
+            // ("explain…"), the arrows, Esc and ⌘⌫ stay the composer's.
+            if let id = session.selectedQueuedID,
                let message = session.queuedMessages.first(where: { $0.id == id }), session.editingQueuedID != id {
                 if Self.usesAlternateSend(flags), event.keyCode == 36 || event.keyCode == 76 {
                     if session.queuedSubmissionID != id, message.pause == nil, message.matches(session) { queueAction?(id, "send") }
@@ -359,14 +402,13 @@ struct ChatComposer: NSViewRepresentable {
                     return true
                 }
                 if flags.isEmpty {
-                    if event.keyCode == 53 { session.selectedQueuedID = nil; session.hoveredQueuedID = nil; return true }
+                    if event.keyCode == 53 { session.selectedQueuedID = nil; return true }
                     if event.charactersIgnoringModifiers == "e", session.draft.isEmpty,
                        session.editingQueuedID == nil, session.queuedSubmissionID != id {
                         queueAction?(id, "edit"); return true
                     }
                     if event.keyCode == 125 || event.keyCode == 126,
                        let index = session.queuedMessages.firstIndex(where: { $0.id == id }) {
-                        session.hoveredQueuedID = nil
                         let next = index + (event.keyCode == 125 ? 1 : -1)
                         session.selectedQueuedID = session.queuedMessages.indices.contains(next) ? session.queuedMessages[next].id : nil
                         return true
@@ -380,6 +422,14 @@ struct ChatComposer: NSViewRepresentable {
             return false
         }
         override func saveDraft() { session?.drafts.keep() }
+        /// Esc twice stops the agent in editor mode as out of it (a queued message's edit first leaves editor mode, as
+        /// before); only ⌘E, or Esc while nothing can be stopped, leaves editor mode.
+        private func editorStopShortcut(_ event: NSEvent) -> Bool {
+            guard event.keyCode == 53, multiline, !hasMarkedText(),
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                  session?.editingQueuedID == nil, canStop() else { return false }
+            return interrupt?(event.timestamp) == true
+        }
         private func editorModeShortcut(_ event: NSEvent) -> Bool {
             guard !hasMarkedText() else { return false }
             let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])

@@ -68,11 +68,11 @@ final class TabsRenderTests: XCTestCase {
         }
     }
 
-    /// Beside the split's sidebar the Terminal / Chat switch takes the host pill's place in the header (one row):
-    /// a long title still truncates beside it, in either posture's detail column.
+    /// Beside the Duo's sidebar the header is the phone's without Back (the title capsule, the mode button): a long
+    /// title still truncates in its capsule, in either posture's tab column (laptop 405.5, book 630.5).
     func testALongTitleBesideTheSplitSwitchStaysInTheBar() throws {
         let (model, tab, space) = headerModel(space: "ciphers", tab: "See how we can speed-up sha3 without writing new code yet.")
-        for column in [CGFloat(405.5), 433.25, 475.25] {
+        for column in [CGFloat(405.5), 630.5] {
             let screen = TabScreen(model: model, ref: tab, path: .constant([.space(space), .tab(tab)]),
                                    terminal: { _, _ in Text("terminal") }, chat: { _, _ in Text("chat") })
                 .environment(\.tabsSplitDetail, true)

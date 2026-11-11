@@ -21,7 +21,7 @@ struct HostSessionStore {
 
     struct Connection: Codable {
         let id: SSHConnectionID
-        let host: HostID
+        var host: HostID
         let shell: SSHShell
         let scope: SSHIntegrationScope?
         let accountUID: UInt32?
@@ -40,7 +40,8 @@ struct HostSessionStore {
         }
     }
     struct Snapshot: Codable {
-        var version = 1
+        /// 2: hosts are logins. 1 named them by machine (`splitLogins`).
+        var version = 2
         var hosts: [HostRecord]
         var spaces: [Space]
         var selectedSpace: UUID?
@@ -49,6 +50,45 @@ struct HostSessionStore {
         /// What each tab showed (Files with its tab, root, selection and commit; chat; the terminal): given back as the
         /// tab comes back (`FilesCoordinator.retainLaunched`). Absent in files saved before it.
         var views: [UUID: RetainedTabView]? = nil
+
+        /// Moves what version 1 saved under a machine to its logins, by the account each connection recorded. Returns
+        /// the machines nothing names any more; a connection saved without an account stays on its machine.
+        mutating func splitLogins() -> Set<HostID> {
+            let machines = Dictionary(hosts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var logins: [HostID: HostRecord] = [:], affected: Set<HostID> = []
+            for index in connections.indices {
+                let connection = connections[index], machine = connection.host
+                guard let uid = connection.accountUID, machine.rawValue.hasPrefix("ssh:"), machine.machine == machine else { continue }
+                let login = HostID(rawValue: machine.rawValue + ":" + String(uid))
+                connections[index].host = login
+                affected.insert(machine)
+                func moved(_ space: Space) -> Space {
+                    let mine = space.remote == connection.id || !connection.surfaces.isDisjoint(with: space.tabs.flatMap(\.surfaceIDs))
+                    guard mine, space.hostID == machine else { return space }
+                    var space = space; space.hostID = login; return space
+                }
+                spaces = spaces.map(moved)
+                connections[index].backends = connection.backends?.map { entry in
+                    var entry = entry; entry.presentation = entry.presentation.map(moved); return entry
+                }
+                for (surface, context) in contexts where context.host == machine && (connection.surfaces.contains(surface) || context.generation == connection.id.rawValue) {
+                    contexts[surface] = TerminalHostContext(host: login, generation: context.generation, state: context.state, authenticated: context.authenticated)
+                }
+                guard let saved = machines[machine] else { continue }
+                var record = logins[login] ?? HostRecord(id: login, name: saved.name, hostname: saved.hostname, system: saved.system,
+                                                         destinations: [], order: saved.order, colorName: saved.colorName)
+                let destination = connection.shell.destination
+                if !record.destinations.contains(destination) { record.destinations.append(destination) }
+                record.account = connection.scope?.account ?? HostRegistry.account(destination: destination, home: "")
+                logins[login] = record
+            }
+            let retired = affected.filter { machine in
+                !connections.contains { $0.host == machine } && !contexts.values.contains { $0.host == machine }
+                    && !spaces.contains { $0.hostID == machine }
+            }
+            hosts = hosts.filter { !retired.contains($0.id) } + logins.values
+            return retired
+        }
     }
 
     /// `history`: also replace the saved output of plain local and SSH tabs (as the app quits).
@@ -175,12 +215,14 @@ struct HostSessionStore {
         PrivateFile.removeStale(for: url)
         guard let workspace = runtime.workspace,
               let data = try? Data(contentsOf: url), data.count <= 16 * 1024 * 1024,
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 else { return false }
+              var snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), (1 ... 2).contains(snapshot.version) else { return false }
+        let splitMachines = snapshot.version == 1 ? snapshot.splitLogins() : []
         // Remote backend references stay parked until their authenticated helper reopens them.
         let spaces = snapshot.spaces.filter { !$0.tabs.isEmpty && !$0.panes.isEmpty }
         runtime.files.retainLaunched(snapshot.views ?? [:])
         guard !spaces.isEmpty else { return false }
         workspace.hosts.restore(snapshot.hosts)
+        splitMachines.forEach(workspace.hosts.forget)
         workspace.updateLayout { $0.spaces += spaces }
         for (surface, context) in snapshot.contexts where workspace.allSurfaceIDs.contains(surface) {
             workspace.hosts.associate(surface, context: .init(host: context.host, generation: context.generation,

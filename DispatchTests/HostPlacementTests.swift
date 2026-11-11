@@ -66,8 +66,8 @@ final class HostPlacementTests: XCTestCase {
         XCTAssertFalse(workspace.hostMoveMotion.connecting.contains(terminal))
         coordinator.connecting(fast)
         XCTAssertFalse(workspace.hostMoveMotion.connecting.contains(terminal), "Late progress cannot restart an authenticated connection")
-        XCTAssertEqual(workspace.current?.hostID, .authenticated("fixture"))
-        XCTAssertEqual(workspace.hosts.record(.authenticated("fixture")).system?.os, "Darwin")
+        XCTAssertEqual(workspace.current?.hostID, .authenticated("fixture", uid: 501))
+        XCTAssertEqual(workspace.hosts.record(.authenticated("fixture", uid: 501)).system?.os, "Darwin")
         try await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.authenticated, true, "The old timer must not replace the detected host")
         coordinator.exited(fast)
@@ -82,7 +82,7 @@ final class HostPlacementTests: XCTestCase {
         XCTAssertEqual(workspace.current?.hostID, .provisional(slow.connectionID.rawValue))
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.state, .disconnected)
         coordinator.authenticated(slow, greeting: greeting)
-        XCTAssertEqual(workspace.current?.hostID, .authenticated("fixture"))
+        XCTAssertEqual(workspace.current?.hostID, .authenticated("fixture", uid: 501))
         coordinator.exited(slow)
 
         let cancelled = request()
@@ -104,16 +104,16 @@ final class HostPlacementTests: XCTestCase {
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.authenticated, true)
         coordinator.exited(replacement)
 
-        workspace.hosts.seed(terminal, from: .authenticated("fixture"), generation: System.uuid())
+        workspace.hosts.seed(terminal, from: .authenticated("fixture", uid: 501), generation: System.uuid())
         var seeded = request()
         seeded.presentationScope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "fixture",
                                                         configuration: "hostname fixture\nuser test\nport 22\n")
         coordinator.began(seeded)
-        XCTAssertEqual(workspace.hosts.terminals[terminal]?.host, .authenticated("fixture"))
+        XCTAssertEqual(workspace.hosts.terminals[terminal]?.host, .authenticated("fixture", uid: 501))
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.generation, seeded.connectionID.rawValue)
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.authenticated, false)
         coordinator.authenticated(seeded, greeting: greeting)
-        XCTAssertEqual(workspace.hosts.terminals[terminal]?.host, .authenticated("fixture"))
+        XCTAssertEqual(workspace.hosts.terminals[terminal]?.host, .authenticated("fixture", uid: 501))
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.authenticated, true)
         coordinator.exited(seeded)
 
@@ -168,7 +168,7 @@ final class HostPlacementTests: XCTestCase {
         let revision = workspace.layoutRevision
         workspace.regroupHosts()
         XCTAssertEqual(workspace.layoutRevision, revision + 1, "All host changes publish together")
-        XCTAssertTrue(workspace.spaces.allSatisfy { $0.hostID == .authenticated("shared") })
+        XCTAssertTrue(workspace.spaces.allSatisfy { $0.hostID == .authenticated("shared", uid: 501) })
     }
 
     func testSingleTerminalRegroupsInPlaceAndRejectsStaleExit() throws {

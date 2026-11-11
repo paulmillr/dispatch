@@ -30,6 +30,10 @@ protocol TerminalBackend: AnyObject {
     var passwordInput: Bool { get }
     var needsConfirmQuit: Bool { get }
     var hasSelection: Bool { get }
+    /// A program reads the mouse: its clicks go to it rather than opening the terminal's menu.
+    var mouseCaptured: Bool { get }
+    /// A full-screen program shows (the alternate screen), whose screen ⌘K cannot clear.
+    var alternateScreen: Bool { get }
     /// The grid and its pixel sizes (cols, rows, cell size, the surface's size in pixels).
     var grid: TerminalGrid { get }
 
@@ -99,6 +103,12 @@ enum TerminalEvent {
     case programStatus([ProgramStatus])
     /// The shell finished a command and is back at its prompt (OSC 133 D).
     case commandFinished(exitCode: Int?)
+    /// A program rang the bell (BEL; the engine sends at most one a tenth of a second).
+    case bell
+    /// The pointer's shape over the terminal, by its CSS name (a link's "pointer", a program's OSC 22, else "text").
+    case mouseShape(String)
+    /// The link under the pointer while it shows as one (⌘ held), or nil once it left it.
+    case linkHover(String?)
 }
 
 extension TerminalView {
@@ -138,6 +148,11 @@ extension TerminalView {
             case .commandFinished:
                 guard runtime.views[self.id] === self else { return }
                 runtime.files.shellPrompted(self.id)
+            case .bell:
+                guard runtime.views[self.id] === self else { return }
+                self.ringBell()
+            case .mouseShape(let name): self.setPointer(name)
+            case .linkHover(let url): self.showLinkPreview(url)
             case .programStatus(let records):
                 guard runtime.views[self.id] === self else { return }
                 runtime.programs.update(self.id, records)

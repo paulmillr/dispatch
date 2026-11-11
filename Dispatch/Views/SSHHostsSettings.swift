@@ -1,3 +1,4 @@
+import Dictation
 import SwiftUI
 
 /// Hosts: this Mac's agent hooks and each known remote machine, with one line per
@@ -24,6 +25,8 @@ struct SSHHostsSettings: View {
         var data = true
     }
     @State private var removal: Removal?
+    /// This Mac's agent whose hooks wait for the Install confirmation.
+    @State private var installing: HelperClient.Launch?
     /// The login each expanded multi-login host is editing.
     @State private var account: [String: String] = [:]
     /// Choices kept while they still match what is saved, so switching the
@@ -68,7 +71,7 @@ struct SSHHostsSettings: View {
             }
             if !other.isEmpty {
                 if !grouped.isEmpty { separator }
-                Text("OTHER LOGINS").font(typography, .caption).tracking(1).foregroundStyle(SettingsControlStyle.detail)
+                Text("Other logins").font(typography, .caption).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.detail)
                     .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 2)
                     .help("Saved helper choices for SSH configurations that haven’t connected since Dispatch launched")
                 ForEach(other) { entry in
@@ -79,6 +82,12 @@ struct SSHHostsSettings: View {
         }.background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
             .accessibilityIdentifier("settings-host-integrations")
+            // A row another place asked for (SettingsNavigation): This Mac from Features, a host from its stats.
+            .onChange(of: SettingsNavigation.shared.host, initial: true) { _, host in
+                guard let host else { return }
+                expanded = host; forgetting = nil
+                SettingsNavigation.shared.host = nil
+            }
     }
 
     private var separator: some View { Rectangle().fill(Chrome.border).frame(height: 1) }
@@ -122,7 +131,14 @@ struct SSHHostsSettings: View {
                                         .lineLimit(1).truncationMode(.middle)
                                         .help("\(address(entry))\nSSH executable: \(entry.scope.executable)\nSaved configuration: \(entry.scope.configurationFingerprint)")
                                 }
-                                chips(currentDraft(for: entry))
+                                if permissions.unsupported(entry.scope) {
+                                    Text("helper not supported here").font(typography, .caption).foregroundStyle(SettingsControlStyle.detail)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(SettingsControlStyle.border) }
+                                        .help("This host’s platform has no Dispatch helper: it connects with plain SSH")
+                                } else {
+                                    chips(currentDraft(for: entry))
+                                }
                             }
                         }
                         if logins.isEmpty, let destination = host?.destinations.first {
@@ -154,7 +170,7 @@ struct SSHHostsSettings: View {
                     .font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
             }
         } else {
-            Text("not seen yet").font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
+            Text("not connected yet").font(typography, .body).foregroundStyle(SettingsControlStyle.detail).fixedSize()
                 .help("This SSH configuration hasn’t connected since Dispatch launched")
         }
     }
@@ -166,10 +182,10 @@ struct SSHHostsSettings: View {
         return HStack(spacing: 4) {
             if draft.helper {
                 ForEach(SSHIntegrationDraft.Choice.all, id: \.self) { choice in
-                    chip(Self.chipTitle(choice), on: draft.checked.contains(choice))
+                    chip(Self.chipLabel(choice), on: draft.checked.contains(choice))
                 }
             } else {
-                Text("plain ssh").font(typography, .caption).foregroundStyle(SettingsControlStyle.detail)
+                Text("Plain SSH").font(typography, .caption).foregroundStyle(SettingsControlStyle.detail)
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(SettingsControlStyle.border) }
             }
@@ -189,6 +205,12 @@ struct SSHHostsSettings: View {
             .opacity(on ? 1 : 0.75)
     }
 
+    /// A chip's words: the choice's title, Copy files in shortened.
+    private static func chipLabel(_ choice: SSHIntegrationDraft.Choice) -> String {
+        choice == .filesWrite ? "Copy in" : choice.title
+    }
+
+    /// A choice in accessibility identifiers.
     private static func chipTitle(_ choice: SSHIntegrationDraft.Choice) -> String {
         switch choice {
         case .stats: "stats"
@@ -206,13 +228,19 @@ struct SSHHostsSettings: View {
             if logins.count > 1 { accountPicker(id: id, logins: logins, selected: entry?.id) }
             if let entry {
                 let draft = currentDraft(for: entry)
+                if permissions.unsupported(entry.scope) {
+                    Text("The Dispatch helper doesn’t run on this host’s platform (it needs Linux on x86-64 or ARM64, or macOS on Apple silicon), so it connects with plain SSH. Change a choice below to try the helper again.")
+                        .font(typography, .body).foregroundStyle(Chrome.palette.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-host-unsupported-\(entry.id)")
+                }
                 options(entry, draft)
                 reconnectNotice(entry, draft)
-                Text("removals apply now; additions on the next connection.")
+                Text("Removals apply now; additions on the next connection. Agent hooks turned off stop reaching Dispatch at once, but their entries stay in that account’s agent configuration until you remove Dispatch from the host.")
                     .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("follows “On new hosts” on the next connection.")
+                Text("The next connection asks which helper features to allow, or allows them all with Auto-confirm uploads (Features › Remote helper).")
                     .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -432,9 +460,16 @@ struct SSHHostsSettings: View {
             Text("Codex may ask you to trust your own hooks again in /hooks.")
                 .font(small).foregroundStyle(SettingsControlStyle.detail)
             if local {
-                Toggle("Also delete Dispatch’s settings, drafts and saved hosts", isOn: Binding(
-                    get: { removal?.data ?? true }, set: { removal?.data = $0 }))
-                    .toggleStyle(.checkbox).font(small).accessibilityIdentifier("settings-removal-data")
+                // Everything in its support folder goes, the dictation models too, which can be large: named with sizes.
+                let models = DictationModel.all.filter { DictationModelStore.shared.state($0) == .installed }
+                    .map { "\($0.name) (\($0.sizeLabel))" }
+                Toggle("Also delete Dispatch’s data: settings, saved spaces and terminal output, drafts, reviews and saved hosts"
+                       + (models.isEmpty ? "" : ", and the dictation models: " + models.formatted(.list(type: .and))),
+                       isOn: Binding(get: { removal?.data ?? true }, set: { removal?.data = $0 }))
+                    .toggleStyle(.checkbox).font(small).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings-removal-data")
+                Text("Your color schemes in ~/.config/dispatch/themes are kept, as Reset keeps them.")
+                    .font(small).foregroundStyle(SettingsControlStyle.detail)
             }
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
@@ -498,7 +533,7 @@ struct SSHHostsSettings: View {
                 }
             }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
-            Text("A switched-off agent’s hooks are ignored here; its settings are left alone.")
+            Text("Install adds Dispatch’s hooks to that agent’s own configuration on this Mac, after asking. Remove takes Claude Code’s out of its settings and deletes Pi’s extension; Codex’s entries stay in hooks.json, unused, so its /hooks trust is kept. Features › Chat mode turns an agent off everywhere.")
                 .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
             if removal?.id == Self.localID {
@@ -524,15 +559,25 @@ struct SSHHostsSettings: View {
                 let found = await LocalAgentsConsent.installedAgents()
                 chat.localCLIs = found ?? chat.localCLIs ?? Set(launches.map(\.key))
             }
+            .alert(installing.map { "Install \($0.label) hooks on this Mac?" } ?? "",
+                   isPresented: Binding(get: { installing != nil }, set: { if !$0 { installing = nil } })) {
+                Button("Cancel", role: .cancel) {}
+                Button("Install") { if let installing { chat.setLocalHooks(installing.key, allowed: true) } }
+                    .keyboardShortcut(.defaultAction)
+            } message: {
+                Text(installing.map { LocalAgentHooks.installMessage($0.key, label: $0.label) } ?? "")
+            }
     }
 
-    /// One agent on one line: its name, how its hooks stand here, Install when they need it (the CLI's own install
-    /// command when this Mac lacks it), and whether this Mac uses them. An agent off in Chat mode is off everywhere,
-    /// so its switch rests.
+    /// One agent on one line: its name, how its hooks stand here, and the one action that changes that: Install (asking
+    /// first, naming the file), Try Again after a failure, or Remove; the CLI's own install command when this Mac lacks
+    /// it, and a spinner while the login shell is asked. An agent off in Chat mode is off everywhere: nothing to do here.
     private func localAgentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
         let inChat = chat.enabled && !chat.disabledIntegrations.contains(launch.key)
-        let command = localOn(launch.key) && missingCLI(launch.key) ? LocalAgentsConsent.installs[launch.key] : nil
+        let installed = chat.localHooksAllowed(launch.key) && chat.hookStatus(launch.key) != .off
+        let command = inChat && !installed && missingCLI(launch.key) ? LocalAgentsConsent.installs[launch.key] : nil
+        let failure = chat.localHooksAllowed(launch.key) ? chat.localInstallationFailure(launch.key) : nil
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(launch.label).fixedSize()
             Group {
@@ -541,22 +586,33 @@ struct SSHHostsSettings: View {
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                         .help("\(launch.label) is not installed on this Mac: run this in a terminal")
                         .accessibilityIdentifier("settings-install-command-\(launch.key)")
-                } else if let failure = chat.localInstallationFailure(launch.key) {
+                } else if let failure {
                     Text(failure).font(typography, .body).foregroundStyle(.red).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("settings-install-failure-\(launch.key)")
                 } else {
                     Text(localStatus(launch)).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-local-status-\(launch.key)")
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            if needsInstall(launch.key) {
-                Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
-                    .accessibilityIdentifier("settings-install-\(launch.key)")
+            if inChat {
+                if installed {
+                    Button("Remove") { chat.setLocalHooks(launch.key, allowed: false) }
+                        .accessibilityIdentifier("settings-remove-hooks-\(launch.key)")
+                        .help(launch.key == "codex" ? "Stop using \(launch.label)’s hooks on this Mac; its entries stay in hooks.json"
+                              : "Take Dispatch’s hooks out of \(launch.label)’s configuration on this Mac")
+                } else if chat.localCLIs == nil {
+                    // The login shell is being asked which CLIs it runs (up to 30 s).
+                    ProgressView().controlSize(.small)
+                        .help("Looking for \(launch.label) in your login shell")
+                        .accessibilityLabel("Looking for \(launch.label)")
+                } else if command == nil {
+                    Button(failure == nil ? "Install…" : "Try Again") {
+                        if chat.localHooksAllowed(launch.key) { chat.setLocalHooks(launch.key, allowed: true) } else { installing = launch }
+                    }.accessibilityIdentifier("settings-install-\(launch.key)")
+                }
             }
-            switchControl(launch.label, isOn: chat.localHooksAllowed(launch.key), identifier: "settings-local-hooks-\(launch.key)") {
-                chat.setLocalHooks(launch.key, allowed: !chat.localHooksAllowed(launch.key))
-            }.disabled(!inChat)
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .opacity(inChat ? 1 : 0.5)
@@ -568,32 +624,23 @@ struct SSHHostsSettings: View {
     private func localSummary(_ launches: [HelperClient.Launch]) -> Text {
         let chat = TerminalRuntime.shared.chat
         guard chat.enabled else { return Text("Chat mode is off").foregroundColor(SettingsControlStyle.detail) }
-        let on = launches.filter { localOn($0.key) }
+        let inChat = launches.filter { !chat.disabledIntegrations.contains($0.key) }
+        let on = inChat.filter { chat.localHooksAllowed($0.key) }
         let ready = on.filter { chat.hookStatus($0.key) == .ready }
         let missing = on.filter { chat.hookStatus($0.key) != .ready && missingCLI($0.key) }.map(\.label)
         let pending = on.filter { chat.hookStatus($0.key) != .ready && !missingCLI($0.key) }.map(\.label)
-        let off = launches.filter { !localOn($0.key) }.map(\.label)
+        let unset = inChat.filter { chat.localHooks[$0.key] == nil }.map(\.label)
+        let off = launches.filter { chat.disabledIntegrations.contains($0.key) || chat.localHooks[$0.key] == false }.map(\.label)
         var parts: [String] = []
         if !ready.isEmpty { parts.append("\(ready.count) ready") }
         if !pending.isEmpty { parts.append(pending.joined(separator: ", ") + (pending.count == 1 ? " needs setup" : " need setup")) }
         if !missing.isEmpty { parts.append(missing.joined(separator: ", ") + " not installed") }
+        if !unset.isEmpty { parts.append(unset.joined(separator: ", ") + " not set up") }
         if !off.isEmpty { parts.append(off.joined(separator: ", ") + " off") }
         return Text(parts.joined(separator: " · ")).foregroundColor(SettingsControlStyle.detail)
     }
 
-    private static let localID = "local"
-
-    /// Hooks this Mac uses: allowed here, with Chat mode and the agent on.
-    private func localOn(_ key: String) -> Bool {
-        let chat = TerminalRuntime.shared.chat
-        return chat.enabled && !chat.disabledIntegrations.contains(key) && chat.localHooksAllowed(key)
-    }
-
-    /// Install waits for the CLI probe, so it never shows for a missing agent before its command replaces it.
-    private func needsInstall(_ key: String) -> Bool {
-        let chat = TerminalRuntime.shared.chat
-        return localOn(key) && chat.hookStatus(key) == .off && chat.localCLIs?.contains(key) == true
-    }
+    static let localID = "local"
 
     /// The probe found no CLI for this agent; unknown until This Mac opens.
     private func missingCLI(_ key: String) -> Bool {
@@ -603,16 +650,23 @@ struct SSHHostsSettings: View {
     /// How an agent's hooks stand on this Mac, from the local helper's installation facts.
     private func localStatus(_ launch: HelperClient.Launch) -> String {
         let chat = TerminalRuntime.shared.chat, install = chat.helperInstalls[launch.key]
-        if !chat.enabled || chat.disabledIntegrations.contains(launch.key) { return "off in Chat mode" }
-        if !chat.localHooksAllowed(launch.key) { return "off" }
-        switch chat.hookStatus(launch.key) {
+        if !chat.enabled || chat.disabledIntegrations.contains(launch.key) { return "off in Features › Chat mode" }
+        if chat.localHooks[launch.key] == false { return "off on this Mac" }
+        if !chat.localHooksAllowed(launch.key) { return missingCLI(launch.key) ? "not installed" : "not set up" }
+        return Self.status(chat.hookStatus(launch.key), install: install, label: launch.label, missing: missingCLI(launch.key))
+    }
+
+    /// An allowed agent's hooks here, worded for its row (and Features' agent rows): ready, the step that finishes
+    /// them, or why they aren't installed.
+    static func status(_ status: ChatCoordinator.AgentHookStatus, install: HelperChat.Installation?, label: String, missing: Bool) -> String {
+        switch status {
         case .ready: return "✓ ready"
         case .restart:
-            if let trust = install?.trust { return "restart \(launch.label), then trust Dispatch in \(trust)" }
-            if let reload = install?.reload { return "run \(reload) in \(launch.label) to finish" }
-            return "restart \(launch.label) to finish"
+            if let trust = install?.trust { return "restart \(label), then trust Dispatch in \(trust)" }
+            if let reload = install?.reload { return "run \(reload) in \(label) to finish" }
+            return "restart \(label) to finish"
         case .off:
-            if missingCLI(launch.key) { return "not installed" }
+            if missing { return "not installed" }
             return install?.optional == true ? "needs its extension" : "not set up"
         }
     }

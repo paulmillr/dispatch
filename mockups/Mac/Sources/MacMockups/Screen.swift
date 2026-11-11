@@ -23,7 +23,6 @@ struct Screen {
 enum Screens {
     static var all: [Screen] {
         Reference.screens + FilesModes.screens + Landing.screens + Onboarding.screens
-            + ReconnectScreens.screens + NarrowPanes.screens + VerticalTabs.screens + UpdateScreens.screens
-            + ModelLadder.screens
+            + UpdateScreens.screens + ModelLadder.screens + ClaudeLimits.screens
     }
 }

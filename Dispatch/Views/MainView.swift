@@ -8,8 +8,6 @@ struct MainView: View {
     let controller: AppDelegate
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The sidebar column's width; dragging its trailing edge resizes it.
-    @State private var sidebarWidth: CGFloat = 264
     /// The full-screen edge reveal is showing its host mark, or the mark's picker is open.
     @State private var revealShown = false
     @State private var revealPicker = false
@@ -102,7 +100,8 @@ struct MainView: View {
                 Rectangle().fill(Chrome.border).frame(height: 1)
             }
             NativeSplit(first: AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)), second: AnyView(contentColumn),
-                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible, sidebarWidth: $sidebarWidth,
+                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible, sidebarWidth: Binding(get: { controller.windowState.sidebarWidth },
+                                                                                set: { controller.windowState.sidebarWidth = $0 }),
                         firstMinimumSize: CGSize(width: typography.expanded(200), height: 120),
                         secondMinimumSize: minimumTerminalSize)
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.sidebarDuration), value: sidebarVisible)
@@ -116,7 +115,7 @@ struct MainView: View {
         .preferredColorScheme(Chrome.colorScheme)
         .ignoresSafeArea()
         .overlay { HostMoveCanvas(motion: workspace.hostMoveMotion).allowsHitTesting(false) }
-        .overlay(alignment: .top) { VoiceNavigationNote() }
+        .overlay(alignment: .top) { VStack(spacing: 0) { VoiceNavigationNote(); WindowNote() } }
         .overlay(alignment: .topLeading) {
             if floatingSidebarToggle {
                 HStack(spacing: 12) {
@@ -166,7 +165,7 @@ struct MainView: View {
         .onChange(of: StripTab.titleRowHeight(typography), initial: true) { _, height in
             (controller.window as? MainWindow)?.titleBarHeight = height
         }
-        .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.sidebarVisibilityOverride = nil }
+        .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.chooseSidebar(nil) }
         // The runtime mirrors a saved choice as it applies it; this covers a value set without saving (tests).
         .onChange(of: settings.values.verticalTabs, initial: true) { _, vertical in workspace.verticalTabs = vertical }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }

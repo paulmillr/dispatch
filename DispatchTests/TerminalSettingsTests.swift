@@ -10,14 +10,14 @@ final class TerminalSettingsTests: XCTestCase {
         XCTAssertEqual(fresh.cursor, .block)
         XCTAssertTrue(fresh.cursorBlink)
         XCTAssertEqual(fresh.scrollback, .automatic)
-        XCTAssertEqual(fresh.optionAsAlt, .both)
+        XCTAssertEqual(fresh.optionAsAlt, .left, "the left Option key is Alt, the right one types characters")
         XCTAssertEqual(fresh.shell, "", "the login shell")
         XCTAssertNil(fresh.shellProgram)
         var chosen = fresh
         chosen.cursor = .bar
         chosen.cursorBlink = false
         chosen.scrollback = .unlimited
-        chosen.optionAsAlt = .left
+        chosen.optionAsAlt = .right
         chosen.shell = "/bin/zsh -l"
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(chosen)), chosen)
         XCTAssertEqual(chosen.shellProgram, "/bin/zsh")

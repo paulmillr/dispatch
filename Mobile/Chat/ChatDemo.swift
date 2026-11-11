@@ -576,31 +576,35 @@ struct ChatDemoHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Back and the host's menu in one capsule, as `TabHeaderBackAndMenu`.
-            HStack(spacing: 0) {
-                Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color.dispatchPink)
-                    .frame(width: 44, height: 44)
-                    .overlay(alignment: .topTrailing) {
-                        if needsYou > 0 { TabsCountBadge(label: "\(needsYou)").offset(x: 6, y: -4) }
-                    }
-                    .zIndex(1)
+            // Back in its circle, then the host's disc, title and host · folder in one capsule, as `TabScreenHeader`.
+            Image(systemName: "chevron.left").font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color.dispatchPink)
+                .frame(width: 44, height: 44)
+                .glassEffect(.regular, in: Circle())
+                .overlay(alignment: .topTrailing) {
+                    if needsYou > 0 { TabsCountBadge(label: "\(needsYou)").offset(x: 6, y: -4) }
+                }
+            HStack(spacing: 8) {
                 Image(systemName: "apple.logo")
+                    .font(.system(size: 17))
                     .foregroundStyle(TabsSample.mba2.tint)
-                    .frame(width: 44, height: 44)
-            }
-            .glassEffect(.regular, in: Capsule())
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(.headline)
-                (Text(session.hostName).foregroundStyle(TabsSample.mba2.tint) + Text(" · ")
-                    + Text("~/src/app").font(.caption2.monospaced()))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+                    .background(TabsSample.mba2.tint.opacity(0.18), in: Circle())
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    (Text(session.hostName) + Text(" · ") + Text("~/src/app"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .padding(.leading, 4)
+            .padding(.trailing, 16)
+            .frame(minHeight: 44)
+            .glassEffect(.regular, in: Capsule())
             Spacer()
             // The mode button on Chat (`TabModeButton`), the waveform in its place in conversation mode.
-            ChatHeaderControls(session: session, menuInDisc: true) {
+            ChatHeaderControls(session: session) {
                 Image(symbol: TabSegment.chat.symbol + ".fill")
                     .foregroundStyle(Color.dispatchPink)
                     .frame(width: 44, height: 44)

@@ -175,8 +175,27 @@ struct ChatQueueView: View {
 
     // MARK: Status
 
+    /// The agent exited with messages still queued: none of them will be sent here.
+    private var exited: Bool { session.agentExited && !session.active }
+
     @ViewBuilder private var status: some View {
-        if let paused = session.queuePaused {
+        if exited {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
+                Text("\(session.agentTitle) exited: \(messages.count == 1 ? "this message was" : "these messages were") not sent.")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { coordinator.copyQueue(session) } label: {
+                    QueueActionLabel(title: "Copy All", symbol: "doc.on.doc", height: buttonHeight)
+                }.buttonStyle(.plain).fixedSize().accessibilityIdentifier("chat-queue-copy-all")
+                Button { coordinator.discardQueue(session) } label: {
+                    QueueActionLabel(title: "Discard All", role: .destructive, height: buttonHeight)
+                }.buttonStyle(.plain).fixedSize().accessibilityIdentifier("chat-queue-discard-all")
+            }
+            .font(theme.typography.detail).foregroundStyle(theme.yellow)
+            .padding(.horizontal, 6).padding(.top, 2)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("chat-queue-exited")
+        } else if let paused = session.queuePaused {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "pause.circle.fill")
                 Text(paused).fixedSize(horizontal: false, vertical: true)
@@ -301,15 +320,17 @@ struct ChatQueueView: View {
             .disabled(index == messages.count - 1 || !coordinator.canReorderQueue(session))
     }
 
-    /// Send now, Edit and Delete, each written out with its shortcut while the composer would take it.
+    /// Send now, Edit and Delete, each written out with its shortcut while the composer would take it: only for the
+    /// keyboard's selection, never a row that is merely under the pointer.
     private func actions(_ message: ChatQueuedMessage, index: Int) -> some View {
-        let shortcuts = session.drafts.shape.isEmpty && !session.drafts.shape.multiline && session.editingQueuedID == nil
+        let shortcuts = session.selectedQueuedID == message.id
+            && session.drafts.shape.isEmpty && !session.drafts.shape.multiline && session.editingQueuedID == nil
         return HStack(spacing: 6) {
             Button { coordinator.sendNow(session, queuedID: message.id) } label: {
                 QueueActionLabel(title: "Send now", shortcut: shortcuts ? "⌥⌘⏎" : nil, role: .primary, height: buttonHeight)
             }
             .disabled(steerDisabled(message))
-            .help("Steer: interrupt the current turn and send this now")
+            .help("Steer: add this to the current turn now")
             .accessibilityLabel("Steer with queued message \(index + 1)")
             Button { coordinator.editQueued(message.id, in: session) } label: {
                 QueueActionLabel(title: "Edit", shortcut: shortcuts ? "E" : nil, height: buttonHeight)
@@ -320,18 +341,18 @@ struct ChatQueueView: View {
                 QueueActionLabel(title: "Delete", role: .destructive, height: buttonHeight)
             }
             .help("Delete · ⌘⌫")
-            .accessibilityLabel("Discard queued message \(index + 1)")
+            .accessibilityLabel("Delete queued message \(index + 1)")
         }
         .buttonStyle(.plain).fixedSize()
         .disabled(sending(message))
     }
 
     private func steerDisabled(_ message: ChatQueuedMessage) -> Bool {
-        message.pause != nil || !message.matches(session) || message.pending || (session.busy && !message.editable)
+        exited || message.pause != nil || !message.matches(session) || message.pending || (session.busy && !message.editable)
     }
 
     private func editDisabled(_ message: ChatQueuedMessage) -> Bool {
-        !session.drafts.shape.isEmpty || session.editingQueuedID != nil || !message.editable || !message.attachments.isEmpty
+        exited || !session.drafts.shape.isEmpty || session.editingQueuedID != nil || !message.editable || !message.attachments.isEmpty
             || !session.draftUploads.isEmpty
     }
 }
@@ -352,7 +373,7 @@ private struct QueuedRowAccessibility: ViewModifier {
             .accessibilityAction(named: "Move down") { coordinator.moveQueued(message.id, by: 1, in: session) }
             .accessibilityAction(named: "Steer") { coordinator.sendNow(session, queuedID: message.id) }
             .accessibilityAction(named: "Edit") { coordinator.editQueued(message.id, in: session) }
-            .accessibilityAction(named: "Discard") { coordinator.removeQueued(message.id, from: session) }
+            .accessibilityAction(named: "Delete") { coordinator.removeQueued(message.id, from: session) }
     }
 }
 

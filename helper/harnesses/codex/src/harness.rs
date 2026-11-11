@@ -1293,6 +1293,23 @@ impl Harness for Codex {
         );
     }
 
+    fn limits(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Vec<LimitWindow>>) {
+        let (jobs, transcript) = (self.jobs.clone(), binding.transcript.clone());
+        self.request(
+            io,
+            binding,
+            "account/rateLimits/read",
+            Data::Null,
+            Box::new(move |io, result| match result {
+                Ok(answer) => deferred(done)(io, Ok(crate::limits::answered(answer.root()))),
+                Err(error) => {
+                    let failure = (!crate::limits::signed_out(&error)).then_some(error);
+                    crate::limits::from_rollout(&jobs, io, transcript, failure, done);
+                }
+            }),
+        );
+    }
+
     fn side(
         &mut self,
         io: &mut dyn Io,

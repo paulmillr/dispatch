@@ -111,7 +111,6 @@ final class TerminalRuntime {
         self.preferences = preferences
         workspace?.verticalTabs = preferences.verticalTabs
         chat.sendWhileWorking = preferences.chatSendWhileWorking
-        ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
         chat.toolSteps = preferences.chatToolSteps
         hosts.reconnect.automatic = preferences.autoReconnectSSH
@@ -193,7 +192,6 @@ final class TerminalRuntime {
         if !preferences.filesEnabled { files.leaveFiles() }
         workspace?.verticalTabs = preferences.verticalTabs
         chat.sendWhileWorking = preferences.chatSendWhileWorking
-        ChatDraft.editorByDefault = preferences.chatEditorByDefault
         chat.agentStart = preferences.chatAgentStart
         chat.toolSteps = preferences.chatToolSteps
         hosts.reconnect.automatic = preferences.autoReconnectSSH

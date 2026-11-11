@@ -27,6 +27,10 @@ import Foundation
     var kind: Kind = .loading
     /// The revision the content was read at; a changed file reloads instead of showing a mix.
     var revision: FileRevision?
+    /// Text read in another encoding than UTF-8 ("UTF-16", "Latin-1"), named in the header; nil for UTF-8.
+    var encoding: String?
+    /// A read of the file as it changed on disk is under way (`FilePreviewLoader.refresh`).
+    @ObservationIgnored var refreshing = false
 
     init(path: String, entry: FileEntry?) {
         self.path = path

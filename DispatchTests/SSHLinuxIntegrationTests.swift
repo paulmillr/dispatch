@@ -185,7 +185,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
             XCTAssertEqual(String(decoding: system, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), "Linux")
             if backend == "plain", !hooks {
                 let store = HostStatisticsStore.shared
-                let host = HostID.authenticated(greeting.host)
+                let host = HostID.authenticated(greeting.host, uid: greeting.uid)
                 let source = store.source(host: host, preferred: ssh.launch.connectionID)
                 guard case .ssh(let key) = source else { throw HerdrFailure("Missing authorized Linux statistics provider") }
                 let entry = try XCTUnwrap(store.remote.series[key])

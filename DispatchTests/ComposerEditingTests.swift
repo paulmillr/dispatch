@@ -128,7 +128,7 @@ import XCTest
         XCTAssertEqual(help, 2); XCTAssertEqual(submitted, 2, "IME composition must not send a draft")
     }
 
-    func testQueueShortcutsFollowHoverAndRespectDisabledActions() {
+    func testQueueShortcutsFollowSelectionAndRespectDisabledActions() {
         defer { close() }
         let text = editor()
         let selected = ChatQueuedMessage(text: "selected", process: nil)
@@ -140,14 +140,14 @@ import XCTest
         text.queueAction = { actions.append(($0, $1)) }
         text.keyDown(with: key(14, "e"))
         XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
-        XCTAssertEqual(actions.map(\.0), [hovered.id, hovered.id])
+        XCTAssertEqual(actions.map(\.0), [selected.id, selected.id], "The keyboard's selection, never the hovered row, takes the keys")
         XCTAssertEqual(actions.map(\.1), ["edit", "send"])
         XCTAssertTrue(text.string.isEmpty)
 
-        session.queuedMessages[1].pause = .stopped
+        session.queuedMessages[0].pause = .stopped
         XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(actions.count, 2, "A paused row's disabled Steer action must not send")
-        session.queuedSubmissionID = hovered.id
+        session.queuedSubmissionID = selected.id
         XCTAssertTrue(text.performKeyEquivalent(with: key(51, "\u{7f}", .command)))
         text.keyDown(with: key(14, "e"))
         XCTAssertEqual(actions.count, 2, "A sending row must not be deleted or edited")
@@ -157,11 +157,10 @@ import XCTest
 
         session.selectedQueuedID = selected.id
         text.keyDown(with: key(53, "\u{1b}"))
-        XCTAssertNil(session.hoveredQueuedID)
         XCTAssertNil(session.selectedQueuedID)
     }
 
-    func testQueueHoverEnablesEditSendAndDeleteShortcuts() {
+    func testQueueHoverLeavesComposerKeysAlone() {
         defer { close() }
         let text = editor()
         let queued = ChatQueuedMessage(text: "queued", process: nil)
@@ -171,21 +170,38 @@ import XCTest
         var sends = 0
         text.queueAction = { actions.append(($0, $1)) }
         text.sendNow = { sends += 1 }
-        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
-        XCTAssertEqual(sends, 0)
-        text.keyDown(with: key(14, "e"))
-        XCTAssertTrue(text.string.isEmpty)
-        XCTAssertTrue(text.performKeyEquivalent(with: key(51, "\u{7f}", .command)))
-        XCTAssertTrue(text.performKeyEquivalent(with: key(51, "\u{7f}", .command, repeating: true)))
-        XCTAssertEqual(actions.map(\.0), [queued.id, queued.id, queued.id])
-        XCTAssertEqual(actions.map(\.1), ["send", "edit", "delete"])
-
-        session.hoveredQueuedID = nil
+        // A row under the pointer shows its buttons; the keys stay the composer's.
         XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
         XCTAssertEqual(sends, 1)
         text.keyDown(with: key(14, "e"))
-        XCTAssertEqual(text.string, "e")
-        XCTAssertEqual(actions.count, 3)
+        XCTAssertEqual(text.string, "e", "Typing a message that starts with e must not edit the hovered row")
+        text.string = ""; session.draft = ""
+        _ = text.performKeyEquivalent(with: key(51, "\u{7f}", .command))
+        XCTAssertTrue(actions.isEmpty, "⌘⌫ must not delete the hovered row")
+
+        session.selectedQueuedID = queued.id
+        XCTAssertTrue(text.performKeyEquivalent(with: key(36, "\r", [.command, .option])))
+        text.keyDown(with: key(14, "e"))
+        XCTAssertTrue(text.string.isEmpty)
+        XCTAssertEqual(actions.map(\.1), ["send", "edit"])
+    }
+
+    /// While the agent works, Esc twice stops it in editor mode as out of it; idle, Esc leaves editor mode.
+    func testEscapeStopsTheAgentInEditorModeAndLeavesEditorModeWhenIdle() {
+        defer { close() }
+        let text = editor("first\nsecond")
+        var stops = 0, working = true
+        text.canStop = { working }
+        text.interrupt = { _ in stops += 1; return true }
+        XCTAssertTrue(text.performKeyEquivalent(with: key(53, "\u{1b}", timestamp: 1)))
+        text.keyDown(with: key(53, "\u{1b}", timestamp: 1.4))
+        XCTAssertEqual(stops, 2)
+        XCTAssertTrue(session.drafts.current.multiline, "Stopping must not leave editor mode")
+        working = false
+        XCTAssertTrue(text.performKeyEquivalent(with: key(53, "\u{1b}", timestamp: 3)))
+        XCTAssertEqual(stops, 2)
+        XCTAssertFalse(session.drafts.current.multiline)
+        XCTAssertEqual(session.draft, "first\nsecond")
     }
 
     func testQueueSelectionDoesNotCaptureDraftNavigationOrSending() {

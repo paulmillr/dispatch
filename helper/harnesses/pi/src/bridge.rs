@@ -340,7 +340,12 @@ pub fn call(
                         }
                     };
                     let deadline =
-                        io.now() + Duration::from_secs(if method == "probe" { 1 } else { 4 });
+                        io.now() + Duration::from_secs(match method.as_str() {
+                            "probe" => 1,
+                            // Past the bridge's own wait for a limits extension.
+                            "limits" => 6,
+                            _ => 4,
+                        });
                     next.borrow_mut()
                         .registrations
                         .insert(binding.process.pid, record);

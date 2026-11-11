@@ -1,11 +1,9 @@
 import SwiftUI
 
-// B7: the Mac's one mode button on the phone (2026-11-01, shipped as the phone's only header). The Terminal · Chat ·
-// Files capsule goes; Back and the host share one capsule on the left (the host's glyph is the tab's menu), the mode
-// toggle stands alone on the right and carries the tab's mode as the Mac strip's `ChatModeSwitch` does. Chat shown:
-// the bubble, on (the system's selected toggle). An agent's tab in Terminal: the bubble, off (a tap opens chat). A
-// shell's tab in Terminal: the folder, off (a tap opens files). Files shown: the folder, on. A tap from Chat or Files
-// returns to Terminal.
+// The mode button (`TabModeButton`), the Mac strip's on the phone: its states, as the header (TitleCapsule.swift)
+// draws it, and the terminal and key bar the tab screens show. Chat shown: the Chat capsule filled in the accent. An
+// agent's tab in Terminal: the capsule's outline (where the tab would go). A shell's tab in Terminal: the folder's.
+// Files shown: the folder filled. A tap opens the modes menu.
 
 enum ModeShown { case terminal, chat, files }
 
@@ -14,50 +12,26 @@ struct ModeButtonState {
     let shown: ModeShown
     /// An agent runs or ran in the tab.
     let agent: Bool
+    /// On Files, the mode shown: the button's glyph names it (Files' modes are in its menu, `TabModeButton`).
+    var filesMode: FilesTabMode = .files
     var symbol: String {
         switch shown {
-        case .chat: "text.bubble"
-        case .files: "folder"
-        case .terminal: agent ? "text.bubble" : "folder"
+        case .chat: "dispatch.chat"
+        case .files: filesMode.symbol
+        case .terminal: agent ? "dispatch.chat" : "folder"
         }
     }
     var lit: Bool { shown != .terminal }
-}
+    /// The glyph as drawn: filled when lit, where the symbol has a filled form (`TabModeButton.filled`).
+    var drawn: String { lit ? Self.filled(symbol) : symbol }
 
-/// Back and the host's glyph on the left, the title block beside them, the mode toggle alone on the right.
-struct ModeTabHeader: ToolbarContent {
-    let title: String
-    var subtitle: AnyView = AnyView(TabSubtitle())
-    let state: ModeButtonState
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {} label: { Image(systemName: "chevron.left").foregroundStyle(Color.dispatchPink) }
-                .overlay(alignment: .topTrailing) { CountBadge(label: "2").offset(x: 16, y: -14) }
-        }
-        ToolbarItem(placement: .topBarLeading) {
-            Button {} label: { Image(systemName: "apple.logo").foregroundStyle(hostTint) }
-        }
-        ToolbarItem(placement: .topBarLeading) { titleBlock.padding(.leading, 4).frame(width: 402 - 32 - 104 - 12 - 72, alignment: .leading) }
-            .sharedBackgroundVisibility(.hidden)
-        ToolbarItem(placement: .topBarTrailing) {
-            ModeToggle(state: state)
-        }
-    }
-
-    private var titleBlock: some View {
-        ViewThatFits(in: .horizontal) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).lineLimit(1)
-                subtitle.font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Text(title).lineLimit(2, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
-        }
-        .font(.subheadline.weight(.semibold))
-        .frame(minHeight: 40, alignment: .topLeading)
+    static func filled(_ symbol: String) -> String {
+        if symbol.hasPrefix("dispatch.") { return symbol + ".fill" }
+        return UIImage(systemName: symbol + ".fill") == nil ? symbol : symbol + ".fill"
     }
 }
 
-private struct KeyBar: View {
+struct KeyBar: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(["Ctrl", "Esc", "Tab", "Alt"], id: \.self) { k in
@@ -74,7 +48,7 @@ private struct KeyBar: View {
 }
 
 /// An agent's TUI in its terminal.
-private struct AgentTerminalMock: View {
+struct AgentTerminalMock: View {
     let lines: [(String, Color)] = [
         ("> Make billing webhook retries idempotent.", .secondary), ("", .primary),
         ("⏺ Stripe retries the same event with a new attempt", .primary), ("  counter, so a counter-based guard can", .primary),
@@ -98,72 +72,14 @@ private struct AgentTerminalMock: View {
     }
 }
 
-/// B7: Chat shown, the bubble on.
-struct ModeChatScreen: View {
-    var body: some View {
-        let state = ModeButtonState(shown: .chat, agent: true)
-        NavigationStack {
-            Transcript()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.canvas)
-                .scrollEdgeEffectStyle(.soft, for: .bottom)
-                .safeAreaBar(edge: .bottom) { Composer() }
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
-        }
-    }
-}
-
-/// B7b: an agent's tab in Terminal, the bubble off: a tap opens its chat.
-struct ModeAgentTerminalScreen: View {
-    var body: some View {
-        let state = ModeButtonState(shown: .terminal, agent: true)
-        NavigationStack {
-            AgentTerminalMock()
-                .safeAreaBar(edge: .bottom) { KeyBar() }
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app", shell: "claude")), state: state) }
-        }
-        // The terminal is black in either scheme; its bar follows it.
-        .environment(\.colorScheme, .dark)
-    }
-}
-
-/// B7c: the four states as the bar draws them.
-struct ModeStatesScreen: View {
-    private let states: [(String, String, ModeButtonState)] = [
-        ("Chat shown", "tap → Terminal", .init(shown: .chat, agent: true)),
-        ("Agent, Terminal shown", "tap → Chat", .init(shown: .terminal, agent: true)),
-        ("Shell, Terminal shown", "tap → Files", .init(shown: .terminal, agent: false)),
-        ("Files shown", "tap → Terminal", .init(shown: .files, agent: false)),
-    ]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(states.enumerated()), id: \.offset) { _, state in
-                Text(state.0 + " · " + state.1).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                    .padding(.top, 14).padding(.leading, 20)
-                NavigationStack {
-                    Color.canvas
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar { ModeTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state.2) }
-                }
-                .frame(height: 62)
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.canvas)
-    }
-}
-
-/// The system's button-style toggle, its glyph primary when off (the app tint would make every bar glyph pink, and off
-/// would differ from on by the selection alone).
+/// The mode button as the app draws it (`TabModeButton`): a bar item, its glyph filled in the accent while Chat or Files
+/// shows, the outline in the label colour in Terminal (naming where the tab would go). A tap opens the modes menu.
 struct ModeToggle: View {
     let state: ModeButtonState
     var body: some View {
-        Toggle(isOn: .constant(state.lit)) {
-            Image(systemName: state.symbol).foregroundStyle(state.lit ? Color.dispatchPink : Color.primary)
+        Button {} label: {
+            Image(symbol: state.drawn)
+                .foregroundStyle(state.lit ? Color.dispatchPink : Color.primary)
         }
-        .toggleStyle(.button)
     }
 }

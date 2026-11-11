@@ -169,7 +169,9 @@ final class GitChangesPresentationTests: XCTestCase {
             // The second fold's "4" is checked through accessibility below: Vision now and then drops a lower fold's digit.
             ["3 unmodified lines"],
         ], in: window, named: "git-changes-mockup")
-        XCTAssertFalse(try snapshot.reads(["Create review"]), "no Create review before a comment")
+        // Before a comment Create Review is there, quiet, and a line over the diff says how to comment.
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("review-create", in: window).isEmpty)
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-diff-review-hint", in: window).isEmpty)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-add-patch", in: window).isEmpty, "no git add -p")
 
         // The files header's row (34 pt at the 12.5 design base) as on every tab: the tab's name, the repository and its
@@ -370,7 +372,7 @@ final class GitChangesPresentationTests: XCTestCase {
         session.changesDiff = nil
         let window = try window(session)
         // OCR reads the UI font's dotted zero as "O".
-        try await read([["No changes"], ["the working tree matches HEAD"]], in: window, named: "git-changes-empty")
+        try await read([["No changes"], ["the working tree matches HEAD"], ["Commits"]], in: window, named: "git-changes-empty")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-diff", in: window).isEmpty, "No diff for no change")
     }
 

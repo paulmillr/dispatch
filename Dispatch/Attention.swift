@@ -15,12 +15,12 @@ enum PaneUrgency: Int, CaseIterable {
     }
 
     #if canImport(AppKit)
-    /// `programs`: the surface's visible OSC 7501 records.
-    @MainActor init(session: ChatSession?, programs: [ProgramStatus] = []) {
+    /// `programs`: the surface's visible OSC 7501 records; `bell`: its bell rang while it was not shown.
+    @MainActor init(session: ChatSession?, programs: [ProgramStatus] = [], bell: Bool = false) {
         let waiting = session?.approvals.contains(where: \.pending) == true || session?.agentAttention != nil
             || programs.contains { $0.state == .blocked }
         let working = session?.active == true && session?.busy == true || programs.contains { $0.state == .working }
-        let unread = session?.hasNewMessages == true || programs.contains(where: \.finished)
+        let unread = session?.hasNewMessages == true || programs.contains(where: \.finished) || bell
         self.init(waiting: waiting, working: working, unread: unread)
     }
     #endif
@@ -30,8 +30,12 @@ enum PaneUrgency: Int, CaseIterable {
 
 struct AttentionEntry: Identifiable {
     let id: UUID
+    /// The tab as the sidebar names it: its conversation's title, else its agent's or its own name.
     let title: String
-    let path: String
+    /// Where it is: its space, and the host when it is not this Mac ("release on mini"). Never a tmux window's name,
+    /// which tmux takes from the program running (`dispatch-helper` for an agent Dispatch launched) and the title
+    /// already names.
+    let place: String
     let urgency: PaneUrgency
 
     @MainActor
@@ -41,16 +45,22 @@ struct AttentionEntry: Identifiable {
             for tab in space.tabs {
                 for surface in tab.surfaceIDs {
                     let session = sessions[surface]
-                    let urgency = PaneUrgency(session: session, programs: programs?.visible(surface) ?? [])
+                    let urgency = PaneUrgency(session: session, programs: programs?.visible(surface) ?? [],
+                                              bell: programs?.rang.contains(surface) == true)
                     let host = workspace.hosts.record(workspace.hosts.terminals[surface]?.host ?? space.hostID)
                     // Only panes that want attention are shown or announced, so only theirs follow title changes.
                     let shown = urgency == .idle ? tab : workspace.liveTab(tab.id) ?? tab
-                    let title = shown.displayLabel(automatic: automaticNames, conversation: session?.active == true ? session?.conversationTitle : nil,
-                                                   agent: TerminalRuntime.agent(of: shown, session: session))
-                    let window = space.windows.first { $0.terminals.contains { $0.id == tab.id } }
+                    let conversation = session?.active == true ? session?.conversationTitle : nil
+                    let agent = TerminalRuntime.agent(of: shown, session: session)
+                    // As the sidebar names the tab: a multiplexer's window by its own rules (a name the user chose, the
+                    // conversation, the launcher's as the agent's), else the pane.
+                    let window = space.containers.first { $0.terminals.contains { $0.id == tab.id } }
+                    let label = window?.displayLabel(automatic: automaticNames, conversation: conversation, focused: shown, agent: agent)
+                        ?? shown.displayLabel(automatic: automaticNames, conversation: conversation, agent: agent)
+                    let title = TerminalTab.shown(label, agent: agent)
                     let name = urgency == .idle ? space.name : workspace.liveName(space)
-                    let path = ([host.id == .local ? "local" : host.name, name] + [window?.name].compactMap { $0 }).joined(separator: " › ")
-                    result.append(Self(id: surface, title: title, path: path, urgency: urgency))
+                    let place = host.id == .local ? name : "\(name) on \(host.name)"
+                    result.append(Self(id: surface, title: title, place: place, urgency: urgency))
                 }
             }
         }
@@ -95,6 +105,8 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     var readyResponses: [AttentionEntry] {
         entries.filter { $0.urgency == .unread && eventKey($0) != nil }
     }
+    /// ⌘J and ⇧⌘J have somewhere to go (`navigate`): an approval or question waiting, or a reply ready.
+    var navigable: Bool { entries.contains { $0.urgency == .waiting || ($0.urgency == .unread && eventKey($0) != nil) } }
     var banner: AttentionEntry? {
         entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID }
     }
@@ -268,22 +280,25 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
 
     func notificationRequest(for entry: AttentionEntry) -> UNNotificationRequest? {
         guard let key = eventKey(entry), let session = TerminalRuntime.shared.chat.sessions[entry.id] else { return nil }
+        // The title is the tab, whole; the subtitle what happened, then where ("Done · release on mini"); the body
+        // the reply, the operation asked for or the question.
         let content = UNMutableNotificationContent()
-        let rowID: String
+        let rowID: String, event: String
         if let approval = session.approvals.first(where: \.pending), entry.urgency == .waiting {
-            content.title = entry.title + (approval.questions == nil ? " · Permission needed" : " · Question for you")
+            event = approval.questions == nil ? "Permission needed" : "Question for you"
             content.body = Self.preview(approval.questions?.questions.map(\.text).joined(separator: " ") ?? approval.operation)
             rowID = "approval-\(approval.id)"
         } else {
             guard let turn = session.turns.last,
                   let response = turn.items.last(where: { $0.kind == .assistant }) else { return nil }
-            content.title = entry.title + " · Response ready"
+            event = "Done"
             content.body = Self.preview(response.text)
             rowID = response.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(response.id)"
         }
-        content.subtitle = entry.path
+        content.title = entry.title
+        content.subtitle = event + " · " + entry.place
         // Without text content a banner says only which pane and what happened (it can show on the lock screen).
-        if !TerminalRuntime.shared.preferences.attentionTextContent { (content.body, content.subtitle) = ("", "") }
+        if !TerminalRuntime.shared.preferences.attentionTextContent { (content.body, content.subtitle) = ("", event) }
         content.categoryIdentifier = "pane-attention"
         content.threadIdentifier = "pane-\(entry.id)"
         content.userInfo = ["surface": entry.id.uuidString, "conversation": session.sessionID ?? "", "row": rowID, "event": key]

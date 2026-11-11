@@ -172,6 +172,23 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertNil(FilesImage.shown(Data("not an image".utf8)))
     }
 
+    /// Rendered Markdown reads as the Mac's preview does (`FileMarkdownDocument`): front matter as YAML, a paragraph's
+    /// wrapped lines as one, its headings the outline and what folds (a file's lone title stays open on Fold All); the
+    /// page sets its prose two points over chat's text, headings in the Mac's six sizes, at most 36 em wide.
+    @MainActor func testMarkdownReadsAsTheMacsDocument() {
+        let document = FileMarkdownDocument("---\ntitle: Notes\n---\n# Theming\n\nOne line\nwrapped by its editor.\n\n## Light\n\nText.\n")
+        XCTAssertEqual(document.blocks.map(\.text), ["title: Notes", "Theming", "One line wrapped by its editor.", "Light", "Text."])
+        XCTAssertEqual(document.headings.map(\.title), ["Theming", "Light"])
+        XCTAssertEqual(document.allFolded, ["2 Light"])
+        XCTAssertEqual(document.shown(folded: document.allFolded, searching: false), [0, 1, 2, 3])
+        let page = FileMarkdownPage(typography: ChatTypography(), scale: 1)
+        XCTAssertEqual(page.size, 18, "chat's 16 points at the default size, two over")
+        XCTAssertEqual(page.headingPoints(1), 31.5)
+        XCTAssertEqual(page.headingPoints(6), 16.5)
+        XCTAssertEqual(page.measure, 648)
+        XCTAssertEqual(FileMarkdownPage(typography: ChatTypography(size: .larger), scale: 1.5).size, 29)
+    }
+
     /// Text past Load all is laid out off the main actor; `version` moves with the lines; Markdown past chat's
     /// rendering bound says so.
     func testLinesVersionAndMarkdownCap() async throws {

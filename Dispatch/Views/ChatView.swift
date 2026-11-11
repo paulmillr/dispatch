@@ -48,8 +48,8 @@ struct ChatView: View {
                     }
                 if !glass { input }
             } else {
-                ContentUnavailableView("Agent chat", systemImage: "text.bubble", description:
-                    Text("Enable Agent chat in Settings, start \(coordinator.agents) in this terminal, and finish any startup menus. Then select Chat to send your first message."))
+                ContentUnavailableView("Chat", systemImage: "text.bubble", description:
+                    Text(coordinator.emptyChatHint(local: localTab)))
                     .task { coordinator.loadLaunches() }
                     .padding(.top, topInset)
             }
@@ -161,7 +161,7 @@ struct ChatView: View {
                     coordinator.interrupt(session)
                 }.floatingGlassPanel()
             }
-            if let status = session.status, TerminalRuntime.shared.hosts.reconnect.state(for: session.id) == nil {
+            if let status = session.status, !TerminalRuntime.shared.hosts.reconnect.showsBar(for: session.id) {
                 HStack {
                     // Nautical calls a failure or a pane stuck on its terminal a MAYDAY.
                     if theme.radioLog && (session.terminalAttention != nil || HarbourDistress.isFailure(status)) {
@@ -170,17 +170,25 @@ struct ChatView: View {
                     Text(status).font(theme.typography.detail).foregroundStyle(theme.muted)
                     Spacer(minLength: 4)
                     if session.terminalAttention != nil {
-                        Button("Retry chat") { coordinator.retryChat(session) }
+                        Button("Retry Chat") { coordinator.retryChat(session) }
                     }
-                    Button("Open in terminal") { coordinator.showTerminal(session) }
+                    if session.statusOffersTerminal {
+                        Button("Open in Terminal") { coordinator.showTerminal(session) }
+                    }
+                    // A refused send's reason stays until the next attempt; it can be dismissed sooner.
+                    if session.terminalAttention == nil, session.submissionFailure != nil {
+                        Button { session.submissionFailure = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).foregroundStyle(theme.muted).help("Dismiss")
+                            .accessibilityLabel("Dismiss message").accessibilityIdentifier("chat-status-dismiss")
+                    }
                 }.floatingGlassPanel()
             }
-            if let notice = session.terminalPromptNotice, TerminalRuntime.shared.hosts.reconnect.state(for: session.id) == nil {
+            if let notice = session.terminalPromptNotice, !TerminalRuntime.shared.hosts.reconnect.showsBar(for: session.id) {
                 HStack {
                     Text(notice).font(theme.typography.detail).foregroundStyle(theme.muted).lineLimit(2)
                     Spacer(minLength: 4)
                     Button("Clear") { coordinator.clearTerminalPrompt(session) }.disabled(session.clearingTerminalPrompt)
-                    Button("Open in terminal") { coordinator.showTerminal(session) }
+                    Button("Open in Terminal") { coordinator.showTerminal(session) }
                 }.floatingGlassPanel()
             }
             if let side = session.sideConversation {
@@ -205,8 +213,8 @@ struct ChatView: View {
                 ChatInputFold(present: queueTipPresented, spacing: 8, reduceMotion: reduceMotion) {
                     HStack(alignment: .top, spacing: 8) {
                         Text(coordinator.sendWhileWorking == .steer
-                             ? "Queued messages run after this turn. ⏎ steers: it interrupts and redirects the current turn."
-                             : "Queued messages run after this turn. Use ⌥⌘⏎ to steer: interrupt and redirect the current turn.")
+                             ? "Queued messages run after this turn. ⏎ steers: it adds your message to the current turn now."
+                             : "Queued messages run after this turn. Use ⌥⌘⏎ to steer: add your message to the current turn now.")
                             .fixedSize(horizontal: false, vertical: true)
                         Button { queueTipPresented = false } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).accessibilityLabel("Dismiss queue tip")
@@ -218,9 +226,9 @@ struct ChatView: View {
                     Group {
                         if let id = session.editingQueuedID, let index = session.queuedMessages.firstIndex(where: { $0.id == id }) {
                             HStack {
-                                Text("editing queued \(index + 1)")
+                                Text("Editing queued message \(index + 1)")
                                 Spacer()
-                                Button("cancel") { coordinator.cancelQueuedEdit(session) }.buttonStyle(.plain)
+                                Button("Cancel") { coordinator.cancelQueuedEdit(session) }.buttonStyle(.plain)
                             }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 12).padding(.top, 6)
                         }
                         // The first chip opens its row and the last one closes it, the composer growing and shrinking
@@ -233,6 +241,7 @@ struct ChatView: View {
                                 if session.editingQueuedID != nil { coordinator.cancelQueuedEdit(session); return true }
                                 return coordinator.escapeStop(session, at: time)
                             },
+                            canStop: { coordinator.canInterrupt(session) },
                             exitChat: { coordinator.quitFromChat(session) },
                             exitPrompt: {
                                 coordinator.quitCommand(session) == nil ? "Press Ctrl+D again to show Terminal"
@@ -255,11 +264,11 @@ struct ChatView: View {
                                 - (attachmentsShown ? ChatComposerAttachments.height(session, theme: theme) : 0))))
                             // Emptied (a message sent, the text cleared), the editor gives its lines back smoothly;
                             // typing resizes it at once.
-                            .animation(session.draft.isEmpty ? InterfaceMotion.animation(reduce: reduceMotion, duration: 0.24) : nil,
+                            .animation(session.drafts.shape.isEmpty ? InterfaceMotion.animation(reduce: reduceMotion, duration: 0.24) : nil,
                                        value: session.composerHeight)
                             .overlay(alignment: .topTrailing) {
                                 if session.drafts.shape.multiline {
-                                    Text("editor")
+                                    Text(ChatComposer.badgeTitle)
                                         .font(theme.typography.detail)
                                         .foregroundStyle(theme.terminal)
                                         .padding(.horizontal, 6).padding(.vertical, 2)
@@ -317,6 +326,11 @@ struct ChatView: View {
     /// The composer stays open unfocused while it holds a draft (text or attachments), so moving to another split
     /// never hides what was typed; empty, it folds to the Reply line or button. Files dragged over the pane open it too.
     private var composerShown: Bool { focused || session.drafts.shape.hasText || attachmentsShown || session.attachmentDrag?.active == true }
+
+    /// A tab on this Mac, whose agents' hooks Settings › Hosts › This Mac sets up.
+    private var localTab: Bool {
+        (workspace ?? TerminalRuntime.shared.workspace)?.hosts.terminals[session.id].map { $0.host == .local } ?? true
+    }
 
     /// The remote host a drop is uploaded to, read only while files are dragged over the pane; nil on this Mac.
     private var dropHost: HostRecord? {
@@ -507,7 +521,7 @@ struct ChatView: View {
     /// Outside the two-row footer's scrolling strip, so neither can scroll out of reach.
     @ViewBuilder private var stopControls: some View {
         if agentWorking, session.stopArmedAt != nil {
-            // Settings' Esc twice: the first press only arms the stop.
+            // Esc twice: the first press only arms the stop.
             Text("⎋ again to stop").font(theme.typography.detail).foregroundStyle(theme.muted)
                 .accessibilityIdentifier("chat-stop-armed")
         }
@@ -523,8 +537,9 @@ struct ChatView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.border))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!coordinator.canInterrupt(session))
-                .help(session.interruptionID == nil
-                      ? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋⎋ · Draft kept" : "Stopping…")
+                .help(coordinator.interruptBlockReason(session)
+                      ?? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋⎋ · Draft kept")
+                .accessibilityHint(coordinator.interruptBlockReason(session) ?? "")
                 .accessibilityLabel(theme.radioLog ? "All stop" : "Stop agent").accessibilityIdentifier("chat-stop")
         }
     }
@@ -534,10 +549,18 @@ struct ChatView: View {
                               presented: $session.shortcutsPresented)
     }
 
+    /// Why the button's steer would be refused now (a pending request, the model picker, …): it is disabled and says so.
+    private var steerBlocked: String? {
+        guard session.busy, session.editingQueuedID == nil, !session.draftIsCommand,
+              // The button steers (`sendFromComposer(_:alternate:)`): ⌥⌘ held, or Return steers and ⌥⌘ is not.
+              alternateSendHeld != coordinator.returnSteers(session) else { return nil }
+        return coordinator.inputBlockReason(session, immediately: true)
+    }
+
     private func replyButton(showsKey: Bool) -> some View {
         ChatReplyButton(canSubmit: canSubmit, alternateSendHeld: alternateSendHeld, busy: session.busy, steers: coordinator.returnSteers(session),
                         editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
-                        command: session.draftIsCommand, showsKey: showsKey) {
+                        command: session.draftIsCommand, showsKey: showsKey, blocked: steerBlocked) {
             coordinator.sendFromComposer(session, alternate: alternateSendHeld)
         }
     }
@@ -625,7 +648,8 @@ struct ChatView: View {
         case "/tree": "go to another branch of this conversation"
         case "/reload": "reload extensions, skills and prompts · in terminal"
         case "/exit", "/quit": "quit the agent"
-        default: "open in terminal"
+        // Typed into the agent as it is (its own commands, skills); Chat stays.
+        default: session.active ? "send to \(session.agentTitle)" : "send to the agent"
         }
     }
 }
@@ -660,8 +684,15 @@ struct ChatSessionStats: View {
                     .accessibilityLabel("\(Int(fraction * 100)) percent context remaining")
             }
             if let usage = session.usage {
-                Text("(\(count(usage.input)) in, \(count(usage.output)) out)")
-                    .help("Cumulative session tokens")
+                // An agent that reports neither count does not count tokens for this chat: say so, not "— in, — out".
+                if usage.input == nil && usage.output == nil {
+                    Text("Token counter is disabled for this chat")
+                        .help("The agent reports no token counts for this chat")
+                        .accessibilityIdentifier("chat-session-tokens-off")
+                } else {
+                    Text("(\(count(usage.input)) in, \(count(usage.output)) out)")
+                        .help("Cumulative session tokens")
+                }
             } else { Text("Usage unavailable").help("Waiting for agent-reported session usage") }
         }
     }

@@ -211,9 +211,6 @@ final class AgentAlertsTests: XCTestCase {
         XCTAssertEqual(posted.map(\.key.node), [ResilienceFixture.billingAgent], "the question; the attention is off")
         XCTAssertEqual(posted.first?.body, "Needs you", "Show message text off")
         XCTAssertEqual(notifier.badges, [2], "both wait for the user")
-        settings.notificationBadge = false
-        _ = await run(settings: settings, cache: HostCache(url: nil), result: result, notifier: notifier)
-        XCTAssertEqual(notifier.badges.last, 0)
     }
 
     // MARK: While the app is open

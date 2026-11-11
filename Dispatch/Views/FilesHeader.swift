@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: the tab's name, where you are, then (on
-/// Review, once it holds comments) Create review with their count; at the trailing end the search, on Commits the
+/// Review and Commits) Create Review with the comments' count; at the trailing end the search, on Commits the
 /// filter (`GitLogFilterButton`), and the Single view toggle (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
 /// Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the follow-the-shell link
 /// after it, the host first), and on Review and Commits the repository and its branch. The Files tab shows nothing of
@@ -50,7 +50,20 @@ struct FilesHeader: View {
             .clipped()
             .layoutPriority(0.5)
             if session.tab == .files, session.source?.readOnly == true { FilesReadOnlyTag() }
-            if session.tab == .changes { ReviewHeaderButton(session: session, focused: focused).layoutPriority(1) }
+            // One review for both git tabs: a commit's lines take comments too.
+            if session.tab != .files, session.gitUnavailable == nil {
+                ReviewHeaderButton(session: session, focused: focused).layoutPriority(1)
+            }
+            // Why cd Here typed nothing: here, so it shows whichever pane is shown or hidden.
+            if let notice = FilesTerminalNotices.shared.notice(for: session.id) {
+                Text(verbatim: notice)
+                    .font(typography, .body)
+                    .foregroundStyle(theme.yellow)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .transition(.opacity)
+                    .accessibilityIdentifier("files-notice")
+            }
             Spacer(minLength: 0)
             if session.drilled, session.tab != .files {
                 HStack(spacing: glass ? 2 : 12) {
@@ -82,8 +95,11 @@ struct FilesHeader: View {
         .overlay(alignment: .bottom) { if !glass { palette.separator.frame(height: 1) } }
         .onChange(of: session.findRequest) { _, _ in
             // ⌘F goes to the preview's find while the preview has focus and shows text (that pane answers it); an
-            // image, a folder or a notice has nothing to find, so the search takes it. On the git tabs it always does.
-            if session.tab != .files || !session.previewFocused || session.preview?.findable != true { openSearch() }
+            // image, a folder or a notice has nothing to find, so the search takes it. On the git tabs it goes to the
+            // diff's find while the diff has the keyboard (`GitDiffView` answers it), else to the search.
+            let paneFinds = session.tab == .files ? session.previewFocused && session.preview?.findable == true
+                : session.diffFocused
+            if !paneFinds { openSearch() }
         }
         .onChange(of: filterFocused) { _, focused in
             if !focused, searchText.isEmpty { searching = false }
@@ -426,7 +442,8 @@ struct FilesHeader: View {
     @ViewBuilder private var searchSlot: some View {
         if searching || !searchText.isEmpty {
             if session.tab == .files {
-                filterField($session.filter, prompt: "Search", help: "Search the list · ⌘F", identifier: "files-filter")
+                filterField($session.filter, prompt: "Filter", help: "Filter this folder’s list by name · ⌘F",
+                            identifier: "files-filter")
                     .layoutPriority(1)
             } else if !session.showsLog {
                 filterField($session.changesFilter, prompt: "Search changes", help: "Search the changed files · ⌘F",
@@ -485,8 +502,9 @@ struct FilesHeader: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(FilesHeaderButtonStyle())
-        .help(session.showsLog ? "Search messages and authors · ⌘F" : "Search · ⌘F")
-        .accessibilityLabel("Search")
+        .help(session.showsLog ? "Search messages and authors · ⌘F"
+              : session.tab == .files ? "Filter by name · ⌘F" : "Filter the changed files by path · ⌘F")
+        .accessibilityLabel(session.tab == .files ? "Filter" : "Search")
         .accessibilityIdentifier("files-search")
     }
 

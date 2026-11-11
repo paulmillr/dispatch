@@ -225,10 +225,19 @@ enum Onboarding {
                     .accessibilityLabel("Back").accessibilityIdentifier("onboarding-back")
                 }
                 Spacer(minLength: 8)
+                if model.busy {
+                    // Asking the login shell which agent CLIs it runs takes up to 30 s.
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Looking for agent CLIs…").font(sheetFont(11.5)).foregroundStyle(muted)
+                    }.accessibilityElement(children: .combine).accessibilityIdentifier("local-agents-checking")
+                }
                 switch model.mode {
                 case .pages:
-                    // On the last page Skip closes with nothing saved; Settings answers later.
-                    Button(action: model.skip) { Text("Skip").font(sheetFont(11.5)).foregroundStyle(muted).padding(.horizontal, 6) }
+                    // Before the questions it goes to them; on them it closes with nothing saved, and Settings answers later.
+                    Button(action: model.skip) {
+                        Text(model.page < 2 ? "Skip to Setup" : "Not Now").font(sheetFont(11.5)).foregroundStyle(muted).padding(.horizontal, 6)
+                    }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier(model.page < 2 ? "onboarding-skip" : "local-agents-later")
                     primary(model.page < 2 ? "Next" : "Let’s roll!", identifier: model.page < 2 ? "onboarding-next" : "local-agents-continue",
@@ -247,7 +256,8 @@ enum Onboarding {
             }
             .padding(.horizontal, 14).frame(height: 54)
             .overlay {
-                if model.mode == .pages {
+                // The steps give way to the search's progress.
+                if model.mode == .pages && !model.busy {
                     HStack(spacing: 6) { ForEach(0..<steps.count, id: \.self) { step($0) } }
                 }
             }

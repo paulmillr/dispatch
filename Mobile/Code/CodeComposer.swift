@@ -101,8 +101,6 @@ struct CodeComposer: View {
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
     /// The first Esc only arms the stop; another within a second stops the turn.
     @State private var stopArmed: Date?
-    /// Send's long press opened its options (a tap felt, `menuOpenHaptic`).
-    @State private var optionsOpened = 0
     @ReduceMotion private var reduceMotion
 
     /// The trailing slot: send for text or attachments, else the mic.
@@ -406,12 +404,9 @@ struct CodeComposer: View {
         case .send:
             // A tap sends; a long press presents the ways the draft can go and sends nothing by itself.
             Menu {
-                Group {
-                    ForEach(sendOptions) { option in
-                        Button(option.title, systemImage: option.image) { perform(option) }
-                    }
+                ForEach(sendOptions) { option in
+                    Button(option.title, systemImage: option.image) { perform(option) }
                 }
-                .menuOpened($optionsOpened)
             } label: {
                 Image(systemName: saving ? "checkmark" : "arrow.up")
                     .font(.system(size: 15, weight: .bold))
@@ -427,7 +422,7 @@ struct CodeComposer: View {
             }
             .buttonStyle(.plain)
             .menuOrder(.fixed)
-            .menuOpenHaptic(optionsOpened)
+            .menuHoldHaptic()
             .accessibilityLabel(saving ? "Save" : "Send")
             .accessibilityActions {
                 if let queue { Button("Queue", action: queue) } else if let steer { Button("Send now", action: steer) }

@@ -209,6 +209,52 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(source.calls.count, reads, "Switching back to files keeps what shows instead of blanking it")
     }
 
+    /// The previewed file changed on disk (the listing shows another size or time): it is read again and shown in
+    /// place, in the same state, so the pane keeps its view; an unchanged listing reads nothing.
+    func testAPreviewReadsTheFileAgainWhenTheListingSaysItChanged() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let path = base + "/src/routes/health.ts"
+        let preview = try await loaded(path, in: source)
+        let folder = base + "/src/routes"
+        func listings() async throws -> [String: FileListingState] {
+            [folder: FileListingState(listing: try await source.list(folder, hidden: false), loadedAt: nil, error: nil, loading: false)]
+        }
+        let unchanged = try await listings()
+        XCTAssertNil(FilePreviewLoader.changedEntry(of: preview, in: unchanged), "the same version")
+        source.file(path, "export const health = 'edited by the agent'\n", modified: Date(timeIntervalSince1970: 1_760_000_600))
+        let changed = try await listings()
+        let entry = try XCTUnwrap(FilePreviewLoader.changedEntry(of: preview, in: changed))
+        await FilePreviewLoader.refresh(preview, entry: entry, from: source) { true }
+        guard case .text(let text, _) = preview.kind else { return XCTFail("\(preview.kind)") }
+        XCTAssertTrue(text.contains("edited by the agent"))
+        let reread = try await listings()
+        XCTAssertNil(FilePreviewLoader.changedEntry(of: preview, in: reread), "the header's size and time are the new ones")
+    }
+
+    /// Text that is not UTF-8 reads as text when its encoding can be told (a UTF-16 byte-order mark, 8-bit text with no
+    /// controls); other bytes with no NUL say they are not UTF-8 rather than pass for a program.
+    func testOtherEncodingsPreviewAsTextAndSaySo() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        var utf16 = Data([0xFF, 0xFE])
+        utf16.append("\"Save\" = \"Sichern\";\n".data(using: .utf16LittleEndian)!)
+        source.file(base + "/Localizable.strings", utf16)
+        source.file(base + "/legacy.conf", Data("name = caf\u{E9}\n".data(using: .isoLatin1)!))
+        source.file(base + "/odd.bin", Data([0x41, 0x42, 0x80, 0x81, 0x01, 0x43]))
+        let strings = try await loaded(base + "/Localizable.strings", in: source)
+        guard case .text(let text, _) = strings.kind else { return XCTFail("\(strings.kind)") }
+        XCTAssertEqual(text, "\"Save\" = \"Sichern\";\n")
+        XCTAssertEqual(strings.encoding, "UTF-16")
+        XCTAssertTrue(FilesFormatting.meta(strings, now: Date(timeIntervalSince1970: 1_760_000_000)).contains("UTF-16"))
+        let conf = try await loaded(base + "/legacy.conf", in: source)
+        guard case .text(let latin, _) = conf.kind else { return XCTFail("\(conf.kind)") }
+        XCTAssertEqual(latin, "name = caf\u{E9}\n")
+        XCTAssertEqual(conf.encoding, "Latin-1")
+        let odd = try await loaded(base + "/odd.bin", in: source)
+        guard case .binary(_, _, let format) = odd.kind else { return XCTFail("\(odd.kind)") }
+        XCTAssertEqual(format, "Not UTF-8 text")
+        XCTAssertNil(FilePreviewContent.otherEncoding(Data("plain ascii".utf8)), "UTF-8 is not another encoding")
+    }
+
     func testShowFirst64KBOfLargeText() async throws {
         let source = FakeFilesSource.mockupAPI()
         let largePath = base + "/bench.json", binaryPath = base + "/core.bin"
@@ -427,46 +473,44 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: CGFloat.infinity, height: 1)))
     }
 
-    // MARK: Open in editor and cd here
+    // MARK: cd Here
 
-    func testEditorCommandQuotesEveryPath() {
-        let cases: [(String, FilesEditor.Action, String)] = [
-            ("/Users/ivan/src/api/src/routes/billing.ts", .edit, "${EDITOR:-vi} '/Users/ivan/src/api/src/routes/billing.ts'"),
-            ("/Users/ivan/My Projects/read me.md", .edit, "${EDITOR:-vi} '/Users/ivan/My Projects/read me.md'"),
-            ("/Users/ivan/it's here/a'b", .edit, #"${EDITOR:-vi} '/Users/ivan/it'\''s here/a'\''b'"#),
-            ("/Users/ivan/Документы/日本語 ✓.txt", .edit, "${EDITOR:-vi} '/Users/ivan/Документы/日本語 ✓.txt'"),
-            ("/home/ivan/nightly/$(rm -rf ~)`x`;*", .edit, "${EDITOR:-vi} '/home/ivan/nightly/$(rm -rf ~)`x`;*'"),
-            ("/home/ivan/nightly/fixtures", .changeDirectory, "cd '/home/ivan/nightly/fixtures'"),
-            ("/home/ivan/it's", .changeDirectory, #"cd '/home/ivan/it'\''s'"#),
+    func testChangeDirectoryCommandQuotesEveryPath() {
+        let cases: [(String, String)] = [
+            ("/home/ivan/nightly/fixtures", "cd '/home/ivan/nightly/fixtures'"),
+            ("/Users/ivan/My Projects/docs", "cd '/Users/ivan/My Projects/docs'"),
+            ("/home/ivan/it's", #"cd '/home/ivan/it'\''s'"#),
+            ("/Users/ivan/Документы/日本語 ✓", "cd '/Users/ivan/Документы/日本語 ✓'"),
+            ("/home/ivan/nightly/$(rm -rf ~)`x`;*", "cd '/home/ivan/nightly/$(rm -rf ~)`x`;*'"),
         ]
-        for (path, action, command) in cases {
-            XCTAssertEqual(FilesEditor.command(for: path, action: action), command, path)
+        for (path, command) in cases {
+            XCTAssertEqual(FilesTerminalCommand.command(changingTo: path), command, path)
         }
-        XCTAssertNil(FilesEditor.command(for: "/tmp/a\nrm -rf ~", action: .edit), "A newline would run the rest")
-        XCTAssertNil(FilesEditor.command(for: "/tmp/\u{1B}[201~x", action: .edit), "A paste strips escape bytes")
-        XCTAssertNil(FilesEditor.command(for: "/tmp/\u{9B}x", action: .changeDirectory))
-        XCTAssertNil(FilesEditor.command(for: "", action: .edit))
+        XCTAssertNil(FilesTerminalCommand.command(changingTo: "/tmp/a\nrm -rf ~"), "A newline would run the rest")
+        XCTAssertNil(FilesTerminalCommand.command(changingTo: "/tmp/\u{1B}[201~x"), "A paste strips escape bytes")
+        XCTAssertNil(FilesTerminalCommand.command(changingTo: "/tmp/\u{9B}x"))
+        XCTAssertNil(FilesTerminalCommand.command(changingTo: ""))
     }
 
-    func testEditorTypesOnlyAtAPrompt() {
-        let path = "/Users/ivan/src/api/README.md"
-        XCTAssertNil(FilesEditor.refusal(path: path, action: .edit, hasTerminal: true, busy: false))
-        XCTAssertEqual(FilesEditor.refusal(path: path, action: .edit, hasTerminal: true, busy: true), .busy)
-        XCTAssertEqual(FilesEditor.refusal(path: path, action: .changeDirectory, hasTerminal: false, busy: true), .noTerminal)
-        XCTAssertEqual(FilesEditor.refusal(path: "/tmp/a\nb", action: .edit, hasTerminal: true, busy: false), .unsafePath)
-        XCTAssertEqual(FilesEditor.Refusal.busy.message, "The terminal is busy")
+    func testChangeDirectoryTypesOnlyAtAPrompt() {
+        let path = "/Users/ivan/src/api"
+        XCTAssertNil(FilesTerminalCommand.refusal(path: path, hasTerminal: true, busy: false))
+        XCTAssertEqual(FilesTerminalCommand.refusal(path: path, hasTerminal: true, busy: true), .busy)
+        XCTAssertEqual(FilesTerminalCommand.refusal(path: path, hasTerminal: false, busy: true), .noTerminal)
+        XCTAssertEqual(FilesTerminalCommand.refusal(path: "/tmp/a\nb", hasTerminal: true, busy: false), .unsafePath)
+        XCTAssertEqual(FilesTerminalCommand.Refusal.busy.message, "The terminal is busy")
     }
 
-    func testEditorRefusalKeepsFilesShowingWithANotice() {
-        let path = "/Users/ivan/src/api/README.md"
-        // A tab with no terminal view: nothing is typed, the mode stays, and the header has the notice.
+    func testChangeDirectoryRefusalKeepsFilesShowingWithANotice() {
+        let path = "/Users/ivan/src/api"
+        // A tab with no terminal view: nothing is typed, the mode stays, and the files header has the notice.
         let tab = System.uuid()
         let files = FilesCoordinator { nil }
         files.switchMode(tab, to: .files)
-        XCTAssertEqual(files.openInEditor(tab, path: path), .noTerminal)
+        XCTAssertEqual(files.changeDirectory(tab, to: path), .noTerminal)
         XCTAssertEqual(files.mode(for: tab), .files)
-        XCTAssertEqual(FilesEditorNotices.shared.notice(for: tab), "The terminal isn’t running")
-        FilesEditorNotices.shared.clear(tab)
+        XCTAssertEqual(FilesTerminalNotices.shared.notice(for: tab), "The terminal isn’t running")
+        FilesTerminalNotices.shared.clear(tab)
     }
 
     // MARK: Support

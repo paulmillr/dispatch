@@ -393,7 +393,7 @@ final class TerminalSelectionHandle: UIView {
         self.end = end
         super.init(frame: CGRect(x: 0, y: 0, width: Self.touch, height: Self.touch))
         // The app's tint, the theme's when one is chosen (resolved by the window's trait as it draws).
-        let tint = UIColor.themed("AccentColor", \.accent)
+        let tint = UIColor.dispatch("AccentColor")
         stem.backgroundColor = tint
         knob.backgroundColor = tint
         knob.layer.cornerRadius = 5

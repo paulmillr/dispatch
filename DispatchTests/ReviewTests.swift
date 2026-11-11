@@ -285,6 +285,7 @@ final class ReviewTests: XCTestCase {
 
         repository.take(scope, sentTo: "Claude Code")
         XCTAssertEqual(repository.sentTo[scope], "Claude Code", "the bar names where the review went")
+        XCTAssertNotNil(repository.takenAt[scope], "the note's time counts from the take, not from when it shows")
         let second = comment("b.ts", nil, nil, [], "Second")
         repository.add(second, to: scope)
         XCTAssertNil(repository.copied[scope], "a new comment ends the Undo")
@@ -299,6 +300,96 @@ final class ReviewTests: XCTestCase {
         XCTAssertNotNil(unread.error)
         unread.add(first, to: scope)
         XCTAssertTrue(broken.saved.isEmpty)
+    }
+
+    /// A comment on a commit's diff is that commit's: it shows on no working-tree diff, ⌥↓ in Review skips it, and
+    /// the review names the commit, in the envelope and beside the comment's line.
+    func testCommentsOnACommitAreNamedAndKeptApart() {
+        var onCommit = comment("src/routes/billing.ts", new(12), new(12),
+                               [ReviewQuote(kind: .added, text: "  await retry(event)", line: new(12))], "Back off here.", at: 1)
+        onCommit.commit = "3f2a9c1d0e8b7a6f5e4d3c2b1a0f9e8d7c6b5a49"
+        let working = comment("src/lib/db.ts", nil, nil, [], "Rename this to store.ts.", at: 2)
+        XCTAssertFalse(onCommit.shows(in: .unstaged, areas: [.unstaged]), "not on the working tree's diff")
+        XCTAssertTrue(working.shows(in: .unstaged, areas: [.unstaged]))
+        let review = Review(comments: [onCommit, working])
+        XCTAssertEqual(review.uncommitted.map(\.id), [working.id])
+        XCTAssertEqual(review.commits, [onCommit.commit!])
+        let status = GitStatus(branch: "main", head: "3f2c1a0", changes: [
+            GitChange(path: "src/routes/billing.ts", kind: .modified, area: .unstaged),
+            GitChange(path: "src/lib/db.ts", kind: .modified, area: .unstaged),
+        ], loadedAt: created)
+        XCTAssertEqual(ReviewNavigation.ordered(review, status: status).map(\.id), [working.id])
+        XCTAssertEqual(ReviewNavigation.ordered(review, commit: onCommit.commit!, files: ["src/routes/billing.ts"]).map(\.id),
+                       [onCommit.id])
+        XCTAssertNil(ReviewNavigation.change(for: onCommit, in: status), "Commits shows it, not Review")
+
+        let text = ReviewText.render(review, context: .init(root: "/Users/sam/src/api"))
+        XCTAssertTrue(text.hasPrefix("Code review of the uncommitted changes and of commits in the repository below: "
+                                     + "2 comments on 2 files."), text)
+        XCTAssertTrue(text.contains("  \"commits\": [\"3f2a9c1\"]"), text)
+        XCTAssertTrue(text.contains("A comment on a commit names it"), text)
+        XCTAssertTrue(text.contains("Line 12 in commit 3f2a9c1:\n```diff\n+  await retry(event)\n```\nBack off here."), text)
+        XCTAssertTrue(ReviewText.render(Review(comments: [onCommit]), context: .init(root: "/r"))
+            .hasPrefix("Code review of commits in the repository below"))
+        XCTAssertEqual(ReviewText.short("3f2a9c1d0e8b`--x"), "3f2a9c1", "only hex digits")
+    }
+
+    /// Create Review's last look finds a commit's lines in the file as it is now; removed lines keep their numbers.
+    func testACommitsCommentIsFoundInTheFileAsItIsNow() {
+        var moved = comment("a.ts", new(2), new(2), [ReviewQuote(kind: .added, text: "let retries = 3", line: new(2))], "Five.")
+        moved.commit = "0123456789abcdef0123456789abcdef01234567"
+        var removed = comment("a.ts", old(4), old(4), [ReviewQuote(kind: .removed, text: "sleep(1)", line: old(4))], "Why?")
+        removed.commit = moved.commit
+        let file = ReviewRefresh.File.lines(["// a", "// b", "let retries = 3", "run()"])
+        let relocated = ReviewRefresh.relocate([moved, removed], file: file, diffs: [:], areas: [])
+        XCTAssertEqual(relocated[0].end, new(3), "the line moved down one")
+        XCTAssertNil(relocated[0].outdated)
+        XCTAssertEqual(relocated[1], removed, "the parent's lines are not in the working tree: unchanged")
+    }
+
+    /// A comment being written moves with its text only within its file. Started on another file, the new one is
+    /// empty and the first is set aside, listed by Create Review as not saved, and in the review only once kept.
+    func testADraftStaysOnItsFileAndIsNotSentUnsaved() {
+        let repository = ReviewRepository(store: MemoryReviewStore())
+        ReviewRepository.use(repository)
+        defer { ReviewRepository.use(nil) }
+        let session = FilesSession(id: System.uuid())
+        let scope = ReviewRepository.scope(local: true, host: nil, root: "/Users/sam/src/api")
+        let status = GitStatus(branch: "main", head: nil, changes: [
+            GitChange(path: "src/api.ts", kind: .modified, area: .unstaged),
+            GitChange(path: "src/db.ts", kind: .modified, area: .unstaged),
+        ], loadedAt: created)
+        let api = GitDiffReview(session: session, scope: scope, path: "src/api.ts", area: .unstaged, status: status)
+        api.begin(start: new(40), end: new(40), quote: [ReviewQuote(kind: .added, text: "auth()", line: new(40))])
+        XCTAssertFalse(api.cancelLosesText, "nothing written yet")
+        session.reviewDraftText = "Check the token here."
+        XCTAssertTrue(api.cancelLosesText, "esc asks before throwing the text away")
+        api.begin(start: new(41), end: new(41), quote: [ReviewQuote(kind: .added, text: "token()", line: new(41))])
+        XCTAssertEqual(session.reviewDraftText, "Check the token here.", "on the same file the draft moves")
+        XCTAssertEqual(session.reviewDraft?.end, new(41))
+
+        let db = GitDiffReview(session: session, scope: scope, path: "src/db.ts", area: .unstaged, status: status)
+        db.begin(start: new(3), end: new(3), quote: [ReviewQuote(kind: .context, text: "open()", line: new(3))])
+        XCTAssertEqual(session.reviewDraftText, "", "a comment on another file starts empty")
+        XCTAssertNil(api.draft)
+        XCTAssertEqual(session.reviewSetAside.map(\.text), ["Check the token here."])
+        XCTAssertEqual(ReviewUnsaved.all(session, scope: scope).map(\.text), ["Check the token here."],
+                       "the empty open draft is not listed")
+        XCTAssertTrue(repository.review(scope).isEmpty, "nothing unsaved is in the review")
+        ReviewUnsaved.all(session, scope: scope)[0].keep(in: session)
+        XCTAssertEqual(repository.review(scope).comments.map(\.text), ["Check the token here."])
+        XCTAssertEqual(repository.review(scope).comments.first?.end, new(41))
+        XCTAssertTrue(session.reviewSetAside.isEmpty)
+
+        // A commit's file keeps its own comments and drafts.
+        let commit = GitDiffReview(session: session, scope: scope, path: "src/api.ts",
+                                   commit: "0123456789abcdef0123456789abcdef01234567")
+        XCTAssertTrue(commit.comments.isEmpty, "the working tree's comment is not the commit's")
+        commit.begin(start: new(7), end: new(7), quote: [ReviewQuote(kind: .added, text: "x", line: new(7))])
+        session.reviewDraftText = "Why here?"
+        GitDiffReview.save(session)
+        XCTAssertEqual(commit.comments.map(\.text), ["Why here?"])
+        XCTAssertEqual(api.comments.map(\.text), ["Check the token here."])
     }
 
     /// The file round-trips, is owner-only, and is not written while nothing was ever reviewed.
