@@ -23,14 +23,18 @@ struct ChatModelControls: View {
     var body: some View {
         let currentPicker = session.modelPicker
         return HStack(spacing: 7) {
-            Button { coordinator.openModelPicker(session, column: .model) } label: {
+            if ChatModelLadder.isSecurity(model: session.model) {
+                Image(systemName: "shield.lefthalf.filled").font(.system(size: 11, weight: .medium)).foregroundStyle(theme.cyan)
+                    .padding(.trailing, -2).accessibilityHidden(true)
+            }
+            Button { open(.model) } label: {
                 Text(modelLabel).lineLimit(1).truncationMode(.middle).frame(maxWidth: modelWidth, alignment: .leading)
                     .footerMenuUnderline(theme.muted)
             }.help(session.model).accessibilityLabel("Choose model").accessibilityValue(session.model)
                 .accessibilityIdentifier("chat-model-picker")
                 .keyboardShortcut(focused ? KeyboardShortcut("m", modifiers: [.command, .shift]) : nil)
             if !compactEffort { Text("·").accessibilityHidden(true) }
-            Button { coordinator.openModelPicker(session, column: .effort) } label: {
+            Button { open(.effort) } label: {
                 Group {
                     if compactEffort {
                         ChatEffortMeter(effort: session.effort)
@@ -61,6 +65,14 @@ struct ChatModelControls: View {
                     coordinator.showTerminal(session)
                 })
             }
+            .onChange(of: session.model) { _, model in currentPicker?.followSession(model: model, effort: session.effort) }
+            .onChange(of: session.effort) { _, effort in currentPicker?.followSession(model: session.model, effort: effort) }
+    }
+
+    /// A shortcut's button press arrives as its key: the tracks show their focus ring only for the keyboard.
+    private func open(_ column: ChatModelPicker.Column) {
+        coordinator.openModelPicker(session, column: column)
+        if NSApp.currentEvent?.type == .keyDown { session.modelPicker?.keyboardFocus = true }
     }
 }
 
@@ -105,6 +117,39 @@ struct ChatModelPickerView: View {
     @FocusState private var keyboardFocus: Bool
 
     var body: some View {
+        Group {
+            if picker.showsTracks { ChatModelTracksView(picker: picker, close: close, terminal: terminal).frame(width: 348) }
+            else { lists }
+        }
+            // On glass the popover's own system glass shows through instead of the sidebar fill.
+            .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)
+            .font(theme.typography.detail).foregroundStyle(theme.ink).preferredColorScheme(theme.isDark ? .dark : .light)
+            .focusable().focusEffectDisabled().focused($keyboardFocus)
+            .onAppear { keyboardFocus = true }
+            .onKeyPress(.upArrow) { if picker.showsTracks { picker.moveTrackRow(-1) } else { picker.move(-1) }; return .handled }
+            .onKeyPress(.downArrow) { if picker.showsTracks { picker.moveTrackRow(1) } else { picker.move(1) }; return .handled }
+            .onKeyPress(.leftArrow) { guard picker.showsTracks else { return .ignored }; picker.stepTrack(-1); return .handled }
+            .onKeyPress(.rightArrow) { guard picker.showsTracks else { return .ignored }; picker.stepTrack(1); return .handled }
+            .onKeyPress(.space) {
+                guard picker.showsTracks, picker.trackRow == .security else { return .ignored }
+                picker.keyboardFocus = true; picker.toggleSecurity(); return .handled
+            }
+            .onKeyPress(.escape) { guard picker.showsTracks else { return .ignored }; picker.escapeTrack(); return .handled }
+            .onKeyPress(.tab) {
+                if picker.showsTracks { picker.moveTrackRow(1, wrapping: true) }
+                else { picker.showColumn(picker.column == .model ? .effort : .model) }
+                return .handled
+            }
+            .onKeyPress(.return) {
+                if picker.showsTracks { close() } else if !picker.loading { picker.chooseHighlighted() }
+                return .handled
+            }
+            // A container, or its identifier would replace those of the tracks and the switch inside.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat-model-effort-popover")
+    }
+
+    private var lists: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !picker.scope.isEmpty {
                 Text(picker.scopeTitle).font(theme.typography.font(offset: -2, weight: .semibold)).padding(8)
@@ -143,16 +188,6 @@ struct ChatModelPickerView: View {
                 Button("Done", action: close).keyboardShortcut(.cancelAction)
             }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 8).padding(.vertical, 4)
         }.padding(6).frame(width: 470)
-            // On glass the popover's own system glass shows through instead of the sidebar fill.
-            .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)
-            .font(theme.typography.detail).foregroundStyle(theme.ink).preferredColorScheme(theme.isDark ? .dark : .light)
-            .focusable().focusEffectDisabled().focused($keyboardFocus)
-            .onAppear { keyboardFocus = true }
-            .onKeyPress(.upArrow) { picker.move(-1); return .handled }
-            .onKeyPress(.downArrow) { picker.move(1); return .handled }
-            .onKeyPress(.tab) { picker.showColumn(picker.column == .model ? .effort : .model); return .handled }
-            .onKeyPress(.return) { if !picker.loading { picker.chooseHighlighted() }; return .handled }
-            .accessibilityIdentifier("chat-model-effort-popover")
     }
 
     private func column(_ title: String, rows: [AgentModelMenu.Choice], highlight: String, active: Bool,
@@ -189,6 +224,307 @@ struct ChatModelPickerView: View {
                 .background(highlighted ? theme.ink.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 4))
         }.buttonStyle(.plain).help(choice.detail).disabled(picker.loading).id(choice.id)
             .accessibilityLabel(effort ? choice.name : picker.displayName(choice)).accessibilityValue(choice.current ? "Current" : "")
+    }
+}
+
+/// The picker when the agent's models are a ladder: MODEL and EFFORT as tracks, the security model a switch under them.
+private struct ChatModelTracksView: View {
+    @Environment(\.chatTheme) private var theme
+    @Bindable var picker: ChatModelPicker
+    let close: () -> Void
+    let terminal: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                ChatModelTrackRow(picker: picker, row: .model, terminal: terminal)
+                ChatModelTrackRow(picker: picker, row: .effort, terminal: terminal)
+            }.padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 13)
+            if let security = picker.ladder?.security {
+                rule
+                securityRow(security)
+            }
+            rule
+            footer.padding(.horizontal, 16).padding(.vertical, 8)
+        }.onChange(of: picker.trackAnnouncement) { _, text in
+            if let text { AccessibilityNotification.Announcement(text).post() }
+        }
+    }
+
+    private var rule: some View { Rectangle().fill(theme.border).frame(height: 1) }
+
+    private func securityRow(_ security: ChatModelLadder.Rung) -> some View {
+        let on = picker.securityOn
+        return HStack(spacing: 10) {
+            Image(systemName: on ? "shield.lefthalf.filled" : "shield").font(.system(size: 16))
+                .foregroundStyle(on ? theme.cyan : theme.muted).frame(width: 20).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(security.label).foregroundStyle(on ? theme.ink : theme.ink.opacity(0.85))
+                Text(picker.securityLine).foregroundStyle(theme.muted).lineLimit(1).minimumScaleFactor(0.75).help(picker.securityLine)
+            }
+            Spacer(minLength: 8)
+            if let command = picker.ladder?.securityCommand {
+                Button(command.title) { picker.runSecurityCommand() }
+                    .controlSize(.small).focusable(false).disabled(!picker.canRunSecurityCommand)
+                    .help("Runs \(command.text): turns it on or off in this chat, and saves that as the default for new chats.")
+                    .accessibilityIdentifier("chat-security-command")
+            }
+            Toggle("", isOn: Binding(get: { on }, set: { _ in picker.toggleSecurity() }))
+                .toggleStyle(.switch).controlSize(.small).labelsHidden().tint(theme.cyan).focusable(false)
+                .disabled(!picker.trackReady)
+                .accessibilityLabel(security.label).accessibilityIdentifier("chat-security-model-switch")
+        }.padding(.horizontal, 16).padding(.vertical, 10)
+            .background(on ? theme.cyan.opacity(0.07) : .clear)
+            .overlay { if picker.keyboardFocus && picker.trackRow == .security { RoundedRectangle(cornerRadius: 6).strokeBorder(theme.accent.opacity(0.7), lineWidth: 1.5).padding(3) } }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            if let status = picker.trackStatus {
+                ProgressView().controlSize(.mini)
+                Text(status).lineLimit(1).truncationMode(.middle)
+            } else {
+                Text("← → step")
+                Text("↑ ↓ row")
+            }
+            Spacer(minLength: 8)
+            Button("Done", action: close).controlSize(.small).focusable(false)
+        }.foregroundStyle(theme.muted)
+    }
+}
+
+/// One row: the title and value, the track, the caption.
+private struct ChatModelTrackRow: View {
+    @Environment(\.chatTheme) private var theme
+    @Bindable var picker: ChatModelPicker
+    let row: ChatModelPicker.TrackRow
+    let terminal: () -> Void
+    @State private var hover: Int?
+
+    var body: some View {
+        let state = picker.trackState(row, hover: hover)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Text(state.title).font(theme.typography.font(offset: -2, weight: .semibold)).kerning(0.7).foregroundStyle(theme.muted)
+                Spacer(minLength: 8)
+                if let note = state.note { Text(note).foregroundStyle(theme.yellow) }
+                if state.unconfirmed && picker.trackSending { ProgressView().controlSize(.mini) }
+                if state.shield {
+                    Image(systemName: "shield.lefthalf.filled").font(.system(size: 11, weight: .medium)).foregroundStyle(theme.cyan)
+                }
+                Text(state.value).monospacedDigit().foregroundStyle(state.valueMuted ? theme.muted : theme.ink)
+            }
+            ChatModelTrack(picker: picker, row: row, state: state, hover: $hover)
+            caption(state.caption).padding(.horizontal, 10)
+        }
+    }
+
+    @ViewBuilder private func caption(_ caption: ChatModelPicker.TrackCaption) -> some View {
+        switch caption {
+        case .ends(let low, let high):
+            HStack {
+                Text(low)
+                Spacer()
+                Text(high)
+            }.foregroundStyle(theme.muted.opacity(0.75)).lineLimit(1)
+        case .detail(let text):
+            Text(text).foregroundStyle(theme.muted).lineLimit(1).truncationMode(.tail).help(text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failure(let text):
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9.5)).foregroundStyle(theme.yellow).accessibilityHidden(true)
+                Text(text).foregroundStyle(theme.yellow).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Button("Open in terminal", action: terminal).buttonStyle(.plain).underline().fixedSize().focusable(false)
+            }
+        }
+    }
+}
+
+/// A groove of equal stops, filled up to a raised thumb. Held, the thumb lifts into a lens that follows the pointer.
+private struct ChatModelTrack: View {
+    @Environment(\.chatTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Bindable var picker: ChatModelPicker
+    let row: ChatModelPicker.TrackRow
+    let state: ChatModelPicker.TrackState
+    @Binding var hover: Int?
+    @State private var pressed = false
+    @State private var crossed: Int?
+    private static let height: CGFloat = 32
+
+    private var held: Double? { picker.trackHeld?.row == row ? picker.trackHeld?.place : nil }
+    private var travel: Animation? { reduceMotion ? nil : .spring(duration: 0.25) }
+    private var lift: Animation? { reduceMotion ? nil : .easeOut(duration: 0.12) }
+
+    var body: some View {
+        GeometryReader { box in
+            let width = box.size.width / CGFloat(max(state.stops.count, 1))
+            let slot = CGSize(width: max(width - 6, 0), height: Self.height - 6)
+            ZStack(alignment: .leading) {
+                Capsule().fill(theme.ink.opacity(0.06).shadow(.inner(color: .black.opacity(theme.isDark ? 0.5 : 0.14), radius: 2, y: 1)))
+                fill(width: width, total: box.size.width)
+                if state.stops.contains(where: { !$0.available }) { hatch }
+                if let ghost = state.ghost {
+                    Capsule().stroke(theme.ink.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .frame(width: slot.width, height: slot.height).offset(x: CGFloat(ghost) * width + 3)
+                }
+                if let hover, held == nil, hover != state.current, state.stops.indices.contains(hover), state.stops[hover].available, !state.disabled {
+                    Capsule().fill(theme.ink.opacity(0.1)).frame(width: slot.width, height: slot.height).offset(x: CGFloat(hover) * width + 3)
+                }
+                thumb(width: width, slot: slot)
+                HStack(spacing: 0) {
+                    ForEach(Array(state.stops.enumerated()), id: \.element.id) { index, stop in
+                        Text(stop.title).font(theme.typography.font(offset: -2, weight: labelWeight(index)))
+                            .foregroundStyle(labelColor(index)).lineLimit(1).minimumScaleFactor(0.7)
+                            .frame(width: width, height: Self.height)
+                    }
+                }.allowsHitTesting(false)
+                if held != nil {
+                    ForEach(state.stops.indices, id: \.self) { index in
+                        Circle().fill(theme.ink.opacity(0.4)).frame(width: 2.5, height: 2.5)
+                            .offset(x: (CGFloat(index) + 0.5) * width - 1.25, y: Self.height / 2 - 4.5)
+                    }
+                }
+            }.frame(width: box.size.width, height: Self.height, alignment: .leading)
+                .contentShape(Capsule())
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case .active(let point): hover = stop(at: point.x, width: width)
+                    case .ended: hover = nil
+                    }
+                }
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in changed(value, width: width) }
+                    .onEnded { value in ended(value, width: width) })
+        }.frame(height: Self.height)
+            .overlay(Capsule().strokeBorder(theme.ink.opacity(0.08), lineWidth: 1).allowsHitTesting(false))
+            .opacity(state.dimmed || state.disabled ? 0.6 : 1)
+            .overlay { if picker.keyboardFocus && picker.trackRow == row { Capsule().stroke(theme.accent.opacity(0.7), lineWidth: 1.5).padding(-3) } }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(row == .model ? "Model" : "Effort")
+            .accessibilityValue(state.current.map { "\(state.value), \($0 + 1) of \(state.stops.count)" } ?? state.value)
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: picker.stepTrack(1, row: row)
+                case .decrement: picker.stepTrack(-1, row: row)
+                @unknown default: break
+                }
+            }
+            .accessibilityIdentifier(row == .model ? "chat-model-track" : "chat-effort-track")
+    }
+
+    private func stop(at x: CGFloat, width: CGFloat) -> Int? {
+        guard width > 0, !state.stops.isEmpty else { return nil }
+        return min(max(Int(x / width), 0), state.stops.count - 1)
+    }
+
+    private func place(at x: CGFloat, width: CGFloat) -> Double {
+        guard width > 0 else { return 0 }
+        return min(max(Double(x / width) - 0.5, 0), Double(max(state.stops.count - 1, 0)))
+    }
+
+    private func changed(_ value: DragGesture.Value, width: CGFloat) {
+        let place = place(at: value.location.x, width: width)
+        if !pressed {
+            pressed = true
+            crossed = Int(place.rounded())
+            picker.pressTrack(row, at: place)
+        } else if held != nil {
+            picker.dragTrack(to: place)
+            if crossed != Int(place.rounded()) {
+                crossed = Int(place.rounded())
+                #if canImport(AppKit)
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                #endif
+            }
+        }
+    }
+
+    private func ended(_ value: DragGesture.Value, width: CGFloat) {
+        pressed = false
+        let moved = hypot(value.translation.width, value.translation.height) > 3
+        // A click lands on the stop under it; a drag ends at the nearest.
+        let at = moved ? place(at: value.location.x, width: width) : stop(at: value.location.x, width: width).map(Double.init) ?? 0
+        picker.releaseTrack(row, at: at, moved: moved)
+    }
+
+    private func labelWeight(_ index: Int) -> Font.Weight {
+        guard state.stops[index].available else { return .regular }
+        if let held { return Int(held.rounded()) == index ? .semibold : .regular }
+        return index == state.current ? .semibold : .regular
+    }
+
+    private func labelColor(_ index: Int) -> Color {
+        guard state.stops[index].available else { return theme.muted.opacity(0.45) }
+        if let held {
+            if Int(held.rounded()) == index { return theme.ink }
+            return Double(index) < held ? theme.ink.opacity(0.78) : theme.muted
+        }
+        if index == state.current { return state.unconfirmed ? theme.ink : theme.terminal }
+        if index == hover { return theme.ink }
+        if let current = state.current, index < current { return theme.ink.opacity(0.78) }
+        return theme.muted
+    }
+
+    @ViewBuilder private func fill(width: CGFloat, total: CGFloat) -> some View {
+        if let place = held ?? state.current.map(Double.init) {
+            Capsule().fill(LinearGradient(colors: [theme.ink.opacity(0.02), theme.ink.opacity(0.17)], startPoint: .leading, endPoint: .trailing))
+                .frame(width: min(total, CGFloat(place + 1) * width))
+                .animation(travel, value: state.current)
+        }
+    }
+
+    /// One shape from pill to lens, so a release travels from under the pointer to its stop. A tail follows slower and
+    /// fades into the thumb as it arrives.
+    @ViewBuilder private func thumb(width: CGFloat, slot: CGSize) -> some View {
+        if let place = held ?? state.current.map(Double.init) {
+            let lens = held != nil && !reduceMotion
+            if !reduceMotion, held == nil {
+                ForEach([(0.34, 0.32), (0.18, 0.42)], id: \.0) { opacity, duration in
+                    Capsule().fill(theme.ink.opacity(opacity)).frame(width: slot.width, height: slot.height)
+                        .offset(x: CGFloat(place) * width + 3)
+                        .animation(.easeOut(duration: duration), value: state.current)
+                }
+            }
+            Capsule().fill(thumbFill(held: held != nil))
+                .overlay { if held != nil { Capsule().strokeBorder(.white.opacity(theme.isDark ? 0.5 : 1), lineWidth: 1) } }
+                .overlay { if state.unconfirmed && held == nil { Capsule().strokeBorder(theme.ink.opacity(0.6), lineWidth: 1) } }
+                .shadow(color: .black.opacity(state.unconfirmed ? 0 : theme.isDark ? 0.5 : 0.3), radius: held != nil ? 9 : 2.5, y: held != nil ? 4 : 1)
+                .frame(width: lens ? width + 6 : slot.width, height: lens ? Self.height + 8 : slot.height)
+                .offset(x: CGFloat(place) * width + (lens ? -3 : 3))
+                .animation(travel, value: state.current)
+                .animation(lift, value: held != nil)
+        }
+    }
+
+    private func thumbFill(held: Bool) -> AnyShapeStyle {
+        if held { return AnyShapeStyle(reduceTransparency ? theme.sidebar : Color.white.opacity(theme.isDark ? 0.2 : 0.9)) }
+        if state.unconfirmed { return AnyShapeStyle(theme.ink.opacity(0.17)) }
+        return AnyShapeStyle(LinearGradient(colors: [theme.ink.opacity(0.99), theme.ink.opacity(0.84)], startPoint: .top, endPoint: .bottom))
+    }
+
+    /// Stops the model lacks: the groove hatched over them.
+    private var hatch: some View {
+        let color = theme.ink.opacity(0.1), stops = state.stops
+        return Canvas { context, size in
+            context.clip(to: Path(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: size.height / 2))
+            let width = size.width / CGFloat(stops.count)
+            for index in stops.indices where !stops[index].available {
+                var layer = context
+                let rect = CGRect(x: width * CGFloat(index), y: 0, width: width, height: size.height)
+                layer.clip(to: Path(rect))
+                var lines = Path()
+                var x = rect.minX - size.height
+                while x < rect.maxX {
+                    lines.move(to: CGPoint(x: x, y: size.height))
+                    lines.addLine(to: CGPoint(x: x + size.height, y: 0))
+                    x += 6
+                }
+                layer.stroke(lines, with: .color(color), lineWidth: 1)
+            }
+        }.allowsHitTesting(false)
     }
 }
 

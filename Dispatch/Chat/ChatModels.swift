@@ -1510,6 +1510,8 @@ final class ChatSession: Identifiable {
     var settingsRevision = 0
     var goalRevision = 0
     @ObservationIgnored var modelChoices = ChatModelChoicesCache()
+    /// The last rung of a model ladder this chat used: where turning its security model off returns to.
+    @ObservationIgnored var lastModelRung: String?
     @ObservationIgnored var configurationRequest: UUID?
     @ObservationIgnored private(set) var configurationRevision = System.uuid()
     var version: String?

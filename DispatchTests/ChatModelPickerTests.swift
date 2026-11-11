@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import DispatchApp
 
@@ -21,6 +22,7 @@ final class ChatModelPickerTests: XCTestCase {
             ("anthropic/claude-fable-5-1", "fable-5.1"), ("opus", "opus"), ("default", "default"),
             ("gpt-5.6-sol", "sol-5.6"), ("gpt-6-astra-latest", "astra-6"), ("openai/gpt-6.1-sol", "sol-6.1"),
             ("gpt-5.5", "gpt-5.5"), ("gpt-4o", "gpt-4o"), ("google/gemini-2.5-pro", "gemini-2.5-pro"),
+            ("gpt-daybreak-blue-latest", "daybreak-blue"),
             ("dispatch-fixture", "dispatch-fixture"),
         ] {
             XCTAssertEqual(ChatModelControls.label(for: model), expected, model)
@@ -238,6 +240,621 @@ final class ChatModelPickerTests: XCTestCase {
             picker.close()
             try await TestSupport.eventually { page.isEmpty }
         }
+    }
+
+    // MARK: The tracks
+
+    private func row(_ name: String, _ detail: String = "", isDefault: Bool = false) -> AgentModelMenu.Choice {
+        .init(number: 1, name: name, detail: detail, current: false, isDefault: isDefault)
+    }
+
+    func testLadderIsOnlyOneKnownFamily() throws {
+        let claude = try XCTUnwrap(ChatModelLadder(["claude-fable-5-2", "claude-mythos-5-2", "claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5"].map { row($0) }))
+        XCTAssertEqual(claude.rungs.map(\.family), ["haiku", "sonnet", "opus", "fable"])
+        XCTAssertEqual(claude.rungs.map(\.label), ["haiku-5.5", "sonnet-5.5", "opus-5.5", "fable-5.2"])
+        XCTAssertEqual(claude.security?.label, "mythos-5.2")
+        let codex = try XCTUnwrap(ChatModelLadder(["gpt-6-astra", "gpt-6-luna", "daybreak-blue"].map { row($0) }))
+        XCTAssertEqual(codex.rungs.map(\.family), ["luna", "astra"], "Rungs the agent does not list are not drawn")
+        XCTAssertEqual(codex.security?.family, "daybreak-blue")
+
+        // Claude's own rows: the default names its model only in its description.
+        let rows = [row("Default", "Opus 5.5 · Most capable", isDefault: true), row("Fable 5.1", "Fable 5.1 · Best"), row("Sonnet 5.5", "Fastest")]
+        let live = try XCTUnwrap(ChatModelLadder(rows))
+        XCTAssertEqual(live.rungs.map(\.choice.name), ["Sonnet 5.5", "Default", "Fable 5.1"])
+        XCTAssertEqual(live.rungs[1].description, "Most capable")
+        XCTAssertEqual(live.rung(reported: "claude-opus-5-5")?.family, "opus")
+
+        let folded = try XCTUnwrap(ChatModelLadder([row("Default", "Opus 5.5 · Most capable", isDefault: true), row("Opus", "Opus 5.5 · Most capable"), row("Sonnet 5.5")]))
+        XCTAssertEqual(folded.rungs.map(\.choice.name), ["Sonnet 5.5", "Opus"])
+        XCTAssertEqual(folded.rungs[1].rows, ["Default", "Opus"])
+        XCTAssertTrue(folded.rungs[1].isDefault)
+
+        for (name, names) in [
+            ("unknown model", ["claude-opus-5-5", "claude-sonnet-5-5", "dispatch-fixture"]),
+            ("custom provider", ["claude-opus-5-5", "provider/model-a"]),
+            ("two families", ["claude-opus-5-5", "gpt-6-astra"]),
+            ("two versions", ["claude-opus-5-5", "claude-opus-5-1", "claude-sonnet-5-5"]),
+            ("a [1m] variant", ["claude-opus-5-5", "claude-opus-5-5[1m]", "claude-sonnet-5-5"]),
+            ("one rung", ["claude-opus-5-5"]),
+            ("one rung and security", ["claude-opus-5-5", "claude-mythos-5-2"]),
+            ("two security models", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-mythos-5-2", "claude-mythos-5-1"]),
+            ("the other family's security model", ["claude-opus-5-5", "claude-sonnet-5-5", "daybreak-blue"]),
+            ("nothing", []),
+        ] as [(String, [String])] {
+            XCTAssertNil(ChatModelLadder(names.map { row($0) }), name)
+        }
+        XCTAssertNil(ChatModelLadder.provisional(model: "dispatch-fixture"))
+        XCTAssertEqual(ChatModelLadder.provisional(model: "claude-opus-5-5")?.rungs.map(\.label), ["opus-5.5"])
+        XCTAssertEqual(ChatModelLadder.provisional(model: "claude-mythos-5-2")?.security?.family, "mythos")
+        XCTAssertTrue(ChatModelLadder.isSecurity(model: "claude-mythos-5-2"))
+        XCTAssertFalse(ChatModelLadder.isSecurity(model: "claude-opus-5-5"))
+    }
+
+    /// Codex's list as it arrives: three generations of some models, and Daybreak by its catalog name.
+    private static let codexRows = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna",
+                                    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-daybreak-blue-latest"]
+
+    func testCodexLadderKeepsEachModelsNewestGeneration() throws {
+        let ladder = try XCTUnwrap(ChatModelLadder(Self.codexRows.map { row($0) }))
+        XCTAssertEqual(ladder.rungs.map(\.family), ["luna", "terra", "sol", "astra"])
+        XCTAssertEqual(ladder.rungs.map(\.choice.name), ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"])
+        XCTAssertEqual(ladder.security?.choice.name, "gpt-daybreak-blue-latest")
+        XCTAssertEqual(ladder.security?.label, "daybreak-blue")
+        XCTAssertEqual(ladder.securityCommand?.text, "/daybreak")
+        XCTAssertEqual(ladder.rung(reported: "gpt-6.1-sol")?.family, "sol")
+        XCTAssertNil(ladder.rung(reported: "gpt-6-sol"), "An older generation is off the ladder")
+        XCTAssertTrue(ChatModelLadder.isSecurity(model: "gpt-daybreak-blue-latest"))
+        XCTAssertNil(ChatModelLadder(["gpt-6-sol", "gpt-6-sol[x]", "gpt-6-luna"].map { row($0) }), "No newest of two alike")
+        XCTAssertNil(ChatModelLadder(Self.codexRows.map { row($0) } + [row("gpt-6-nova")]), "Unknown model")
+        XCTAssertNil(try XCTUnwrap(ChatModelLadder(["claude-opus-5-5", "claude-sonnet-5-5"].map { row($0) })).securityCommand)
+    }
+
+    func testDaybreakButtonSendsOnlyWhenPressed() async throws {
+        let agent = TrackAgent()
+        let ids = Self.codexRows
+        agent.cache.store(models: ids.map { .init(number: 1, name: $0, detail: "", current: false, isDefault: false) }, quickModels: [])
+        for id in ids { agent.cache.store(efforts: TrackAgent.five.map { .init(number: 1, name: $0, detail: "", current: false, isDefault: false, effortValue: $0) }, for: id) }
+        let picker = agent.picker(model: "gpt-6.1-terra")
+        XCTAssertTrue(picker.showsTracks)
+        XCTAssertEqual(stops(picker, .model), ["luna", "terra", "sol", "astra"])
+
+        picker.toggleSecurity()
+        try await TestSupport.eventually { agent.selects == ["gpt-daybreak-blue-latest high"] }
+        agent.replies.append(.success(("gpt-daybreak-blue-latest", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertTrue(picker.securityOn)
+        XCTAssertEqual(agent.commands, [], "Choosing the model never sends it")
+
+        picker.runSecurityCommand()
+        XCTAssertEqual(picker.trackStatus, "Sending /daybreak…")
+        XCTAssertFalse(picker.canRunSecurityCommand)
+        picker.runSecurityCommand()
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(agent.commands, ["/daybreak"], "One press, one toggle")
+        XCTAssertEqual(picker.securityLine, "Sent. See Terminal.")
+        XCTAssertEqual(agent.selects.count, 1, "The model stays as it is")
+
+        agent.commandFailure = HerdrFailure("The terminal is busy")
+        picker.runSecurityCommand()
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(picker.trackState(.model).caption, .failure("The terminal is busy"))
+        picker.close()
+
+        // An older generation is the lists' to show.
+        let older = agent.picker(model: "gpt-5.6-sol")
+        XCTAssertFalse(older.showsTracks); XCTAssertNil(older.ladder)
+        older.close()
+    }
+
+    func testEffortOrderAndBringingDown() {
+        XCTAssertEqual(ChatModelLadder.union([["max", "low", "future"], ["high", "low", "other", "none"]]),
+                       ["none", "low", "high", "max", "future", "other"])
+        XCTAssertEqual(ChatModelLadder.broughtDown("high", to: ["low", "high"]), "high")
+        XCTAssertEqual(ChatModelLadder.broughtDown("xhigh", to: ["low", "medium", "high"]), "high")
+        XCTAssertEqual(ChatModelLadder.broughtDown("medium", to: ["low", "high"]), "low")
+        XCTAssertEqual(ChatModelLadder.broughtDown("none", to: ["low", "high"]), "low", "Nothing below it: the lowest")
+        XCTAssertNil(ChatModelLadder.broughtDown("high", to: []))
+        XCTAssertEqual(ChatModelLadder.levels([.init(number: 1, name: "Default", detail: "", current: true, isDefault: true, effortValue: "default")]), [])
+    }
+
+    /// An agent whose replies, level reads and key pause the test steps.
+    @MainActor private final class TrackAgent {
+        typealias Observed = (model: String, effort: String?)
+        var selects: [String] = []
+        var replies: [Result<Observed, Error>] = []
+        var reads: [String] = []
+        var catalogHeld = false
+        var pauseElapsed = false
+        var pausing = 0
+        var confirmed: [String] = []
+        var finished: [Bool] = []
+        var remembered: [String] = []
+        var commands: [String] = []
+        var commandFailure: Error?
+        let cache = ChatModelChoicesCache()
+        static let ids = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-mythos-5-2"]
+        static let five = ["low", "medium", "high", "xhigh", "max"]
+        var levels = ["claude-haiku-5-5": ["low", "medium", "high"], "claude-sonnet-5-5": five, "claude-opus-5-5": five,
+                      "claude-fable-5-2": five, "claude-mythos-5-2": five]
+
+        func menu(_ names: [String], current: String?) -> HelperChat.Menu {
+            .init(choices: names.map { .init(id: $0, label: $0, detail: "About \($0)") }, current: current)
+        }
+
+        func cacheCatalog(levelsFor models: [String] = ids) {
+            cache.store(models: Self.ids.map { .init(number: 1, name: $0, detail: "About \($0)", current: false, isDefault: false) }, quickModels: [])
+            for model in models {
+                cache.store(efforts: (levels[model] ?? []).map { .init(number: 1, name: $0, detail: "Level \($0)", current: false, isDefault: false, effortValue: $0) }, for: model)
+            }
+        }
+
+        func picker(model: String = "claude-fable-5-2", effort: String? = "high", column: ChatModelPicker.Column = .model, lastRung: String? = nil) -> ChatModelPicker {
+            let picker = ChatModelPicker(model: model, effort: effort, column: column, cache: cache, transport: .init(
+                catalog: {
+                    while self.catalogHeld { try await Task.sleep(for: .milliseconds(5)) }
+                    return self.menu(Self.ids, current: model)
+                }, efforts: { name in
+                    self.reads.append(name)
+                    return self.menu(self.levels[name] ?? [], current: name == model ? effort : nil)
+                }, select: { name, level in
+                    self.selects.append("\(name) \(level ?? "nil")")
+                    while self.replies.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+                    return try self.replies.removeFirst().get()
+                }, pause: {
+                    self.pausing += 1
+                    while !self.pauseElapsed { try await Task.sleep(for: .milliseconds(5)) }
+                    self.pauseElapsed = false
+                }, command: { text in
+                    if let failure = self.commandFailure { throw failure }
+                    self.commands.append(text)
+                }), lastRung: lastRung, chatOnly: true, rememberRung: { self.remembered.append($0) },
+                confirmed: { self.confirmed.append("\($0) \($1 ?? "nil")") }, finished: { self.finished.append($0) })
+            picker.start()
+            return picker
+        }
+    }
+
+    private func stops(_ picker: ChatModelPicker, _ row: ChatModelPicker.TrackRow) -> [String] { picker.trackState(row).stops.map(\.id) }
+
+    func testTrackChangeWaitsForReadbackAndStaysOpen() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        XCTAssertTrue(picker.showsTracks); XCTAssertFalse(picker.loading)
+        XCTAssertEqual(stops(picker, .model), ["haiku", "sonnet", "opus", "fable"])
+        XCTAssertEqual(stops(picker, .effort), TrackAgent.five)
+        XCTAssertEqual(picker.trackState(.model).current, 3)
+        XCTAssertEqual(picker.trackState(.model).value, "fable-5.2")
+
+        picker.chooseTrackStop(.model, at: 3)
+        XCTAssertNil(picker.trackTarget, "Clicking the chosen stop does nothing")
+        picker.chooseTrackStop(.model, at: 2)
+        let pending = picker.trackState(.model)
+        XCTAssertEqual(pending.current, 2); XCTAssertEqual(pending.ghost, 3); XCTAssertTrue(pending.unconfirmed)
+        XCTAssertEqual(pending.value, "opus-5.5"); XCTAssertEqual(picker.trackStatus, "Switching to opus-5.5…")
+        try await TestSupport.eventually { agent.selects == ["claude-opus-5-5 high"] }
+        XCTAssertTrue(agent.confirmed.isEmpty, "Only the agent's state confirms a choice")
+
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(agent.confirmed, ["claude-opus-5-5 high"])
+        XCTAssertNil(picker.trackTarget); XCTAssertNil(picker.error)
+        XCTAssertFalse(picker.trackState(.model).unconfirmed); XCTAssertNil(picker.trackState(.model).ghost)
+        XCTAssertTrue(picker.presented, "The popover stays open so the other track can be set")
+        XCTAssertEqual(agent.finished, [])
+        XCTAssertEqual(picker.trackReturnRung, "opus"); XCTAssertEqual(agent.remembered.last, "opus")
+        picker.close()
+        XCTAssertEqual(agent.finished, [false]); XCTAssertFalse(picker.presented)
+    }
+
+    func testTrackQueueSendsOneAtATimeAndLatestWins() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.chooseTrackStop(.model, at: 2)
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        picker.chooseTrackStop(.model, at: 1)
+        picker.chooseTrackStop(.model, at: 0)
+        picker.chooseTrackStop(.effort, at: 0)
+        XCTAssertEqual(agent.selects.count, 1, "A change made in flight waits for the readback")
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { agent.selects.count == 2 }
+        XCTAssertEqual(agent.selects.last, "claude-haiku-5-5 low")
+        agent.replies.append(.success(("claude-haiku-5-5", "low")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(agent.selects.count, 2)
+        XCTAssertEqual(picker.trackConfirmed, .init(rung: "haiku", effort: "low"))
+        picker.close()
+    }
+
+    func testTrackKeysApplyAfterAPause() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.stepTrack(1)
+        XCTAssertNil(picker.trackTarget, "No wrapping past the last stop")
+        picker.stepTrack(-1); picker.stepTrack(-1); picker.stepTrack(-1)
+        XCTAssertTrue(picker.keyboardFocus)
+        XCTAssertEqual(picker.trackState(.model).current, 0, "The thumb moves at once")
+        XCTAssertEqual(picker.trackState(.effort).current, 2)
+        try await TestSupport.eventually { agent.pausing > 0 }
+        XCTAssertEqual(agent.selects, [])
+
+        picker.escapeTrack()
+        XCTAssertNil(picker.trackTarget); XCTAssertTrue(picker.presented, "Esc inside the pause puts the thumb back")
+        XCTAssertEqual(picker.trackState(.model).current, 3)
+
+        picker.stepTrack(-1); picker.stepTrack(-1)
+        picker.stepTrack(1)
+        try await TestSupport.eventually { agent.pausing > 1 }
+        agent.pauseElapsed = true
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        XCTAssertEqual(agent.selects, ["claude-opus-5-5 high"], "← ← → is one switch")
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+
+        picker.moveTrackRow(1)
+        XCTAssertEqual(picker.trackRow, .effort)
+        picker.moveTrackRow(1)
+        XCTAssertEqual(picker.trackRow, .security)
+        picker.moveTrackRow(1)
+        XCTAssertEqual(picker.trackRow, .security, "↑ ↓ stop at the ends")
+        picker.moveTrackRow(1, wrapping: true)
+        XCTAssertEqual(picker.trackRow, .model, "Tab goes round")
+        picker.close()
+    }
+
+    func testTrackFailureReturnsTheThumbAndSaysSo() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.chooseTrackStop(.model, at: 2)
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        agent.replies.append(.success(("claude-sonnet-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(picker.error, "Couldn't switch to opus-5.5.")
+        XCTAssertEqual(picker.trackState(.model).current, 1, "The thumb goes where the readback says")
+        XCTAssertEqual(picker.trackState(.model).caption, .failure("Couldn't switch to opus-5.5."))
+        XCTAssertEqual(picker.trackState(.effort).caption, .ends("quicker", "more thorough"))
+        XCTAssertEqual(agent.confirmed, ["claude-sonnet-5-5 high"])
+        XCTAssertTrue(picker.presented)
+
+        picker.chooseTrackStop(.effort, at: 0)
+        XCTAssertNil(picker.error, "A new change clears it")
+        try await TestSupport.eventually { agent.selects.count == 2 }
+        agent.replies.append(.failure(HerdrFailure("The agent is gone")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(picker.trackState(.effort).caption, .failure("The agent is gone"))
+        XCTAssertEqual(picker.trackState(.effort).current, 2)
+        XCTAssertNil(picker.trackTarget)
+        XCTAssertEqual(agent.confirmed.count, 1)
+        picker.close()
+    }
+
+    func testTrackBringsTheEffortDownAndHatchesMissingLevels() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker(effort: "xhigh")
+        picker.chooseTrackStop(.model, at: 0)
+        let effort = picker.trackState(.effort)
+        XCTAssertEqual(effort.value, "high"); XCTAssertEqual(effort.note, "was xhigh"); XCTAssertEqual(effort.ghost, 3)
+        XCTAssertEqual(effort.stops.map(\.available), [true, true, true, false, false])
+        try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 high"] }
+        agent.replies.append(.success(("claude-haiku-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(picker.trackState(.effort).note, "was xhigh", "Until the popover closes")
+
+        let hatched = picker.trackState(.effort, hover: 3)
+        XCTAssertEqual(hatched.caption, .detail("haiku-5.5 stops at high."))
+        XCTAssertEqual(hatched.value, "high", "Pointing at a hatched stop changes nothing")
+        picker.chooseTrackStop(.effort, at: 4)
+        XCTAssertNil(picker.trackTarget, "A hatched stop is inert")
+        picker.trackRow = .effort
+        picker.stepTrack(1)
+        XCTAssertNil(picker.trackTarget, "Arrows stop at the last level the model has")
+        let pointing = picker.trackState(.effort, hover: 0)
+        XCTAssertEqual(pointing.value, "low"); XCTAssertTrue(pointing.valueMuted); XCTAssertEqual(pointing.caption, .detail("Level low"))
+        picker.close()
+    }
+
+    func testTrackKeysDoNotForgetTheEffortOnTheWayPastAWeakerModel() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker(model: "claude-sonnet-5-5", effort: "xhigh")
+        picker.stepTrack(-1)
+        XCTAssertEqual(picker.trackState(.effort).value, "high")
+        picker.stepTrack(1); picker.stepTrack(1)
+        XCTAssertEqual(picker.trackState(.effort).value, "xhigh")
+        XCTAssertNil(picker.trackState(.effort).note)
+        try await TestSupport.eventually { agent.pausing > 0 }
+        agent.pauseElapsed = true
+        try await TestSupport.eventually { agent.selects == ["claude-opus-5-5 xhigh"] }
+        agent.replies.append(.success(("claude-opus-5-5", "xhigh")))
+        try await TestSupport.eventually { !picker.trackSending }
+        picker.close()
+    }
+
+    func testTrackReadsUncachedLevelsBeforeSending() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog(levelsFor: ["claude-fable-5-2"])
+        let picker = agent.picker(effort: "xhigh")
+        XCTAssertEqual(agent.reads, [], "The current model's levels are cached")
+        picker.chooseTrackStop(.model, at: 0)
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        XCTAssertEqual(agent.reads, ["claude-haiku-5-5"])
+        XCTAssertEqual(agent.selects, ["claude-haiku-5-5 high"])
+        agent.replies.append(.success(("claude-haiku-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertEqual(picker.trackState(.effort).note, "was xhigh")
+        picker.close()
+    }
+
+    func testTrackModelWithoutLevelsSendsNoEffort() async throws {
+        let agent = TrackAgent(); agent.levels["claude-haiku-5-5"] = ["default"]; agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.chooseTrackStop(.model, at: 0)
+        try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 nil"] }
+        agent.replies.append(.success(("claude-haiku-5-5", nil)))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertTrue(picker.trackState(.effort).disabled)
+        picker.close()
+    }
+
+    func testSecurityModelIsASwitchOffTheLadder() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker(model: "claude-opus-5-5")
+        XCTAssertEqual(stops(picker, .model), ["haiku", "sonnet", "opus", "fable"], "The security model is no stop")
+        XCTAssertEqual(picker.securityLine, "For security work. This chat only.")
+        picker.toggleSecurity()
+        try await TestSupport.eventually { agent.selects == ["claude-mythos-5-2 high"] }
+        agent.replies.append(.success(("claude-mythos-5-2", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertTrue(picker.securityOn)
+        let track = picker.trackState(.model)
+        XCTAssertNil(track.current); XCTAssertTrue(track.dimmed); XCTAssertTrue(track.shield)
+        XCTAssertEqual(track.ghost, 2); XCTAssertEqual(track.value, "mythos-5.2")
+        XCTAssertEqual(track.caption, .detail("Off the ladder. A stop here turns it off."))
+        XCTAssertEqual(picker.securityLine, "Off returns to opus-5.5.")
+        XCTAssertFalse(picker.trackState(.effort).dimmed, "Effort stays live")
+
+        picker.stepTrack(-1)
+        XCTAssertNil(picker.trackTarget, "Arrow keys never reach it")
+        picker.pressTrack(.model, at: 1)
+        XCTAssertNil(picker.trackHeld, "Dragging never reaches it")
+
+        picker.toggleSecurity()
+        try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertFalse(picker.securityOn)
+
+        picker.toggleSecurity()
+        try await TestSupport.eventually { agent.selects.count == 3 }
+        agent.replies.append(.success(("claude-mythos-5-2", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        picker.releaseTrack(.model, at: 1, moved: false)
+        try await TestSupport.eventually { agent.selects.count == 4 }
+        XCTAssertEqual(agent.selects.last, "claude-sonnet-5-5 high", "A stop on the dimmed track turns it off in one request")
+        agent.replies.append(.success(("claude-sonnet-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        XCTAssertFalse(picker.securityOn)
+        picker.close()
+    }
+
+    func testSecurityModelReturnsToTheLastRungOrTheDefault() {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let known = agent.picker(model: "claude-mythos-5-2", lastRung: "sonnet")
+        XCTAssertTrue(known.securityOn); XCTAssertEqual(known.trackReturnRung, "sonnet")
+        known.close()
+        let strongest = agent.picker(model: "claude-mythos-5-2")
+        XCTAssertEqual(strongest.trackReturnRung, "fable", "No default among the rungs: the strongest")
+        strongest.close()
+        agent.cache.store(models: TrackAgent.ids.map { .init(number: 1, name: $0, detail: "", current: false, isDefault: $0 == "claude-sonnet-5-5") }, quickModels: [])
+        let fallback = agent.picker(model: "claude-mythos-5-2")
+        XCTAssertEqual(fallback.trackReturnRung, "sonnet", "The agent's default, when it is a rung")
+        fallback.close()
+    }
+
+    func testTrackDragAppliesOnlyOnRelease() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.pressTrack(.model, at: 3)
+        picker.dragTrack(to: 1.25)
+        XCTAssertEqual(picker.trackState(.model).value, "sonnet-5.5", "The header names the nearest stop")
+        XCTAssertEqual(picker.trackState(.model).caption, .detail("About claude-sonnet-5-5"))
+        XCTAssertNil(picker.trackTarget); XCTAssertEqual(agent.selects, [], "Never sent mid-drag")
+
+        picker.escapeTrack()
+        XCTAssertNil(picker.trackHeld); XCTAssertTrue(picker.presented)
+        picker.releaseTrack(.model, at: 1.25, moved: true)
+        XCTAssertNil(picker.trackTarget, "Esc while held puts the thumb back; its release does nothing")
+
+        picker.pressTrack(.model, at: 3)
+        picker.dragTrack(to: 1.25)
+        picker.releaseTrack(.model, at: 1.25, moved: true)
+        XCTAssertNil(picker.trackHeld)
+        try await TestSupport.eventually { agent.selects == ["claude-sonnet-5-5 high"] }
+        agent.replies.append(.success(("claude-sonnet-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+
+        // Haiku's missing levels: a drag ends on the nearest level it has.
+        agent.levels["claude-sonnet-5-5"] = ["low", "medium"]
+        picker.close()
+        let limited = TrackAgent(); limited.cacheCatalog()
+        let haiku = limited.picker(model: "claude-haiku-5-5")
+        haiku.pressTrack(.effort, at: 2)
+        haiku.dragTrack(to: 4)
+        XCTAssertEqual(haiku.trackState(.effort).value, "high")
+        haiku.releaseTrack(.effort, at: 4, moved: true)
+        XCTAssertNil(haiku.trackTarget, "Its nearest level is the chosen one")
+        haiku.close()
+    }
+
+    func testClosingSendsAWaitingChangeAndFinishesWithItsReadback() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.stepTrack(-1)
+        try await TestSupport.eventually { agent.pausing > 0 }
+        picker.close()
+        XCTAssertFalse(picker.presented)
+        XCTAssertEqual(agent.finished, [], "The picker finishes with the readback")
+        try await TestSupport.eventually { agent.selects == ["claude-opus-5-5 high"] }
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { agent.finished == [false] }
+        XCTAssertEqual(agent.confirmed, ["claude-opus-5-5 high"])
+
+        let failing = TrackAgent(); failing.cacheCatalog()
+        let declined = failing.picker()
+        declined.chooseTrackStop(.model, at: 0)
+        try await TestSupport.eventually { failing.selects.count == 1 }
+        declined.close()
+        failing.replies.append(.failure(HerdrFailure("No")))
+        try await TestSupport.eventually { failing.finished == [true] }
+    }
+
+    func testTracksFollowChangesMadeElsewhere() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker()
+        picker.followSession(model: "claude-sonnet-5-5", effort: "low")
+        XCTAssertEqual(picker.trackState(.model).current, 1)
+        XCTAssertEqual(picker.trackState(.effort).value, "low")
+        XCTAssertEqual(agent.selects, [])
+        picker.followSession(model: "dispatch-fixture", effort: "max")
+        XCTAssertEqual(picker.trackState(.model).current, 1, "A model off the ladder moves nothing")
+        picker.chooseTrackStop(.model, at: 2)
+        picker.followSession(model: "claude-haiku-5-5", effort: "low")
+        XCTAssertEqual(picker.trackState(.model).current, 2, "A change on its way is not overtaken")
+        try await TestSupport.eventually { agent.selects.count == 1 }
+        agent.replies.append(.success(("claude-opus-5-5", "low")))
+        try await TestSupport.eventually { !picker.trackSending }
+        picker.close()
+    }
+
+    func testTracksBeforeTheChoicesAreKnownThenTheLists() async throws {
+        let agent = TrackAgent(); agent.catalogHeld = true
+        let picker = agent.picker()
+        XCTAssertTrue(picker.showsTracks, "A current model of a known family opens at the tracks")
+        XCTAssertFalse(picker.ladderKnown); XCTAssertEqual(stops(picker, .model), ["fable"]); XCTAssertEqual(stops(picker, .effort), ["high"])
+        XCTAssertEqual(picker.trackStatus, "Reading agent choices…")
+        picker.chooseTrackStop(.effort, at: 0); picker.stepTrack(-1); picker.toggleSecurity()
+        XCTAssertNil(picker.trackTarget, "Inert until the agent's list is known")
+        agent.catalogHeld = false
+        try await TestSupport.eventually { !picker.loading }
+        XCTAssertTrue(picker.ladderKnown)
+        XCTAssertEqual(stops(picker, .model), ["haiku", "sonnet", "opus", "fable"])
+        XCTAssertEqual(agent.reads, ["claude-fable-5-2"])
+        XCTAssertEqual(stops(picker, .effort), TrackAgent.five)
+        picker.close()
+
+        // Any other list keeps today's lists, and a choice there closes the popover.
+        let other = TrackAgent()
+        other.cache.store(models: ["claude-opus-5-5", "dispatch-fixture"].map { .init(number: 1, name: $0, detail: "", current: false, isDefault: false) }, quickModels: [])
+        other.cache.store(efforts: [.init(number: 1, name: "low", detail: "", current: false, isDefault: false, effortValue: "low")], for: "claude-opus-5-5")
+        let lists = other.picker(model: "claude-opus-5-5", effort: "low")
+        XCTAssertFalse(lists.showsTracks); XCTAssertNil(lists.ladder); XCTAssertFalse(lists.efforts.isEmpty)
+        lists.selectEffort(try XCTUnwrap(lists.efforts.first))
+        try await TestSupport.eventually { other.selects.count == 1 }
+        other.replies.append(.success(("claude-opus-5-5", "low")))
+        try await TestSupport.eventually { !lists.presented }
+        XCTAssertEqual(other.finished, [false])
+    }
+
+    func testTracksDrawAndTakeKeysAndThePointer() async throws {
+        let agent = TrackAgent(); agent.cacheCatalog()
+        let picker = agent.picker(effort: "xhigh")
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 420, height: 340), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatModelPickerView(picker: picker, close: { picker.close() }, terminal: {}))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        func shot(_ name: String) async throws -> String {
+            try await Task.sleep(for: .milliseconds(500))
+            return try await PresentationTestSupport.capture(window, named: "tracks-" + name, in: "chat-model-validation").text().lowercased()
+        }
+        func key(_ code: UInt16, _ text: String) { NSApp.sendEvent(TerminalTestSupport.keyEvent(code, text, in: window)) }
+        func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws {
+            NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                             context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+        }
+        let rest = try await shot("rest")
+        for word in ["model", "effort", "haiku", "sonnet", "opus", "fable", "fable-5.2", "mythos-5.2", "faster", "smarter", "done"] {
+            XCTAssertTrue(rest.contains(word), "\(word) in: \(rest)")
+        }
+
+        // Keys reach the popover: down to EFFORT, up back, a step, Esc puts it back and leaves it open.
+        key(125, "\u{f701}")
+        XCTAssertEqual(picker.trackRow, .effort)
+        key(126, "\u{f700}")
+        XCTAssertEqual(picker.trackRow, .model)
+        key(123, "\u{f702}")
+        XCTAssertEqual(picker.trackTarget?.rung, "opus")
+        _ = try await shot("waiting")
+        key(53, "\u{1b}")
+        XCTAssertNil(picker.trackTarget); XCTAssertTrue(picker.presented)
+
+        // The pointer: a click on a stop sends it; a drag follows and applies on release.
+        let track = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("chat-model-track", in: window).first)
+        func stop(_ place: CGFloat) -> NSPoint { NSPoint(x: track.minX + (place + 0.5) * track.width / 4, y: track.midY) }
+        try mouse(.leftMouseDown, stop(0))
+        try mouse(.leftMouseUp, stop(0))
+        try await TestSupport.eventually { agent.selects == ["claude-haiku-5-5 high"] }
+        let hatched = try await shot("brought-down")
+        XCTAssertTrue(hatched.contains("was xhigh"), hatched)
+        agent.replies.append(.success(("claude-haiku-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+
+        try mouse(.leftMouseDown, stop(0))
+        XCTAssertNotNil(picker.trackHeld)
+        try mouse(.leftMouseDragged, stop(1.1))
+        XCTAssertEqual(agent.selects.count, 1, "Never sent mid-drag")
+        _ = try await shot("held")
+        try mouse(.leftMouseDragged, stop(2.2))
+        try mouse(.leftMouseUp, stop(2.2))
+        try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
+        agent.replies.append(.success(("claude-opus-5-5", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+
+        // The switch and a failure, then Space on the security row.
+        key(48, "\t"); key(48, "\t")
+        XCTAssertEqual(picker.trackRow, .security)
+        key(49, " ")
+        try await TestSupport.eventually { agent.selects.last == "claude-mythos-5-2 high" }
+        agent.replies.append(.success(("claude-mythos-5-2", "high")))
+        try await TestSupport.eventually { !picker.trackSending }
+        let security = try await shot("security")
+        XCTAssertTrue(security.contains("off the ladder"), security)
+        key(49, " ")
+        try await TestSupport.eventually { agent.selects.last == "claude-opus-5-5 high" }
+        agent.replies.append(.failure(HerdrFailure("Couldn't switch to opus-5.5.")))
+        try await TestSupport.eventually { !picker.trackSending }
+        let failed = try await shot("failed")
+        XCTAssertTrue(failed.contains("open in terminal"), failed)
+
+        key(53, "\u{1b}")
+        XCTAssertFalse(picker.presented, "Esc with nothing waiting closes")
+    }
+
+    func testDaybreakButtonDrawsAndTakesAClick() async throws {
+        let agent = TrackAgent()
+        let ids = Self.codexRows
+        agent.cache.store(models: ids.map { .init(number: 1, name: $0, detail: "", current: false, isDefault: false) }, quickModels: [])
+        for id in ids { agent.cache.store(efforts: TrackAgent.five.map { .init(number: 1, name: $0, detail: "", current: false, isDefault: false, effortValue: $0) }, for: id) }
+        let picker = agent.picker(model: "gpt-6.1-terra")
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 420, height: 340), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatModelPickerView(picker: picker, close: { picker.close() }, terminal: {}))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(900))
+        let text = try await PresentationTestSupport.capture(window, named: "tracks-codex", in: "chat-model-validation").text().lowercased()
+        for word in ["luna", "terra", "sol", "astra", "terra-6.1", "daybreak-blue", "daybreak"] { XCTAssertTrue(text.contains(word), "\(word) in: \(text)") }
+
+        let frame = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("chat-security-command", in: window).first)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: frame.midX, y: frame.midY), modifierFlags: [], timestamp: 0,
+                                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+        }
+        try await TestSupport.eventually { agent.commands == ["/daybreak"] }
+        XCTAssertEqual(agent.selects, [])
+        try await Task.sleep(for: .milliseconds(500))
+        _ = try await PresentationTestSupport.capture(window, named: "tracks-codex-sent", in: "chat-model-validation")
+        picker.close()
     }
 
     func testRealLocalModelAndEffortPicker() async throws { try await walkthrough("local") }

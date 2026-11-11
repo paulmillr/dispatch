@@ -187,6 +187,7 @@
 		491C633EA18F3EE5250814A3 /* HiddenResources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF7883732E0E0B8C61920EB /* HiddenResources.swift */; };
 		495D37CC4D9D3EFD0A2EAE3C /* KeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02590CE945630DA7CC3696CA /* KeyStore.swift */; };
 		4AF4754B09334B2C030A91FE /* ChatFollowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AA1F6422E3038D53E6D4C29 /* ChatFollowTests.swift */; };
+		4BFC71DE833897E8FE5FC225 /* ChatModelLadder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39A6AB944C133B7C5388F229 /* ChatModelLadder.swift */; };
 		4C5890C2019F7E83271E5BFE /* WatchCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75FF11AAF6A25BD16999BBD /* WatchCodec.swift */; };
 		4CBCC3A5780423BE284F9313 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207463548CB256DCFD794787 /* SettingsTests.swift */; };
 		4D3E60BAA967A98F95EA3E95 /* GitParsers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 862A3DBE608D7CA6830D7ADA /* GitParsers.swift */; };
@@ -798,6 +799,7 @@
 		383C3DBB6DE8CCAD775969E1 /* HomePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomePathTests.swift; sourceTree = "<group>"; };
 		384A0BC8EA8CD1B464CA7886 /* ShellSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellSessions.swift; sourceTree = "<group>"; };
 		38DC24FAA35F3389E50324AD /* HostSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSession.swift; sourceTree = "<group>"; };
+		39A6AB944C133B7C5388F229 /* ChatModelLadder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModelLadder.swift; sourceTree = "<group>"; };
 		39B32A9884205B17BBB0939E /* TermUnicode18Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermUnicode18Tests.swift; sourceTree = "<group>"; };
 		3A421E596801986A429E4A48 /* WatchComplicationWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchComplicationWriter.swift; sourceTree = "<group>"; };
 		3A74A563AEBDD9D6953B7502 /* FilesFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesFormatting.swift; sourceTree = "<group>"; };
@@ -1535,6 +1537,7 @@
 				CC821F218F506A89E8E8C7D6 /* ChatMarkdownBlock.swift */,
 				1275FD726403048D1BF0D943 /* ChatMarkdownPolicy.swift */,
 				01D48DCD4EA16ACA99AC346B /* ChatModelChoicesCache.swift */,
+				39A6AB944C133B7C5388F229 /* ChatModelLadder.swift */,
 				F458A029BB78654A3430678E /* ChatModels.swift */,
 				6B8AC2FF1CEEA332F551BF7F /* ChatOperations.swift */,
 				20D6EBC7D6A77133C245F9B0 /* ChatPatch.swift */,
@@ -2780,6 +2783,7 @@
 				02117530C052474C20E466DE /* ChatMarkdownPolicy.swift in Sources */,
 				5E922D0C80DC03E79FC7E4F6 /* ChatMessageDetails.swift in Sources */,
 				F61CEAF42B0FEC612DCA8846 /* ChatModelChoicesCache.swift in Sources */,
+				4BFC71DE833897E8FE5FC225 /* ChatModelLadder.swift in Sources */,
 				259F6918FA94D051AAA5280F /* ChatModelMemory.swift in Sources */,
 				37E6C7058C196BC3C30B09B4 /* ChatModels.swift in Sources */,
 				BCF1E0577EA727AD3801CCE1 /* ChatMotion.swift in Sources */,

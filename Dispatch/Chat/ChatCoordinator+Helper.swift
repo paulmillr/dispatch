@@ -642,6 +642,7 @@ extension ChatCoordinator {
         if command, ChatCommand(text) == .model {
             openModelPicker(session, column: .model)
             if session.modelPicker != nil {
+                session.modelPicker?.keyboardFocus = true
                 if let queued {
                     if let delivery = queued.delivery { session.drafts.finish(delivery, success: true) }
                     session.queuedMessages.removeAll { $0.id == queued.id }
@@ -866,6 +867,8 @@ extension ChatCoordinator {
         }
         session.modelChoices = modelChoices(for: session)
         let picker = ChatModelPicker(model: session.model, effort: session.effort, column: column, cache: session.modelChoices, helper: helper,
+            lastRung: session.lastModelRung, chatOnly: session.agentID == "claude",
+            rememberRung: { [weak session] in session?.lastModelRung = $0 },
             confirmed: { [weak session] model, effort in
                 guard let session, session.helper === helper else { return }
                 session.confirmConfiguration(model: model, effort: effort)

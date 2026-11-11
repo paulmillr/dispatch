@@ -133,6 +133,7 @@ targets:
       - Dispatch/Chat/ChatQuestionPolicy.swift
       - Dispatch/Chat/ChatMarkdownBlock.swift
       - Dispatch/Chat/ChatModelChoicesCache.swift
+      - Dispatch/Chat/ChatModelLadder.swift
       - Dispatch/Chat/ChatModels.swift
       - Dispatch/Chat/ChatOperations.swift
       - Dispatch/Chat/ChatPatch.swift

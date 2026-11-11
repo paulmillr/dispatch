@@ -610,6 +610,7 @@
 		D09B5BB8BE33B418B0AADE74 /* ChatHistoricalMergeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE80E5054476A96B5643A999 /* ChatHistoricalMergeTests.swift */; };
 		D0B510191A9CA6E46C896706 /* FilePreviewLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11913F152AB9E0940A0E497 /* FilePreviewLoader.swift */; };
 		D24B0D8FCFAED6214DF98F1E /* FileFolderPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74838A334545448258C3BCA2 /* FileFolderPreview.swift */; };
+		D273DBF6C367ACEE21618561 /* ChatModelLadder.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEC211D0233761A0C53DFAD1 /* ChatModelLadder.swift */; };
 		D2A1CB096766BF6926F723AC /* mem.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = BBB7F2E56A67337A8C181BB3 /* mem.h */; };
 		D2A557FA961BA429CE1A0AB1 /* KeyGroupRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57E0972BC230FC4DCE5B5B27 /* KeyGroupRecorder.swift */; };
 		D2EB57C5A20286B4DD6BB60C /* ghostty in Resources */ = {isa = PBXBuildFile; fileRef = 057AB4A3C99EAD2127140C47 /* ghostty */; };
@@ -1598,6 +1599,7 @@
 		FE2EAB5EBFE093ED5C6CAC91 /* SSHCompatibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCompatibilityTests.swift; sourceTree = "<group>"; };
 		FE80E5054476A96B5643A999 /* ChatHistoricalMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHistoricalMergeTests.swift; sourceTree = "<group>"; };
 		FE98820FA24018BB28D2FE02 /* FilesModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesModeTests.swift; sourceTree = "<group>"; };
+		FEC211D0233761A0C53DFAD1 /* ChatModelLadder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModelLadder.swift; sourceTree = "<group>"; };
 		FEE9069D9674FA632B2E7261 /* Face.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Face.swift; sourceTree = "<group>"; };
 		FFC333C08D482B3C37F39648 /* TerminalContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalContentView.swift; sourceTree = "<group>"; };
 		FFE61486BADC617A3702A3D6 /* zstd_compress.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = zstd_compress.c; sourceTree = "<group>"; };
@@ -2376,6 +2378,7 @@
 				0BAD86E1CA9E45F4432C17ED /* ChatMarkdownBlock.swift */,
 				DA1F3C8BCD44DA73BE61CFD0 /* ChatMarkdownPolicy.swift */,
 				02E15FF5D2CE086EB93C1E24 /* ChatModelChoicesCache.swift */,
+				FEC211D0233761A0C53DFAD1 /* ChatModelLadder.swift */,
 				E58DDA317626EFD473A0F1D8 /* ChatModelPicker.swift */,
 				3F55F6DE85F80089DFB6A563 /* ChatModels.swift */,
 				7A68D71ACC0F006DCFD9A1B4 /* ChatOperations.swift */,
@@ -3020,6 +3023,7 @@
 				3B34E782DCA80E1AA8BC0818 /* ChatModeSwitch.swift in Sources */,
 				B06726978DF9368F65F72AF4 /* ChatModelChoicesCache.swift in Sources */,
 				3438F7A030235F50BC9ECBA7 /* ChatModelControls.swift in Sources */,
+				D273DBF6C367ACEE21618561 /* ChatModelLadder.swift in Sources */,
 				984B4E0237F4815170A68763 /* ChatModelPicker.swift in Sources */,
 				077D6D3A8759407DAF6C83FE /* ChatModels.swift in Sources */,
 				A6CD0E242046B93F9240CE93 /* ChatOperations.swift in Sources */,

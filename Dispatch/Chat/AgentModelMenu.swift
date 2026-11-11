@@ -113,8 +113,9 @@ extension AgentModelMenu {
         let isVersion = { (part: String) in part.range(of: "^[0-9]+(?:\\.[0-9]+)*$", options: .regularExpression) != nil }
         let family = parts.filter { !isVersion($0) }, version = parts.filter(isVersion)
         // GPT IDs lead with the version (gpt-6.1-sol); without a name after one (gpt-5.5, gpt-4o) the ID stays.
+        // Daybreak's have no version at all (gpt-daybreak-blue-latest).
         let gpt = model[vendor].hasSuffix("gpt-")
-        guard !family.isEmpty, !gpt || parts.first.map(isVersion) == true else { return plain }
+        guard !family.isEmpty, !gpt || parts.first.map(isVersion) == true || parts.first == "daybreak" else { return plain }
         return (family + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: "-") + suffix
     }
 
