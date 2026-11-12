@@ -80,9 +80,39 @@ pub struct Codex {
     surfaces: BTreeMap<(u32, [u64; 2]), String>,
     /// Context lines earlier pages already found (paging::Known).
     known: crate::paging::Known,
+    /// chat.list's summaries of rollout ends (overview.rs), apart from the chats' pages.
+    tails: dispatch_helper_core::tail::Shared,
+    /// The rollouts list clients list (`Harness::listen`), by watch, and what each session's row
+    /// was last given.
+    listed: BTreeMap<u64, Binding>,
+    overviews: Rc<RefCell<BTreeMap<String, Overview>>>,
 }
 
 impl Codex {
+    /// A listed rollout changed: read its end again, and publish what changed for its row.
+    fn relist(&mut self, io: &mut dyn Io, binding: &Binding) {
+        let Some(path) = binding.transcript.clone() else { return };
+        let (known, updates, owner) = (self.overviews.clone(), self.updates.clone(), binding.clone());
+        dispatch_helper_core::tail::listing(
+            &self.tails,
+            io,
+            &path,
+            &binding.session,
+            false,
+            crate::overview::classify,
+            Box::new(move |io, result| {
+                let Ok(overview) = result else { return };
+                let changed = known.borrow().get(&owner.session).is_none_or(|old| overview.differs(old));
+                known.borrow_mut().insert(owner.session.clone(), overview.clone());
+                if changed {
+                    updates.borrow_mut().push(Update::Overview { binding: owner, overview });
+                    let now = io.now();
+                    io.timer(now);
+                }
+            }),
+        );
+    }
+
     /// Only an observed conversation/process change ends a roster. A transcript refresh or
     /// an ordinary turn ending must keep background agents running across turns.
     fn bind(&mut self, binding: &Binding) {
@@ -247,6 +277,21 @@ impl Harness for Codex {
             .processes
             .remove(&(process.pid, process.start));
         self.launch.exited(&self.jobs, io, process);
+        let listed: Vec<u64> = self
+            .listed
+            .iter()
+            .filter(|(_, binding)| binding.process.pid == process.pid && binding.process.start == process.start)
+            .map(|(watch, _)| *watch)
+            .collect();
+        for watch in listed {
+            io.unwatch(watch);
+            if let Some(binding) = self.listed.remove(&watch) {
+                self.overviews.borrow_mut().remove(&binding.session);
+                if let Some(path) = &binding.transcript {
+                    self.tails.borrow_mut().forget(path);
+                }
+            }
+        }
         for binding in self.follows.bindings() {
             if binding.process.pid == process.pid && binding.process.start == process.start {
                 self.follows.stop(io, &binding.session);
@@ -572,6 +617,67 @@ impl Harness for Codex {
                 deferred(done)(io, result);
             }),
         );
+    }
+
+    /// The rollout's end only (overview.rs); without a rollout, a live channel's records as
+    /// `history` gives them, without publishing the chat's questions.
+    fn overview(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Overview>) {
+        let Some(path) = binding.transcript.clone() else {
+            let live = binding.session.is_empty()
+                || self.channel(binding).is_ok()
+                || self.main.bound(binding)
+                || self.statuses.borrow().get(&(binding.process.pid, binding.process.start))
+                    .and_then(Option::as_deref) == Some(binding.session.as_str());
+            let result = if live {
+                let live = self.live.borrow();
+                let records = live.get(&binding.session).map(|live| live.records.as_slice()).unwrap_or_default();
+                Ok(Overview::of(records))
+            } else {
+                Err(failure("history", "No Codex rollout is available."))
+            };
+            return deferred(done)(io, result);
+        };
+        let (session, known) = (binding.session.clone(), self.overviews.clone());
+        dispatch_helper_core::tail::listing(
+            &self.tails,
+            io,
+            &path,
+            &binding.session,
+            false,
+            crate::overview::classify,
+            Box::new(move |io, result| {
+                if let Ok(overview) = &result {
+                    known.borrow_mut().insert(session, overview.clone());
+                }
+                done(io, result)
+            }),
+        );
+    }
+
+    /// Watch the rollouts list clients list; each change reads its end again (`relist`).
+    fn listen(&mut self, io: &mut dyn Io, bindings: &[Binding]) {
+        let ended: Vec<u64> = self
+            .listed
+            .iter()
+            .filter(|(_, listed)| !bindings.contains(listed))
+            .map(|(watch, _)| *watch)
+            .collect();
+        for watch in ended {
+            io.unwatch(watch);
+            self.listed.remove(&watch);
+        }
+        for binding in bindings {
+            if self.listed.values().any(|listed| listed == binding) {
+                continue;
+            }
+            if let Some(path) = &binding.transcript
+                && let Ok(watch) = io.watch(path, false)
+            {
+                self.listed.insert(watch, binding.clone());
+            }
+        }
+        let sessions: BTreeSet<&str> = self.listed.values().map(|binding| binding.session.as_str()).collect();
+        self.overviews.borrow_mut().retain(|session, _| sessions.contains(session.as_str()));
     }
 
     fn read(&mut self, io: &mut dyn Io, source: &Transcript, done: Done<Archive>) {
@@ -1388,6 +1494,12 @@ impl Harness for Codex {
 
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         self.bind_main();
+        if let Event::Changed { watch, .. } = &event
+            && let Some(binding) = self.listed.get(watch).cloned()
+        {
+            self.relist(io, &binding);
+            return;
+        }
         let (bindings, servers) = (&self.bindings, &self.launch.servers);
         // The bound TUI and the private server serving it (arch.md Main-thread hooks).
         let owners = |session: &str| -> Vec<Owner> {

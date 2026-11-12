@@ -11,7 +11,7 @@ mod chat;
 pub(crate) use chat::follow;
 pub(crate) mod features;
 pub(crate) mod following;
-mod list;
+pub(crate) mod list;
 mod hello;
 mod launch;
 pub(crate) use launch::write;

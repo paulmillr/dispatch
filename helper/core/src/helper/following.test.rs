@@ -145,6 +145,7 @@ impl Bench {
             login: None,
             features: helper.features.clone(),
             follows: helper.follows.clone(),
+            activity: helper.activity.clone(),
         }
         .update(update);
     }

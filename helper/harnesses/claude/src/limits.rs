@@ -69,10 +69,14 @@ fn with_status_line(before: Option<&[u8]>, command: &str) -> Result<Vec<u8>, Err
 }
 
 /// `current` without a status line running `command`: None when it holds no such entry, empty when nothing is left.
+/// A read's command names its helper's route after the hook's (`reading_command`): an entry of `command` with a route
+/// is ours too, so a dead read's line is taken out by whichever helper sees it run.
 fn without_status_line(current: &[u8], command: &str) -> Option<Vec<u8>> {
     let document = Json::parse(current).ok()?;
     let root = document.root();
-    if root.kind() != Kind::Object || root.get("statusLine").and_then(|line| text(line, "command")) != Some(command) {
+    let line = root.get("statusLine").and_then(|line| text(line, "command"));
+    let ours = line.is_some_and(|line| line == command || (line.starts_with(&format!("{command} '")) && line.ends_with('\'')));
+    if root.kind() != Kind::Object || !ours {
         return None;
     }
     let fields =
@@ -296,7 +300,22 @@ pub(crate) struct Limits {
 pub(crate) fn command(io: &mut dyn Io) -> Result<String, Error> {
     let executable = io.executable().map_err(|e| error("io", e))?;
     let executable = executable.to_str().ok_or_else(|| error("settings", "Helper executable path is not UTF-8"))?;
-    Ok(format!("'{}' hook claude", executable.replace('\'', "'\\''")))
+    Ok(format!("'{}' hook claude", quote(executable)))
+}
+
+/// A read's status line: the hook's command naming this helper's route, so Claude's run comes back to the helper that
+/// asked. Another helper of the account may bind the same agent (the Mac's beside a phone's over SSH) and win an
+/// ordinary hook's routing (`sender`); a route named on the command line comes first. Without a route, the hook's.
+pub(crate) fn reading_command(io: &mut dyn Io) -> Result<String, Error> {
+    let command = command(io)?;
+    Ok(match io.route().ok().and_then(|(_, path)| path.to_str().map(quote)) {
+        Some(route) => format!("{command} '{route}'"),
+        None => command,
+    })
+}
+
+fn quote(text: &str) -> String {
+    text.replace('\'', "'\\''")
 }
 
 impl Limits {

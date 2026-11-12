@@ -372,8 +372,25 @@ pub struct Launch {
     pub directory: PathBuf,
     pub question: String,
     pub model: Option<String>,
+    /// The parent's effort, passed on only when it is one `claude --effort` takes: an unknown word would fail the fork.
+    pub effort: Option<String>,
     pub read_only: bool,
     pub done: Done<Binding>,
+}
+
+/// The efforts `claude --effort` accepts.
+const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// The fork's `--model` and `--effort`: the parent's, so the side answers as the main conversation would.
+pub fn pinned(model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    let mut arguments = Vec::new();
+    if let Some(model) = model {
+        arguments.extend(["--model".to_owned(), model.to_owned()]);
+    }
+    if let Some(effort) = effort.map(str::to_ascii_lowercase).filter(|effort| EFFORTS.contains(&effort.as_str())) {
+        arguments.extend(["--effort".to_owned(), effort]);
+    }
+    arguments
 }
 struct Fork {
     parent: Binding,
@@ -758,9 +775,7 @@ impl Sides {
             .current_dir(&launch.directory)
             .args(arguments(&launch.parent.session, launch.read_only))
             .args(["--session-id", &session]);
-        if let Some(model) = &launch.model {
-            command.args(["--model", model]);
-        }
+        command.args(pinned(launch.model.as_deref(), launch.effort.as_deref()));
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

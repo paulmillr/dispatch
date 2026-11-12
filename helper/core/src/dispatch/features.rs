@@ -12,6 +12,11 @@ use std::{collections::BTreeSet, os::fd::RawFd};
 pub(crate) const INTERACTION_OPTIONS: &str = "interaction.options";
 /// The `chat.list` operation.
 pub(crate) const CHAT_LIST: &str = "chat.list";
+/// `agent.changed` on this client's backends.open whenever a bound agent's list row changes
+/// (busy, activity, an open approval or question, its last answer), with a real summary, at most
+/// one per terminal per 500 ms (helper/activity.rs). Without it a client gets agent.changed only
+/// for binding changes, with an empty summary, as recorded clients expect.
+pub(crate) const AGENTS_ACTIVITY: &str = "agents.activity";
 /// The `chat.limits` operation: the agent's usage windows, read when asked.
 pub(crate) const CHAT_LIMITS: &str = "chat.limits";
 /// The `chat.limits.rows` operation: what a limits extension of the agent reports.
@@ -94,6 +99,7 @@ pub(crate) const KNOWN: &[&str] = &[
     LOGIN_RELEASE,
     SIZES_STEADY,
     TOPOLOGY_BOUND,
+    AGENTS_ACTIVITY,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary

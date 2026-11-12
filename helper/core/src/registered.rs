@@ -128,6 +128,7 @@ impl<T: Harness> Harness for Registered<T> {
         fn identify(process: &Process, hook: Option<&Hook>) -> Option<Binding>;
         fn candidate(process: &Process) -> Option<Error>;
         fn history(binding: &Binding, earlier: Option<&str>) -> Page;
+        fn overview(binding: &Binding) -> Overview;
         fn read(source: &Transcript) -> Archive;
         fn state(binding: &Binding) -> State;
         fn send(binding: &Binding, text: &str, mode: Mode, command: bool) -> Sent;
@@ -152,6 +153,13 @@ impl<T: Harness> Harness for Registered<T> {
     }
     effects! {
         fn exited(process: &Process, status: Option<i32>);
+    }
+    /// As `effects!`; without `agent.inspect` nothing is listed.
+    fn listen(&mut self, io: &mut dyn Io, bindings: &[Binding]) {
+        let bindings = if (self.permitted)("listen") { bindings } else { &[] };
+        let previous = io.section(&self.section);
+        self.part.listen(io, bindings);
+        io.section(&previous);
     }
     /// Every hook path (own route, a mux forwarding a bound hook) ends here, so muting here
     /// covers all of them.

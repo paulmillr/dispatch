@@ -135,12 +135,15 @@ fn main() -> std::io::Result<()> {
     let hook = first("hook").then(|| {
         args.next();
         let key = args.next().and_then(|arg| arg.into_string().ok());
-        let endpoint = args
-            .next()
+        // An endpoint on the command line (a limits read's status line) is the helper that asked; the terminal's
+        // DISPATCH_HELPER_ENDPOINT only breaks a tie.
+        let named = args.next();
+        let explicit = named.is_some();
+        let endpoint = named
             .or_else(|| std::env::var_os("DISPATCH_HELPER_ENDPOINT"))
             .map(PathBuf::from);
         key.filter(|_| args.next().is_none())
-            .map(|key| (key, endpoint))
+            .map(|key| (key, endpoint, explicit))
     });
     // `launch <key> [args...]`: every remaining argument belongs to the typed command.
     let launch = if first("launch") {
@@ -332,13 +335,18 @@ fn main() -> std::io::Result<()> {
             // Hooks fail open: the agent continues in its ordinary terminal UI and nothing leaks
             // into its diagnostics (old ssh-helper main.rs:132-136).
             // The harness's registration order is its route section (harness/<index>).
-            if let Some((key, endpoint)) = hook
+            if let Some((key, endpoint, explicit)) = hook
                 && let Some(index) = harnesses.iter().position(|(name, _)| *name == key)
             {
                 let section = format!("harness/{index}");
                 let harness = harnesses[index].1.clone();
-                let _ =
-                    dispatch_helper_core::system::sender::run(&mut io, harness, &section, endpoint.as_deref());
+                let _ = dispatch_helper_core::system::sender::run(
+                    &mut io,
+                    harness,
+                    &section,
+                    endpoint.as_deref(),
+                    explicit,
+                );
             }
             io.finish(0)?;
             Ok(())

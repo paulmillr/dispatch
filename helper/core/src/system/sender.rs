@@ -16,9 +16,17 @@ use std::{
 /// Every live helper of this account is asked whether it owns the hook's process (B4: helpers
 /// of one account share the registry, e.g. an app's helper and one reached over SSH). Among
 /// owners the one with the agent bound wins, then the one `endpoint` (the terminal's
-/// DISPATCH_HELPER_ENDPOINT) names, then registry order, recorded as ambiguous. Without an
-/// owner nothing is sent: the agent keeps its native UI.
-pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoint: Option<&Path>) -> io::Result<()> {
+/// DISPATCH_HELPER_ENDPOINT) names, then registry order, recorded as ambiguous. An `explicit`
+/// endpoint (named on the command line: a limits read's status line, `hook claude <route>`) is
+/// the helper that asked and comes first when it owns the process. Without an owner nothing is
+/// sent: the agent keeps its native UI.
+pub fn run(
+    io: &mut System,
+    harness: Shared<dyn Harness>,
+    section: &str,
+    endpoint: Option<&Path>,
+    explicit: bool,
+) -> io::Result<()> {
     io.section("hook.sender");
     let (input, output) = io.stdio()?;
     let deadline = io.now() + Duration::from_secs(2);
@@ -57,7 +65,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
         .hook(&document)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?
         .interactive;
-    let route = owner(io, &registries(section)?, endpoint, deadline, Duration::ZERO)?
+    let route = owner(io, &registries(section)?, endpoint, explicit, deadline, Duration::ZERO)?
         .ok_or(io::ErrorKind::NotFound)?;
     if !interactive {
         check(io, &route, deadline)?;
@@ -123,7 +131,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
 pub fn setup(io: &mut System, section: &str, endpoint: Option<&Path>) -> io::Result<()> {
     io.section("setup.sender");
     let deadline = io.now() + Duration::from_secs(12);
-    let Some(route) = owner(io, &registries(section)?, endpoint, deadline, SETTLE)? else {
+    let Some(route) = owner(io, &registries(section)?, endpoint, false, deadline, SETTLE)? else {
         return Ok(());
     };
     let request = body::encode_plain(&Data::Object(vec![("section", Data::String(section))]))
@@ -159,7 +167,7 @@ pub fn launch(io: &mut System, program: &str, arguments: &[String], endpoint: Op
             sections.extend(entries.into_iter().filter(|(_, kind)| *kind == FileKind::Directory).map(|(name, _)| registry.join(name)));
         }
     }
-    if let Some(route) = owner(io, &sections, endpoint, deadline, Duration::ZERO)? {
+    if let Some(route) = owner(io, &sections, endpoint, false, deadline, Duration::ZERO)? {
         let request = body::encode_plain(&Data::Object(vec![("program", Data::String(program))]))
             .map_err(|_| io::ErrorKind::InvalidData)?;
         let response = exchange(io, &route, wire::Kind::Request, 3, &request, deadline)?;
@@ -221,11 +229,13 @@ fn owner(
     io: &mut System,
     registries: &[PathBuf],
     endpoint: Option<&Path>,
+    explicit: bool,
     deadline: Instant,
     settle: Duration,
 ) -> io::Result<Option<PathBuf>> {
-    // The nearest ancestor with a tty selects its terminal's helper. A bound
-    // agent wins among multiple owners; then the terminal's named endpoint.
+    // The nearest ancestor with a tty selects its terminal's helper. An explicitly named owner
+    // (the helper that asked) wins; then a bound agent among multiple owners; then the
+    // terminal's named endpoint.
     let mut chain = Vec::new();
     let mut pid = io.pid();
     loop {
@@ -268,7 +278,7 @@ fn owner(
                 let answer = body::decode_plain(&answer).map_err(|_| io::ErrorKind::InvalidData)?;
                 let fact = |name| answer.get(name).and_then(Data::boolean) == Some(true);
                 if fact("owned") {
-                    owners.push(((!fact("bound"), !named), route));
+                    owners.push(((!(named && explicit), !fact("bound"), !named), route));
                 }
             }
             Ok((owners, named_live))

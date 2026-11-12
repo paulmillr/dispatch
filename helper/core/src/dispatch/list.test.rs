@@ -17,6 +17,75 @@ fn a_row_shows_the_newest_assistant_text_and_the_newest_time() {
 }
 
 #[test]
+fn the_reply_is_the_answer_or_a_later_turn_end_never_a_later_record() {
+    // An answer, its turn's end, then a native command's output and a compaction notice.
+    let records = [
+        record(RecordKind::TurnStarted, "", Some(1)),
+        record(RecordKind::Assistant, "Fixed.", Some(2)),
+        record(RecordKind::TurnEnded, "", Some(3)),
+        record(RecordKind::Output, "Set model to Sonnet", Some(4)),
+        record(RecordKind::Notice, "Conversation compacted", Some(5)),
+    ];
+    let overview = Overview::of(&records);
+    assert_eq!((overview.preview.as_deref(), overview.time_ms, overview.reply_ms), (Some("Fixed."), Some(5), Some(3)));
+    assert_eq!(overview.started_ms, Some(1));
+    // A turn interrupted before any answer: its end is the reply.
+    let interrupted = [record(RecordKind::TurnStarted, "", Some(1)), record(RecordKind::TurnEnded, "", Some(2))];
+    assert_eq!(Overview::of(&interrupted).reply_ms, Some(2));
+    // The newest record's time alone is no reason to ask again.
+    let moved = Overview { time_ms: Some(6), ..overview.clone() };
+    assert!(!moved.differs(&overview));
+    assert!(Overview { reply_ms: Some(7), ..overview.clone() }.differs(&overview));
+}
+
+#[test]
+fn a_row_keeps_its_fields_and_adds_reply_ms() {
+    let binding = Binding {
+        session: "s1".into(),
+        transcript: None,
+        process: Process {
+            pid: 4242,
+            parent: 1,
+            group: 4242,
+            foreground: 4242,
+            tty: 7,
+            start: [1_800_000_000, 0],
+            executable: "/opt/example/claude".into(),
+            arguments: vec!["claude".into()],
+            files: vec![],
+        },
+    };
+    let row = Row {
+        terminal: 7,
+        binding,
+        key: "claude".into(),
+        label: "Claude Code".into(),
+        name: "docs".into(),
+        cwd: None,
+        state: Some(State { busy: true, title: None, ..State::default() }),
+        state_error: None,
+        listing: Overview { preview: Some("Fixed.".into()), time_ms: Some(5), reply_ms: Some(3), started_ms: Some(1), title: Some("Fix the docs".into()) },
+        history_error: None,
+        waiting: false,
+    };
+    let mut out = crate::wire::body::SCHEMA.to_vec();
+    crate::encode::Encode::encode(&row, &mut out);
+    let value = crate::wire::body::decode(&out).unwrap();
+    let keys: Vec<&str> = value.object().unwrap().map(|(key, _)| key).collect();
+    assert_eq!(
+        keys,
+        [
+            "terminal", "session", "binding", "key", "label", "name", "cwd", "busy", "attention", "activity", "title",
+            "state_error", "preview", "time_ms", "history_error", "waiting", "reply_ms"
+        ]
+    );
+    // The transcript's title when the agent names none.
+    assert_eq!(value.get("title").and_then(Data::string), Some("Fix the docs"));
+    assert_eq!(value.get("time_ms").and_then(Data::signed), Some(5));
+    assert_eq!(value.get("reply_ms").and_then(Data::signed), Some(3));
+}
+
+#[test]
 fn a_long_answer_is_cut_at_a_character_boundary() {
     let text = "é".repeat(PREVIEW + 10);
     let (preview, _) = last(&[record(RecordKind::Assistant, &text, None)]);

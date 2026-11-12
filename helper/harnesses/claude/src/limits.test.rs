@@ -90,6 +90,21 @@ fn repair_takes_out_only_this_helpers_entry() {
     assert_eq!(without_status_line(br#"{"model":"sonnet"}"#, COMMAND), None);
 }
 
+/// A read's line names its helper's route (`reading_command`): any helper's repair takes it out, and a line naming a
+/// route that merely starts like ours is not ours.
+#[test]
+fn a_reads_line_with_its_route_is_ours_too() {
+    let line = |command: &str| format!(r#"{{"statusLine":{{"type":"command","command":{}}}}}"#, json_string(command));
+    let routed = line(&format!("{COMMAND} '/home/sam/.dispatch/run/123/routes/harness-1/77'"));
+    assert_eq!(without_status_line(routed.as_bytes(), COMMAND), Some(Vec::new()));
+    assert_eq!(without_status_line(line(&format!("{COMMAND} --other")).as_bytes(), COMMAND), None);
+    assert_eq!(without_status_line(line(&format!("{COMMAND}x '/r'")).as_bytes(), COMMAND), None);
+}
+
+fn json_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 #[test]
 fn a_new_file_and_folder_are_removed_again() {
     let now = Instant::now();

@@ -12,6 +12,7 @@ mod prompt;
 mod registered;
 pub mod rpc;
 pub mod system;
+pub mod tail;
 pub mod text;
 pub mod tool;
 pub mod wire;

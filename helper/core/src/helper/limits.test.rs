@@ -517,6 +517,7 @@ fn route(helper: &DispatchHelper, observers: &Observers, replies: &Replies, upda
         login: None,
         features: helper.features.clone(),
         follows: helper.follows.clone(),
+        activity: helper.activity.clone(),
     }
     .update(update);
 }
