@@ -30,6 +30,7 @@ import shards
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL_ENVIRONMENT = load_test_environment()
 GUEST = "/Users/admin/dispatch-tests"
+# Where the guest keeps Codex (its Homebrew npm layout). The host copy is always the pinned one (pinned_tool('codex')).
 CODEX = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/"
              "@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
 # OpenAI's quick start uses this image registry. Pin the image for reproducibility.
@@ -115,7 +116,7 @@ def archive(path, directory, members):
 
 
 def setup(vm, image):
-    binaries = {"herdr": Path("/opt/homebrew/bin/herdr"), "codex": CODEX}
+    binaries = {"herdr": Path("/opt/homebrew/bin/herdr"), "codex": pinned_tool('codex')}
     for source in binaries.values():
         if not source.is_file():
             raise RuntimeError("Missing host test dependency: " + str(source))
@@ -235,10 +236,8 @@ def inspect_codex(vm):
 
 
 def sync_claude(vm):
-    source = shutil.which('claude')
-    if not source:
-        raise RuntimeError('Claude Code is required for Claude Chat integration tests; install it explicitly first')
-    source = Path(source).resolve()
+    """Copy the pinned native Claude Code (scripts/test-tools.lock.json), not whatever the host's PATH has."""
+    source = pinned_tool('claude').resolve()
     destination = GUEST + '/test-tools/claude'
     digest = hashlib.sha256()
     with source.open('rb') as stream:
@@ -252,7 +251,7 @@ def sync_claude(vm):
     synchronize(vm, [str(source)], destination)
     checked = inspect_binary(vm, destination)
     if len(checked) < 2 or checked[0] != digest.hexdigest() or 'Claude Code' not in checked[-1]:
-        raise RuntimeError('Guest Claude does not match the installed host native CLI')
+        raise RuntimeError('Guest Claude does not match the pinned native CLI')
     return checked[-1]
 
 
@@ -358,30 +357,31 @@ def sync_pi(vm):
 
 
 def sync_codex(vm):
-    """Test the installed host CLI, even when the VM predates an upgrade."""
+    """Install the pinned Codex at the guest's CODEX path, even when the VM predates an upgrade."""
+    source = pinned_tool('codex').resolve()
     # Code-mode tools execute in a companion process. A matching main binary
     # alone is insufficient for fixtures that invoke tools through exec.
-    companion = CODEX.with_name("codex-code-mode-host")
+    companion = source.with_name("codex-code-mode-host")
     if companion.is_file():
-        synchronize(vm, [str(companion)], str(companion))
+        synchronize(vm, [str(companion)], str(CODEX.with_name(companion.name)))
     digest = hashlib.sha256()
-    with CODEX.open("rb") as stream:
+    with source.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     # Compare SHA-256 before invoking rsync: an unchanged 223 MB binary does
     # not need a second checksum pass and an rsync protocol exchange.
     inspected = inspect_codex(vm)
     if inspected and inspected[0].split()[0] == digest.hexdigest():
-        return inspected[-1] + " (host binary SHA-256 " + digest.hexdigest() + ")\n"
-    check_portable(vm, CODEX)
-    synchronize(vm, [str(CODEX)], str(CODEX))
+        return inspected[-1] + " (pinned binary SHA-256 " + digest.hexdigest() + ")\n"
+    check_portable(vm, source)
+    synchronize(vm, [str(source)], str(CODEX))
     checked = inspect_codex(vm)
     if len(checked) < 2:
         raise RuntimeError("Guest Codex executable is missing after synchronization")
     actual, version = checked[0].split()[0], checked[-1]
     if actual != digest.hexdigest():
-        raise RuntimeError("Guest Codex does not match the host test binary")
-    return version + " (host binary SHA-256 " + actual + ")\n"
+        raise RuntimeError("Guest Codex does not match the pinned test binary")
+    return version + " (pinned binary SHA-256 " + actual + ")\n"
 
 
 def synchronize(vm, sources, destination, relative=False):
@@ -543,8 +543,8 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
                stamp=None, shard_classes=None, primary=True, host_ready=False, live=False, guest_build=False):
     fast = selection is not None and selection['suite'] == 'fast'
     selected = selection['selected'] if selection else tests
-    if not fast and not CODEX.is_file():
-        raise RuntimeError("Missing host test dependency: " + str(CODEX))
+    if not fast:
+        pinned_tool('codex')  # Fail before booting when ./build.sh --test hasn't prepared the pin.
     started = time.perf_counter()
     stamp = stamp or run_stamp()
     output = ROOT / "build" / "vm-tests" / stamp

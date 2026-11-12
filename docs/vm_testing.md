@@ -16,7 +16,7 @@ The host needs Apple Silicon, Xcode 26 with first launch completed, Homebrew in 
 - herdr 0.9.5 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
 - Native Codex from the global npm layout: `npm install --global --prefix /opt/homebrew @openai/codex`, giving `/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`. The runner copies the installed version and its `codex-code-mode-host` companion when present.
 
-The full suite also needs Claude Code on `PATH` and the pinned Pi from `./build.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
+The full suite also needs the pinned Claude Code, Codex and Pi from `./build.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
 
 ```sh
 python3 test/vm.py setup            # creates/reuses the VM from the digest-pinned image; copies host Rust + XcodeGen
@@ -85,7 +85,7 @@ the Screen Sharing window tart opens stops the VM.
 
 ### Updating the agent CLIs
 
-`vm.py` takes Claude Code from the host's `PATH` (put a checkout's `build/test-tools/bin` first for the pinned one), Codex from the fixed Homebrew npm path above, and Pi always from the pin in `scripts/test-tools.lock.json`. A guest's tmux is its own Homebrew's: after a tmux pin change, `HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade tmux` in each guest (`tart exec NAME …`) once Homebrew's stable matches. To compare two versions, run `--live`: in replay the recorded tool I/O answers and the CLIs barely run. Compare the per-case failures of each run's `TestSummary.json` (`testFailures[].testIdentifierString`), then rerun their union under both versions, one VM each, swapping VMs for any case that differs. The Linux test VM's agents are separate: update them in the guest as well (with their publishers' SHA-256s) and pair it again (`vm.py linux … --claude/--pi/--codex PATH`).
+`vm.py` copies Claude Code, Codex and Pi from the pins in `scripts/test-tools.lock.json` (prepared by `./build.sh --test`), never from the host's `PATH` or Homebrew. Codex lands at the guest's Homebrew npm path above. To upgrade, change a pin's version, URL and the publisher's SHA-256, run `./build.sh --test` and replay; the next `vm.py test` installs it in each guest. A guest's tmux is its own Homebrew's: after a tmux pin change, `HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade tmux` in each guest (`tart exec NAME …`) once Homebrew's stable matches. To compare two versions, run `--live`: in replay the recorded tool I/O answers and the CLIs barely run. Compare the per-case failures of each run's `TestSummary.json` (`testFailures[].testIdentifierString`), then rerun their union under both versions, one VM each, swapping VMs for any case that differs. The Linux test VM's agents are separate: update them in the guest as well (with their publishers' SHA-256s) and pair it again (`vm.py linux … --claude/--pi/--codex PATH`).
 
 ## Linux SSH
 

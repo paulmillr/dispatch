@@ -85,8 +85,9 @@ are cropped 80 pixels on each side to the window.
 The `onboarding` group draws the first-launch setup sheet as it ships (LocalAgentsConsent, OnboardingPages.swift): O1
 Chat, O2 Tabs, O3 Prefs, over a fresh install's window.
 
-The `updates` group (`Screens/Updates.swift`) explores the updater's sheet in place of the "is ready" NSAlert: the
-release notes' first five items (the version commit's body before its first `---` line, `* ` or `- ` items, `Area:
+The `updates` group (`Screens/Updates.swift`) is the updater's sheet in place of the "is ready" NSAlert, built as
+`UpdateSheet` (U1, U4a, U4b; U3 in Settings; U2 not built): the
+release notes' first five items (the GitHub release's text before its first `---` line, `* ` or `- ` items, `Area:
 text` giving a coloured tag), one line each; U4a downloading (a ring round the tile and the footer's edge fill), U4b
 verifying, U1 ready; U1b a short list, U2 the list in the terminal's colours, U3 the list in Settings › Updates.
 
@@ -97,7 +98,9 @@ a stop per choice), the family's security model (mythos, daybreak-blue) a switch
 today's lists beside it; E3 the popover's states (pointing, dragging, switching, a model without the effort's level,
 the security model on, a failed switch, opened by keyboard, the other family); E4 the footer's model and effort, with
 the security model's shield; E5 one track frame by frame: point, click, the choice translucent until the agent
-confirms, the thumb held as a lens and dragged, arrow keys, a hatched stop the model lacks. A stroked `Capsule` comes
+confirms, the thumb held as a lens and dragged, arrow keys, a hatched stop the model lacks; E6 the stops' labels, both
+families in words, icons (a symbol per model, effort as a rising meter) and capitals; E7 the composer's footer with
+the model as a sun (emoji or symbol) and the effort as a word or a meter; E8 the emoji and meter in the window. A stroked `Capsule` comes
 out offscreen with a flat nub at each end: `PillStroke` there draws the outline in a canvas instead.
 
 The `limits` group (`Screens/ClaudeLimits.swift`) explores Claude's subscription limits in the popover the composer's
@@ -120,13 +123,15 @@ under the header, Create review a glass capsule at the bottom; there is no syste
 | tab | H0 terminal (the program in the subtitle, the key bar), H1 files, H2 review, H3 commits: the shipped header, the mode button naming the Files mode; B8c the title capsule tapped: the tab's menu, Search, Stats, Side Conversation, then Tab: Rename…, Detach, Close Tab; B8d a long title, one line cut, host · folder kept |
 | review | R2 diff with glass comment cards, R3 line selection with handles, R4 glass composer, R5 Create review sheet (R5b swipe to delete, R5c no agent in the tab) |
 | pushed | F2 file preview, C2 commit detail |
-| spaces | P1 Spaces tree with the filter row All · Needs you · Agents (P1b Needs you), Detached row per host, branch per space; P2 a space's tabs, titled as the Mac strip titles them with a line that follows the agent's state (P2b swipe to Close, which ends the tab, P2c menu: New tab, Edit, Detach, Terminate, P2d Edit renaming the space and its tabs, with reorder, P2e New tab held: Shell, Claude, Codex, Pi); P3 the switcher sheet from a tab's host disc |
+| spaces | P1 Spaces tree with the filter row All · Needs you · Agents (P1b Needs you), Detached row per host, no branch beside a space's name (Settings › Hosts › Show git branches is off by default); P2 a space's tabs, titled as the Mac strip titles them with a line that follows the agent's state (P2b swipe to Close, which ends the tab, P2c menu: New tab, Edit, Detach, Terminate, P2d Edit renaming the space and its tabs, with reorder, P2e New tab held: Shell, Claude, Codex, Pi); P3 the switcher sheet from a tab's host disc |
+| agents | A1 the Agents tab (`Sources/AgentsScreens.swift`, as `AgentsScreen` draws it): rows of three lines (the host under the time), the Group icon by the title, chips All · Needs you · Unread, the freshness line, Needs you, Working, Recent and Offline (dimmed rows, the host's problem in the footer), the tab item badged; A1b Needs you; A1c a row's menu; A1d scrolled to Offline and its footer; A1e grouped by host (Group); A2 no host reached (Try Again), A2b no agent running (New Chat) |
 | host | W0 Spaces tree with the host glyph as the stats button and the Offline group (W0b folded, W0c the filter menu); W1a the small stats sheet (stat strip and sparkline), W1b dragging up, W1c small and offline; W1 the large sheet by CPU, W2 by memory, W3 scrubbing; W5 disconnected, W6 plain SSH, W7 Low Power Mode |
 | states | S1 no helper, S2 no grant, S3 offline, S4 review sent with Undo, S5 diff fold and outdated comment |
 | settings | G1 Settings as the app's (Appearance with Color scheme and Colorblind-friendly, no app theme; Terminal; Chat; Notifications; Hosts; Remove all data); G2 terminal font; G3 chat font; G5 notifications |
 | terminal | T1 search; T2 the key bar's menu with Clear screen |
-| chat | C1 search; C2 slash commands; C3 side conversation; C4 goal strip (C4b Manage goal); C5 conversation mode; C6 Jump to latest |
+| chat | C1 search; C2 slash commands; C3 side conversation; C4 goal strip (C4b Manage goal); C5 conversation mode; C7 Jump to latest as the app ships it (`Sources/JumpToEnd.swift`, `ChatJumpButton`): a glass arrow at the trailing edge above the composer whenever the thread is scrolled up, C7a with nothing new, C7b with two new rows as a badge |
 | queue | As the app ships it (`Sources/QueueRow.swift`, `ChatQueuedBubbles`), as Messages' Send Later: queued messages are the user's bubbles, faded, under the working row (Stop beside the clock, "thinking · 38s ■"), the last captioned "2 queued · sends after this turn". Q1 the queue; Q1b a queued bubble tapped: its menu, Send Now ("Interrupts the current turn"), Edit, Move Down, Delete; Q1c Edit: the text in the composer under "Editing queued message · Cancel", send a ✓; Q6 no working row (paused after Stop): "paused after Stop" with Resume |
+| usage | As the app ships it (`Sources/UsageLimits.swift`, `ChatWorkingRow`'s steps line): the working row unfolded, the steps and the session's tokens leading the steps line and the plan's weekly limit trailing it as a ring, its share and "Resets Thu 9:40am" (the Mac's `ChatLimitsSection`); the week's name goes where the line is too narrow. N4a; N4c an account that still reports the 5-hour window: its ring in the reset's place; N4d and N4e the same under 80%: rings and shares as dim as the rest of the line |
 | message | M1 an agent message's details (the app's M5b) redesigned: agent and time as the title, Copy · Reply · Share · Show in Terminal in the ⋯ menu, the whole message raw (Markdown unrendered, one selection), outcome and time as one line, Changes · Tokens with context · the conversation's model, and past 8 steps the steps folded (patches and failures stay; the runs between fold into a row with a disclosure; Show all); M1b a fold open in place, M1c a short turn (nothing folds), M1d a turn stopped by you |
 
 **iPad** (`Sources/IPad.swift`, `PadStrip.swift`; the same target, landscape). The Mac's layout: a 320-point sidebar
@@ -151,6 +156,7 @@ header's capsule, over the content's top for a moment as the tab opens (the Chat
 |---|---|
 | onerail | Back with its count and the menu disc at the rail's top, the five modes stacked, the mode's action at its foot. L12 Chat: Reply is the pink button (attach and send options in the menu disc, dictation on the keyboard's mic), the thread right of the rail; L12b writing: the field alone, text and Send; L12c a draft kept: Reply marked. L13 Review: Create review at the foot with its count, search heading the list, Comment in the diff's header. L14 Terminal: every column right of the rail, the keyboard the rail's foot; L14b typing: the key row (Ctrl, Esc, Tab, Alt, arrows) rides the keyboard; L14c the keyboard button held: Esc, Ctrl-C, Ctrl-D, Tab, Previous command, Paste (Esc without the keyboard is two taps) |
 | onerail (edge) | L15 Terminal and L15b Chat to the window's edge: iOS insets both sides 62 points for the Dynamic Island, which is on one side only; the rail stands on the island's side (50 points in, clear of it) and the content runs into the other side's inset to 12 points from the glass, Chat without its 600-point measure. Turned the other way, the rail moves to the right edge with the island |
+| host-landscape | The host sheet on its side as the app ships it (`Sources/HostStatsLandscape.swift`, `HostStatsLandscape`): a chart screen in the landscape tabs' chrome (L12–L15). No header row: a rail on the Dynamic Island's side 2 points clear of it with Close and the host's disc (a tab menu disc's ⋯ badge) on top and Edit at its foot, the content to 12 points from the glass on the other side; CPU, Memory and Disk in a row, then CPU and memory in one chart on one 0–100% axis, the gridlines' values inside it. L19a at rest, L19b opening (the host's name as the tabs' title capsule for 2.5 s, under the row), L19c the disc open: the upright sheet's facts and its action |
 
 **iPhone Duo** (`Sources/Duo.swift`; the `Mockups` target on an iPhone Duo simulator, `shoot.py all duo`). As the app
 draws it (docs/ios.md, Windows). Unfolded, the inner screen (951 × 669 points, book posture): the Spaces tree in the

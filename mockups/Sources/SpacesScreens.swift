@@ -149,6 +149,9 @@ struct SpacesRootScreen: View {
         .padding(.horizontal, 16)
     }
 
+    /// The branch beside each space's name: Settings › Hosts › Show git branches, off by default as the app ships.
+    static let branches = false
+
     /// spaces: (name, branch, count, working)
     private func hostSection(_ name: String, glyph: String, tint: Color, mux: String, spaces: [(String, String?, String, Bool)], detached: Int = 0) -> some View {
         VStack(spacing: 10) {
@@ -157,7 +160,8 @@ struct SpacesRootScreen: View {
                 ForEach(Array(spaces.enumerated()), id: \.offset) { i, s in
                     HStack(spacing: 8) {
                         Text(s.0).font(.body)
-                        if let branch = s.1 {
+                        // The app's Settings › Hosts › Show git branches, off by default.
+                        if Self.branches, let branch = s.1 {
                             HStack(spacing: 3) {
                                 Text(branch).font(.caption)
                             }

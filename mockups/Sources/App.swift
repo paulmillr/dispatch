@@ -50,6 +50,14 @@ enum Screens {
         case "P2d-space-edit": SpaceScreen(editing: true)
         case "P2e-space-new-tab": SpaceScreen(newTabMenu: true)
         case "P3-space-switcher": SpaceSwitcherHost()
+        // The Agents tab (Mobile/Agents/AgentsScreen.swift).
+        case "A1-agents": AgentsTabBar { AgentsListScreen() }
+        case "A1b-agents-needs-you": AgentsTabBar { AgentsListScreen(filter: 1) }
+        case "A1c-agents-menu": AgentsMenuScreen()
+        case "A1d-agents-scrolled": AgentsTabBar { AgentsListScreen(scrolled: true) }
+        case "A1e-agents-by-host": AgentsTabBar { AgentsListScreen(byHost: true) }
+        case "A2-agents-no-host": AgentsEmptyScreen(kind: .offline)
+        case "A2b-agents-no-agents": AgentsEmptyScreen(kind: .noAgents)
         // Settings.
         case "G1-settings": SettingsScreen()
         case "G2-terminal-font": SettingsPush(title: "Terminal font") { TerminalFontScreen() }
@@ -65,12 +73,19 @@ enum Screens {
         case "C4-chat-goal": ChatGoalScreen()
         case "C4b-chat-goal-sheet": ChatGoalScreen(sheet: true)
         case "C5-chat-conversation": ChatConversationScreen()
-        case "C6-chat-jump": ChatJumpScreen()
+        // Jump to latest: the way back to the end whenever the thread is scrolled up (C7b: newer rows came).
+        case "C7a-jump-corner": JumpToEndScreen()
+        case "C7b-jump-corner-new": JumpToEndScreen(unseen: 2)
         // The queue: queued messages as faded bubbles (Messages' Send Later).
         case "Q1-queue-bubbles": QueueRowScreen()
         case "Q1b-queue-menu": QueueRowScreen(variant: .menu)
         case "Q1c-queue-editing": QueueRowScreen(variant: .editing)
         case "Q6-queue-paused": QueuePausedScreen()
+        // The working row's plan limits on its steps line, with the 5-hour window (N4c).
+        case "N4a-usage-steps-ring": UsageLimitsScreen()
+        case "N4c-usage-steps-ring-5h": UsageLimitsScreen(fiveHour: true)
+        case "N4d-usage-steps-ring-low": UsageLimitsScreen(low: true)
+        case "N4e-usage-steps-ring-5h-low": UsageLimitsScreen(fiveHour: true, low: true)
         // Message details.
         case "M1-message-info": MessageInfoScreen()
         case "M1b-message-info-unfolded": MessageInfoScreen(variant: .unfolded)
@@ -123,6 +138,10 @@ enum Screens {
         case "L14c-one-rail-terminal-keys": OneRailTerminalScreen(menu: true)
         case "L15-edge-terminal": OneRailTerminalScreen(edgeToEdge: true)
         case "L15b-edge-chat": OneRailChatScreen(edgeToEdge: true)
+        // The host sheet on its side as shipped: a rail on the island's side, the name for 2.5 s, the facts behind the disc.
+        case "L19a-host-rail": HostStatsRailScreen()
+        case "L19b-host-rail-opening": HostStatsRailScreen(state: .opening)
+        case "L19c-host-rail-facts": HostStatsRailScreen(state: .facts)
         case "I6-half-width": PadHalfWidth { HybridFilesScreen() }
         case "I6b-half-width-spaces": PadHalfWidth { PadSidebarTabs(width: 507) }
         default: Text("screen \(id)").font(.title)
