@@ -136,6 +136,11 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(TabsTime.elapsed(3600 + 5 * 60), "1h 5m")
         // Without a session: the row's summary.
         XCTAssertEqual(MobileComposition.status(row, session: nil), TabsStatus(text: "working"))
+        // Agents: the step's kind only, never the command or file.
+        XCTAssertEqual(MobileComposition.status(row, session: working, detail: false)?.text, working.currentStepGist ?? "working")
+        XCTAssertEqual(WatchSnapshotBuilder.gist(.run, title: "rm -f /srv/app/cache"), "Running shell command…")
+        XCTAssertEqual(WatchSnapshotBuilder.gist(.read, title: "Sources/a.swift"), "Reading file…")
+        XCTAssertEqual(WatchSnapshotBuilder.gist(.read, title: "a.swift, b.swift"), "Reading files…")
     }
 
     /// The newest `limit` items; `earlier` when more exist, here or on the host. The page survives the wire and fits a

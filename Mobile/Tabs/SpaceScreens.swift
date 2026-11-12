@@ -1,11 +1,13 @@
 import SwiftUI
 
 /// P2: a space's tabs, as the Mac strip shows them: named for what runs in them, the agent's mark or a terminal, what
-/// each is doing, in server order. The header carries the space with its branch, its host and path, and the space's
-/// menu (New tab, Edit, Detach, Terminate…); a row swipes to Detach and Close and holds the tab's menu; Edit (P2d)
-/// renames the space and its tabs in place, reorders the tabs on the server and closes them; the New tab capsule opens
-/// a shell here, held the agents the host can start (P2e). A plain host's Shell space has its shells only: Close, no
-/// Rename, Detach or reorder.
+/// each is doing, by time or in server order (the header's sort menu). The header is a tab's (B7): Back's circle, then
+/// one glass capsule with the host's disc, the space with its branch and its host and folder, which opens the space's
+/// menu (Edit, Detach, Terminate…), and the sort menu trailing. A row swipes to Close and holds the tab's menu with Move
+/// to (another of the host's spaces); Edit (P2d) renames the space and its tabs in place, reorders the tabs on the
+/// server and closes them; the New tab capsule opens a shell here, held the agents the host can start (P2e), and New
+/// chat beside it starts the agent used last. A plain host's Shell space has its shells only: Close, no Rename, Detach
+/// or reorder.
 struct SpaceTabsScreen: View {
     let navigator: SpacesNavigator
     let ref: SpaceRef
@@ -33,16 +35,20 @@ struct SpaceTabsScreen: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if let space, !editing, workspace?.canAddTab(to: space) == true {
-                SpaceNewTabButton(navigator: navigator, space: space)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 8)
+                HStack(spacing: 10) {
+                    let chat = SpaceNewChatButton.offered(navigator: navigator, space: space)
+                    if chat { SpaceNewChatButton(navigator: navigator, space: space) }
+                    SpaceNewTabButton(navigator: navigator, space: space, showsStarting: !chat)
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 8)
             }
         }
         .tabsPushedScreen()
         .toolbar {
             TabsScreenHeader(title: space?.name ?? "", column: column, trailingWidth: editing ? 78 : 44, branch: branch,
-                             atTrailingEdge: column == nil) {
-                TabsBackPill(label: "Spaces") { pop() }
+                             atTrailingEdge: column == nil, titleCapsule: capsule(space, host: host)) {
+                TabsBackDisc(back: "Spaces") { pop() }
             } subtitle: {
                 // As a tab's header: host · folder's name ("studio · app"), the whole path for VoiceOver.
                 if let host {
@@ -55,8 +61,8 @@ struct SpaceTabsScreen: View {
                         Text("Done").fontWeight(.semibold).padding(.leading, 6)
                     }
                     .accessibilityLabel("Done")
-                } else if let space {
-                    SpaceMenu(navigator: navigator, space: space, shells: shells, edit: { editing = true })
+                } else if space != nil, !shells {
+                    SpaceSortMenu(model: model)
                 }
             }
         }
@@ -76,6 +82,15 @@ struct SpaceTabsScreen: View {
             await gitFacts.watch(gitWatch.key, directory: gitWatch.directory)
         }
         .onChange(of: space == nil) { _, gone in if gone { editing = false } }
+    }
+
+    /// The header's capsule (B7, as a tab's): the host's disc, the name with its branch, host · folder under it; a tap
+    /// opens the space's menu, without New tab (the capsule at the bottom is New tab).
+    private func capsule(_ space: MobileSpace?, host: TabsHost?) -> TabsTitleCapsule? {
+        guard let space, let host else { return nil }
+        let menu = SpaceMenuItems(navigator: navigator, space: space, newTab: false, edit: ("Edit", { editing = true }))
+        return TabsTitleCapsule(glyph: AnyView(TabHostDisc(host: host)), menu: AnyView(menu), branch: branch,
+                                hint: "Opens the space's menu", identifier: "space-menu")
     }
 
     private func list(_ space: MobileSpace, workspace: MobileWorkspace, now: Date) -> some View {
@@ -123,6 +138,9 @@ struct SpaceTabsScreen: View {
                         TabsTabMenu(actions: actions, tab: entry.id)
                         if !shells {
                             Button("Edit", systemImage: "pencil") { editing = true }
+                        }
+                        SpaceMoveMenu(targets: workspace.moveTargets(from: space)) { target in
+                            move(entry.id, to: target, in: workspace)
                         }
                     }
                     // Close alone, also by a full swipe: it ends the tab, asking first while work runs (Detach, which
@@ -186,6 +204,16 @@ struct SpaceTabsScreen: View {
         }
     }
 
+    /// Move to: the tab goes to `target` on the server; the topology takes its row away from here.
+    private func move(_ ref: TabRef, to target: MobileSpace, in workspace: MobileWorkspace) {
+        guard let tab = workspace.tab(ref.key) else { return }
+        Task {
+            do { try await workspace.move(tab: tab, to: target) } catch {
+                actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
     private struct GitWatch: Hashable {
         let key: SpaceGitFacts.Key
         let directory: String
@@ -207,20 +235,21 @@ struct SpaceTabsScreen: View {
     private func pop() { if !path.isEmpty { path.removeLast() } }
 }
 
-/// P2c: the space's menu behind the header's "…": New tab, Edit (renaming the space and its tabs, reordering and
-/// closing them), then Detach ("keeps everything running") and Terminate… ("ends every shell and agent"), which asks
-/// first. A Shell space's: New tab and Close all.
-private struct SpaceMenu: View {
-    let navigator: SpacesNavigator
-    let space: MobileSpace
-    let shells: Bool
-    let edit: () -> Void
+/// P2's sort menu, trailing in the space's header where the space's "…" was: By time (most recent first) or Manual
+/// (the server's order, which Edit's drags change), for every space on this device (`MobileTabs.tabSort`).
+struct SpaceSortMenu: View {
+    @Bindable var model: MobileTabs
 
     var body: some View {
         Menu {
-            SpaceMenuItems(navigator: navigator, space: space, edit: ("Edit", edit))
+            Picker("Sort tabs", selection: $model.tabSort) {
+                ForEach(TabsSort.allCases) { sort in
+                    Label(sort.title, systemImage: sort.symbol).tag(sort)
+                }
+            }
+            .pickerStyle(.inline)
         } label: {
-            Image(systemName: "ellipsis")
+            Image(systemName: "arrow.up.arrow.down")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
@@ -228,23 +257,46 @@ private struct SpaceMenu: View {
         }
         // The label's 44 point circle, which the header's title leaves room for (`TabsScreenHeader.leadingWidth`): a bar
         // item's Menu otherwise becomes the bar's own menu button, 56 by 36 points around a 36 point circle, and a long
-        // space name folded the ⋯ into the bar's "…" (375 points, and the iPhone Air's 420 with its 20 point margins).
+        // space name folded it into the bar's "…" (375 points, and the iPhone Air's 420 with its 20 point margins).
         .menuStyle(.button)
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
         .contentShape(.hoverEffect, Circle())
         .hoverEffect(.highlight)
-        .accessibilityLabel("Space menu")
-        .accessibilityIdentifier("space-menu")
+        .accessibilityLabel("Sort tabs")
+        .accessibilityValue(model.tabSort.title)
+        .accessibilityIdentifier("space-sort")
     }
 }
 
-/// A space's menu items, the header's "…" and a space row's long press alike: New tab, then the way to change it (the
-/// header's Edit, for the space and its tabs; the list's Rename… and Edit Spaces, which reorders them), then Detach
-/// and Terminate… (a Shell space: Close all shells). As a tab's menu: what it is called, then how it ends.
+/// A tab row's Move to (in its long press, P2): the host's other spaces; picking one moves the tab there
+/// (`MobileWorkspace.move(tab:to:)`). Nothing without another space or a connection.
+struct SpaceMoveMenu: View {
+    let targets: [MobileSpace]
+    let move: (MobileSpace) -> Void
+
+    var body: some View {
+        if !targets.isEmpty {
+            Menu {
+                ForEach(targets) { target in
+                    Button(target.name) { move(target) }
+                }
+            } label: {
+                Label("Move to", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+        }
+    }
+}
+
+/// A space's menu items, the header's capsule and a space row's long press alike: New tab (the row's only: the space's
+/// screen has its capsule), then the way to change it (the header's Edit, for the space and its tabs; the list's
+/// Rename… and Edit Spaces, which reorders them), then Detach and Terminate… (a Shell space: Close all shells). As a
+/// tab's menu: what it is called, then how it ends.
 struct SpaceMenuItems: View {
     let navigator: SpacesNavigator
     let space: MobileSpace
+    /// New tab first (a space row's long press).
+    var newTab = true
     /// The header's Edit: a title and what it does.
     var edit: (title: String, action: () -> Void)? = nil
     /// The list's: Rename… and Edit Spaces.
@@ -254,7 +306,7 @@ struct SpaceMenuItems: View {
         let workspace = navigator.model.workspace(space.ref.host)
         let connected = workspace?.client != nil
         let shells = space.kind == .plainShell
-        if workspace?.canAddTab(to: space) == true {
+        if newTab, workspace?.canAddTab(to: space) == true {
             Button("New tab", systemImage: "plus") { navigator.newTab(in: space) }
         }
         if !shells {
@@ -290,7 +342,8 @@ struct SpaceMenuItems: View {
 /// What closing a space says (the Mac's choices; docs/integrations.md: closing a space always detaches).
 enum SpaceCloseCopy {
     static let detachNote = "keeps everything running"
-    static let terminateNote = "ends every shell and agent"
+    /// One line in the menu, as Detach's.
+    static let terminateNote = "ends all its work"
     /// The Close space dialog's message (P3's Close space, ⌘⇧W).
     static let message = "Detach keeps the space and its work running on the host; Terminate ends its windows and the processes in them."
 }
@@ -298,13 +351,14 @@ enum SpaceCloseCopy {
 /// P2e: the New tab capsule. A tap opens a shell in this space (a new shell on a plain host); held, the menu: Shell (the
 /// shell and folder it opens in), the agents the host can start (each on its own default model), and "In another
 /// space…" (New tab's picker). While an agent picked there starts, the capsule says so with a spinner ("Starting
-/// Claude…", the Mac's launch cover) until its tab opens in Chat.
+/// Claude…", the Mac's launch cover) until its tab opens in Chat, unless New chat beside it does (`showsStarting`).
 struct SpaceNewTabButton: View {
     let navigator: SpacesNavigator
     let space: MobileSpace
+    var showsStarting = true
 
     var body: some View {
-        let starting = navigator.startingAgents[space.ref]
+        let starting = showsStarting ? navigator.startingAgents[space.ref] : nil
         Menu {
             SpaceNewTabMenu(navigator: navigator, space: space)
         } label: {
@@ -336,6 +390,61 @@ struct SpaceNewTabButton: View {
         .accessibilityValue(starting.map { "Starting \($0)" } ?? "")
         .accessibilityHint("Hold for an agent or another space")
         .accessibilityIdentifier("space-new-tab")
+    }
+}
+
+/// P2's New chat capsule, before New tab: a tap starts the agent New chat used last (`SpacesNavigator.preferredAgent`,
+/// else the host's first) in a new tab here and opens it in Chat; held, the host's agents. Offered in a multiplexer's
+/// space once the host's agents are known (Chat on for the host). While one starts it says so ("Starting Claude…").
+struct SpaceNewChatButton: View {
+    let navigator: SpacesNavigator
+    let space: MobileSpace
+
+    @MainActor static func offered(navigator: SpacesNavigator, space: MobileSpace) -> Bool {
+        space.kind == .multiplexer && navigator.preferredAgent(host: space.ref.host) != nil
+    }
+
+    var body: some View {
+        let starting = navigator.startingAgents[space.ref]
+        let choices = navigator.agentChoices[space.ref.host] ?? []
+        Menu {
+            ForEach(choices) { choice in
+                Button { navigator.startAgent(choice, in: space) } label: {
+                    Text(choice.label)
+                    if let note = choice.note { Text(note) }
+                    Image(symbol: TabSegment.chat.symbol)
+                }
+                .disabled(starting != nil)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                if let starting {
+                    ProgressView()
+                    Text("Starting \(starting)…").font(.headline).lineLimit(1)
+                } else {
+                    Image(symbol: TabSegment.chat.symbol).font(.title3.weight(.medium))
+                    Text("New chat").font(.headline)
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(.leading, 18)
+            .padding(.trailing, 22)
+            .padding(.vertical, 8)
+            .frame(minHeight: 56)
+            .contentShape(Capsule())
+        } primaryAction: {
+            guard starting == nil, let choice = navigator.preferredAgent(host: space.ref.host) else { return }
+            navigator.startAgent(choice, in: space)
+        }
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
+        .accessibilityLabel("New chat")
+        .accessibilityValue(starting.map { "Starting \($0)" } ?? navigator.preferredAgent(host: space.ref.host)?.label ?? "")
+        .accessibilityHint("Hold for another agent")
+        .accessibilityIdentifier("space-new-chat")
     }
 }
 
@@ -401,6 +510,8 @@ struct SpacesAgentChoice: Identifiable, Hashable, Sendable {
 struct SpacesAgentLauncher {
     var choices: @MainActor (UUID) async -> [SpacesAgentChoice]
     var start: @MainActor (SpacesAgentChoice, MobileSpace) async throws -> Void
+    /// The agent New chat started last (its launch key; `ChatModelMemory.lastAgent`): P2's New chat starts it.
+    var preferred: @MainActor () -> String? = { nil }
 }
 
 /// P2's tab row: the state dot (blue needs you or unseen, amber working), the agent's mark or a terminal, the title as

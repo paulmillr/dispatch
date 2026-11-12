@@ -137,9 +137,105 @@ final class ChatRenderingTests: XCTestCase {
         helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: true)))
         try await TestSupport.eventually { session.working }
         let row = ChatWorkingRow(session: session, directory: nil, expanded: .constant(true), openStep: { _ in })
-        XCTAssertEqual(size(row).height, 45 + 6 + 22, accuracy: 8, "The 44 pt row, its hairline and the hint")
+        let step = size(ChatStepLogRow(step: nil)).height
+        XCTAssertEqual(size(row).height, 45 + 26 + 4 * step + 3 * ChatStepWindow.rule + 6, accuracy: 1,
+                       "The 44 pt row and its hairline, the steps line, a window four steps tall with no step in it yet")
         let folded = ChatWorkingRow(session: session, directory: nil, expanded: .constant(false), openStep: { _ in })
         XCTAssertEqual(size(folded).height, 45, accuracy: 1, "Folded, the row is its hairline and 44 pt")
+    }
+
+    /// Every step of the live log is two lines tall, with a result or without, at any text size: the window over them
+    /// never changes height.
+    func testEveryLogStepIsTwoLinesTall() {
+        let read = ChatStep(ChatItem(id: "r", kind: .tool, text: #"{"file_path":"/w/a.ts"}"#, title: "Read", completed: true), directory: "/w")
+        var item = ChatItem(id: "c", kind: .tool, text: #"{"command":"cargo test"}"#, title: "Bash", completed: true)
+        item.exitCode = 1
+        let failed = ChatStep(item, directory: "/w")
+        XCTAssertNil(read.detail)
+        XCTAssertTrue(failed.failed)
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let heights = [ChatStepLogRow(step: nil), ChatStepLogRow(step: read), ChatStepLogRow(step: failed, live: true)]
+                .map { size($0.environment(\.dynamicTypeSize, typeSize)).height }
+            XCTAssertEqual(Set(heights.map { $0.rounded() }).count, 1, "\(typeSize): \(heights)")
+        }
+    }
+
+    /// The steps line's limits (N4a): the week, the longest window still running, with when it resets; an account that
+    /// still reports the 5-hour window shows that one in the reset's place. Dim under 80%.
+    func testTheStepsLineShowsTheWeekAndTheFiveHourWindowInItsResetsPlace() {
+        let now = Date(timeIntervalSince1970: 1_794_000_000)
+        let week = ChatLimitWindow(name: "seven_day", used: 83, resets_at: now.timeIntervalSince1970 + 3 * 86_400)
+        let hours = ChatLimitWindow(name: "five_hour", used: 42, resets_at: now.timeIntervalSince1970 + 8_280)
+        let gone = ChatLimitWindow(name: "five_hour", used: 99, resets_at: now.timeIntervalSince1970 - 60)
+        XCTAssertEqual(ChatLimitsLine.windows([hours, week], now: now)?.main, week)
+        XCTAssertEqual(ChatLimitsLine.windows([hours, week], now: now)?.short, hours)
+        XCTAssertNil(ChatLimitsLine.windows([week, gone], now: now)?.short, "a window past its reset is not shown")
+        XCTAssertNil(ChatLimitsLine.windows([], now: now))
+        let codex = ChatLimitWindow(name: "window_10080", used: 10, resets_at: now.timeIntervalSince1970 + 86_400 * 2)
+        XCTAssertEqual(codex.minutes, 10080)
+        XCTAssertEqual(ChatLimitsLine.resets(hours, now: now), "Resets in 2h 18m")
+        XCTAssertTrue(ChatLimitsLine.resets(week, now: now).hasPrefix("Resets "), ChatLimitsLine.resets(week, now: now))
+        XCTAssertEqual(ChatLimitsLine.spoken([hours, week], now: now).components(separatedBy: ". ").count, 2)
+        XCTAssertEqual(ChatUsageText.text(nil, cost: false), nil)
+        let counted = ChatUsage(["info": ["total_token_usage": ["input_tokens": 182_400, "output_tokens": 12_350],
+                                          "total_cost_usd": 0.042]])
+        XCTAssertEqual(ChatUsageText.text(counted, cost: false), "182.4K in · 12.3K out")
+        XCTAssertEqual(ChatUsageText.text(counted, cost: true), "182.4K in · 12.3K out · $0.042", "Pi's cost")
+        let off = ChatUsage(["info": ["last_token_usage": ["total_tokens": 64_000], "model_context_window": 200_000]])
+        XCTAssertNotNil(off)
+        XCTAssertNil(ChatUsageText.text(off, cost: false), "token counter off: nothing said of it")
+    }
+
+    /// The limits are read only after the user agreed for that agent, then at most every 10 minutes per host and agent; a
+    /// failure is not kept, Not Now holds for the run.
+    func testLimitsAreReadOnlyAfterConsentAndAtMostEveryTenMinutes() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "limits-\(UUID().uuidString)"))
+        var now = Date(timeIntervalSince1970: 1_794_000_000)
+        let reader = ChatLimitsReader(defaults: defaults, clock: { now })
+        let key = ChatLimitsReader.Key(host: UUID(), agent: "claude")
+        var reads = 0
+        let read: @MainActor () async throws -> [ChatLimitWindow] = {
+            reads += 1
+            return [ChatLimitWindow(name: "seven_day", used: 18, resets_at: 1_794_866_400)]
+        }
+        reader.open(key, read: read)
+        XCTAssertNil(reader.phases[key], "nothing asked before Show Limits")
+        reader.decline("claude")
+        XCTAssertTrue(reader.declined("claude"))
+        reader.accept("claude")
+        XCTAssertTrue(ChatLimitsReader(defaults: defaults).consented("claude"), "kept on this device")
+        reader.open(key, read: read)
+        try await TestSupport.eventually { if case .shown = reader.phases[key] { true } else { false } }
+        reader.open(key, read: read)
+        XCTAssertEqual(reads, 1, "within the minute, the reading answers")
+        now += 300
+        reader.open(key, read: read)
+        XCTAssertEqual(reads, 1, "and within 10 minutes")
+        now += 301
+        reader.open(key, read: read)
+        try await TestSupport.eventually { reads == 2 }
+        try await TestSupport.eventually { if case .shown = reader.phases[key] { true } else { false } }
+        now += 601
+        reader.open(key) { throw HelperFailure(code: "expired", message: "Claude Code did not run its status line") }
+        try await TestSupport.eventually { reader.phases[key] == .failed("Claude Code did not run its status line") }
+        reader.open(key, read: read)
+        try await TestSupport.eventually { reads == 3 }
+    }
+
+    /// The log's line counts the steps and, once they outnumber the window, what lies above and below it.
+    func testTheLogLineSaysWhatTheWindowHides() {
+        func read(_ id: String) -> ChatStep {
+            ChatStep(ChatItem(id: id, kind: .tool, text: #"{"file_path":"/w/\#(id).ts"}"#, title: "Read", completed: true), directory: "/w")
+        }
+        let thought = ChatStep(ChatItem(id: "t", kind: .reasoning, text: "Checking the guard", title: "", completed: true), directory: nil)
+        XCTAssertEqual(ChatStepWindow.caption([], above: 0, below: 0), "No steps yet")
+        XCTAssertEqual(ChatStepWindow.caption([read("a"), thought], above: 0, below: 0), "1 step · 1 thought")
+        let twelve = (0..<12).map { read("\($0)") }
+        XCTAssertEqual(ChatStepWindow.caption(twelve, above: 5, below: 3), "12 steps · 5 above · 3 below")
+        XCTAssertTrue(ChatStepWindow.hidden(count: 3, offset: 0, pitch: 50) == (0, 0), "Three fit")
+        XCTAssertTrue(ChatStepWindow.hidden(count: 12, offset: 0, pitch: 50) == (0, 8), "At the top")
+        XCTAssertTrue(ChatStepWindow.hidden(count: 12, offset: 260, pitch: 50) == (5, 3))
+        XCTAssertTrue(ChatStepWindow.hidden(count: 12, offset: 900, pitch: 50) == (8, 0), "At the foot, bounced past it")
     }
 
     /// A user message's images sit above its bubble on the user's side, within the bubble's share: one large, else up

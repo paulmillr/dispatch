@@ -283,6 +283,7 @@ targets:
       - DispatchTests/GitReadCoreTests.swift
       - DispatchTests/HelperChatTransportTests.swift
       - DispatchTests/SurfaceSessionCoreTests.swift
+      - DispatchTests/TerminalRendererPrewarmTests.swift
       - DispatchTests/HelperPolicyTests.swift
       - DispatchTests/ChatPresentationPolicyTests.swift
     dependencies:

@@ -84,18 +84,21 @@ struct HostStatsPresentation {
 /// status as its title with Edit (the pencil) at both detents, the stat strip over the 15-minute sparkline, the top
 /// processes and the connection list, with one action: Disconnect, or Connect while offline. Its small detent shows the
 /// strip and Disconnect, or offline the connection list and Connect, with the screen behind it still usable; the large
-/// one everything. Everything the user sets (the switches, the colour, Remove host) is Edit host's. Present it with
-/// `hostStatsSheet(host:)`.
+/// one everything. On a phone's side it is a chart screen instead (`HostStatsLandscape`, L19). Everything the user sets
+/// (the switches, the colour, Remove host) is Edit host's. Present it with `hostStatsSheet(host:)`.
 struct HostStatsSheet: View {
     let hostID: UUID
     var launch = HostStatsLaunch()
 
     @Environment(HostSessions.self) private var sessions
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.hostNewSpace) private var newSpace
     @State private var detent: PresentationDetent
     @State private var metric: HostStatistics.Metric
     @State private var scrub: Int?
     @State private var editing = false
+    /// A phone on its side: the chart screen (`HostStatsLandscape`, L19) instead of the sheet's stack.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     /// The small detent: the strip and one action, or the connection list and Connect.
     nonisolated static let small = PresentationDetent.height(372)
@@ -117,12 +120,18 @@ struct HostStatsSheet: View {
     var body: some View {
         Group {
             if let session = sessions.session(hostID) {
-                NavigationStack { content(session) }
-                    .hostStatsViewing(session.stats)
-                    // Remove host in Edit host closes this sheet too (the session goes: the branch below).
-                    .sheet(isPresented: $editing) {
-                        NewHostSheet(editing: session.host).tint(.dispatchPink)
+                Group {
+                    if verticalSizeClass == .compact {
+                        HostStatsLandscape(session: session, editing: $editing, newSpace: newSpace) { dismiss() }
+                    } else {
+                        NavigationStack { content(session) }
                     }
+                }
+                .hostStatsViewing(session.stats)
+                // Remove host in Edit host closes this sheet too (the session goes: the branch below).
+                .sheet(isPresented: $editing) {
+                    NewHostSheet(editing: session.host).tint(.dispatchPink)
+                }
             } else {
                 // Removed elsewhere while open.
                 Color.clear.onAppear { dismiss() }
@@ -130,7 +139,7 @@ struct HostStatsSheet: View {
         }
         .tint(.dispatchPink)
         .presentationDetents(detents, selection: $detent)
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(verticalSizeClass == .compact ? .hidden : .visible)
         .presentationBackgroundInteraction(.enabled(upThrough: Self.small))
         .presentationBackground(Color.canvas)
     }
@@ -175,6 +184,11 @@ struct HostStatsSheet: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { editing = true } label: { Image(systemName: "pencil") }
                     .accessibilityLabel("Edit")
+            }
+            if let newSpace, newSpace.offered(hostID) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    HostNewSpaceButton(hostID: hostID, newSpace: newSpace) { dismiss() }
+                }
             }
         }
     }
@@ -459,6 +473,39 @@ extension View {
     }
 }
 
+/// The host sheet's New space (+, after Edit): what Spaces sets (`spacesPresentations`); nil offers none.
+struct HostNewSpace {
+    /// The host can take a space now (connected, a multiplexer known).
+    var offered: @MainActor (UUID) -> Bool
+    /// A space is being made on the host: the button waits.
+    var creating: @MainActor (UUID) -> Bool
+    /// Makes a space with New space's defaults, without the form (`SpacesNavigator.quickSpace`'s); `dismiss` closes the
+    /// sheet or popover once it is made (or refused), before the space opens or the failure shows.
+    var create: @MainActor (UUID, _ dismiss: @escaping @MainActor () -> Void) -> Void
+}
+
+extension EnvironmentValues {
+    @Entry var hostNewSpace: HostNewSpace? = nil
+}
+
+/// The host sheet's + (after Edit's pencil): a new space on this host at once, a spinner while it is made.
+struct HostNewSpaceButton: View {
+    let hostID: UUID
+    let newSpace: HostNewSpace
+    let dismiss: @MainActor () -> Void
+
+    var body: some View {
+        let creating = newSpace.creating(hostID)
+        Button { newSpace.create(hostID, dismiss) } label: {
+            if creating { ProgressView() } else { Image(systemName: "plus") }
+        }
+        .disabled(creating)
+        .accessibilityLabel("New space")
+        .accessibilityValue(creating ? "Creating" : "")
+        .accessibilityIdentifier("host-new-space")
+    }
+}
+
 /// Presents a host's stats sheet.
 private struct HostStatsItem: Identifiable {
     let id: UUID
@@ -488,6 +535,8 @@ struct HostStatsLaunch {
 struct HostStatsPopoverContent: View {
     let hostID: UUID
     @Environment(HostSessions.self) private var sessions
+    @Environment(\.hostNewSpace) private var newSpace
+    @Environment(\.dismiss) private var dismiss
     @State private var metric: HostStatistics.Metric = .cpu
     @State private var scrub: Int?
     @State private var editing = false
@@ -510,6 +559,14 @@ struct HostStatsPopoverContent: View {
                             .buttonStyle(.plain)
                             .glassEffect(.regular.interactive(), in: Circle())
                             .accessibilityLabel("Edit")
+                            if let newSpace, newSpace.offered(hostID) {
+                                HostNewSpaceButton(hostID: hostID, newSpace: newSpace) { dismiss() }
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color.dispatchPink)
+                                    .frame(width: 34, height: 34)
+                                    .buttonStyle(.plain)
+                                    .glassEffect(.regular.interactive(), in: Circle())
+                            }
                         }
                         .padding(.top, 2)
                         HostStatsBody(session: session, metric: $metric, scrub: $scrub)

@@ -114,6 +114,11 @@ enum ChatDemo {
                                        "last_token_usage": ["total_tokens": 158_000], "model_context_window": 250_000]]
             state["agents"] = ["explorer", "worker"]
         }
+        if ["M5a", "M5f"].contains(screen) {
+            // The working row's usage line, unfolded.
+            state["usage"] = ["info": ["total_token_usage": ["input_tokens": 182_400, "output_tokens": 12_350],
+                                       "last_token_usage": ["total_tokens": 64_000], "model_context_window": 200_000]]
+        }
         return state
     }
 
@@ -212,6 +217,9 @@ enum ChatDemo {
             case "queue.list": respond(id, screen == "M5c" ? queued() : [])
             // M4b's chips: the answer is written, as the helper's hook would report it. A message or a stop from the
             // composer is typed into the terminal (the thread keeps the sent bubble; no turn follows).
+            // The plan's limits (feature chat.limits): the week at 83%, resetting in three days.
+            case "chat.limits":
+                respond(id, [["name": "seven_day", "used": 83, "resets_at": Date().timeIntervalSince1970 + 3 * 86_400 + 1_800]])
             case "interactions.answer", "chat.send", "chat.stop":
                 respond(id, ["written": true, "may_have_sent": true, "reason": NSNull()])
                 if method == "chat.send", ChatDemo.echoes, let text = params["text"] as? String { echo(text, terminal: terminal) }
@@ -412,7 +420,7 @@ enum ChatDemo {
             }
         } else {
             conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: link, client: peer.client, topology: topology(),
-                                                  features: [ChatAttachment.feature]))
+                                                  features: [ChatAttachment.feature, HelperSession.chatLimits]))
         }
         if ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_LINK"] == "cycle" {
             // Frame checks of M4c's banner: the link drops after 3 s and comes back 4 s later (the thread reattaches).
@@ -449,7 +457,7 @@ struct ChatDemoRoot: View {
         switch screen {
         case "M3a":
             let agents = NavigationStack {
-                AgentsScreen(conversations: conversations, look: ChatDemo.look, open: { _ in }, close: { _ in })
+                AgentsScreen(conversations: conversations, look: ChatDemo.look, context: AgentsContext(close: { _ in }))
                     // The app's canvas, as the shell gives the Agents tab (#F2F2F7 in light, L1a).
                     .background(Color.canvas)
             }

@@ -95,6 +95,19 @@ final class ChatTranscriptTests: XCTestCase {
         XCTAssertEqual(transcript.lastActivity, Date(timeIntervalSince1970: 946_719_172))
     }
 
+    /// A turn's end written after its answer is the thread's newest activity: the list's `reply_ms` counts it, so a
+    /// thread marked seen through `lastActivity` is not unread again once its row comes from `chat.list`.
+    func testATurnsEndAfterItsAnswerIsTheNewestActivity() throws {
+        var transcript = MobileTranscript()
+        var all = try ChatFixture.records("claude-thread")
+        let end = try XCTUnwrap(all.firstIndex { $0["id"] as? String == "f2:ended" })
+        all[end]["time_ms"] = Int64(946_719_175_000)
+        transcript.apply(try records(all), historical: true)
+        XCTAssertEqual(transcript.lastActivity, Date(timeIntervalSince1970: 946_719_175), "the end, 3 s after the answer")
+        let reply = ChatConversationSummary(preview: "Done.", finished: true, reply: Date(timeIntervalSince1970: 946_719_175))
+        XCTAssertEqual(reply.replied, transcript.lastActivity, "what the seen marker is compared with")
+    }
+
     func testAWrapperThatOnlyRepeatsItsPatchIsOneStep() {
         let diff = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
         var patch = ChatItem(id: "p", kind: .tool, text: "*** Begin Patch\n*** Update File: x\n@@\n-a\n+b\n*** End Patch", title: "apply_patch")

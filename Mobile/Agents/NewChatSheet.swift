@@ -47,7 +47,9 @@ extension ChatConversations {
             throw HelperFailure(code: "not_found", message: "\(space.name) is no longer on \(space.hostName).")
         }
         let terminal = try await client.create(.init(parent: parent, beside: nil, cwd: nil, launch: launch.launch))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        // The agent runs from here on: past the deadline it is not an error to try again (that started a second one),
+        // only a tab still on its way, which Agents lists when it shows (`HelperFailure` code "started").
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while ContinuousClock.now < deadline {
             if let key = key(host: space.host, terminal: terminal) {
                 let chat = session(for: key)
@@ -57,7 +59,7 @@ extension ChatConversations {
             }
             try await Task.sleep(for: .milliseconds(100))
         }
-        throw HelperFailure(code: "timeout", message: "The chat started, but its tab has not appeared on \(space.hostName) yet.")
+        throw HelperFailure(code: "started", message: "The chat started on \(space.hostName); its tab shows in Agents once the host lists it.")
     }
 }
 
@@ -101,12 +103,17 @@ struct NewChatSheet: View {
         self.look = look
         self.spaceMaker = spaceMaker
         self.started = started
-        _space = State(initialValue: conversations.spaces.first)
+        // The space last used (New tab's `recentSpace`), else the first.
+        let spaces = conversations.spaces
+        let preferred = conversations.preferredSpace?()
+        _space = State(initialValue: spaces.first { $0.host == preferred?.host && $0.key == preferred?.key } ?? spaces.first)
     }
     @State private var agent: String?
     @State private var model: String?
     @State private var effort: String?
     @State private var starting = false
+    /// The sheet was closed: a start still on its way opens nothing.
+    @State private var presence = NewChatPresence()
     @State private var error: String?
     /// Starting needs an optional integration installed first: the user's answer.
     @Environment(\.dismiss) private var dismiss
@@ -252,6 +259,7 @@ struct NewChatSheet: View {
         .tint(Color.dispatchPink)
         // M9a draws the sheet's grabber, as New space's (M7a) does.
         .mobileSheetGrabber()
+        .onDisappear { presence.gone = true }
         .onChange(of: spaces) { _, spaces in
             if let made = making?.made { adopt(made) } else if space == nil { space = spaces.first }
         }
@@ -362,9 +370,19 @@ struct NewChatSheet: View {
             do {
                 let key = try await conversations.start(launch, in: space, settings: model.map { ($0, effort) })
                 memory.remember(agent: launch.key)
+                // Closed while it started: the chat is in Agents; nothing opens later over another screen.
+                guard !presence.gone else { return }
                 dismiss()
                 started(key)
+            } catch let failure as HelperFailure where failure.code == "started" {
+                memory.remember(agent: launch.key)
+                if !presence.gone { dismiss() }
             } catch { self.error = error.localizedDescription }
         }
     }
+}
+
+/// Whether New chat is still on screen, read by its start's task after the sheet may have gone.
+@MainActor final class NewChatPresence {
+    var gone = false
 }

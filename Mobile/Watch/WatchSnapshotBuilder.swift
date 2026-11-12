@@ -148,6 +148,23 @@ struct WatchSnapshotBuilder {
         }
     }
 
+    /// The step's kind alone, without what it acts on ("Running shell command…", "Reading file…"): Agents' rows, which
+    /// say what an agent is doing, not the command or file (docs/ios.md, Agents).
+    static func gist(_ step: ChatStep) -> String { gist(step.kind, title: step.title) }
+
+    static func gist(_ kind: ChatStep.Kind, title: String) -> String {
+        let several = title.contains(", ")
+        switch kind {
+        case .patch: return several ? "Editing files…" : "Editing file…"
+        case .read: return several ? "Reading files…" : "Reading file…"
+        case .run: return "Running shell command…"
+        case .search: return "Searching…"
+        case .web: return "Browsing the web…"
+        case .think: return "Thinking…"
+        case .tool: return "Using a tool…"
+        }
+    }
+
     /// An approval in a line: "Allow <subject>?" when its operation names a command, file, URL or pattern (as
     /// `approvalPresentation`'s code block); else its own words unless they are the operation itself (raw JSON or a
     /// tool's input); else "Allow a tool call?".

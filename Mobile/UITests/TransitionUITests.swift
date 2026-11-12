@@ -206,6 +206,23 @@ final class TransitionUITests: XCTestCase {
         }
     }
 
+    /// Stop stops once held where it is: a touch brings up "Hold to stop" over the row, left alone it goes, let go
+    /// early nothing stops, held three seconds it stops.
+    func testStopNeedsAHold() {
+        let app = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5a"])
+        rest()
+        let stop = app.descendants(matching: .any)["chat-stop"]
+        let hold = app.descendants(matching: .any)["chat-stop-hold"]
+        tap(stop)
+        XCTAssertTrue(hold.waitForExistence(timeout: 2), "A tap on Stop brings up the capsule")
+        XCTAssertTrue(hold.waitForNonExistence(timeout: 7), "Left alone, it goes")
+        stop.press(forDuration: 1)
+        XCTAssertTrue(hold.exists, "Let go early: the capsule stays")
+        XCTAssertTrue(stop.exists, "and nothing stopped")
+        stop.press(forDuration: 3.5)
+        XCTAssertTrue(hold.waitForNonExistence(timeout: 3), "Held three seconds, it stops")
+    }
+
     /// M5c's queue card collapses with Done and opens again from its caption.
     func testQueueCard() {
         let app = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5c"])

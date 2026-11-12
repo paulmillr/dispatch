@@ -36,6 +36,8 @@ enum HostSessionEvent: Sendable {
     case following(String?)
     /// A `stats.ping` round trip.
     case latency(Duration)
+    /// An agent on the followed backend changed state or wrote (`agent.changed` with `agents.activity`).
+    case agentActivity
 }
 
 /// How the driver starts the helper (docs/ios.md, Helper contract): `command(sha256)` on a plain exec channel, with no

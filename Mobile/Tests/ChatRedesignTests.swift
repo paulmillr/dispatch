@@ -6,7 +6,7 @@ import XCTest
 @testable import DispatchMobile
 
 /// The chat redesign (C1–C6, S6) against the scripted helper and the real helper's recorded pages (Fixtures/Chat):
-/// the turn footnote, search, the slash list, side conversations, the goal, the jump pill's count and conversation
+/// the turn footnote, search, the slash list, side conversations, the goal, the jump button's count and conversation
 /// mode's state machine (a scripted listener and speaker: no audio).
 @MainActor
 final class ChatRedesignTests: XCTestCase {

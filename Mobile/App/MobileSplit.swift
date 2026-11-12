@@ -209,6 +209,9 @@ struct PadSplitDetail: View {
         .background { PadColumnMarker().accessibilityHidden(true) }
     }
 
+    @Environment(\.tabsRootTitle) private var rootTitle
+    private var agents: Bool { rootTitle == MobileSection.agents.title }
+
     private var stack: some View {
         NavigationStack(path: Binding(get: { navigator.splitPath.detail }, set: { navigator.setDetail($0) })) {
             Group {
@@ -218,10 +221,12 @@ struct PadSplitDetail: View {
                         .environment(\.tabsPadStrip, true)
                         .id(tab)
                 } else {
+                    // As the sidebar's section says it: a space's tabs, or a conversation.
                     ContentUnavailableView {
-                        Label("No tab open", systemImage: "square.on.square")
+                        Label(agents ? "No conversation open" : "No tab open",
+                              systemImage: agents ? "bubble.left.and.bubble.right" : "square.on.square")
                     } description: {
-                        Text("Open a space in the sidebar.")
+                        Text(agents ? "Open a conversation in the sidebar." : "Open a space in the sidebar.")
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.canvas)

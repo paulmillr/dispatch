@@ -153,7 +153,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                 case .terminal:
                     if let pane = tab.activePane { terminal(tab, pane) } else { TabGone() }
                 case .chat:
-                    if let pane = tab.agentPane {
+                    if let pane = chatPane(tab) {
                         chat(tab, pane).environment(\.chatShowTerminal, ChatTerminalSwitch { choose(.terminal) })
                     } else { TabNoAgent() }
                 case .files:
@@ -186,8 +186,9 @@ struct TabScreen<Terminal: View, Chat: View>: View {
             }
         }
         .tabsPushedScreen()
-        // The strip is the iPad's header: no bar over the tab.
-        .toolbarVisibility(strip ? .hidden : .automatic, for: .navigationBar)
+        // The strip is the iPad's header: no bar over the tab. Visible, not automatic, upright: turned back from its
+        // side (whose screens hide it) the stack kept the bar hidden now and then.
+        .toolbarVisibility(strip ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             // None in the iPad's strip layout: the strip above the column is its header.
             if !strip, let tab, let workspace {
@@ -214,6 +215,12 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     /// The Chat segment's control, nil elsewhere, which conversation mode's waveform replaces while on: in the header
     /// the mode button (the conversation's items are in the title capsule's menu); on a phone's side the rail's menu
     /// disc, holding the conversation's items.
+    /// The pane the Chat segment shows: its agent's, or once the agent exited the pane whose thread is still held, read
+    /// only (its banner says the agent exited), so the conversation does not vanish under the reader.
+    private func chatPane(_ tab: MobileTab) -> MobilePane? {
+        tab.agentPane ?? tab.panes.first { model.keepsTranscript(tab.ref.host, $0.key) }
+    }
+
     private func chatControls(_ tab: MobileTab, host: TabsHost) -> AnyView? {
         guard current(tab) == .chat, let pane = tab.agentPane, let chatTrailing else { return nil }
         if modeButton { return chatTrailing(tab, pane, AnyView(modeButtonView(tab))) }
@@ -372,7 +379,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         case .terminal:
             if let pane = tab.activePane { terminal(tab, pane) } else { TabGone() }
         case .chat:
-            if let pane = tab.agentPane {
+            if let pane = chatPane(tab) {
                 chat(tab, pane).environment(\.chatShowTerminal, ChatTerminalSwitch { setMode(.terminal) })
             } else {
                 TabNoAgent()
@@ -474,7 +481,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         case .terminal:
             if let pane = tab.activePane { terminal(tab, pane) } else { TabGone() }
         case .chat:
-            if let pane = tab.agentPane {
+            if let pane = chatPane(tab) {
                 chat(tab, pane)
                     .environment(\.chatShowTerminal, ChatTerminalSwitch { setMode(.terminal) })
                     .frame(maxWidth: Self.chatWidth)
@@ -570,6 +577,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     }
 
     private func back() { if !path.isEmpty { path.removeLast() } }
+    @Environment(\.tabsRootTitle) private var rootTitle
 
     /// The screen Back returns to: the space, a host, or Spaces itself.
     private var backTitle: String {
@@ -577,9 +585,14 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         case .space(let space)?: model.space(space)?.name ?? "Back"
         case .detached(let id)?: model.workspace(id)?.host.name ?? "Back"
         case .tab(let tab)?, .files(let tab, _)?: model.tab(tab).flatMap { tab in model.workspace(tab.ref.host).map { model.label(of: tab, host: $0.host) } } ?? "Back"
-        case nil: "Spaces"
+        case nil: rootTitle
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The section under the stack's first screen ("Spaces" or "Agents"): what Back from it names.
+    @Entry var tabsRootTitle = "Spaces"
 }
 
 /// The top of a tab. On the phone (B7): Back in its own circle, then one capsule with the host's disc, the title and
@@ -916,8 +929,9 @@ struct TabModeButton: View {
     }
 }
 
-/// The disc's ⋯ badge: a small grey circle ringed in the canvas, so it reads as a separate mark on the glass.
-private struct TabHeaderMenuBadge: View {
+/// The disc's ⋯ badge: a small grey circle ringed in the canvas, so it reads as a separate mark on the glass. The host
+/// stats screen's disc on a phone's side wears it too (`HostStatsLandscape`).
+struct TabHeaderMenuBadge: View {
     var body: some View {
         Image(systemName: "ellipsis")
             .font(.system(size: 8, weight: .heavy))

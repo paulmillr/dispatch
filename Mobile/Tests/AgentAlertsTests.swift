@@ -297,6 +297,14 @@ final class AgentAlertsTests: XCTestCase {
         XCTAssertTrue(ChatConversations.arrivals(from: [row(summary(busy: true))], to: [], hosts: offline).isEmpty)
     }
 
+    /// Mute quiets results and stops, never an approval or question the agent waits on.
+    func testMuteLetsApprovalsThrough() {
+        XCTAssertFalse(AgentAlerts.silenced(.needsYou(question: true), muted: true))
+        XCTAssertTrue(AgentAlerts.silenced(.finished, muted: true))
+        XCTAssertTrue(AgentAlerts.silenced(.stopped, muted: true))
+        XCTAssertFalse(AgentAlerts.silenced(.finished, muted: false))
+    }
+
     private func topologyWithoutDocs() throws -> HelperTopology {
         let data = try JSONEncoder().encode(HostFixture.topology())
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])

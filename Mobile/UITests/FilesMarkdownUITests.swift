@@ -1,7 +1,7 @@
 import XCTest
 
 /// A Markdown file rendered as a page (`FileMarkdownReader`), on the Spaces sample's README.md: a tap on a section's
-/// heading folds it and another opens it; the "…" menu's Outline folds them all, unfolds them, and scrolls to one.
+/// heading folds it and another opens it; the "…" menu's Outline scrolls to one (no Fold All or Unfold All).
 @MainActor
 final class FilesMarkdownUITests: XCTestCase {
     override func setUp() {
@@ -28,6 +28,8 @@ final class FilesMarkdownUITests: XCTestCase {
         outline.tap()
         let entry = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", item)).firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 5), item)
+        XCTAssertFalse(app.buttons["Fold All"].exists, "no Fold All")
+        XCTAssertFalse(app.buttons["Unfold All"].exists, "no Unfold All")
         entry.tap()
     }
 
@@ -45,16 +47,13 @@ final class FilesMarkdownUITests: XCTestCase {
         tokens.tap()
         XCTAssertTrue(cell.waitForExistence(timeout: 5), "another tap opens it")
 
-        outline(app, "Fold All")
-        gone(cell)
-        gone(quote)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'The app follows'")).firstMatch.exists,
-                      "the lone title stays open")
         // Going to a heading opens the folded sections around it, not its own.
+        let dark = app.buttons["file-markdown-heading-2"]
+        dark.tap()
+        gone(quote)
         outline(app, "Dark mode")
-        XCTAssertFalse(quote.exists)
-        outline(app, "Unfold All")
-        XCTAssertTrue(cell.waitForExistence(timeout: 5))
-        XCTAssertTrue(quote.waitForExistence(timeout: 5))
+        XCTAssertFalse(quote.exists, "its own fold stays")
+        dark.tap()
+        XCTAssertTrue(quote.waitForExistence(timeout: 5), "a tap opens it")
     }
 }

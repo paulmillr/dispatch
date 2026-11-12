@@ -81,11 +81,11 @@ final class TabsRenderTests: XCTestCase {
         }
     }
 
-    /// P2 with a long space name and its branch: the title truncates beside "‹ Spaces", and the space's ⋯ stays in the
-    /// bar as the 44 point circle the title's room assumes, at every iPhone's width (the stack's column is its window's).
-    /// The bar's margins follow the window, not the device (16 up to 402 points, 20 from 420), so every simulator checks
-    /// every width. A ⋯ the bar drew as its own 56 by 36 point menu button left the title 12 points too many: at 375
-    /// and on the iPhone Air's 420 the bar folded the ⋯ into its "…".
+    /// P2 with a long space name and its branch: the title capsule truncates beside Back's circle, and the sort menu
+    /// stays in the bar as the 44 point circle the title's room assumes, at every iPhone's width (the stack's column is
+    /// its window's). The bar's margins follow the window, not the device (16 up to 402 points, 20 from 420), so every
+    /// simulator checks every width. A trailing menu the bar drew as its own 56 by 36 point menu button left the title 12
+    /// points too many: at 375 and on the iPhone Air's 420 the bar folded it into its "…".
     func testALongSpaceNameStaysInTheBar() async throws {
         AccessibilityLabelTests.enableAccessibility()
         let helper = ScriptedHelper()
@@ -110,13 +110,13 @@ final class TabsRenderTests: XCTestCase {
                 try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "\(name), \(width): \(frames)") {
                     frames = [:]
                     for element in AccessibilityLabelTests.elements(in: window) {
-                        guard let label = element.accessibilityLabel, ["Back to Spaces", "Space menu"].contains(label) else { continue }
+                        guard let label = element.accessibilityLabel, ["Back to Spaces", "Sort tabs"].contains(label) else { continue }
                         frames[label] = window.convert(element.accessibilityFrame, from: window.screen.coordinateSpace)
                     }
                     return frames.count == 2
                 }
-                let back = try XCTUnwrap(frames["Back to Spaces"]), menu = try XCTUnwrap(frames["Space menu"])
-                XCTAssertEqual(menu.width, 44, accuracy: 0.5, "\(name), \(width): the ⋯ is the mockup's circle, \(menu)")
+                let back = try XCTUnwrap(frames["Back to Spaces"]), menu = try XCTUnwrap(frames["Sort tabs"])
+                XCTAssertEqual(menu.width, 44, accuracy: 0.5, "\(name), \(width): the sort menu is a 44 point circle, \(menu)")
                 XCTAssertGreaterThanOrEqual(back.minX, edges.minX, "\(name), \(width): \(back)")
                 XCTAssertLessThanOrEqual(menu.maxX, edges.maxX, "\(name), \(width): \(menu)")
                 XCTAssertLessThan(back.maxX, menu.minX, "\(name), \(width)")

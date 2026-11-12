@@ -101,6 +101,34 @@ final class PhoneLandscapeUITests: XCTestCase {
         attach("Turned the other way")
     }
 
+    /// L19: the host sheet on its side is a chart screen: no navigation bar, its rail at the island's edge (Close, the
+    /// host's disc with its facts, Edit), CPU and memory across the rest; ⓘ shows the facts and the action; Close closes.
+    func testTheHostSheetIsAChartScreenOnItsSide() {
+        app = XCUIApplication()
+        app.launchArguments = ["-DispatchHostStats", "mba2", "-appearance", "dark"]
+        app.launchEnvironment["DISPATCH_MOBILE_DEMO"] = "1"
+        app.launch()
+        let chart = app.descendants(matching: .any)["host-stats-chart"]
+        XCTAssertTrue(chart.waitForExistence(timeout: 15), "the chart screen")
+        XCTAssertGreaterThan(window.width, window.height, "on its side")
+        let side = app.descendants(matching: .any)["host-stats-rail"].frame
+        XCTAssertTrue(side.minX < 70 || side.maxX > window.maxX - 70, "the rail at an edge: \(side)")
+        XCTAssertGreaterThan(chart.frame.width, window.width * 0.8, "the chart across the rest: \(chart.frame)")
+        XCTAssertLessThan(chart.frame.minY, 80, "no header row: only the legend above the chart: \(chart.frame)")
+        XCTAssertTrue(app.descendants(matching: .any)["host-stats-rail"].buttons["Edit"].exists, "Edit on the rail")
+        Thread.sleep(forTimeInterval: 3)
+        attach("Host stats on its side")
+
+        app.buttons["host-stats-facts"].tap()
+        XCTAssertTrue(app.staticTexts["Address"].waitForExistence(timeout: 5), "the facts")
+        XCTAssertTrue(app.buttons["Disconnect"].exists, "the action with them")
+        attach("Its facts")
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["Address"].waitForNonExistence(timeout: 5))
+        app.descendants(matching: .any)["host-stats-rail"].buttons["Close"].tap()
+        XCTAssertTrue(chart.waitForNonExistence(timeout: 5), "closed")
+    }
+
     /// The rail's outer edge is at least 2 points past where the phone's island (or notch) ends, from the window's edge.
     private func assertClearOfTheIsland(file: StaticString = #filePath, line: UInt = #line) {
         let model = UIDevice.current.name
@@ -179,4 +207,60 @@ final class PhoneLandscapeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Create review"].waitForExistence(timeout: 5), "Review still shown")
         attach("Upright again")
     }
+
+    /// A file's preview on its side: no navigation bar; Back, "…" and ⓘ in a rail on the island's side, ⓘ's popover
+    /// naming the file, and the content's action at the rail's foot: Outline for a Markdown page, Find for code.
+    /// Turned upright, the header is back.
+    func testAFilePreviewKeepsItsTitleBesideThePage() {
+        func open(_ file: String) {
+            app = XCUIApplication()
+            app.launchArguments = ["-DispatchTabsSample", "YES", "-DispatchTabsTree", "NO", "-DispatchTabsShow", "tab:herdr:app:1",
+                                   "-DispatchTabsSegment", "files", "-DispatchFilesPreview", file, "-appearance", "dark"]
+            app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
+            app.launch()
+            XCTAssertTrue(app.otherElements["preview-rail"].waitForExistence(timeout: 10), "the preview's rail")
+            XCTAssertGreaterThan(window.width, window.height, "on its side")
+            XCTAssertEqual(app.navigationBars.count, 0, "no navigation bar")
+            let side = app.otherElements["preview-rail"].frame
+            XCTAssertTrue(side.minX < 70 || side.maxX > window.maxX - 70, "the rail at an edge: \(side)")
+            XCTAssertTrue(side.contains(back.frame), "Back in the rail")
+            XCTAssertTrue(app.buttons["More"].exists, "… in the rail")
+            XCTAssertTrue(app.buttons["preview-info"].exists, "ⓘ in the rail")
+        }
+
+        open("README.md")
+        XCTAssertTrue(app.buttons["file-markdown-heading-1"].waitForExistence(timeout: 10), "the page")
+        let rail = app.otherElements["preview-rail"].frame
+        let outline = app.buttons["preview-outline"]
+        XCTAssertTrue(outline.exists, "Outline on the rail")
+        XCTAssertGreaterThan(outline.frame.minY, rail.midY, "at its foot")
+        attach("Markdown on its side")
+        app.buttons["preview-info"].tap()
+        XCTAssertTrue(app.staticTexts["README.md"].waitForExistence(timeout: 5), "the popover names the file")
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
+
+        open("src/theme.ts")
+        let find = app.buttons["preview-find"]
+        XCTAssertTrue(find.waitForExistence(timeout: 5), "Find on the rail")
+        XCTAssertTrue(app.otherElements["preview-rail"].frame.contains(find.frame), "in the rail, not at the bottom")
+        let info = app.buttons["preview-info"]
+        info.tap()
+        XCTAssertTrue(app.staticTexts["theme.ts"].waitForExistence(timeout: 5), "the popover names the file")
+        XCTAssertTrue(app.staticTexts["TypeScript"].exists, "and its kind")
+        attach("Code on its side, info")
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
+
+        // Turned upright and back a few times: the header comes back every time.
+        for _ in 0..<3 {
+            XCUIDevice.shared.orientation = .portrait
+            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 5), "the header upright")
+            XCTAssertTrue(app.buttons["More"].waitForExistence(timeout: 5) && app.buttons["More"].isHittable, "… in the header")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertTrue(app.otherElements["preview-rail"].waitForExistence(timeout: 5), "the rail on its side")
+        }
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 5), "the header upright at the end")
+        attach("Upright again")
+    }
 }
+

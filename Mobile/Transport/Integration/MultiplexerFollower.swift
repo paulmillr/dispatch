@@ -55,7 +55,7 @@ struct MultiplexerFollower: Sendable {
     /// `none` after each round in which the followed multiplexer gave no snapshot (none chosen, herdr not running,
     /// tmux's open failed without a server): the host has no spaces now.
     func run(following: @escaping @Sendable (String?) -> Void, topology: @escaping @Sendable (HelperTopology) -> Void,
-             none: @escaping @Sendable () -> Void = {}) async {
+             activity: @escaping @Sendable () -> Void = {}, none: @escaping @Sendable () -> Void = {}) async {
         var rows = rows, backends = backends
         var reported: String??
         while !Task.isCancelled {
@@ -76,7 +76,7 @@ struct MultiplexerFollower: Sendable {
             _ = await withTaskGroup(of: Bool.self) { group in
                 group.addTask {
                     var delivered = false
-                    if let follow { delivered = await Self.follow(follow, on: client, topology: topology) }
+                    if let follow { delivered = await Self.follow(follow, on: client, topology: topology, activity: activity) }
                     guard !Task.isCancelled else { return false }
                     if !delivered { none() }
                     // No server yet (or it went away): look again after a while.
@@ -125,15 +125,20 @@ struct MultiplexerFollower: Sendable {
     /// True when it delivered at least one topology.
     @discardableResult
     static func follow(_ route: HelperBackend.Route, on client: HelperClient,
-                       topology: @escaping @Sendable (HelperTopology) -> Void) async -> Bool {
+                       topology: @escaping @Sendable (HelperTopology) -> Void,
+                       activity: @escaping @Sendable () -> Void = {}) async -> Bool {
         let (ended, end) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let delivered = Flag()
         let id: UInt64
         do {
             id = try await client.connection.subscribe("backends.open", params: route, notify: { method, params in
-                if case .topology(let value)? = try? HelperClient.Update.decode(method, params) {
+                switch try? HelperClient.Update.decode(method, params) {
+                case .topology(let value)?:
                     delivered.set()
                     topology(value)
+                // An agent's state or newest message changed (`agents.activity`): what changed is read with `chat.list`.
+                case .agent?: activity()
+                default: break
                 }
             }, ended: { _ in end.yield() })
         } catch { return false }

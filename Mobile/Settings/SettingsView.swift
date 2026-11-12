@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var confirmingRemoval: MobileComposition.Removal?
     /// Why background refresh stayed off (notifications not allowed).
     @State private var refreshNote: String?
+    @AppStorage(MobileSettings.gitBranchesKey) private var showGitBranches = false
     /// The pushed screens (G2 to G5, and Color scheme).
     @State private var path: [Route]
 
@@ -163,6 +164,8 @@ struct SettingsView: View {
                         if !sessions.ordered.isEmpty {
                             Toggle("Color-code hosts", isOn: $settings.showHostColors)
                         }
+                        Toggle("Show git branches", isOn: $showGitBranches)
+                            .accessibilityIdentifier("settings-git-branches")
                         Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
                             .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
                     } header: {
@@ -172,6 +175,7 @@ struct SettingsView: View {
                             if !sessions.ordered.isEmpty {
                                 Text("With Color-code hosts off, every host is gray.")
                             }
+                            Text("Show git branches puts each space's branch beside its name in Spaces.")
                             Text("Turn off unsafe pastes to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                         }
                     }
@@ -254,7 +258,8 @@ extension MobileComposition {
     }
 
     /// Settings' Remove all data: every host (its session ends, its password goes), every key and Keychain secret, the
-    /// trusted host keys, the seen markers and mutes, the cache, drafts and the outbox, the review comments
+    /// trusted host keys, the seen markers and mutes, the cache, drafts and the outbox, the transcripts kept in memory,
+    /// the review comments
     /// (`reviews.json`), the remembered agents and models (`chat-models.json`) and Spaces' per-host values (recent space, collapsed hosts, space order: `spaces.json`, and
     /// any left in UserDefaults by an older build); background refresh turns off and its notifications and the badge
     /// go. Appearance, the theme, the fonts and font sizes, the notification switches and Spaces' menu stay. `keepingKeys`: the SSH keys, their Keychain items (private keys and
@@ -276,6 +281,8 @@ extension MobileComposition {
         }
         conversations.markers.removeAll()
         conversations.outbox.removeAll()
+        // Gone with their hosts already (`ChatConversations.remove`); in memory only either way.
+        conversations.forgetTranscripts()
         for key in conversations.drafts.buckets.keys { conversations.drafts.remove(key) }
         conversations.drafts.flush()
         cache.removeAll()

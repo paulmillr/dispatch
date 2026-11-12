@@ -71,13 +71,21 @@ public final class FontCollection {
             }
         }
         try completeStyles(synthetic: synthetic)
-        let resource = { (name: String) in [UInt8](try! Data(contentsOf: Self.bundle.url(forResource: name, withExtension: "ttf", subdirectory: Self.fontFolder)!)) }
-        let (upright, italic) = (resource("JetBrainsMono-Variable"), resource("JetBrainsMono-Italic-Variable"))
-        add(upright, .regular, adjustment: .icWidth)
-        add(upright, .bold, adjustment: .icWidth, weight: 700)
-        add(italic, .italic, adjustment: .icWidth)
-        add(italic, .boldItalic, adjustment: .icWidth, weight: 700)
-        add(resource("SymbolsNerdFont-Regular"), .regular, adjustment: .none)
+        // A bundled font's faces: from the process's shared descriptor once an embedder asked for it
+        // (`shareBundledFonts`), else from its bytes, read here for this collection.
+        let (shared, pixels) = (Self.sharedBundledFonts(), pixels)
+        let bundled = { (name: String) -> () -> Face in
+            if let descriptor = shared?[name] { return { Face(descriptor: descriptor, pixels: pixels) } }
+            let bytes = [UInt8](try! Data(contentsOf: Self.bundledURL(name)))
+            Self.counted()
+            return { Face(data: bytes, pixels: pixels)! }
+        }
+        let (upright, italic) = (bundled("JetBrainsMono-Variable"), bundled("JetBrainsMono-Italic-Variable"))
+        add(upright(), .regular, adjustment: .icWidth)
+        add(upright(), .bold, adjustment: .icWidth, weight: 700)
+        add(italic(), .italic, adjustment: .icWidth)
+        add(italic(), .boldItalic, adjustment: .icWidth, weight: 700)
+        add(bundled("SymbolsNerdFont-Regular")(), .regular, adjustment: .none)
         // macOS: Apple Color Emoji by exact family name (discoverExactFamily), loaded on use.
         let emoji = CTFontCreateWithName("Apple Color Emoji" as CFString, 12, nil)
         if CTFontCopyFamilyName(emoji) as String == "Apple Color Emoji" {
@@ -87,9 +95,79 @@ public final class FontCollection {
 
     var pixels: Double { Face.pixels(points: points, dpi: dpi) }
 
+    /// The fonts every collection adds after the configured families (the embedded fonts).
+    static let bundledFontNames = ["JetBrainsMono-Variable", "JetBrainsMono-Italic-Variable", "SymbolsNerdFont-Regular"]
+
+    static func bundledURL(_ name: String) -> URL {
+        bundle.url(forResource: name, withExtension: "ttf", subdirectory: fontFolder)!
+    }
+
+    /// Guards `shared`, `unshareable` and `reads`. Held while one font is mapped and parsed (a few milliseconds), never across a
+    /// collection.
+    private static let sharedLock = NSLock()
+    /// The bundled fonts' descriptors by name once `shareBundledFonts` started (nil before: each collection reads its
+    /// own copies). Immutable CoreText objects, which any thread may use.
+    nonisolated(unsafe) private static var shared: [String: CTFontDescriptor]?
+    nonisolated(unsafe) private static var reads = 0
+    /// Bundled font files read or mapped so far in the process (checks).
+    @_spi(Test) public static var bundledFontReads: Int {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        return reads
+    }
+
+    private static func counted() {
+        sharedLock.lock()
+        reads += 1
+        sharedLock.unlock()
+    }
+
+    /// From now on every collection in the process takes its bundled fonts from one descriptor each, made here: the
+    /// file mapped rather than read (clean pages the system can drop and read again, outside the footprint), parsed
+    /// once. Without it each collection reads the files and keeps its own copies of their bytes (3.7 MB, about 4 MB of
+    /// footprint per terminal). Any thread; an embedder calls it off the main thread at launch, before its first
+    /// terminal, and it returns once all are made. A collection made meanwhile waits for each font being made (a few
+    /// milliseconds), or reads its own copies when it came before this call. Idempotent, and not undone.
+    public static func shareBundledFonts() {
+        sharedLock.lock()
+        if shared == nil { shared = [:] }
+        sharedLock.unlock()
+        for name in bundledFontNames { _ = sharedBundledFont(name) }
+    }
+
+    /// The shared descriptors, every bundled font's made first; nil until `shareBundledFonts` started.
+    static func sharedBundledFonts() -> [String: CTFontDescriptor]? {
+        sharedLock.lock()
+        let sharing = shared != nil
+        sharedLock.unlock()
+        guard sharing else { return nil }
+        var fonts: [String: CTFontDescriptor] = [:]
+        for name in bundledFontNames { fonts[name] = sharedBundledFont(name) }
+        return fonts
+    }
+
+    /// Bundled fonts that did not map or parse: tried once, then each collection reads them as without sharing.
+    nonisolated(unsafe) private static var unshareable: Set<String> = []
+
+    /// A bundled font's shared descriptor, made on first use (sharing on); nil where the file does not map or parse as
+    /// a font (remembered), and then the collection reads it as without sharing (and fails there as before).
+    private static func sharedBundledFont(_ name: String) -> CTFontDescriptor? {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        if let made = shared?[name] { return made }
+        guard !unshareable.contains(name) else { return nil }
+        guard let data = try? NSData(contentsOf: bundledURL(name), options: .alwaysMapped),
+              let descriptor = CTFontManagerCreateFontDescriptorFromData(data as CFData) else {
+            unshareable.insert(name)
+            return nil
+        }
+        shared?[name] = descriptor
+        reads += 1
+        return descriptor
+    }
+
     /// A loaded face appended with its scale computed now (Collection.add), resized by it.
-    func add(_ data: [UInt8], _ style: Style, adjustment: Adjustment, weight: Double? = nil) {
-        let base = Face(data: data, pixels: pixels)!
+    func add(_ base: Face, _ style: Style, adjustment: Adjustment, weight: Double? = nil) {
         let scale = scaleFactor(base.metrics, adjustment)
         var font = Face(base.font, pixels: Face.pixels(points: points * Float(scale), dpi: dpi)).font
         if let w = weight { font = Self.vary(font, ["wght": w]) }

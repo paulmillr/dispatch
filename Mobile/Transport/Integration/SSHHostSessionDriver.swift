@@ -22,11 +22,14 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// phone publishes none (`TerminalFeed.hostsScreens`); with `terminals.follow` too a terminal only a conversation
     /// uses holds its output (`TerminalPresence`). With `sizes.steady` opening a tab resizes its tmux window alone, not
     /// every other window of its session. With `topology.bound` the first topology names the agents already running in
-    /// tmux (the helper's discovery looked at its panes first, at most 1 s, within `firstTopology`).
+    /// tmux (the helper's discovery looked at its panes first, at most 1 s, within `firstTopology`). With
+    /// `agents.activity` the followed backend's `agent.changed` says when an agent's state, newest message or turn
+    /// changed, so Agents reads its rows again (`ChatConversations.activityChanged`) without the thread open. With
+    /// `chat.limits` the unfolded working row reads the agent's plan limits (`ChatLimitsReader`).
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",
                            "launch.names", "stdio.liveness", ChatAttachment.feature,
                            "memberships.append", HelperSession.screensHost, HelperSession.terminalsFollow, "sizes.steady",
-                           "topology.bound"]
+                           "topology.bound", "agents.activity", HelperSession.chatLimits]
     /// The longest a `topology.bound` helper holds a tmux server's first topology (helper/PROTOCOL.md, `BOUND_WAIT`).
     static let boundWait: Duration = .seconds(1)
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
@@ -309,7 +312,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
                                            preference: preference, reopenDelay: reopenDelay)
         await follower.run(following: { events.yield(.following($0)) }, topology: { topology in
             if gate.offer(topology) { events.yield(.topology(topology)) }
-        }, none: {
+        }, activity: { events.yield(.agentActivity) }, none: {
             if gate.none() { events.yield(.noBackend) }
         })
     }

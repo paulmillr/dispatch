@@ -34,7 +34,7 @@ struct ChatThreadView: View {
     @State private var column: CGFloat = 370
     @FocusState private var focused: Bool
     @FocusState private var searchFocused: Bool
-    /// The thread shows its end (C6): new rows keep it there; scrolled up, they count into the jump pill.
+    /// The thread shows its end (C6): new rows keep it there; scrolled up, they count into the jump button.
     /// Whether the thread follows its end and what came while it did not (C6, `ChatFollow`), kept outside SwiftUI's
     /// state: it changes with every scrolled frame, which draws nothing. `followShown` is the part that draws.
     @State private var follower = ChatFollower()
@@ -108,7 +108,7 @@ struct ChatThreadView: View {
             }
             scroller(rows)
                 // The thread runs on under the header and the composer, the rows fading under their glass as under the
-                // system's bars (the side conversation's too); the jump pill is laid out inside the bar's inset. Soft at
+                // system's bars (the side conversation's too); the jump button is laid out inside the bar's inset. Soft at
                 // the top too, as Messages has it: left to the system, an iPhone drew the header's edge as the hard one,
                 // an opaque band ending in a line, where the simulator drew the soft one.
                 .scrollEdgeEffectStyle(.soft, for: .all)
@@ -165,7 +165,10 @@ struct ChatThreadView: View {
         .onChange(of: session.showingSide) { _, showing in
             if showing, voice.active(for: session) { voice.stop() }
         }
-        .onChange(of: session.transcript.lastActivity) { _, _ in seen() }
+        // Only while the app is in the foreground: a result arriving behind the lock screen is not read. Kept rows shown
+        // before the helper named the conversation are seen once it does (their newest record may not change).
+        .onChange(of: session.transcript.lastActivity) { _, _ in if scenePhase == .active { seen() } }
+        .onChange(of: session.conversation) { _, _ in if scenePhase == .active { seen() } }
         .onChange(of: session.transcript.revision) { _, _ in
             let rows = session.transcript.rows
             pinFirstShown(self.entries(rows))
@@ -177,6 +180,10 @@ struct ChatThreadView: View {
         // An earlier page arrived above what is drawn while the top was near: draw on into it.
         .onChange(of: session.loadingEarlier) { _, loading in
             if !loading, follower.nearTop { reachedTop() }
+        }
+        // A kept transcript's top reached before the helper answered: its earlier page loads once one can.
+        .onChange(of: session.canLoadEarlier) { _, can in
+            if can, follower.nearTop { reachedTop() }
         }
         .onChange(of: session.working) { _, _ in voice.check() }
         .onChange(of: showsWorkingRow) { _, shown in if !shown { workingExpanded = false } }
@@ -193,7 +200,7 @@ struct ChatThreadView: View {
         .onChange(of: scenePhase) { _, phase in
             // The microphone stops in the background: conversation mode ends rather than half-listen.
             if phase == .background, voice.active(for: session) { voice.stop() }
-            if phase == .active { today = Date() }
+            if phase == .active { today = Date(); seen() }
             linkHaptic.scene(active: phase == .active)
         }
         .modifier(ChatLinkHaptics(connected: session.link.isConnected, haptic: $linkHaptic))
@@ -217,7 +224,7 @@ struct ChatThreadView: View {
         }
     }
 
-    /// The thread's scroll view: the rows, the working row and queue, following the end (C6), the jump pill.
+    /// The thread's scroll view: the rows, the working row and queue, following the end (C6), the jump button.
     private func scroller(_ rows: [ChatThreadRow]) -> some View {
         ScrollViewReader { scroll in
             ScrollView {
@@ -262,7 +269,10 @@ struct ChatThreadView: View {
                 switch phase {
                 case .idle:
                     if updateFollow({ $0.dragEnded(atEnd: follower.atEnd) }) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
-                    if old == .animating { updateFollow { $0.settled() } }
+                    // Following but at rest away from the end (the button's scroll lost to a fling): to the end.
+                    if updateFollow({ $0.rested(atEnd: follower.atEnd) }) {
+                        withAnimation(.snappy) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
+                    }
                     // Where it stopped is where the thread opens next time.
                     if restoring == nil { saveReading() }
                 case .interacting, .tracking:
@@ -313,13 +323,19 @@ struct ChatThreadView: View {
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
             .environment(\.chatColumnWidth, column)
             .environment(\.chatMeasure, measure)
-            .overlay(alignment: .bottom) {
-                // The follow changes outside any animation (`updateFollow`): the pill's transition brings its own.
+            .overlay(alignment: .bottomTrailing) {
+                // The follow changes outside any animation (`updateFollow`): the button's transition brings its own.
                 if shownFollow.showsJump {
-                    ChatJumpPill(count: shownFollow.unseen) {
+                    ChatJumpButton(count: shownFollow.unseen) {
+                        // A fling still running toward older rows would carry on over the scroll to the end: it stops
+                        // where it is first.
+                        if let view = follower.scrollView, view.isDecelerating {
+                            view.setContentOffset(view.contentOffset, animated: false)
+                        }
                         updateFollow { $0.follow(scrolling: true) }
                         withAnimation(.snappy) { scroll.scrollTo(Self.bottom, anchor: .bottom) }
                     }
+                    .padding(.trailing, 16)
                     .padding(.bottom, 12)
                     .transition(jumpTransition)
                 }
@@ -424,14 +440,14 @@ struct ChatThreadView: View {
                                 metrics: ChatCornerMetrics(column: column, measure: measure, size: typeSize))
     }
 
-    /// Rows added after the last one while scrolled up count into the jump pill (C6).
+    /// Rows added after the last one while scrolled up count into the jump button (C6).
     private func countUnseen(_ rows: [ChatThreadRow]) {
         defer { lastRow = rows.last?.id }
         let added = Self.appended(rows, after: lastRow)
         if added > 0 { updateFollow { $0.appended(added) } }
     }
 
-    /// What the pill and the size-change anchor read.
+    /// What the button and the size-change anchor read.
     private var shownFollow: ChatFollow.Shown { followShown ?? ChatFollow(following: !startsAtTop).shown }
 
     /// Changes the follow state; draws again only when what it shows changed.
@@ -783,7 +799,8 @@ struct ChatThreadView: View {
         if session.approvalInTerminal, session.phase == .verified {
             ChatNote(text: "Codex is asking for approval in its terminal. To get its approvals here, pick Trust all under “Hooks need review” there.")
         }
-        if session.phase == .verified, !session.terminalAttached {
+        // Not for a terminal nobody asked for yet (a warm session's, attached as its thread shows: one frame).
+        if session.phase == .verified, !session.terminalAttached, !session.defersTerminal {
             ChatNote(text: "Attaching the terminal… messages wait in the queue until it shows.")
         }
         if case .paused(let reason) = session.phase {
@@ -894,7 +911,7 @@ struct ChatThreadView: View {
     }
 
     /// Opens where the thread was read (`MobileChatSession.readingPosition`): drawn from that row, scrolled to it
-    /// (`applyReading`), not following; what came at the end meanwhile counts into the jump pill. Without a place, or with
+    /// (`applyReading`), not following; what came at the end meanwhile counts into the jump button. Without a place, or with
     /// its row gone, the thread opens at its end.
     private func restoreReading(_ rows: [ChatThreadRow]) {
         guard !startsAtTop, let position = session.readingPosition,
@@ -927,6 +944,13 @@ struct ChatThreadView: View {
     /// thread is put where it shows: the place being put back, else its end while it follows; an offset from before is
     /// no scroll of the user's.
     private func attached() {
+        // In the window, in the layout of the thread's first frame: what the helper sent meanwhile applies, and a
+        // terminal deferred for this showing attaches, just after that frame is committed (`firstFrameShown`), not
+        // inside it. The view's `onAppear` can come earlier, before the window (a push over an existing screen).
+        if session.waitsForFirstFrame {
+            let session = session
+            DispatchQueue.main.async { session.firstFrameShown() }
+        }
         updateFollow { $0.attached() }
         guard let scroll = follower.scrollView, scroll.contentSize.height > 0 else { return }
         if follower.restoring != nil { return applyReading() }
@@ -936,7 +960,7 @@ struct ChatThreadView: View {
         if scroll.contentOffset.y < end - 0.5 { scroll.contentOffset.y = end }
     }
 
-    /// While the thread follows its end and nothing else moves it (no finger, no fling, the pill's animated scroll, a
+    /// While the thread follows its end and nothing else moves it (no finger, no fling, the button's animated scroll, a
     /// place being put back), puts it exactly at its end: its last row's bottom at the composer, not a few points (or the
     /// 40 the follow lets pass as "at the end") above. False without a laid-out scroll view.
     @discardableResult

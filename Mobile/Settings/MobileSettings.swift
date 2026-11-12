@@ -54,6 +54,9 @@ final class MobileSettings {
     nonisolated static let notificationTextKey = "notify.text"
     nonisolated static let colorVisionKey = "colorVision"
     nonisolated static let hostColorsKey = "hosts.colors"
+    /// Settings › Hosts › Show git branches (the Mac's): each space's branch beside its name in Spaces, off by default;
+    /// the list and Settings read it (`@AppStorage`).
+    nonisolated static let gitBranchesKey = "spaces.gitBranches"
 
     @ObservationIgnored let defaults: UserDefaults
 

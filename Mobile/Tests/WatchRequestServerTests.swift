@@ -420,7 +420,8 @@ final class WatchRequestServerTests: XCTestCase {
             ChatFixture.record("a1", "assistant", turn: "t1", text: "Done.", time: first),
             ChatFixture.record("t1:ended", "turn_ended", turn: "t1", time: first)])
         let markers = app.conversations.markers
-        XCTAssertEqual(markers.seen(host: record.id, conversation: conversation), first, "first sight is the baseline")
+        // The rows rebuild once per burst of a session's changes (`ChatConversations.rebuildDelay`).
+        try await TestSupport.eventually { markers.seen(host: record.id, conversation: conversation) == first }
         try notify("chat.records", ["records": [
             ChatFixture.record("t2:started", "turn_started", turn: "t2", time: second),
             ChatFixture.record("a2", "assistant", turn: "t2", text: "Also fixed the retry.", time: second),
