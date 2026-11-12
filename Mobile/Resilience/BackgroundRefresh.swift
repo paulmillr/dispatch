@@ -279,7 +279,7 @@ final class BackgroundRefresh {
             // (the refresh reads no detached terminal), whose agent goes on working.
             if now == nil, result.topology?.nodes.contains(where: { $0.key == key && $0.agent != nil }) != false { continue }
             guard let event = AgentAlerts.event(previous: before, current: now), AgentAlerts.notifies(event, policy),
-                  !markers.muted(host: record.id, node: key) else { continue }
+                  !AgentAlerts.silenced(event, muted: markers.muted(host: record.id, node: key)) else { continue }
             let node = result.topology?.nodes.first { $0.key == key }
             let tab = node.flatMap { $0.parent.flatMap { nodes[$0] }?.name ?? $0.name } ?? before?.title ?? "Agent"
             let text = Self.lastLine(result.texts[key]) ?? Self.lastLine(now?.preview) ?? now?.attention

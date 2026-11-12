@@ -134,6 +134,17 @@ final class AgentAlerts {
     let settings: MobileSettings
     /// Threads on screen: what arrives for them shows there, not as a banner.
     var onScreen: Set<ChatConversationKey> = []
+    /// The app is in the foreground: a thread on screen shows what arrives for it. In the background (the lock screen
+    /// over the thread, the linger's seconds) it shows nothing, so the banner posts.
+    var appActive = true
+
+    /// A muted conversation stays quiet about its results and stops, never about an approval or question it waits on:
+    /// the agent would wait for the user with no word of it (docs/ios.md, Agents).
+    nonisolated static func silenced(_ event: Event, muted: Bool) -> Bool {
+        guard muted else { return false }
+        if case .needsYou(question: true) = event { return false }
+        return true
+    }
     /// Posted while the app is open (tests).
     private(set) var posted: [RefreshNotification] = []
 
@@ -149,8 +160,8 @@ final class AgentAlerts {
     func arrived(_ key: ChatConversationKey, tab: String, host: String, previous: ChatConversationSummary?,
                  current: ChatConversationSummary?, muted: Bool) async {
         let policy = settings.alertPolicy
-        guard let event = Self.event(previous: previous, current: current), Self.notifies(event, policy), !muted,
-              !onScreen.contains(key) else { return }
+        guard let event = Self.event(previous: previous, current: current), Self.notifies(event, policy),
+              !Self.silenced(event, muted: muted), !(appActive && onScreen.contains(key)) else { return }
         if event == .stopped {
             if let closed = closedByUser[key], ContinuousClock.now - closed < Self.closeWindow { return }
             if stopGrace > .zero { try? await Task.sleep(for: stopGrace) }

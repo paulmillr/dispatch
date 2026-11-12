@@ -18,11 +18,13 @@ struct FilesPreviewActions {
 
 /// F2: a file pushed over the tab (its header, capsule and the modes' bar go with the push). The back pill names the
 /// screen it returns to; the title is the file's name, the subtitle its folder, size, age and kind; "…" holds Wrap lines
-/// (or Markdown's source), Copy path, Copy contents, Share, Save to Photos (an image's), Attach to chat and Open in
-/// terminal. Code has line numbers and the syntax palette, scrolls both ways and zooms with a pinch (kept as the diff
-/// viewer's, `CodeFontSize`); Find counts and steps through matches. Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…";
-/// images zoom with a pinch or a double tap, a binary shows its kind and size with Share, a long text its head with Load
-/// all.
+/// and Line numbers (or Markdown's source), Copy path, Share, Save to Photos (an image's), Attach to chat and Open in
+/// terminal. Code has line numbers (unless turned off, kept as `files.lineNumbers`) and the syntax palette, scrolls both
+/// ways and zooms with a pinch (kept as the diff viewer's, `CodeFontSize`); Find counts and steps through matches.
+/// Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…"; images zoom with a
+/// pinch or a double tap, a binary shows its kind and size with Share, a long text its head with Load all. On a phone's
+/// side no header: Back, "…" and ⓘ (the name and details) stand in a rail (`rail`), with the content's action at its
+/// foot as a tab's rail holds its mode's: Find for code, Outline for a rendered page.
 struct FilePreviewScreen: View {
     @State private var preview: FilePreview
     let host: TabsHost
@@ -35,6 +37,8 @@ struct FilePreviewScreen: View {
     @State private var fontSize: Double
     @State private var pinchBase: Double?
     @State private var wrap = true
+    /// The code's gutter, kept across files and launches.
+    @AppStorage("files.lineNumbers") private var lineNumbers = true
     @State private var showsSource = false
     /// The rendered Markdown's folded sections and the heading the outline asked for (`FileMarkdownReader`).
     @State private var folds: Set<String> = []
@@ -54,6 +58,12 @@ struct FilePreviewScreen: View {
     @State private var opening: Task<Void, Never>?
     @FocusState private var findFocused: Bool
     @Environment(\.tabsColumnWidth) private var column
+    /// A phone on its side (`MobileLandscape`): no header; Back, "…" and the title (or ⓘ) stand in a rail on the
+    /// island's side, as the tab's do.
+    @Environment(\.mobileLandscape) private var sideways
+    @Environment(\.mobileRailEdge) private var railEdge
+    @Environment(\.mobileIsland) private var island
+    @State private var infoShown = false
 
     init(preview: FilePreview, host: TabsHost, root: String?, actions: FilesPreviewActions, fonts: CodeFontStore = .standard,
          folder: (() -> AnyView)? = nil) {
@@ -76,10 +86,21 @@ struct FilePreviewScreen: View {
     }
 
     private var screen: some View {
-        content
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        let leading = railEdge == .leading
+        // One structure upright and on its side, so turning the phone keeps the content's scroll and zoom.
+        return HStack(spacing: sideways ? MobileLandscape.railGap : 0) {
+            if sideways && leading { rail }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if sideways && !leading { rail }
+        }
+        .padding(leading ? .leading : .trailing, sideways ? MobileLandscape.railInset(island: island) : 0)
+        .padding(leading ? .trailing : .leading, sideways ? MobileLandscape.contentInset : 0)
+        .ignoresSafeArea(.container, edges: sideways ? .horizontal : [])
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar }
         .tabsPushedScreen()
+        // Visible, not automatic, upright: turned back from its side the stack kept the bar hidden now and then.
+        .toolbarVisibility(sideways ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             TabsScreenHeader(title: preview.name, column: column) {
                 TabsBackPill(label: actions.back, action: actions.pop)
@@ -108,16 +129,76 @@ struct FilePreviewScreen: View {
     }
 
     /// "src · 1.8 KB · 25m ago · TypeScript": the folder under the root, the size, the age, the kind.
-    private var subtitle: String {
-        Self.subtitle(path: preview.path, root: root, home: host.home, revision: preview.revision, now: System.date())
+    private var subtitle: String { details.joined(separator: " · ") }
+
+    private var details: [String] {
+        Self.details(path: preview.path, root: root, home: host.home, revision: preview.revision, now: System.date())
     }
 
     static func subtitle(path: String, root: String?, home: String?, revision: FileRevision?, now: Date) -> String {
+        details(path: path, root: root, home: home, revision: revision, now: now).joined(separator: " · ")
+    }
+
+    /// The subtitle's parts, a line each in ⓘ's popover.
+    static func details(path: String, root: String?, home: String?, revision: FileRevision?, now: Date) -> [String] {
         var parts = [FilesFormatting.location(of: path, root: root, home: home)]
         if let size = revision?.size { parts.append(FilesFormatting.size(size)) }
         if let ago = FilesText.ago(revision?.modified, now: now) { parts.append(ago) }
         if let kind = FilesFormatting.kindName(FilesPath.name(path)) { parts.append(kind) }
-        return parts.joined(separator: " · ")
+        return parts
+    }
+
+    // MARK: On its side
+
+    /// Back, "…" and ⓘ stacked on the island's side, the rail's discs, and the content's action at its foot: Find for
+    /// code, Outline for a rendered Markdown page (held empty otherwise, so nothing above it moves).
+    private var rail: some View {
+        VStack(spacing: 8) {
+            TabsBackDisc(back: actions.back, action: actions.pop)
+            if preview.content != .folder { menu }
+            infoButton
+            Spacer(minLength: 0)
+            if hasText && !finding {
+                findButton
+            } else if case .markdown(let text, _) = preview.content, !showsSource {
+                outlineButton(FileMarkdownDocuments.document(text))
+            }
+        }
+        .frame(width: MobileLandscape.railWidth)
+        .frame(maxHeight: .infinity)
+        .padding(.vertical, MobileLandscape.railMargin)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("preview-rail")
+    }
+
+    /// The name and details in a popover (the upright header's title and subtitle).
+    private var infoButton: some View {
+        Button { infoShown = true } label: {
+            Image(systemName: "info")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel("Info")
+        .accessibilityIdentifier("preview-info")
+        .popover(isPresented: $infoShown, arrowEdge: railEdge == .leading ? .leading : .trailing) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(preview.name).font(.headline).padding(.bottom, 2)
+                ForEach(Array(details.enumerated()), id: \.offset) { _, detail in
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 320, alignment: .leading)
+            .padding(16)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     // MARK: Content
@@ -165,8 +246,8 @@ struct FilePreviewScreen: View {
     }
 
     private var code: some View {
-        FileCodeView(lines: preview.lines, longest: preview.longest, fontSize: fontSize, wrap: wrap, find: find,
-                     footer: AnyView(truncation))
+        FileCodeView(lines: preview.lines, longest: preview.longest, fontSize: fontSize, wrap: wrap, numbers: lineNumbers,
+                     find: find, footer: AnyView(truncation))
             .simultaneousGesture(pinch)
     }
 
@@ -307,26 +388,57 @@ struct FilePreviewScreen: View {
     @ViewBuilder private var bottomBar: some View {
         if finding {
             findBar
-        } else if hasText {
+        } else if hasText && !sideways {
+            // On its side Find is the rail's.
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
-                Button {
-                    finding = true
-                    findFocused = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: Circle())
-                .accessibilityLabel("Find in file")
+                findButton
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .padding(.horizontal, 16)
             .padding(.bottom, 4)
+        }
+    }
+
+    private var findButton: some View {
+        Button {
+            finding = true
+            findFocused = true
+        } label: {
+            Image(systemName: "magnifyingglass")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel("Find in file")
+        .accessibilityIdentifier("preview-find")
+    }
+
+    /// On its side: the Outline as the rail's disc.
+    @ViewBuilder private func outlineButton(_ document: FileMarkdownDocument) -> some View {
+        if !document.headings.isEmpty {
+            Menu {
+                outlineItems(document)
+            } label: {
+                Image(systemName: "list.bullet.indent")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Circle())
+            .contentShape(.hoverEffect, Circle())
+            .hoverEffect(.highlight)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .accessibilityLabel("Outline")
+            .accessibilityIdentifier("preview-outline")
         }
     }
 
@@ -404,43 +516,45 @@ struct FilePreviewScreen: View {
     }
 
     /// Rendered Markdown's headings, indented under the ones they belong to: one scrolls to its section (opening the
-    /// folded ones around it); then Fold All (a heading alone at its level, a file's title, stays open) and Unfold All.
+    /// folded ones around it).
     @ViewBuilder private func outline(_ document: FileMarkdownDocument) -> some View {
         if !document.headings.isEmpty {
-            let all = document.allFolded
-            let current = document.folds(in: folds)
             Menu {
-                ForEach(document.headings) { heading in
-                    Button {
-                        folds = document.revealing(heading, in: folds)
-                        reveal = heading.id
-                    } label: {
-                        // Em spaces: a menu keeps them where it trims plain ones.
-                        Text(verbatim: String(repeating: "\u{2003}", count: min(heading.depth, 5)) + heading.title)
-                    }
-                }
-                Section {
-                    Button("Fold All", systemImage: "chevron.right") { folds = all }
-                        .disabled(all.isEmpty || current == all)
-                    Button("Unfold All", systemImage: "chevron.down") { folds = [] }
-                        .disabled(current.isEmpty)
-                }
+                outlineItems(document)
             } label: {
                 Label("Outline", systemImage: "list.bullet.indent")
             }
         }
     }
 
+    @ViewBuilder private func outlineItems(_ document: FileMarkdownDocument) -> some View {
+        ForEach(document.headings) { heading in
+            Button {
+                folds = document.revealing(heading, in: folds)
+                reveal = heading.id
+            } label: {
+                // Em spaces: a menu keeps them where it trims plain ones.
+                Text(verbatim: String(repeating: "\u{2003}", count: min(heading.depth, 5)) + heading.title)
+            }
+        }
+    }
+
+    @ViewBuilder private var codeToggles: some View {
+        Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") }
+        Toggle(isOn: $lineNumbers) { Label("Line numbers", systemImage: "list.number") }
+    }
+
     private var menu: some View {
         Menu {
             switch preview.content {
             case .text:
-                Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") }
+                codeToggles
             case .markdown(let text, _):
                 Toggle(isOn: $showsSource) { Label("Show source", systemImage: "chevron.left.forwardslash.chevron.right") }
                 if showsSource {
-                    Toggle(isOn: $wrap) { Label("Wrap lines", systemImage: "text.alignleft") }
-                } else {
+                    codeToggles
+                } else if !sideways {
+                    // On its side the Outline is the rail's.
                     outline(FileMarkdownDocuments.document(text))
                 }
             default:
@@ -448,8 +562,6 @@ struct FilePreviewScreen: View {
             }
             Section {
                 Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = preview.path }
-                Button("Copy contents", systemImage: "doc.on.clipboard") { UIPasteboard.general.string = preview.text }
-                    .disabled(preview.text == nil || preview.truncated)
                 // Only with the helper's metadata of what loaded: never a failed, offline or partial read's bytes.
                 Button("Share", systemImage: "square.and.arrow.up", action: share)
                     .disabled(!preview.canShare || saving != nil)
@@ -543,13 +655,14 @@ struct FilePreviewScreen: View {
     }
 }
 
-/// F2's code: line numbers in the gutter and the lines in the syntax palette, one row each, scrolling both ways (or
-/// wrapped), at the pinched size; Find's marks, the current one scrolled to.
+/// F2's code: line numbers in the gutter (unless `numbers` is off) and the lines in the syntax palette, one row each,
+/// scrolling both ways (or wrapped), at the pinched size; Find's marks, the current one scrolled to.
 struct FileCodeView: View {
     let lines: [AttributedString]
     let longest: Int
     let fontSize: Double
     var wrap = false
+    var numbers = true
     var find = FileFind()
     var footer: AnyView = AnyView(EmptyView())
 
@@ -569,8 +682,10 @@ struct FileCodeView: View {
         }
 
         func gutter(lines: Int) -> Double { max(28 * scale, Double(String(lines).count) * character) }
-        /// The code's width unwrapped: the longest line and the margins.
-        func width(lines: Int, longest: Int) -> Double { edge + gutter(lines: lines) + gap + Double(longest) * character + edge * 2 }
+        /// The code's width unwrapped: the longest line and the margins, with the gutter and its gap unless `numbers` is off.
+        func width(lines: Int, longest: Int, numbers: Bool = true) -> Double {
+            edge + (numbers ? gutter(lines: lines) + gap : 0) + Double(longest) * character + edge * 2
+        }
     }
 
     var body: some View {
@@ -585,7 +700,7 @@ struct FileCodeView: View {
                     footer
                 }
                 .padding(.vertical, 8)
-                .frame(width: wrap ? nil : metrics.width(lines: lines.count, longest: longest), alignment: .leading)
+                .frame(width: wrap ? nil : metrics.width(lines: lines.count, longest: longest, numbers: numbers), alignment: .leading)
             }
             .onChange(of: find.currentMatch) {
                 guard let match = find.currentMatch else { return }
@@ -597,10 +712,12 @@ struct FileCodeView: View {
 
     private func row(_ index: Int, metrics: Metrics, gutter: Double) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: metrics.gap) {
-            Text("\(index + 1)")
-                .font(.system(size: metrics.number, design: .monospaced))
-                .foregroundStyle(Color(uiColor: CodePalette.gutter))
-                .frame(width: gutter, alignment: .trailing)
+            if numbers {
+                Text("\(index + 1)")
+                    .font(.system(size: metrics.number, design: .monospaced))
+                    .foregroundStyle(Color(uiColor: CodePalette.gutter))
+                    .frame(width: gutter, alignment: .trailing)
+            }
             Text(find.highlighted(lines[index], index: index))
                 .font(.system(size: metrics.size, design: .monospaced))
                 .lineLimit(wrap ? nil : 1)

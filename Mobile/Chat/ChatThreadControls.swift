@@ -322,37 +322,38 @@ struct ChatWaveform: View {
     }
 }
 
-/// C6: "Jump to latest" over the thread's bottom while the user scrolled up and newer messages came, with how many
-/// (`ChatFollow`).
-struct ChatJumpPill: View {
+/// C7: "Jump to latest", a glass arrow at the thread's trailing edge just above the composer whenever the end is out of
+/// view; the rows that came meanwhile badge it with their count (`ChatFollow`). Out of the reading column, where the
+/// thumb rests.
+struct ChatJumpButton: View {
     let count: Int
     let action: () -> Void
     @ReduceMotion private var reduceMotion
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down")
-                Text("Jump to latest")
-                if count > 0 {
-                    Text("\(count)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
-                        .padding(.horizontal, 6)
-                        .frame(minWidth: 18, minHeight: 18)
-                        .background(Color.stateUnread, in: Capsule())
-                        .animation(.snappy(duration: 0.25), value: count)
-                }
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 16)
-            .frame(minHeight: 40)
-            .contentShape(Capsule())
+            Image(systemName: "arrow.down")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Circle())
+        .overlay(alignment: .topTrailing) {
+            if count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(count)))
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Color.stateUnread, in: Capsule())
+                    .offset(x: 4, y: -4)
+                    .animation(.snappy(duration: 0.25), value: count)
+                    .allowsHitTesting(false)
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { action() }
@@ -366,9 +367,10 @@ struct ChatJumpPill: View {
 /// any other scroll toward older rows (VoiceOver's scroll and focus, the status bar's tap, Page Up and the arrow keys).
 /// Content that grows, the keyboard or the composer changing height take the end out of view without moving the offset
 /// up, so the thread goes back to it (`moved` answers true) instead of counting what comes meanwhile; the app's own
-/// animated scroll to the end (the pill) is let run. A drag that only took the keyboard down keeps a following thread
-/// following. "Jump to latest" shows only while not following with something new below: never at the end, also not
-/// for a frame; at the end again, after the pill or a send, it follows again.
+/// animated scroll to the end (the button) is let run. A drag that only took the keyboard down keeps a following thread
+/// following. "Jump to latest" (C7) shows whenever the thread does not follow and its end is out of view: never at the
+/// end, also not for a frame, nor during a drag that stays there; at the end again, after the button or a send, it
+/// follows again.
 struct ChatFollow: Equatable {
     private(set) var following: Bool
     private(set) var unseen = 0
@@ -379,18 +381,24 @@ struct ChatFollow: Equatable {
     private var followedBeforeDrag = false
     private var dismissedKeyboard = false
     private var offset: CGFloat?
+    /// The end was in view at the last move.
+    private(set) var atEnd: Bool
 
-    init(following: Bool = true) { self.following = following }
+    init(following: Bool = true) {
+        self.following = following
+        atEnd = following
+    }
 
-    /// What the view draws from this (the pill and the size-change anchor); the rest changes as the thread scrolls and
-    /// draws nothing.
+    /// What the view draws from this (the button, its badge and the size-change anchor); the rest changes as the thread
+    /// scrolls and draws nothing.
     struct Shown: Equatable {
         var following: Bool
         var unseen: Int
-        var showsJump: Bool { !following && unseen > 0 }
+        var atEnd: Bool
+        var showsJump: Bool { !following && !atEnd }
     }
 
-    var shown: Shown { Shown(following: following, unseen: unseen) }
+    var shown: Shown { Shown(following: following, unseen: unseen, atEnd: atEnd) }
     var showsJump: Bool { shown.showsJump }
 
     /// The offset or the end's visibility changed. True: go back to the end now (a plain scroll; nothing else is
@@ -399,6 +407,7 @@ struct ChatFollow: Equatable {
     mutating func moved(offset: CGFloat, atEnd: Bool, resized: Bool = false) -> Bool {
         let previous = self.offset
         self.offset = offset
+        self.atEnd = atEnd
         if atEnd {
             unseen = 0
             scrollingToEnd = false
@@ -450,7 +459,7 @@ struct ChatFollow: Equatable {
     /// Rows arrived at the end.
     mutating func appended(_ count: Int) { if !following { unseen += count } }
 
-    /// A send, or the pill: the thread follows its end again, and the app scrolls there (`scrolling`: animated, let it
+    /// A send, or the button: the thread follows its end again, and the app scrolls there (`scrolling`: animated, let it
     /// run).
     mutating func follow(scrolling: Bool = false) {
         following = true
@@ -459,8 +468,13 @@ struct ChatFollow: Equatable {
         scrollingToEnd = scrolling
     }
 
-    /// The app's animated scroll ended (or was taken over).
-    mutating func settled() { scrollingToEnd = false }
+    /// The thread came to rest: the app's animated scroll ended, or was taken over. True: it follows its end but rests
+    /// away from it (a fling's inertia outran the button's scroll to the end): go there, animated, let run as the button's.
+    mutating func rested(atEnd: Bool) -> Bool {
+        let again = following && !dragging && !atEnd
+        scrollingToEnd = again
+        return again
+    }
 
     /// The thread moved away on the user's request (a search match).
     mutating func leave() {

@@ -91,6 +91,33 @@ final class TerminalSession: @unchecked Sendable {
 
     enum Failure: Error { case noMetalDevice }
 
+    /// What the first session of the process would otherwise make on the main thread, inside the SwiftUI update that
+    /// creates its presence: the renderer's shader library and pipelines (`MetalRenderer.prewarm`; compiled from
+    /// source, 0.6 to 1 s without Metal's shader cache, after an install or an update) and, on another thread meanwhile
+    /// (a few milliseconds), the bundled fonts' shared faces (`FontCollection.shareBundledFonts`). The compile goes
+    /// first, as a session takes the renderer first: a session made once it started waits on the renderer's lock for
+    /// the rest of it instead of compiling, and by then the fonts are shared (docs/ios.md, The first terminal). Once
+    /// per process, on the thread that asks first; a call meanwhile returns when both are done. A failure is left to
+    /// the first session, which tries again and throws.
+    private static let prewarmed: Void = {
+        let fonts = DispatchWorkItem { FontCollection.shareBundledFonts() }
+        DispatchQueue.global(qos: .userInitiated).async(execute: fonts)
+        if let device = MTLCreateSystemDefaultDevice() { try? MetalRenderer.prewarm(device: device) }
+        fonts.wait()
+    }()
+
+    static func prewarm() { _ = prewarmed }
+
+    /// `prewarmInBackground` ran: the app's launch started the prewarm (checks).
+    @MainActor private(set) static var prewarmStarted = false
+
+    /// `prewarm` off the main thread (at launch: `MobileAppDelegate`), on a dispatch queue: its compile blocks its
+    /// thread for most of a second, which must not be one of Swift concurrency's few shared threads.
+    @MainActor static func prewarmInBackground() {
+        prewarmStarted = true
+        DispatchQueue.global(qos: .userInitiated).async { prewarm() }
+    }
+
     /// `scale`: the screen's scale (pixels per point). The size is 800x600 pixels until the host sets it.
     init(configuration: TerminalConfiguration, scale: Double) throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw Failure.noMetalDevice }

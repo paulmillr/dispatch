@@ -132,6 +132,8 @@ final class HostSession: Identifiable {
     /// Called on the main actor when a connection's client goes away (a drop, a reconnect, disconnect): what used it
     /// stops (`TerminalPresences.stopAll(host:)`) and reattaches after the next `.ready`.
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)?
+    /// The helper said an agent changed (`HostSessionEvent.agentActivity`): Agents reads the host's rows again.
+    @ObservationIgnored var agentActivity: ((HostSession) -> Void)?
     /// Called on the main actor when `parked` changed (HostSessions saves it with the host).
     @ObservationIgnored var parkChanged: ((HostSession) -> Void)?
     /// Called on the main actor after anything the areas read changed (`HostSessions.changed`).
@@ -364,6 +366,10 @@ final class HostSession: Identifiable {
             guard link == .connected, mode == .helper else { return }
             updated = System.date()
             latency = value
+        case .agentActivity:
+            guard link == .connected, mode == .helper else { return }
+            updated = System.date()
+            agentActivity?(self)
         }
     }
 

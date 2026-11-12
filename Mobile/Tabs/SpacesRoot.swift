@@ -46,8 +46,13 @@ final class SpacesNavigator {
                 remember(strip: tab)
             }
             rememberSplit()
+            routed?(path, oldValue)
         }
     }
+    /// The path changed (a row's link, Agents' row, a notification, Back), in the turn it changed, before the
+    /// destination is built: the composition opens what a pushed tab's first segment needs now (Chat's `chat.open`) and
+    /// lets go of what a push that never showed had opened.
+    @ObservationIgnored var routed: ((_ path: [TabsRoute], _ previous: [TabsRoute]) -> Void)?
     /// The tab each space showed last (the iPad sidebar's space rows open it again, `selectSpace`).
     @ObservationIgnored var lastTabs: [SpaceRef: TabRef] = [:]
     /// The shown tab's place in its strip, as last seen (`reconcile` hands the column to its neighbour when the host
@@ -62,6 +67,8 @@ final class SpacesNavigator {
                 path.removeAll(where: \.isSpace)
             }
             rememberSplit()
+            // The same path shown another way (beside the sidebar, or as one stack).
+            if split != oldValue { routed?(path, path) }
         }
     }
     /// The split hides its sidebar (`toggleSidebar`): an iPad's does, the Duo's never (`MobileRoot` sets it).
@@ -252,7 +259,8 @@ final class SpacesNavigator {
 
     /// On top of the stack; in the split, in the detail column in place of the tab shown there (and what it pushed).
     private func show(_ ref: TabRef) {
-        if split { path = splitPath.sidebar + [.tab(ref)] } else { path.append(.tab(ref)) }
+        if split { path = splitPath.sidebar + [.tab(ref)] } else if path.last != .tab(ref) { path.append(.tab(ref)) }
+        // Already on top (a notification for the thread being read, a second tap): nothing is pushed over itself.
     }
 
     /// The path as the split shows it (`MobileSplit`): the sidebar's routes, the tab the detail column shows (the last
@@ -329,6 +337,14 @@ final class SpacesNavigator {
         guard let agentLauncher else { return }
         let choices = await agentLauncher.choices(host)
         if agentChoices[host] != choices { agentChoices[host] = choices }
+    }
+
+    /// P2's New chat: the agent started last when the host has it, else the host's first; nil before the host's agents
+    /// are known or without any.
+    func preferredAgent(host: UUID) -> SpacesAgentChoice? {
+        let choices = agentChoices[host] ?? []
+        let last = agentLauncher?.preferred()
+        return choices.first { $0.key == last } ?? choices.first
     }
 
     /// P2e's agent entries: the agent starts in a new tab of `space` and opens in Chat, as New chat's Start does.
@@ -531,6 +547,28 @@ private struct SpacesPresentations: ViewModifier {
             .sheet(item: Binding(get: { navigator.editHost.map(EditHostItem.init) }, set: { navigator.editHost = $0?.id })) { item in
                 hostViews.edit(item.id)
             }
+            .environment(\.hostNewSpace, newSpace)
+    }
+
+    /// The host sheet's + (and the iPad popover's): a space with New space's defaults on the host's shown multiplexer
+    /// (the quick menu's first entry), opened as Create's is once the sheet is gone.
+    private var newSpace: HostNewSpace {
+        let navigator = navigator
+        let destination = { (host: UUID) in NewSpaceDestination.all(navigator.model.workspaces, host: host).first }
+        return HostNewSpace(offered: { destination($0) != nil }, creating: { navigator.creatingSpace.contains($0) },
+                            create: { host, dismiss in
+            guard let destination = destination(host) else { return }
+            Task {
+                do {
+                    let tab = try await navigator.makeSpace(destination)
+                    dismiss()
+                    navigator.openNewSpace(tab)
+                } catch {
+                    dismiss()
+                    navigator.actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        })
     }
 }
 
@@ -732,6 +770,7 @@ private struct SpacesTree: View {
             .scrollContentBackground(.hidden)
             // Not while editing: the drags start where the pull would.
             .hostsRefreshable(editing ? nil : model.refresh)
+            .background { SectionScrollLink().accessibilityHidden(true) }
             .environment(\.editMode, .constant(editing ? .active : .inactive))
             .alert(removing?.question.title ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                    presenting: removing) { removing in
@@ -1160,12 +1199,14 @@ struct SpacesNewSpaceLine: View {
     }
 }
 
-/// A space in the tree (P1): its name, its branch, the amber dot while something works, the unread count (blue, as
-/// Mail's), a chevron. The branch is the space's folder's (`SpaceGitFacts`, read once per folder and connection).
+/// A space in the tree (P1): its name, its branch (Settings › Hosts › Show git branches, off by default), the amber dot
+/// while something works, the unread count (blue, as Mail's), a chevron. The branch is the space's folder's
+/// (`SpaceGitFacts`, read once per folder and connection, and not at all while branches are off).
 struct SpacesSpaceLine: View {
     let row: SpacesSpaceRow
     let editing: Bool
     var gitFacts: SpaceGitFacts? = nil
+    @AppStorage(MobileSettings.gitBranchesKey) private var showsBranches = false
     /// The iPad sidebar: the row selects the space (its tab beside the sidebar) and is marked while it shows.
     @Environment(\.tabsSelectSpace) private var select
     @Environment(\.tabsShownSpace) private var shown
@@ -1192,8 +1233,8 @@ struct SpacesSpaceLine: View {
             .accessibilityValue(Self.value(unread: row.unread, working: row.working, branch: branch))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("space-row")
-            .task(id: gitKey) {
-                guard let gitFacts, let gitKey else { return }
+            .task(id: showsBranches ? gitKey : nil) {
+                guard showsBranches, let gitFacts, let gitKey else { return }
                 await gitFacts.resolve(gitKey.key, directory: gitKey.directory)
             }
         } else {
@@ -1205,18 +1246,21 @@ struct SpacesSpaceLine: View {
             .accessibilityLabel(row.space.name)
             .accessibilityValue(Self.value(unread: row.unread, working: row.working, branch: branch))
             .accessibilityIdentifier("space-row")
-            .task(id: gitKey) {
-                guard let gitFacts, let gitKey else { return }
+            .task(id: showsBranches ? gitKey : nil) {
+                guard showsBranches, let gitFacts, let gitKey else { return }
                 await gitFacts.resolve(gitKey.key, directory: gitKey.directory)
             }
         }
     }
 
-    /// The name and branch, the amber dot while something works, the unread count.
+    /// The name and branch, the amber dot while something works, the unread count. The branch sits on the name's last
+    /// line's baseline: centred beside the larger name, the caption rode high, above the name's baseline.
     private var label: some View {
         HStack(spacing: 8) {
-            Text(row.space.name).font(.body).lineLimit(2).layoutPriority(1).foregroundStyle(.primary)
-            if let branch { SpacesBranchChip(branch: branch) }
+            HStack(alignment: .lastTextBaseline, spacing: 8) {
+                Text(row.space.name).font(.body).lineLimit(2).layoutPriority(1).foregroundStyle(.primary)
+                if let branch { SpacesBranchChip(branch: branch) }
+            }
             Spacer(minLength: 0)
             if row.working {
                 Circle().fill(Color.stateWorking).frame(width: 10, height: 10)
@@ -1240,7 +1284,8 @@ struct SpacesSpaceLine: View {
     }
 
     private var branch: String? {
-        gitKey.flatMap { gitFacts?.facts($0.key, directory: $0.directory)?.branch }
+        guard showsBranches else { return nil }
+        return gitKey.flatMap { gitFacts?.facts($0.key, directory: $0.directory)?.branch }
     }
 }
 

@@ -165,7 +165,8 @@ final class SSHDriverTests: XCTestCase {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",
                                                        "terminals.coalesce", "launch.names", "stdio.liveness",
                                                        "chat.attachments", "memberships.append",
-                                                       "screens.host", "terminals.follow", "sizes.steady", "topology.bound"])
+                                                       "screens.host", "terminals.follow", "sizes.steady", "topology.bound",
+                                                       "agents.activity", "chat.limits"])
         XCTAssertLessThan(SSHHostSessionDriver.boundWait, SSHHostSessionDriver().firstTopology,
                           "the helper's held first topology arrives within the wait for it")
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)

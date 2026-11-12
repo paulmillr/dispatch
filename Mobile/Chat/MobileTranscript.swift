@@ -86,6 +86,48 @@ struct MobileTranscript {
     /// A transcript replaced in place (a Pi tree switch, `replace` records): the history goes, identity stays.
     mutating func clear() { self = MobileTranscript() }
 
+    /// The turns whose thinking was held for a live reader let it go at once: a transcript kept after its session
+    /// (`MobileChatSession.Kept`) has nobody to hold it for, and its next session has no fold scheduled.
+    mutating func releaseHeldThinking() {
+        guard !heldThinkingTurns.isEmpty else { return }
+        heldThinkingTurns = []
+        revision += 1
+    }
+
+    /// Whether `records` (a page of this conversation) continue what is here: one of its items is an item shown here,
+    /// by the record's native id. A page that shares nothing may lie after a gap (more was written than one page
+    /// holds), which merging would order wrongly.
+    func overlaps(_ records: [HelperChat.Record]) -> Bool {
+        guard !isEmpty, !records.isEmpty else { return false }
+        let ids = Set(records.lazy.filter { ChatItem.Kind(rawValue: $0.kind) != nil }.map(\.id))
+        return turns.contains { turn in turn.items.contains { item in ids.contains(item.source?.id ?? item.id) } }
+    }
+
+    /// About how much memory the transcript holds, for a bound (`ChatTranscriptStore`), not a measurement: each item's
+    /// record whole (texts, tool output blocks, diffs, the tool's input and nested records), the item's own texts
+    /// only where it has no record (an item takes its strings from its record and shares their storage), its
+    /// attachments with their thumbnails, a fixed share per item and turn, and the merge index's keys and positions.
+    var estimatedBytes: Int {
+        var bytes = transcript.index.seen.reduce(0) { $0 + 32 + $1.utf8.count }
+        bytes += (transcript.index.itemDates.count + transcript.index.itemOffsets.count) * 96
+        for turn in turns {
+            bytes += 128 + turn.id.utf8.count
+            for item in turn.items {
+                bytes += 384 + item.id.utf8.count + (item.rowID?.utf8.count ?? 0)
+                if let source = item.source {
+                    bytes += source.estimatedBytes
+                } else {
+                    bytes += item.text.utf8.count + item.output.utf8.count + item.title.utf8.count
+                        + (item.patch?.documents.reduce(0) { $0 + $1.diff.utf8.count + $1.path.utf8.count } ?? 0)
+                }
+                for attachment in item.attachments {
+                    bytes += 128 + attachment.name.utf8.count + (attachment.path?.utf8.count ?? 0) + (attachment.thumbnail?.count ?? 0)
+                }
+            }
+        }
+        return bytes
+    }
+
     /// A tool whose full output `chat.tools` returned: the same id merges into its row.
     mutating func replaceTool(_ record: HelperChat.Record) {
         guard case .item(let item)? = record.display?.action else { return }
@@ -169,11 +211,15 @@ extension MobileTranscript {
         turns.reversed().lazy.compactMap { $0.items.last { $0.kind == .assistant } }.first
     }
 
-    /// When the newest record was written.
+    /// When the newest record was written. A turn's end is a record too, usually the newest: `chat.list`'s `reply_ms`
+    /// (what unread compares with the seen marker) is the later of the answer and the turn's end, so a thread marked
+    /// seen through this stays read once its row comes from the list again.
     var lastActivity: Date? {
         turns.reversed().lazy.compactMap { turn in
-            turn.items.compactMap { $0.source?.time_ms }.max().map { Date(timeIntervalSince1970: Double($0) / 1000) }
-                ?? (turn.started.timeIntervalSince1970 > 0 ? turn.ended ?? turn.started : nil)
+            let items = turn.items.compactMap { $0.source?.time_ms }.max().map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            let ended = turn.ended.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
+            if let items, let ended { return max(items, ended) }
+            return items ?? ended ?? (turn.started.timeIntervalSince1970 > 0 ? turn.started : nil)
         }.first
     }
 
@@ -185,4 +231,27 @@ extension MobileTranscript {
 
 extension ChatThreadRow: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+extension HelperChat.Record {
+    /// About what the record holds in memory (`MobileTranscript.estimatedBytes`): its texts, blocks, diffs, patch state
+    /// and tool (its input, summary, read and search paths, shell command, and the records nested in it).
+    var estimatedBytes: Int {
+        var bytes = 256 + id.utf8.count + (turn?.utf8.count ?? 0) + kind.utf8.count + text.utf8.count + title.utf8.count
+            + output.utf8.count + (patch?.utf8.count ?? 0)
+        for block in blocks {
+            bytes += 64 + (block.text?.utf8.count ?? 0) + (block.language?.utf8.count ?? 0) + (block.path?.utf8.count ?? 0)
+        }
+        for document in documents {
+            bytes += 64 + document.path.utf8.count + document.diff.utf8.count + (document.workdir?.utf8.count ?? 0)
+        }
+        if let tool {
+            bytes += 256 + tool.title.utf8.count + tool.summary.utf8.count + tool.input.utf8.count + tool.kind.utf8.count
+                + (tool.directory?.utf8.count ?? 0) + (tool.confirmed_result?.utf8.count ?? 0)
+                + (tool.read?.path.utf8.count ?? 0) + (tool.shell?.command.utf8.count ?? 0)
+                + (tool.search.map { $0.pattern.utf8.count + ($0.paths + $0.filters).reduce(0) { $0 + $1.utf8.count } } ?? 0)
+            bytes += tool.children.reduce(0) { $0 + $1.estimatedBytes }
+        }
+        return bytes
+    }
 }

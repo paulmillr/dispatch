@@ -209,7 +209,7 @@ private struct PushedThreadRoot: View {
 /// Leaving a conversation's tab and opening it again keeps the place (`MobileChatSession.readingPosition`).
 extension ChatThreadWindowTests {
     /// Read back a screen and a half, then left for the space and opened again: the row read sits where it was, the
-    /// thread does not follow its end, and the turn that came meanwhile counts into the jump pill.
+    /// thread does not follow its end, and the turn that came meanwhile counts into the jump button.
     func testOpeningAgainKeepsThePlaceRead() async throws {
         let (chat, helper, window) = try await thread()
         defer { window.isHidden = true }
@@ -243,7 +243,7 @@ extension ChatThreadWindowTests {
         XCTAssertFalse(atEnd(again), "not at the end")
         XCTAssertGreaterThan(after["Answer 40."]?.minY ?? .infinity, window.bounds.height, "the new turn is below the screen")
         let labels = AccessibilityLabelTests.elements(in: window).compactMap(\.accessibilityLabel)
-        XCTAssertTrue(labels.contains { $0.hasPrefix("Jump to latest") }, "the pill for the new turn: \(labels)")
+        XCTAssertTrue(labels.contains { $0.hasPrefix("Jump to latest") }, "the button for the new turn: \(labels)")
     }
 
     /// Left at its end with a message queued under it: it opens at its end again, the queue in view, and the place

@@ -10,8 +10,23 @@ final class ChatConversationsTests: XCTestCase {
         private var values: [UInt64: ChatConversationSummary] = [:]
         private(set) var calls = 0
         func set(_ terminal: UInt64, _ summary: ChatConversationSummary) { lock.withLock { values[terminal] = summary } }
+        private var failing = false
+        private var delay = Duration.zero
+        /// Requests fail (nil) until set back.
+        func fail(_ on: Bool) { lock.withLock { failing = on } }
+        /// Each request takes `delay` to answer.
+        func slow(_ delay: Duration) { lock.withLock { self.delay = delay } }
         func summaries(_ terminals: [UInt64], client: HelperClient) async -> [UInt64: ChatConversationSummary] {
             lock.withLock { calls += 1; return values.filter { terminals.contains($0.key) } }
+        }
+        func fetch(_ terminals: [UInt64], client: HelperClient) async -> [UInt64: ChatConversationSummary]? {
+            let (failing, delay) = lock.withLock { (self.failing, self.delay) }
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            if failing {
+                lock.withLock { calls += 1 }
+                return nil
+            }
+            return await summaries(terminals, client: client)
         }
     }
 
@@ -144,9 +159,13 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertEqual(conversations.dot(host: host, terminal: 3), .unread, "An agent blocked on the user stays visible")
         XCTAssertNil(conversations.dot(host: host, terminal: 5))
         XCTAssertTrue(conversations.conversations.allSatisfy(\.muted))
-        conversations.unreadOnly = true
+        conversations.filter = .unread
         XCTAssertEqual(conversations.visible.map(\.terminal), [3])
         conversations.setMuted(false, conversations.conversations.first { $0.terminal == 5 }!)
+        XCTAssertEqual(conversations.visible.map(\.terminal), [3], "Working is not unread")
+        conversations.filter = .needsYou
+        XCTAssertEqual(conversations.visible.map(\.terminal), [3])
+        conversations.filter = .all
         XCTAssertEqual(Set(conversations.visible.map(\.terminal)), [3, 5])
     }
 
@@ -166,7 +185,9 @@ final class ChatConversationsTests: XCTestCase {
         helper.notify(id, "chat.history", ChatFixture.history(terminal: 3, records: try ChatFixture.records("claude-thread"),
                                                               state: ChatFixture.state(busy: false), binding: binding))
         try await TestSupport.eventually { session.phase == .verified }
-        XCTAssertTrue(conversations.conversations.first?.summary.preview?.hasPrefix("Right, the invoice.paid path") == true)
+        try await TestSupport.eventually {
+            conversations.conversations.first?.summary.preview?.hasPrefix("Right, the invoice.paid path") == true
+        }
         helper.notify(id, "chat.state", ["terminal": 3, "session": "00000000-0000-4000-8000-000000000201",
                                          "state": ChatFixture.state(busy: true)])
         try await TestSupport.eventually { conversations.dot(host: host, terminal: 3) == .working }
@@ -200,6 +221,129 @@ final class ChatConversationsTests: XCTestCase {
     }
 
     /// An older `chat-markers.json` without mutes (or with a key this build does not know) keeps its seen markers.
+    // MARK: Freshness (docs/ios.md, Agents)
+
+    /// Pull to refresh, the foreground and the timer read the rows again (`refreshAll`); a request that fails keeps the
+    /// rows as they were, stale, never live with old data.
+    func testRowsAreReadAgainAndAFailedReadLeavesThemStale() async throws {
+        let source = Source()
+        source.set(3, summary(busy: true, record: 1, finished: false))
+        let conversations = list(source)
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { conversations.dot(host: self.host, terminal: 3) == .working }
+        XCTAssertFalse(conversations.conversations[0].stale)
+        source.set(3, summary(record: 2))
+        await conversations.refreshAll()
+        XCTAssertEqual(conversations.dot(host: host, terminal: 3), .unread, "The finished turn shows without opening the thread")
+        source.fail(true)
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"]), link: .reconnecting(attempt: 1, since: now)))
+        XCTAssertTrue(conversations.conversations[0].stale)
+        // A new connection whose first read fails: still the previous connection's rows, stale.
+        let other = ScriptedHelper()
+        conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: other.client,
+                                              topology: try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { source.calls >= 3 }
+        XCTAssertTrue(conversations.conversations[0].stale, "Rows stay stale until a read over this connection answers")
+        source.fail(false)
+        await conversations.refreshAll()
+        XCTAssertFalse(conversations.conversations[0].stale)
+    }
+
+    /// A refresh asked while one is on its way runs again when it ends, instead of being dropped.
+    func testARefreshAskedDuringAReadRunsAgain() async throws {
+        let source = Source()
+        source.set(3, summary(record: 1))
+        let conversations = list(source)
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { source.calls == 1 }
+        source.slow(.milliseconds(300))
+        source.set(3, summary(record: 2))
+        let host = host
+        let first = Task { await conversations.refresh(host: host) }
+        try await Task.sleep(for: .milliseconds(50))
+        source.set(3, summary(record: 3))
+        await conversations.refresh(host: host)
+        await first.value
+        XCTAssertEqual(source.calls, 3)
+        XCTAssertEqual(conversations.conversations[0].summary.lastActivity, now.addingTimeInterval(3))
+    }
+
+    /// A state the helper could not read (`state_error`) keeps the row's state; a read without a message keeps its
+    /// message and time; Claude waiting at a prompt in its terminal (`activity` "waiting") needs the user.
+    func testAPartialReadKeepsWhatTheRowHadAndAWaitingAgentNeedsYou() throws {
+        func row(_ object: [String: Any]) throws -> ChatConversationSummary {
+            try JSONDecoder().decode(ChatListOperation.Row.self, from: JSONSerialization.data(withJSONObject: object)).summary
+        }
+        let previous = summary(busy: true, record: 5, finished: false)
+        let unknown = try row(["terminal": 3, "busy": NSNull(), "state_error": "registry changed", "preview": "Later text",
+                               "time_ms": milliseconds(6)])
+        XCTAssertTrue(unknown.partial)
+        let merged = unknown.merged(over: previous)
+        XCTAssertTrue(merged.busy, "Not turned idle (and so unread) by a state it could not read")
+        XCTAssertEqual(merged.preview, "Later text")
+        let empty = try row(["terminal": 3, "busy": false, "history_error": "changed"])
+        let kept = empty.merged(over: summary(record: 4))
+        XCTAssertEqual(kept.preview, "Moving the check into a shared middleware.")
+        XCTAssertEqual(kept.lastActivity, now.addingTimeInterval(4))
+        let blocked = try row(["terminal": 3, "busy": true, "activity": "waiting", "preview": "Run it?", "time_ms": milliseconds(7),
+                               "reply_ms": milliseconds(6)])
+        XCTAssertTrue(blocked.needsYou)
+        XCTAssertFalse(blocked.busy)
+        XCTAssertEqual(blocked.replied.map(ChatConversations.milliseconds), milliseconds(6))
+    }
+
+    /// A conversation first seen now whose newest message came after the phone last heard from the host is unread (it
+    /// arrived while the phone was away); one that had said nothing yet makes its first result unread.
+    func testResultsWhileAwayAndFirstResultsAreUnread() async throws {
+        let source = Source()
+        source.set(3, summary(record: 10))
+        source.set(5, summary(record: -10))
+        let conversations = list(source)
+        conversations.restore(host: host, summaries: [:], heard: now)
+        conversations.update(snapshot(try topology()))
+        try await TestSupport.eventually { conversations.conversations.count == 2 && !conversations.conversations[0].stale }
+        XCTAssertEqual(conversations.dot(host: host, terminal: 3), .unread, "Written after the phone last heard from the host")
+        XCTAssertNil(conversations.dot(host: host, terminal: 5), "Older than that: the baseline")
+
+        let fresh = Source()
+        fresh.set(3, ChatConversationSummary(busy: true))
+        let later = list(fresh)
+        later.update(snapshot(try topology(agents: [3: "conv-new"])))
+        try await TestSupport.eventually { fresh.calls == 1 }
+        fresh.set(3, summary(record: 1))
+        await later.refresh(host: host)
+        XCTAssertEqual(later.dot(host: host, terminal: 3), .unread, "A new conversation's first result is news")
+    }
+
+    /// An agent that has written nothing yet sorts by when it appeared: at the top, not under every other row.
+    func testANewAgentWithNothingWrittenSortsByWhenItAppeared() async throws {
+        let source = Source()
+        source.set(3, summary(record: -3600))
+        let conversations = list(source)
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { source.calls == 1 }
+        conversations.update(snapshot(try topology()))
+        try await TestSupport.eventually { conversations.conversations.count == 2 }
+        XCTAssertEqual(conversations.conversations.map(\.terminal), [5, 3])
+    }
+
+    /// Threads not on screen beyond the last few shown give their sessions up; their rows read `chat.list` again.
+    func testThreadsNoLongerShownReleaseTheirSessions() async throws {
+        let source = Source()
+        source.set(3, summary(record: 1))
+        helper.script { request in request.method == "chat.open" ? .open : .result([Any]()) }
+        let conversations = list(source)
+        conversations.keptSessions = 0
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { source.calls == 1 }
+        let key = ChatConversationKey(host: host, node: "tmux:s:$0:%3")
+        _ = conversations.session(for: key)
+        conversations.shown(key)
+        conversations.hidden(key)
+        XCTAssertNil(conversations.sessions[key])
+        try await TestSupport.eventually { source.calls >= 2 }
+    }
+
     func testMarkersOfAnOlderShapeKeepWhatTheyHave() throws {
         let file = Data(#"{"version":2,"seen":{"h:c":1700000000000,"h:bad":"x"},"extra":true}"#.utf8)
         let document = try JSONDecoder().decode(ChatMarkers.Document.self, from: file)
@@ -296,5 +440,533 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertEqual(ChatConversationSummary.preview("snake_case_names and a_b stay"), "snake_case_names and a_b stay",
                        "Intraword underscores are not emphasis")
     }
+
+    // MARK: Opening ahead of the thread
+
+    private func k3(_ host: UUID) -> ChatConversationKey { ChatConversationKey(host: host, node: "tmux:s:$0:%3") }
+    private func k5(_ host: UUID) -> ChatConversationKey { ChatConversationKey(host: host, node: "tmux:s:$0:%5") }
+
+    /// A list over the scripted helper whose `chat.open` stays open, terminals counted as attached once retained.
+    private func opening(_ source: Source = Source(), presence: ChatTerminalPresenceStub = ChatTerminalPresenceStub(),
+                         markers: ChatMarkers = ChatMarkers(store: ChatMarkerMemoryStore()),
+                         outbox: ChatOutbox = ChatOutbox(store: ChatOutboxMemoryStore())) -> ChatConversations {
+        helper.script { request in
+            switch request.method {
+            case "chat.open": .open
+            case "queue.list": .result([Any]())
+            default: .result(NSNull())
+            }
+        }
+        return ChatConversations(source: source, presence: presence, markers: markers, outbox: outbox,
+                                 drafts: ChatDraftRepository(store: ChatDraftMemoryStore()))
+    }
+
+    /// The `count`th `chat.open` subscription of `terminal`, once it is on its way.
+    private func subscription(_ terminal: UInt64, count: Int = 1) async throws -> UInt64 {
+        let opens = { self.helper.requests("chat.open").filter { $0.params["terminal"] as? UInt64 == terminal } }
+        try await TestSupport.eventually { opens().count >= count }
+        return try XCTUnwrap(opens().dropFirst(count - 1).first, "chat.open \(count) of terminal \(terminal)").id
+    }
+
+    /// `chat.open`'s history on that subscription, as the helper answers for the fixture topology's binding.
+    private func answer(_ id: UInt64, terminal: UInt64, session: String, records: [[String: Any]],
+                        state: [String: Any] = ChatFixture.state(busy: false)) {
+        var binding = ChatFixture.binding
+        binding["session"] = session; binding["pid"] = 100; binding["start"] = [1, 2]
+        helper.notify(id, "chat.history", ChatFixture.history(terminal: terminal, session: session, records: records, state: state,
+                                                              binding: binding))
+    }
+
+    /// A shown thread let go keeps what it read; the conversation's next session shows it before its `chat.open`
+    /// answers. A kept transcript of a conversation the pane no longer runs (/clear, a new agent) is dropped instead.
+    func testAReleasedThreadsTranscriptOpensItsNextSessionAtOnce() async throws {
+        let conversations = opening()
+        conversations.keptSessions = 0
+        let conversation = "00000000-0000-4000-8000-000000000201"
+        conversations.update(snapshot(try topology(agents: [3: conversation])))
+        let key = k3(host)
+        let first = conversations.session(for: key)
+        answer(try await subscription(3), terminal: 3, session: conversation, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { first.phase == .verified && !first.loadingHistory }
+        let rows = first.transcript.rows
+        conversations.shown(key)
+        conversations.hidden(key)
+        XCTAssertNil(conversations.sessions[key])
+        XCTAssertEqual(conversations.transcripts.keys, [key])
+        try await TestSupport.eventually { self.helper.cancellations.contains(self.helper.requests("chat.open")[0].id) }
+
+        let next = conversations.session(for: key)
+        XCTAssertFalse(next === first)
+        XCTAssertEqual(next.transcript.rows.map(\.id), rows.map(\.id), "its first frame")
+        XCTAssertTrue(next.seeded)
+        XCTAssertTrue(conversations.transcripts.keys.isEmpty, "the session holds it now")
+        answer(try await subscription(3, count: 2), terminal: 3, session: conversation, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { next.phase == .verified && !next.seeded }
+        XCTAssertEqual(next.transcript.rows.map(\.id), rows.map(\.id))
+
+        conversations.shown(key)
+        conversations.hidden(key)
+        XCTAssertEqual(conversations.transcripts.keys, [key])
+        conversations.update(snapshot(try topology(agents: [3: "00000000-0000-4000-8000-000000000301"])))
+        let cleared = conversations.session(for: key)
+        XCTAssertTrue(cleared.transcript.isEmpty, "another conversation's rows never show")
+        XCTAssertFalse(cleared.seeded)
+        XCTAssertTrue(conversations.transcripts.keys.isEmpty, "and are not kept")
+    }
+
+    /// Kept transcripts are bounded by their estimated bytes, the least recently kept going first; one larger than the
+    /// whole store is not kept; a host's go with it.
+    func testKeptTranscriptsAreBoundedByBytesOldestFirst() throws {
+        let store = ChatTranscriptStore(limit: 1_000)
+        let other = UUID()
+        func kept(_ bytes: Int) -> MobileChatSession.Kept {
+            .init(transcript: MobileTranscript(), conversation: "conv", earlier: nil, readingPosition: nil, bytes: bytes)
+        }
+        let a = ChatConversationKey(host: host, node: "a"), b = ChatConversationKey(host: host, node: "b")
+        let c = ChatConversationKey(host: other, node: "c"), d = ChatConversationKey(host: host, node: "d")
+        store.keep(kept(400), for: a)
+        store.keep(kept(400), for: b)
+        XCTAssertEqual(store.bytes, 800)
+        store.keep(kept(400), for: c)
+        XCTAssertEqual(store.keys, [b, c], "the oldest went")
+        XCTAssertEqual(store.bytes, 800)
+        store.keep(kept(300), for: b)
+        store.keep(kept(400), for: a)
+        XCTAssertEqual(store.keys, [b, a], "b kept again is newer than c")
+        XCTAssertEqual(store.bytes, 700)
+        store.keep(kept(1_001), for: d)
+        XCTAssertEqual(store.keys, [b, a], "too large for the store")
+        XCTAssertNotNil(store.take(b))
+        XCTAssertNil(store.take(b), "taken out")
+        XCTAssertEqual(store.bytes, 400)
+        store.keep(kept(100), for: c)
+        store.remove(host: host)
+        XCTAssertEqual(store.keys, [c], "another host's stays")
+        store.removeAll()
+        XCTAssertEqual(store.bytes, 0)
+
+        // The estimate follows what the transcript holds: each text about once (an item shares its record's strings).
+        var transcript = MobileTranscript()
+        let empty = transcript.estimatedBytes
+        let record = ChatFixture.record("r", "assistant", turn: "t", text: String(repeating: "x", count: 100_000))
+        transcript.apply([try JSONDecoder().decode(HelperChat.Record.self, from: JSONSerialization.data(withJSONObject: record))],
+                         historical: true)
+        XCTAssertGreaterThan(transcript.estimatedBytes - empty, 100_000)
+        XCTAssertLessThan(transcript.estimatedBytes - empty, 200_000)
+    }
+
+    /// Removing a host ends its sessions and forgets what they read; another host's kept transcripts stay.
+    func testRemovingAHostForgetsItsKeptTranscripts() async throws {
+        let conversations = opening()
+        let conversation = "00000000-0000-4000-8000-000000000201"
+        conversations.update(snapshot(try topology(agents: [3: conversation])))
+        let key = k3(host)
+        let session = conversations.session(for: key)
+        answer(try await subscription(3), terminal: 3, session: conversation, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { session.phase == .verified && !session.loadingHistory }
+        let elsewhere = ChatConversationKey(host: UUID(), node: "tmux:s:$1:%1")
+        conversations.transcripts.keep(try XCTUnwrap(session.kept()), for: elsewhere)
+        conversations.remove(host: host)
+        XCTAssertNil(conversations.sessions[key])
+        XCTAssertEqual(conversations.transcripts.keys, [elsewhere], "the released session's is gone with its host")
+    }
+
+    /// The Agents list's first rows open ahead of a tap, in its order and one at a time, without counting as shown: no
+    /// terminal attached, the rows stay `chat.list`'s (no state of the session's, no seen marker moved, a new result
+    /// still arrives as one, for the banners), and nothing else sees the session.
+    func testTheListsFirstRowsWarmOneAtATimeWithoutBeingShown() async throws {
+        let source = Source()
+        source.set(3, summary(record: 1))
+        source.set(5, summary(record: 2))
+        let presence = ChatTerminalPresenceStub()
+        let markers = ChatMarkers(store: ChatMarkerMemoryStore())
+        let conversations = opening(source, presence: presence, markers: markers)
+        conversations.update(snapshot(try topology()))
+        try await TestSupport.eventually {
+            conversations.conversation(self.k3(self.host))?.summary.preview != nil
+                && conversations.conversation(self.k5(self.host))?.summary.preview != nil
+        }
+        let seen = markers.document
+        var arrivals: [ChatConversationKey] = []
+        conversations.arrived = { _, current in if let current { arrivals.append(current.key) } }
+
+        conversations.agentsListShown([k5(host), k3(host)])
+        // Opening is decided in the call: the second row has no session while the first is opening.
+        XCTAssertEqual(Set(conversations.warm.keys), [k5(host)], "one at a time, the list's first first")
+        XCTAssertEqual(conversations.warm[k5(host)]?.phase, .opening)
+        let five = try await subscription(5)
+        XCTAssertNil(conversations.warm[k3(host)])
+        answer(five, terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"),
+               state: ChatFixture.state(busy: true))
+        let three = try await subscription(3)
+        answer(three, terminal: 3, session: "conv-e2e", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm.values.allSatisfy { $0.phase == .verified } && conversations.warm.count == 2 }
+
+        XCTAssertTrue(conversations.sessions.isEmpty, "no one else sees them")
+        XCTAssertTrue(presence.retained.isEmpty, "no terminal attached")
+        await conversations.refresh(host: host)
+        conversations.rebuild()
+        XCTAssertEqual(conversations.conversation(k5(host))?.summary.busy, false, "the row is chat.list's, not the session's")
+        XCTAssertNotEqual(conversations.dot(k5(host)), .working)
+        XCTAssertEqual(markers.document, seen, "nothing marked seen")
+        source.set(5, summary(record: 9))
+        await conversations.refresh(host: host)
+        XCTAssertEqual(arrivals, [k5(host)], "a new result still arrives (its banner)")
+        XCTAssertTrue(conversations.conversation(k5(host))?.unread == true)
+    }
+
+    /// A warm session outlives its row's place among the first rows, or the list on screen, by `prewarmLinger`, then
+    /// goes as any session does (what it read kept); in the background it goes at once, and comes back seeded.
+    func testWarmSessionsFollowTheListAndGoAfterItLeaves() async throws {
+        let conversations = opening()
+        let clock = LifecycleClock()
+        conversations.now = { clock.now }
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host)])
+        let five = try await subscription(5)
+        answer(five, terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)]?.phase == .verified }
+
+        conversations.agentsListShown([k3(host)])
+        XCTAssertNotNil(conversations.warm[k5(host)], "cooling, not gone")
+        let three = try await subscription(3)
+        answer(three, terminal: 3, session: "conv-e2e", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm[self.k3(self.host)]?.phase == .verified }
+        clock.advance(by: 9)
+        conversations.tick()
+        XCTAssertNotNil(conversations.warm[k5(host)], "9 s: still cooling")
+        clock.advance(by: 2)
+        conversations.tick()
+        XCTAssertNil(conversations.warm[k5(host)], "past the linger")
+        try await TestSupport.eventually { self.helper.cancellations.contains(five) }
+        XCTAssertTrue(conversations.transcripts.keys.contains(k5(host)), "what it read is kept")
+        XCTAssertEqual(conversations.warm[k3(host)]?.phase, .verified)
+
+        // The released row comes back seeded from what it read; the other, back among the first rows before its linger
+        // ended, stays warm: nothing opens it again.
+        conversations.agentsListShown([k5(host)])
+        conversations.agentsListShown([k3(host), k5(host)])
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)] != nil }
+        XCTAssertTrue(conversations.warm[k5(host)]?.seeded == true, "seeded from what it read")
+        XCTAssertEqual(helper.requests("chat.open").filter { $0.params["terminal"] as? UInt64 == 3 }.count, 1)
+        let reopened = try await subscription(5, count: 2)
+        answer(reopened, terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm.values.allSatisfy { $0.phase == .verified } }
+        let opens = helper.requests("chat.open").count
+
+        conversations.agentsListHidden()
+        clock.advance(by: 5)
+        conversations.tick()
+        XCTAssertEqual(conversations.warm.count, 2, "the list left a moment ago")
+        clock.advance(by: 6)
+        conversations.tick()
+        XCTAssertTrue(conversations.warm.isEmpty)
+
+        conversations.agentsListShown([k3(host)])
+        try await TestSupport.eventually { conversations.warm[self.k3(self.host)] != nil }
+        conversations.foreground = false
+        XCTAssertTrue(conversations.warm.isEmpty, "the background lets them go at once")
+        conversations.foreground = true
+        XCTAssertNotNil(conversations.warm[k3(host)], "back in the foreground with the list still shown")
+        // Both opens of k3 after the list came back reach the helper (its transport reads on its own thread).
+        try await TestSupport.eventually { self.helper.requests("chat.open").count >= opens + 2 }
+    }
+
+    /// Rows on a host not reached, and rows with messages in the device's queue (a warm session would send them), are
+    /// not warmed; the host's connection warms its rows.
+    func testWarmingSkipsHostsNotReachedAndRowsWithQueuedMessages() async throws {
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore())
+        let conversations = opening(outbox: outbox)
+        XCTAssertTrue(outbox.add(ChatOutboxItem(key: k3(host), conversation: "conv-e2e", text: "Run the suite")))
+        conversations.update(snapshot(try topology(), link: .reconnecting(attempt: 1, since: Date())))
+        conversations.agentsListShown([k3(host), k5(host)])
+        XCTAssertTrue(conversations.warm.isEmpty)
+        conversations.update(snapshot(try topology()))
+        let five = try await subscription(5)
+        answer(five, terminal: 5, session: "conv-app", records: [])
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)]?.phase == .verified }
+        // Its verification asked the queue again, in the same turn: k3 would be warm now.
+        XCTAssertNil(conversations.warm[k3(host)], "its queued message waits for its thread")
+        XCTAssertFalse(helper.requests("chat.open").contains { $0.params["terminal"] as? UInt64 == 3 })
+    }
+
+    /// A tap takes the warm session over: verified, its rows in the first frame, its terminal attached as the thread
+    /// shows; the row follows it from then on.
+    func testATapTakesOverAWarmSessionAndAttachesItsTerminalAsItShows() async throws {
+        let presence = ChatTerminalPresenceStub()
+        let conversations = opening(presence: presence)
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host)])
+        answer(try await subscription(5), terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)]?.phase == .verified }
+        let warm = try XCTUnwrap(conversations.warm[k5(host)])
+        try await TestSupport.eventually { !conversations.rebuildPending }
+        conversations.opening(k5(host))
+        XCTAssertTrue(conversations.sessions[k5(host)] === warm)
+        XCTAssertFalse(conversations.rebuildPending, "the row's rebuild waits for the first frame, out of the push")
+        XCTAssertTrue(conversations.warm.isEmpty)
+        XCTAssertFalse(warm.holding, "verified already: nothing to hold")
+        XCTAssertTrue(presence.retained.isEmpty, "not on screen yet")
+        XCTAssertTrue(conversations.session(for: k5(host)) === warm, "the screen's own ask keeps it waiting")
+        XCTAssertTrue(presence.retained.isEmpty)
+        conversations.agentsListHidden()
+        conversations.shown(k5(host))
+        // Its appearance may come before the push's layout: whatever it scheduled has run now, and nothing attached.
+        await mainQueueTurn()
+        XCTAssertTrue(presence.retained.isEmpty, "not inside the push")
+        XCTAssertTrue(conversations.session(for: k5(host)) === warm)
+        XCTAssertTrue(presence.retained.isEmpty, "nor when the screen asks for its session again")
+        warm.firstFrameShown()
+        XCTAssertEqual(presence.retained[k5(host)], 5, "after the first frame")
+        XCTAssertTrue(conversations.rebuildPending, "and the row follows it from then")
+        XCTAssertTrue(conversations.pending.isEmpty)
+        XCTAssertEqual(helper.requests("chat.open").count, 1, "nothing opened again")
+    }
+
+    /// The thread the user opened comes first: while it is being pushed or on screen and still opening, the list (an
+    /// iPad's sidebar beside it) warms nothing; once it is open, the list's first rows warm.
+    func testNothingWarmsWhileTheUsersThreadOpens() async throws {
+        let conversations = opening()
+        conversations.holdLimit = .seconds(3600)
+        conversations.update(snapshot(try topology()))
+        conversations.opening(k3(host))
+        conversations.agentsListShown([k3(host), k5(host)])
+        XCTAssertTrue(conversations.warm.isEmpty, "the user's thread is opening")
+        answer(try await subscription(3), terminal: 3, session: "conv-e2e", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.sessions[self.k3(self.host)]?.heldUpdates == 1 }
+        XCTAssertTrue(conversations.warm.isEmpty, "held for its first frame, still opening")
+        conversations.shown(k3(host))
+        conversations.sessions[k3(host)]?.firstFrameShown()
+        try await TestSupport.eventually { conversations.sessions[self.k3(self.host)]?.phase == .verified }
+        _ = try await subscription(5)
+        XCTAssertNotNil(conversations.warm[k5(host)])
+        XCTAssertNil(conversations.warm[k3(host)], "open already")
+    }
+
+    /// A tap's session is kept until its thread shows, and what the helper answers meanwhile waits for the thread's
+    /// first frame; a push that never shows it makes it an ordinary session, trimmed as one.
+    func testATappedThreadIsKeptUntilShownAndAnAbandonedOneGoes() async throws {
+        let conversations = opening()
+        conversations.keptSessions = 0
+        conversations.holdLimit = .seconds(3600)
+        conversations.update(snapshot(try topology()))
+        conversations.opening(k3(host))
+        let session = try XCTUnwrap(conversations.sessions[k3(host)])
+        XCTAssertTrue(session.holding)
+        XCTAssertEqual(session.phase, .opening)
+        answer(try await subscription(3), terminal: 3, session: "conv-e2e", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { session.heldUpdates == 1 }
+        XCTAssertEqual(session.phase, .opening, "held for the first frame")
+        conversations.trimSessions()
+        XCTAssertTrue(conversations.sessions[k3(host)] === session, "never trimmed before it shows")
+        conversations.shown(k3(host))
+        // Its appearance can come before its view is in a window: what it scheduled has run, and the hold stands.
+        await mainQueueTurn()
+        XCTAssertTrue(session.holding, "until the first frame is committed")
+        session.firstFrameShown()
+        XCTAssertFalse(session.holding)
+        XCTAssertEqual(session.phase, .verified)
+
+        conversations.opening(k5(host))
+        let abandoned = try XCTUnwrap(conversations.sessions[k5(host)])
+        let id = try await subscription(5)
+        conversations.abandoned(k5(host))
+        XCTAssertNil(conversations.sessions[k5(host)], "trimmed as any session not shown")
+        XCTAssertFalse(abandoned.holding)
+        try await TestSupport.eventually { self.helper.cancellations.contains(id) }
+        XCTAssertTrue(conversations.pending.isEmpty)
+        XCTAssertNotNil(conversations.sessions[k3(host)], "the shown one stays")
+    }
+
+    /// A thread shown without its view entering a window (no first frame reported) still gets its held answers and
+    /// its deferred terminal, after `holdLimit` from its showing.
+    func testAThreadShownWithoutItsFirstFrameGetsItAfterTheLimit() async throws {
+        let presence = ChatTerminalPresenceStub()
+        let conversations = opening(presence: presence)
+        conversations.holdLimit = .milliseconds(100)
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host)])
+        answer(try await subscription(5), terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)]?.phase == .verified }
+        conversations.opening(k5(host))
+        conversations.agentsListHidden()
+        conversations.shown(k5(host))
+        XCTAssertTrue(presence.retained.isEmpty)
+        try await TestSupport.eventually { presence.retained[self.k5(self.host)] == 5 }
+    }
+
+    /// A push whose thread never shows (its tab opened on another segment, say) stops protecting its session after
+    /// `pendingLimit`: it is trimmed as any other.
+    func testAPushWhoseThreadNeverShowsIsLetGoAfterItsLimit() async throws {
+        let conversations = opening()
+        let clock = LifecycleClock()
+        conversations.now = { clock.now }
+        conversations.update(snapshot(try topology()))
+        conversations.opening(k3(host))
+        let id = try await subscription(3)
+        clock.advance(by: 4)
+        conversations.tick()
+        XCTAssertTrue(conversations.pending.contains(k3(host)), "a push takes well under a second, but 4 s are allowed")
+        clock.advance(by: 2)
+        conversations.tick()
+        XCTAssertTrue(conversations.pending.isEmpty)
+        XCTAssertNil(conversations.sessions[k3(host)], "trimmed: never shown")
+        try await TestSupport.eventually { self.helper.cancellations.contains(id) }
+    }
+
+    /// A reconnect (or a pane rebound) while Agents shows does not reopen every warm session at once: they are let go
+    /// and warmed again through the queue, one at a time and only once the user's own thread has opened again.
+    func testANewConnectionWarmsTheRowsAgainThroughTheQueue() async throws {
+        let conversations = opening()
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host), k3(host)])
+        answer(try await subscription(5), terminal: 5, session: "conv-app", records: try ChatFixture.records("claude-thread"))
+        answer(try await subscription(3), terminal: 3, session: "conv-e2e", records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { conversations.warm.count == 2 && conversations.warm.values.allSatisfy { $0.phase == .verified } }
+
+        let other = ScriptedHelper.scripted { request in request.method == "queue.list" ? .result([Any]()) : nil }
+        defer { other.close() }
+        conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: other.client, topology: try topology()))
+        XCTAssertEqual(conversations.warm.count, 1, "one opens again, through the queue")
+        XCTAssertTrue(conversations.warm.values.allSatisfy { $0.client === other.client && $0.phase == .opening })
+        XCTAssertTrue(conversations.transcripts.keys.contains(k3(host)), "the other waits with what it read")
+
+        // The user's thread first: on screen, it opens again with the next connection, and nothing warms meanwhile.
+        conversations.opening(k3(host))
+        conversations.shown(k3(host))
+        try await TestSupport.eventually { conversations.sessions[self.k3(self.host)]?.phase == .opening }
+        let third = ScriptedHelper.scripted { request in request.method == "queue.list" ? .result([Any]()) : nil }
+        defer { third.close() }
+        conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: third.client, topology: try topology()))
+        XCTAssertTrue(conversations.warm.isEmpty, "nothing warms while the user's thread opens")
+        XCTAssertEqual(conversations.sessions[k3(host)]?.phase, .opening)
+    }
+
+    /// A warm `chat.open` the helper refuses is let go and the queue moves on; a tap on that row opens it afresh instead
+    /// of showing the old failure.
+    func testAFailedWarmOpenIsLetGoAndATapOpensAfresh() async throws {
+        let conversations = opening()
+        helper.script { request in
+            switch request.method {
+            case "chat.open": request.params["terminal"] as? UInt64 == 5 ? .error(code: "busy", message: "Busy.") : .open
+            case "queue.list": .result([Any]())
+            default: .result(NSNull())
+            }
+        }
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host), k3(host)])
+        try await TestSupport.eventually { conversations.warm[self.k5(self.host)] == nil && conversations.warm[self.k3(self.host)] != nil }
+        conversations.opening(k5(host))
+        let tapped = try XCTUnwrap(conversations.sessions[k5(host)])
+        XCTAssertEqual(tapped.phase, .opening, "a fresh open, not the failure")
+        _ = try await subscription(5, count: 2)
+    }
+
+    /// A warm `chat.open` that never answers is let go after `warmOpenLimit`, its row given up on this connection, and
+    /// the queue moves on; one tapped after the limit is let go and the tap opens the row afresh.
+    func testAWarmOpenThatNeverAnswersIsLetGoAndATapOpensAfresh() async throws {
+        let conversations = opening()
+        let clock = LifecycleClock()
+        conversations.now = { clock.now }
+        conversations.update(snapshot(try topology()))
+        conversations.agentsListShown([k5(host), k3(host)])
+        _ = try await subscription(5)
+        clock.advance(by: 9)
+        conversations.tick()
+        XCTAssertNotNil(conversations.warm[k5(host)], "still within the limit")
+        XCTAssertNil(conversations.warm[k3(host)])
+        clock.advance(by: 2)
+        conversations.tick()
+        XCTAssertNil(conversations.warm[k5(host)], "unanswered past the limit")
+        XCTAssertEqual(conversations.warm[k3(host)]?.phase, .opening, "the queue moved on")
+        conversations.agentsListShown([k5(host), k3(host)])
+        XCTAssertNil(conversations.warm[k5(host)], "given up on this connection")
+
+        // k3 never answers either; tapped after the limit, the tap opens it afresh.
+        _ = try await subscription(3)
+        let waiting = try XCTUnwrap(conversations.warm[k3(host)])
+        clock.advance(by: 11)
+        conversations.opening(k3(host))
+        let tapped = try XCTUnwrap(conversations.sessions[k3(host)])
+        XCTAssertFalse(tapped === waiting)
+        XCTAssertEqual(tapped.phase, .opening)
+        _ = try await subscription(3, count: 2)
+    }
+
+    /// A kept transcript waits while the topology names no conversation for its pane (a new helper's first snapshots,
+    /// a provisional binding): only another named conversation drops it.
+    func testAKeptTranscriptWaitsWhileThePaneNamesNoConversation() async throws {
+        let conversations = opening()
+        conversations.keptSessions = 0
+        let conversation = "00000000-0000-4000-8000-000000000201"
+        conversations.update(snapshot(try topology(agents: [3: conversation])))
+        let key = k3(host)
+        let first = conversations.session(for: key)
+        answer(try await subscription(3), terminal: 3, session: conversation, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { first.phase == .verified && !first.loadingHistory }
+        conversations.shown(key)
+        conversations.hidden(key)
+        XCTAssertEqual(conversations.transcripts.keys, [key])
+        conversations.update(snapshot(try topology(agents: [3: ""])))
+        let unnamed = conversations.session(for: key)
+        XCTAssertFalse(unnamed.seeded)
+        conversations.shown(key)
+        conversations.hidden(key)
+        XCTAssertEqual(conversations.transcripts.keys, [key], "kept for when the conversation is named again")
+        conversations.update(snapshot(try topology(agents: [3: conversation])))
+        XCTAssertTrue(conversations.session(for: key).seeded)
+    }
+
+    /// The store's estimate counts what a transcript holds: tool output blocks, diffs, a tool's input and the records
+    /// nested in it, and the thumbnails merged into sent messages, each about once.
+    func testTheByteEstimateCountsWhatTheTranscriptHolds() throws {
+        let big = String(repeating: "x", count: 100_000)
+        func record(_ extra: [String: Any], kind: String = "tool", id: String = "r") throws -> HelperChat.Record {
+            var value = ChatFixture.record(id, kind, turn: "t", text: "", time: 946_719_000_000)
+            value.merge(extra) { $1 }
+            return try JSONDecoder().decode(HelperChat.Record.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        let tool: [String: Any] = ["kind": "shell", "title": "Run", "symbol": "terminal", "summary": "", "input": big,
+                                   "language": "sh", "directory": NSNull(), "failed": false, "read": NSNull(),
+                                   "search": NSNull(), "shell": NSNull(), "orchestration": false, "patch": false,
+                                   "confirmed_result": NSNull(), "additions": 0, "deletions": 0,
+                                   "children": [ChatFixture.record("child", "tool", turn: "t", text: big)]]
+        let cases: [(String, HelperChat.Record)] = [
+            ("blocks", try record(["blocks": [["kind": "code", "language": "text", "text": big, "path": NSNull()]]])),
+            ("diffs", try record(["documents": [["path": "/work/a.swift", "kind": NSNull(), "diff": big, "workdir": NSNull()]]])),
+            ("tool", try record(["tool": tool])),
+        ]
+        for (name, heavy) in cases {
+            var transcript = MobileTranscript()
+            let empty = transcript.estimatedBytes
+            transcript.apply([heavy], historical: true)
+            let grown = transcript.estimatedBytes - empty
+            XCTAssertGreaterThan(grown, 100_000, name)
+            XCTAssertLessThan(grown, 260_000, "\(name): about once, not twice or more")
+        }
+        // A sent message's thumbnail, merged into its row.
+        var transcript = MobileTranscript()
+        let thumbnail = ChatAttachment(id: "a1", name: "shot.png", kind: .image, size: 2048, path: "/stored/shot.png",
+                                       thumbnail: Data(count: 100_000))
+        let prompt = try record([:], kind: "user", id: "u")
+        let before = transcript.estimatedBytes
+        transcript.apply([prompt], historical: false, prepare: { item, _ in
+            var item = item
+            item.attachments = [thumbnail]
+            return item
+        })
+        XCTAssertGreaterThan(transcript.estimatedBytes - before, 100_000, "thumbnails")
+    }
+}
+
+/// Runs the main queue once: what was queued on it before has run.
+@MainActor private func mainQueueTurn() async {
+    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { done.resume() } }
+}
+
+/// A clock the lifecycle's deadlines read (`ChatConversations.now`), moved by the test.
+private final class LifecycleClock {
+    var now = Date(timeIntervalSince1970: 946_719_000)
+    func advance(by seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
 }
 

@@ -23,6 +23,7 @@ final class MobileComposition {
     var refresh: BackgroundRefresh?
     /// Notifications and the badge while the app is open (`AgentAlerts`); set by `app()`, tests make their own.
     var alerts: AgentAlerts?
+    private var polling: Task<Void, Never>?
     var network: NetworkPathWatcher?
     /// The Apple Watch link (docs/watch.md); nil where WatchConnectivity is unsupported.
     var watch: WatchBridge?
@@ -45,6 +46,8 @@ final class MobileComposition {
     let feedsTabs: Bool
     /// A conversation New chat started: its thread opens with the keyboard up (M3b).
     private var focusing: ChatConversationKey?
+    /// Tabs pushed on Chat whose thread has not come on screen yet, and the conversation each opened (`routed`).
+    private var pushing: [TabRef: ChatConversationKey] = [:]
     /// The client each host's presences last reattached through (once per connection, on its first live topology).
     private var reattached: [UUID: ObjectIdentifier] = [:]
 
@@ -67,6 +70,7 @@ final class MobileComposition {
         if review == nil, feedsTabs { self.review.file = ReviewFileStore().url }
         conversations = ChatConversations(presence: TerminalChatPresence(presences: presences), markers: markers,
                                           outbox: outbox, drafts: drafts)
+        conversations.foreground = hosts.active
         navigator = SpacesNavigator(model: tabs, memory: splitMemory)
         navigator.gitFacts = gitFacts
         // Shell tabs keep their presences with the rest (plain SSH).
@@ -93,7 +97,8 @@ final class MobileComposition {
         for session in hosts.ordered {
             guard let entry = cache.entry(session.id) else { continue }
             session.shells.restore(entry.shells)
-            conversations.restore(host: session.id, summaries: entry.conversations.mapValues(\.summary))
+            conversations.restore(host: session.id, summaries: entry.conversations.mapValues(\.summary),
+                                  heard: cache.updated(session.id))
             session.restore(hello: entry.hello, multiplexers: entry.multiplexers.map(\.multiplexer), versions: entry.versions,
                             following: entry.following, topology: entry.topology, updated: cache.updated(session.id))
         }
@@ -107,6 +112,13 @@ final class MobileComposition {
             self.updateBadge()
         }
         conversations.arrived = { [weak self] previous, current in self?.arrived(previous, current) }
+        conversations.preferredSpace = { [weak tabs] in tabs?.recentSpace.map { ($0.ref.host, $0.ref.key) } }
+        // Agents' chips as the user left them (Spaces' filter is kept the same way, `MobileTabs.query`).
+        if feedsTabs {
+            let defaults = UserDefaults.standard
+            conversations.filter = defaults.string(forKey: Self.agentsFilterKey).flatMap(AgentsFilter.init(rawValue:)) ?? .all
+            conversations.filterChanged = { defaults.set($0.rawValue, forKey: Self.agentsFilterKey) }
+        }
         // Hosts draw in Settings' colorblind colours, or grey with Color-code hosts off.
         settings.hostColors = .shared
         // The Settings app's Dispatch page: its badge switch reaches the icon as Settings' own does.
@@ -118,6 +130,7 @@ final class MobileComposition {
         NotificationRoute.shared.open = { [weak self] key in self?.openChat(key, keyboard: false) }
         let presences = presences
         hosts.clientEnded = { session in presences.stopAll(host: session.id) }
+        hosts.agentActivity = { [weak conversations] session in conversations?.activityChanged(host: session.id) }
         hosts.postConnect = [Self.enableIntegrations]
         let conversations = conversations
         // The Debug Spaces sample brings its own urgency and lines (M2a's dots and "thinking 48s", the back pill's
@@ -125,6 +138,12 @@ final class MobileComposition {
         if feedsTabs {
             wireTabs(conversations)
             navigator.agentLauncher = agentLauncher
+            navigator.routed = { [weak self] path, previous in self?.routed(path, from: previous) }
+        }
+        // Kept transcripts are a convenience: under memory pressure they go first.
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil,
+                                               queue: .main) { [weak conversations] _ in
+            MainActor.assumeIsolated { conversations?.forgetTranscripts() }
         }
         #if DEBUG
         if !feedsTabs {
@@ -150,6 +169,9 @@ final class MobileComposition {
         }
         let presences = presences
         tabs.paneTitle = { host, key in presences.presence(.init(host: host, node: key))?.title }
+        tabs.keepsTranscript = { host, key in
+            conversations.sessions[ChatConversationKey(host: host, node: key)].map { !$0.transcript.isEmpty } ?? false
+        }
         let navigator = navigator, gitFacts = gitFacts, browsers = filesBrowsers, commits = commits
         tabs.filesName = { [weak tabs] tab, mode in
             let ref = tab.ref
@@ -188,7 +210,9 @@ final class MobileComposition {
         let tabs = tabs, hosts = hosts
         tabs.shellSessions = { hosts.session($0)?.shells }
         tabs.updated = { hosts.session($0)?.updated }
-        tabs.refresh = { await hosts.refresh() }
+        // Pull to refresh: the links answer, then every host's rows are read again (the links alone say nothing new
+        // about an agent whose thread is not open).
+        tabs.refresh = { await hosts.refresh(); await conversations.refreshAll() }
         // New space on a multiplexer the host does not show: the host follows it from now on, as Edit host's choice.
         tabs.follow = { id, name in
             guard var record = hosts.session(id)?.host,
@@ -220,13 +244,21 @@ final class MobileComposition {
     /// Hosts that reach a machine and account an earlier host in the list already shows (a LAN and a Tailscale address
     /// of one Mac): the Mac keys a host by machine and uid (`HostRegistry`, `ssh:<machine>:<uid>`) and shows it once, so
     /// here the first connected one shows its spaces and agents and the others name it. Host id → that host's name.
+    /// An entry not connected now whose last hello names a machine a connected entry shows names it too: away from
+    /// home the LAN entry reconnecting does not list the machine's agents a second time, stale, beside the live ones.
     static func sameMachine(_ sessions: [HostSession]) -> [UUID: String] {
         var first: [String: String] = [:], result: [UUID: String] = [:]
+        func machine(_ session: HostSession) -> String? {
+            guard let identity = session.hello?.identity, let account = session.hello?.account else { return nil }
+            return identity.host + ":" + String(account.uid)
+        }
         // A plain SSH host's hello is an earlier helper's: it names no machine now.
         for session in sessions where session.link.isConnected && !session.isPlain {
-            guard let identity = session.hello?.identity, let account = session.hello?.account else { continue }
-            let key = identity.host + ":" + String(account.uid)
+            guard let key = machine(session) else { continue }
             if let name = first[key] { result[session.id] = name } else { first[key] = session.host.name }
+        }
+        for session in sessions where !session.link.isConnected && !session.isPlain {
+            if let key = machine(session), let name = first[key] { result[session.id] = name }
         }
         return result
     }
@@ -290,6 +322,7 @@ final class MobileComposition {
             synced[id] = nil
             reattached[id] = nil
             conversations.remove(host: id)
+            conversations.markers.removeAll(host: id)
             presences.closeAll(host: id)
             tabs.dropHost(id)
             topologies.forget(id)
@@ -323,11 +356,43 @@ final class MobileComposition {
         }
     }
 
-    /// The badge (`AgentAlerts.waiting`): live rows only, so a host offline or a row whose agent left counts as the
-    /// background refresh counts it.
+    /// The badge (`AgentAlerts.waiting`): live rows, so a host offline or a row whose agent left counts as the
+    /// background refresh counts it, and the stale rows of a host still connecting (the foreground's reconnect does not
+    /// clear it for a moment). In the background the open app leaves it alone: its hosts disconnect after the linger,
+    /// which says nothing about the agents (the background refresh sets it from what it reads).
     func updateBadge() {
-        alerts?.badge(waiting: AgentAlerts.waiting(conversations.conversations.filter { !$0.stale }.map(\.summary)))
+        guard hosts.active else { return }
+        let counted = conversations.conversations.filter { row in
+            !row.stale || hosts.session(row.key.host)?.link.isPending == true
+        }
+        alerts?.badge(waiting: AgentAlerts.waiting(counted.map(\.summary)))
     }
+
+    /// While the app is in the foreground every connected host's rows are read again every `pollInterval`: the helper
+    /// pushes a change when it can (`activityChanged`), and this catches what it cannot.
+    private func startPolling() {
+        guard polling == nil, feedsTabs else { return }
+        let conversations = conversations
+        polling = Task { [weak self] in
+            // The foreground's first read: a lingering connection is the same client, which `update` would not refetch.
+            await conversations.refreshAll()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.pollInterval)
+                guard !Task.isCancelled, self != nil else { return }
+                await conversations.refreshAll()
+            }
+        }
+    }
+
+    private func stopPolling() {
+        polling?.cancel()
+        polling = nil
+    }
+
+    static let agentsFilterKey = "agents.filter"
+
+    /// How often the open app reads every host's rows when no push came.
+    static let pollInterval: Duration = .seconds(20)
 
     /// The live rows of connected hosts go to the cache (offline rows are the cache's own); a row whose terminal no
     /// longer has an agent goes, so the background refresh does not take its last summary for a stop again.
@@ -404,7 +469,12 @@ final class MobileComposition {
     func scenePhaseChanged(_ phase: ScenePhase) {
         hosts.scenePhaseChanged(phase)
         watch?.scenePhaseChanged()
+        alerts?.appActive = phase == .active
+        // Agents warms its first rows only in the foreground (`ChatConversations.foreground`), as the hosts connect.
+        conversations.foreground = hosts.active
+        if phase == .active { startPolling() } else { stopPolling() }
         if phase == .background {
+            conversations.markers.flush()
             cache.flush()
             // The overall comment is written 300 ms after typing stops: going away writes it now.
             review.repository.flush()
@@ -425,9 +495,64 @@ final class MobileComposition {
     /// Agents' row tap and New chat's Start: the conversation's tab on its Chat segment (with the keyboard up after
     /// Start).
     func openChat(_ key: ChatConversationKey, keyboard: Bool) {
-        guard let ref = tab(for: key) else { return }
+        guard let ref = pick(key) else { return }
         if keyboard { focusing = key }
         navigator.openChat(ref)
+    }
+
+    /// The stack moved (`SpacesNavigator.routed`), in the turn it moved. A tab pushed (or put in the split's detail
+    /// column) that opens on Chat opens its conversation now, before its screen is built, so `chat.open` leaves with
+    /// the tap (`ChatConversations.opening`): an Agents row, a space's tab, a notification, New chat's Start. A tab
+    /// that left the path before its thread showed lets its conversation go (`abandoned`).
+    private func routed(_ path: [TabsRoute], from previous: [TabsRoute]) {
+        // On a phone's stack a push covers the tab bar, Agents' list with it (an iPad's split shows it beside).
+        conversations.agentsListCovered = !navigator.split && !path.isEmpty
+        let onPath = Set(path.compactMap(\.tab))
+        for (ref, key) in pushing where !onPath.contains(ref) {
+            pushing[ref] = nil
+            conversations.abandoned(key)
+        }
+        guard let ref = SpacesNavigator.split(path).tab, ref != SpacesNavigator.split(previous).tab,
+              let key = chatKey(opening: ref) else { return }
+        pushing[ref] = key
+        conversations.opening(key)
+    }
+
+    /// The conversation a tab shows when it opens: on Chat (its segment as `TabScreen` picks it, `chosenMode`), its
+    /// agent's pane; nil when it opens on another segment.
+    private func chatKey(opening ref: TabRef) -> ChatConversationKey? {
+        guard let tab = tabs.tab(ref), tabs.chosenMode(tab).segment == .chat, TabSegment.available(for: tab).contains(.chat),
+              let pane = tab.agentPane else { return nil }
+        return ChatConversationKey(host: ref.host, node: pane.key)
+    }
+
+    /// A thread of the tab came on screen. When it is not the conversation the push opened (its pane was rebound, or
+    /// another pane picked meanwhile), that one is let go now rather than when the tab leaves the path.
+    func pushed(_ ref: TabRef, _ key: ChatConversationKey) {
+        if let opened = pushing.removeValue(forKey: ref), opened != key { conversations.abandoned(opened) }
+        for (other, opened) in pushing where opened == key { pushing[other] = nil }
+    }
+
+    /// Agents' Open Terminal: the conversation's tab on its Terminal segment, its pane chosen.
+    func openTerminal(_ key: ChatConversationKey) {
+        guard let ref = pick(key), let tab = tabs.tab(ref) else { return }
+        navigator.open(tab, terminal: true)
+    }
+
+    /// The conversation's tab with the conversation's pane chosen: a tab with two agents in a split shows the one asked
+    /// for, not its first.
+    private func pick(_ key: ChatConversationKey) -> TabRef? {
+        guard let ref = tab(for: key) else { return nil }
+        if let tab = tabs.tab(ref), let pane = tab.panes.first(where: { $0.key == key.node }) { tab.pick(pane) }
+        return ref
+    }
+
+    /// The hosts as Agents' empty state and offline section tell them.
+    var agentHosts: [AgentsHost] {
+        hosts.ordered.map { session in
+            AgentsHost(id: session.id, name: session.host.name, state: SpacesHostState(session.link), problem: session.problem,
+                       updated: session.updated, listsAgents: session.host.chat && !session.isPlain)
+        }
     }
 
     /// How Agents draws a host: its tint (gray offline) and glyph, as Spaces does.
@@ -493,11 +618,12 @@ final class MobileComposition {
     /// `workingSince`); while it waits, the approval or question ("Allow cargo test --workspace?", as the watch's
     /// `waitingText`); once done, its last message. The model stays in the chat; the agent is the row's mark. Reads
     /// the session's cached step (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row.
-    static func status(_ row: ChatConversation, session: MobileChatSession?) -> TabsStatus? {
+    /// `detail` false (Agents): the step by its kind only ("Running shell command…"), never the command or file.
+    static func status(_ row: ChatConversation, session: MobileChatSession?, detail: Bool = true) -> TabsStatus? {
         if let session, session.phase == .verified {
             if session.waitingForUser { return TabsStatus(text: WatchSnapshotBuilder.waiting(session) ?? "needs you") }
             if session.working {
-                let step = session.currentStep
+                let step = !detail ? session.currentStepGist ?? "working" : session.currentStep
                     ?? session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "working"
                 return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince)
             }
@@ -525,7 +651,7 @@ final class MobileComposition {
             let key = try await conversations.start(launch, in: target, settings: nil)
             memory.remember(agent: launch.key)
             self?.openChat(key, keyboard: true)
-        })
+        }, preferred: { memory.lastAgent })
     }
 
     /// The agents' integrations on every connection, as the Mac's `installHelperIntegrations` does for a newly connected
@@ -604,8 +730,8 @@ final class MobileComposition {
                 // On screen, what arrives for the thread shows in it, not as a banner (`AgentAlerts.onScreen`).
                 return AnyView(ChatThreadView(session: conversations.session(for: key), space: space, tab: tab.name, directory: pane.cwd,
                                               homes: HomePath(hosts.session(key.host)?.hello), focusOnAppear: focus, seen: { conversations.markSeen(key) }, memory: memory)
-                    .onAppear { self.alerts?.onScreen.insert(key) }
-                    .onDisappear { self.alerts?.onScreen.remove(key) }
+                    .onAppear { self.alerts?.onScreen.insert(key); self.conversations.shown(key); self.pushed(tab.ref, key) }
+                    .onDisappear { self.alerts?.onScreen.remove(key); self.conversations.hidden(key) }
                     .id(key))
             },
             terminalDirectory: { tab, pane in

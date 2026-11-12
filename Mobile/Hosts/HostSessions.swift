@@ -73,6 +73,10 @@ final class HostSessions {
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)? {
         didSet { for case let session? in sessionOf.values.map(\.session) { session.clientEnded = clientEnded } }
     }
+    /// Called when a session's helper says an agent changed (`HostSession.agentActivity`).
+    @ObservationIgnored var agentActivity: ((HostSession) -> Void)? {
+        didSet { for case let session? in sessionOf.values.map(\.session) { session.agentActivity = agentActivity } }
+    }
     /// Where every session's shell tabs keep their presences (the composition's `TerminalPresences`).
     @ObservationIgnored var presences: TerminalPresences = .shared {
         didSet { for case let session? in sessionOf.values.map(\.session) { session.shells.presences = presences } }
@@ -646,6 +650,7 @@ final class HostSessions {
         session.refusal = { [weak self] in self?.connectionRefusal }
         session.postConnect = postConnect
         session.clientEnded = clientEnded
+        session.agentActivity = agentActivity
         session.shells.presences = presences
         session.networkUnavailable = networkUnavailable
         session.stats.active = active

@@ -182,7 +182,8 @@ struct TabCommands: Sendable {
         try await client.place(HelperClient.Placement(node: tab.node, place: .init(kind: "workspace", label: space)))
     }
 
-    /// `memberships.move` of a tab within its space (P2d's reorder), or of detached work back under its parent.
+    /// `memberships.move` of a tab within its space (P2d's reorder) or into another (Move to), or of detached work back
+    /// under its parent.
     func move(_ node: UInt64, parent: UInt64, before: UInt64?) async throws {
         try await client.move(HelperClient.Membership(node: node, parent: parent, before: before))
     }

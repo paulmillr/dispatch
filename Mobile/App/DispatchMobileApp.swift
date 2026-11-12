@@ -34,8 +34,23 @@ final class MobileAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
         MobileDevice.start()
         // The bundled terminal fonts, off the main thread; a terminal or chat that needs one first waits for it.
         MobileFonts.registerInBackground()
+        // The terminal renderer's shaders and fonts, off the main thread, so the first terminal or chat does not make
+        // them there (`TerminalSession.prewarm`), but only once the app comes to the foreground: a launch in the
+        // background (the app refresh, a watch request) shows no terminal. The state reads background here in every
+        // launch (the scene connects later), and a launch the user made comes to the foreground about 30 ms later.
+        if application.applicationState == .background {
+            NotificationCenter.default.addObserver(self, selector: #selector(prewarmTerminals),
+                                                   name: UIApplication.willEnterForegroundNotification, object: nil)
+        } else {
+            TerminalSession.prewarmInBackground()
+        }
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    @objc private func prewarmTerminals() {
+        NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
+        TerminalSession.prewarmInBackground()
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

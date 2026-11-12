@@ -341,14 +341,8 @@ private struct MobileCommandHost: ViewModifier {
         case .find, .findNext, .findPrevious, .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize:
             if let action = command.terminalAction { UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil) }
         case .spaces, .agents:
-            // The iPad's sidebar has no tab bar: Agents is its filter (All and Agents, `PadFilterMenu`), and the tab
-            // bar stays on Spaces for a window that stacks again.
-            if navigator.sidebarHides, navigator.split {
-                navigator.model.query.filter = command == .spaces ? .all : .agents
-                section = .spaces
-            } else {
-                section = command == .spaces ? .spaces : .agents
-            }
+            // The tab bar's section, or on an iPad the sidebar's (`PadSectionSwitch`).
+            section = command == .spaces ? .spaces : .agents
             navigator.showRoot()
         case .previousTab: navigator.stepTab(-1)
         case .nextTab: navigator.stepTab(1)

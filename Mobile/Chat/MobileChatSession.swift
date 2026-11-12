@@ -58,7 +58,12 @@ final class MobileChatSession: Identifiable {
     private(set) var terminal: UInt64?
     /// The agent the topology binds to this terminal (discovery).
     private(set) var binding: HelperTopology.Binding?
-    private(set) var phase = Phase.detached
+    private(set) var phase = Phase.detached {
+        didSet { if phase != oldValue { phaseChanged?(self) } }
+    }
+    /// Called when `phase` changes (the Agents list's prewarming opens one conversation at a time,
+    /// `ChatConversations.advancePrewarm`).
+    @ObservationIgnored var phaseChanged: ((MobileChatSession) -> Void)?
     @ObservationIgnored let presence: (any ChatTerminalPresence)?
 
     // The conversation, as the helper names it.
@@ -85,6 +90,8 @@ final class MobileChatSession: Identifiable {
     /// The open turn's current step as a phrase ("Editing Sidebar.tsx"), and when that turn started: Spaces' tab lines
     /// read these, which change only when the step or the turn does, never with every streamed word of the transcript.
     private(set) var currentStep: String?
+    /// The same step by its kind only ("Running shell command…"), for Agents' rows (`WatchSnapshotBuilder.gist`).
+    private(set) var currentStepGist: String?
     private(set) var openTurnStarted: Date?
     private(set) var loadingHistory = false {
         didSet {
@@ -99,8 +106,9 @@ final class MobileChatSession: Identifiable {
     private(set) var historyPending = false
     private(set) var earlier: String?
     var hasEarlier: Bool { earlier != nil }
-    /// An earlier page can load now: there is one and the conversation is verified.
-    var canLoadEarlier: Bool { earlier != nil && phase == .verified }
+    /// An earlier page can load now: there is one, the conversation is verified and the cursor is this subscription's
+    /// (not a kept transcript's, `seeded`).
+    var canLoadEarlier: Bool { earlier != nil && phase == .verified && seed == nil }
     private(set) var loadingEarlier = false
     private(set) var earlierError: String?
     private(set) var historyError: String?
@@ -289,8 +297,11 @@ final class MobileChatSession: Identifiable {
         stepRevision = transcript.revision
         let turn = transcript.openTurn
         let steps = turn.map { ChatStep.steps($0, directory: nil, reasoning: false) } ?? []
-        let step = (steps.last(where: \.running) ?? steps.last).map(WatchSnapshotBuilder.phrase)
+        let current = steps.last(where: \.running) ?? steps.last
+        let step = current.map(WatchSnapshotBuilder.phrase)
         if currentStep != step { currentStep = step }
+        let gist = current.map(WatchSnapshotBuilder.gist)
+        if currentStepGist != gist { currentStepGist = gist }
         let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
         if openTurnStarted != started { openTurnStarted = started }
     }
@@ -329,16 +340,24 @@ final class MobileChatSession: Identifiable {
         if transcript.isEmpty { loadingHistory = true }
         struct Open: Encodable { let terminal: UInt64 }
         let connection = client.connection
-        Task { [weak self] in
+        // Immediately: the request is encoded and handed to the transport in this turn (the subscribe suspends only
+        // once it is queued), not after whatever the main actor runs first. A tap that pushes a thread opens its
+        // session in the tap's turn (`ChatConversations.opening`), and the push's build and layout took 75–100 ms
+        // before this ran.
+        Task.immediate { [weak self] in
             do {
                 let id = try await connection.subscribe(
                     "chat.open", params: Open(terminal: terminal),
                     notify: { [weak self] method, value in
                         // One serial queue keeps the helper's order (a Task per notification would not).
-                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.notify(method, value, generation: generation) } }
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated { self?.deliver { self?.notify(method, value, generation: generation) } }
+                        }
                     },
                     ended: { [weak self] result in
-                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.ended(result, generation: generation) } }
+                        DispatchQueue.main.async {
+                            MainActor.assumeIsolated { self?.deliver { self?.ended(result, generation: generation) } }
+                        }
                     })
                 guard let self, self.generation == generation else { connection.cancel(id); return }
                 self.observation = (id, client)
@@ -347,6 +366,153 @@ final class MobileChatSession: Identifiable {
                 self.fail(error)
             }
         }
+    }
+
+    // MARK: Opening ahead of the thread
+
+    /// What a released session read, kept in memory (`ChatTranscriptStore`) so the conversation's next session shows it
+    /// at once while its `chat.open` reconciles (`seed`). Only what the transcript says: never the agent's state, its
+    /// requests or the queue, which belong to a live subscription.
+    struct Kept {
+        let transcript: MobileTranscript
+        /// The conversation the transcript was read from (`chat.history`'s `session`).
+        let conversation: String
+        /// The earlier page's cursor when it was kept: only whether the transcript reached the conversation's start
+        /// (nil) is used. A cursor belongs to the subscription's read of the recent page; the next `chat.open` reads it
+        /// again and ends the old cursors (helper/harnesses/claude/src/archive.test.rs).
+        let earlier: String?
+        let readingPosition: ChatReadingPosition?
+        /// `MobileTranscript.estimatedBytes`, for the store's bound.
+        let bytes: Int
+    }
+
+    /// The seeded transcript's origin until the helper's history reconciles it (`receive(history:)`).
+    private struct Seed {
+        let conversation: String
+        let reachedStart: Bool
+    }
+    @ObservationIgnored private var seed: Seed?
+    /// Live records that came while the seed waited for the helper's page (`history_pending` already made the
+    /// conversation live): applied once the page has reconciled the kept rows, so whether that page continues them is
+    /// decided against the kept rows alone, and nothing that came meanwhile is lost to a replacement.
+    @ObservationIgnored private var seededLive: [[HelperChat.Record]] = []
+
+    /// The transcript shows what an earlier session kept and the helper's page has not reconciled it yet. Until the
+    /// helper answers the conversation is not live (`opening` or `detached`); while it reads the transcript
+    /// (`history_pending`) it is, but the kept cursor is not used (`canLoadEarlier`).
+    var seeded: Bool { seed != nil }
+
+    /// What this session read, for the conversation's next one; nil with nothing to keep.
+    func kept() -> Kept? {
+        guard !transcript.isEmpty, let conversation = conversation ?? seed?.conversation else { return nil }
+        var transcript = transcript
+        transcript.releaseHeldThinking()
+        return Kept(transcript: transcript, conversation: conversation, earlier: earlier, readingPosition: readingPosition,
+                    bytes: transcript.estimatedBytes)
+    }
+
+    /// A new session, before its first `chat.open`: the kept transcript shows (and the place it was read at) while the
+    /// helper's history decides whether it still stands. Nothing else is taken over: the phase stays as it is (no
+    /// input, no paging, no approvals), and the working row, the agent's state and its requests wait for the helper.
+    func seed(_ kept: Kept) {
+        guard transcript.isEmpty, phase == .detached, observation == nil else { return }
+        transcript = kept.transcript
+        earlier = kept.earlier
+        readingPosition = kept.readingPosition
+        seed = Seed(conversation: kept.conversation, reachedStart: kept.earlier == nil)
+    }
+
+    /// Opened ahead of a tap (the Agents list's prewarming): the terminal is not attached until the thread shows
+    /// (`attachTerminal`), so a conversation nobody looks at reads no terminal output.
+    @ObservationIgnored private(set) var defersTerminal = false
+
+    func deferTerminal() {
+        guard !retained else { return }
+        defersTerminal = true
+    }
+
+    /// The verified conversation's terminal, held through the presence (`ChatTerminalPresence.retain`) once: at
+    /// verification, or for a session that deferred it, when its thread shows.
+    func attachTerminal() {
+        defersTerminal = false
+        guard phase == .verified, let client, let terminal, !retained else { return }
+        presence?.retain(key, terminal: terminal, client: client, features: features)
+        retained = true
+    }
+
+    /// Notifications held back while a pushed thread builds its first frame (`holdUpdates`), in the helper's order.
+    @ObservationIgnored private var held: [() -> Void]?
+    @ObservationIgnored private var holdTicket = 0
+    /// The longest a hold lasts when no thread ends it (one that never came on screen).
+    static let holdLimit: Duration = .seconds(1)
+
+    /// The thread is being pushed: what the helper sends now waits until its first frame is on screen (`endHold`), or
+    /// at most `limit`. An answer that came before the first layout was built into it and made the push's first commit
+    /// slower; the rows a seed brought are a different matter, and are in that frame.
+    func holdUpdates(for limit: Duration = MobileChatSession.holdLimit) {
+        guard held == nil else { return }
+        held = []
+        holdTicket += 1
+        let ticket = holdTicket
+        Task { [weak self] in
+            try? await Task.sleep(for: limit)
+            guard let self, self.holdTicket == ticket else { return }
+            self.endHold()
+        }
+    }
+
+    /// How many of the helper's notifications wait for the hold's end (checks).
+    var heldUpdates: Int { held?.count ?? 0 }
+
+    /// The thread's first frame was committed (or it will not show): what was held back applies now, in order.
+    func endHold() {
+        guard let queued = held else { return }
+        held = nil
+        holdTicket += 1
+        for update in queued { update() }
+    }
+
+    var holding: Bool { held != nil }
+
+    /// The thread's first frame is committed (`ChatThreadView.attached`, one turn after it entered a window; else the
+    /// backstop `ChatConversations.shown` starts): what the helper sent meanwhile applies, and a terminal deferred
+    /// for this showing (a warm session a tap took over) attaches. Neither is done inside the push's layout.
+    func firstFrameShown() {
+        endHold()
+        guard defersTerminal else { return }
+        attachTerminal()
+        // The row follows the session from now (a rebuild left out of the push, `ChatConversations.claim`).
+        changed?(self)
+    }
+
+    /// Something waits for the first frame (`firstFrameShown`).
+    var waitsForFirstFrame: Bool { holding || defersTerminal }
+
+    private func deliver(_ update: @escaping () -> Void) {
+        if held != nil { held?.append(update) } else { update() }
+    }
+
+    /// Nothing of the session's own is under way: no message being sent or queued, no side conversation, no open
+    /// approval or question, no launch. Agents may release it (`ChatConversations.trimSessions`).
+    var releasable: Bool {
+        !sending && !queueBusy && inFlight.isEmpty && !awaitingAck && !starting && launching == nil
+            && (side?.ended ?? true) && !waitingForUser && outbox.items(for: key).isEmpty
+    }
+
+    /// The thread has not been shown for a while: its subscription and terminal attachment end. Its row reads
+    /// `chat.list` again; opening the thread makes a new session, which shows what this one read (`kept`, through
+    /// `ChatTranscriptStore`) while it loads the history again.
+    func release() {
+        held = nil
+        holdTicket += 1
+        seededLive = []
+        guard phase != .detached || observation != nil else { return }
+        closeObservation()
+        generation = UUID()
+        retireRequests()
+        loadingHistory = false
+        reconciling = false
+        phase = .detached
     }
 
     private func closeObservation() {
@@ -367,6 +533,8 @@ final class MobileChatSession: Identifiable {
             side.end(connected: false)
         }
         goalEdit = nil
+        // The next subscription's page has what came live on this one.
+        seededLive = []
         closeObservation()
         generation = UUID()
         retireRequests()
@@ -407,9 +575,12 @@ final class MobileChatSession: Identifiable {
             case .records(let records):
                 guard accepts(records.terminal, records.session) else { return }
                 if records.replace == true {
+                    seed = nil; seededLive = []
                     transcript.clear(); typing.reset()
                     transcript.apply(records.records, historical: true)
                     earlier = records.earlier
+                } else if seed != nil {
+                    seededLive.append(records.records)
                 } else { receive(live: records.records) }
             case .state(let status):
                 guard accepts(status.terminal, status.session) else { return }
@@ -447,7 +618,14 @@ final class MobileChatSession: Identifiable {
             return
         }
         let named = history.session.isEmpty ? nil : history.session
-        if let shown = conversation, let named, shown != named {
+        if let seeded = seed, seeded.conversation != named {
+            // The kept rows were another conversation's (/clear, a new conversation in the pane, or one not named yet):
+            // they go before anything of this one applies.
+            seed = nil; seededLive = []
+            transcript = MobileTranscript(); typing.reset()
+            earlier = nil
+            readingPosition = nil
+        } else if let shown = conversation, let named, shown != named {
             // Another conversation in this terminal (/clear, /resume): its own transcript and requests.
             transcript = MobileTranscript(); typing.reset()
             retireRequests()
@@ -473,13 +651,33 @@ final class MobileChatSession: Identifiable {
         if let error = history.state_error, error.code == "setup" {
             phase = .paused(error.localizedDescription)
         }
-        if !wasVerified, phase == .verified, let client, let terminal, !retained {
-            presence?.retain(key, terminal: terminal, client: client, features: features)
-            retained = true
-        }
+        if !wasVerified, phase == .verified, !defersTerminal { attachTerminal() }
         if history.history_pending {
             loadingHistory = transcript.isEmpty && named != nil
             historyPending = loadingHistory
+        } else if let seeded = seed {
+            // The same conversation: the kept rows meet the helper's newest page. A page that shares an item with them
+            // continues them (rows that match keep their ids, so nothing moves; the earlier pages the user read stay);
+            // a page that shares nothing may lie after a gap, and replaces them. A page the helper could not read
+            // (`history_error`, no records) leaves them, with no cursor to page from.
+            seed = nil
+            loadingHistory = false
+            if history.history_error != nil, history.records.isEmpty {
+                earlier = nil
+            } else if transcript.overlaps(history.records) {
+                transcript.apply(history.records, historical: true, prepare: reconcile)
+                // The kept cursor is spent (this read began a new one); what reached the start still does.
+                earlier = seeded.reachedStart ? nil : history.earlier
+            } else {
+                transcript = MobileTranscript(); typing.reset()
+                readingPosition = nil
+                transcript.apply(history.records, historical: true, prepare: reconcile)
+                earlier = history.earlier
+            }
+            // What came live during the read, after the page it may repeat (repeats are no-ops).
+            let live = seededLive
+            seededLive = []
+            for records in live { receive(live: records) }
         } else {
             loadingHistory = false
             transcript.apply(history.records, historical: true, prepare: reconcile)
@@ -1539,6 +1737,8 @@ final class MobileChatSession: Identifiable {
     /// The helper takes attachments (hello feature `chat.attachments`) and the conversation takes input: the composer
     /// offers "+", paste and drop. A command draft takes none.
     var attachmentsAvailable: Bool { features.contains(ChatAttachment.feature) && client != nil && phase == .verified }
+    /// The helper reads the agent's plan limits (`chat.limits`) and the conversation can ask.
+    var limitsAvailable: Bool { features.contains(HelperSession.chatLimits) && client != nil && phase == .verified }
     var canAttach: Bool { attachmentsAvailable && !drafts.shape.command }
 
     /// Picked, pasted or dropped files: each is read and prepared off the main actor (`ChatAttachmentImage.prepare`),
@@ -1764,7 +1964,7 @@ final class MobileChatSession: Identifiable {
     }
 
     func loadEarlier() {
-        guard phase == .verified, let earlier, !loadingEarlier else { return }
+        guard canLoadEarlier, let earlier, !loadingEarlier else { return }
         loadingEarlier = true; earlierError = nil
         var input = route()
         input.earlier = earlier
@@ -1838,12 +2038,19 @@ final class MobileChatSession: Identifiable {
 
     /// A step's full output (`chat.tools`), merged into the transcript.
     func fullOutput(of item: ChatItem) async throws -> HelperChat.Record {
+        // A kept transcript's step is read once the helper has confirmed the rows are this conversation's.
+        guard !seeded else {
+            throw ChatInputNotSent(HelperFailure(code: "connection_closed", message: "\(agentName)'s conversation is still opening."))
+        }
         var input = route()
         input.record = item.source?.id ?? item.id
         let record: HelperChat.Record = try await call("chat.tools", input)
         transcript.replaceTool(record)
         return record
     }
+
+    /// The plan's usage windows the agent reports now (`chat.limits`): the working row's limits (`ChatLimitsReader`).
+    func limits() async throws -> [ChatLimitWindow] { try await call("chat.limits", route()) }
 
     private func route() -> HelperChat.Input {
         HelperChat.Input(HelperChat.Route(terminal: terminal ?? 0, session: conversation))

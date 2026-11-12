@@ -13,7 +13,13 @@ public struct Face {
     /// From font file bytes: a descriptor from the data, then the font at `pixels` (Ghostty's Face.init).
     public init?(data: [UInt8], pixels: Double) {
         guard let d = CFDataCreate(nil, data, data.count), let desc = CTFontManagerCreateFontDescriptorFromData(d) else { return nil }
-        self.init(CTFontCreateWithFontDescriptor(desc, 12, nil), pixels: pixels)
+        self.init(descriptor: desc, pixels: pixels)
+    }
+
+    /// From a descriptor of font file bytes: the one `init(data:)` makes, or one kept for the process
+    /// (`FontCollection.shareBundledFonts`).
+    public init(descriptor: CTFontDescriptor, pixels: Double) {
+        self.init(CTFontCreateWithFontDescriptor(descriptor, 12, nil), pixels: pixels)
     }
 
     /// A font by PostScript name at `pixels` (how a discovered face is loaded).

@@ -35,6 +35,11 @@ final class MobileTabs {
     var offlineFolded: Bool {
         didSet { if offlineFolded != oldValue { defaults.set(offlineFolded, forKey: Self.offlineFoldedKey) } }
     }
+    /// How a space's screen orders its tabs (its header's sort menu): by activity, or the server's order (manual, the
+    /// one Edit's drags change).
+    var tabSort: TabsSort {
+        didSet { if tabSort != oldValue { defaults.set(tabSort.rawValue, forKey: Self.tabSortKey) } }
+    }
     /// The space New tab goes to (the last one opened on the phone, else the most active).
     private(set) var recent: SpaceRef?
 
@@ -51,6 +56,9 @@ final class MobileTabs {
     @ObservationIgnored var agentKey: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
     /// (host, pane key) → the terminal's own title (OSC 0/2) while the phone has it attached. The composition sets it.
     @ObservationIgnored var paneTitle: @MainActor (UUID, String) -> String? = { _, _ in nil }
+    /// The pane's conversation is still held with its transcript (`ChatConversations.sessions`): after its agent
+    /// exits, its thread stays readable on the Chat segment instead of giving way to "No agent".
+    @ObservationIgnored var keepsTranscript: @MainActor (UUID, String) -> Bool = { _, _ in false }
     /// A tab showing Files → what it shows as its name (`FilesTab.tabName`: the open file, the folder, Review or the
     /// commit), as the Mac names it. The composition sets it from the Files screens' state.
     @ObservationIgnored var filesName: @MainActor (MobileTab, FilesMode) -> String? = { _, _ in nil }
@@ -80,7 +88,8 @@ final class MobileTabs {
     @ObservationIgnored private var detected: [UUID: String?] = [:]
 
     /// The filter and the OFFLINE group name no host: they stay in UserDefaults with the other preferences.
-    static let queryKey = "tabs.query", showOfflineKey = "tabs.showOffline", offlineFoldedKey = "tabs.offlineFolded"
+    static let queryKey = "tabs.query", showOfflineKey = "tabs.showOffline", offlineFoldedKey = "tabs.offlineFolded",
+               tabSortKey = "tabs.sort"
 
     /// `deviceState` nil: the app's file with `.standard` defaults, else in memory.
     init(activity: TabActivityStore = .shared, defaults: UserDefaults = .standard, deviceState: SpacesDeviceState? = nil) {
@@ -90,6 +99,7 @@ final class MobileTabs {
         query = defaults.data(forKey: Self.queryKey).flatMap { try? JSONDecoder().decode(TabsQuery.self, from: $0) } ?? TabsQuery()
         showOffline = defaults.object(forKey: Self.showOfflineKey) as? Bool ?? true
         offlineFolded = defaults.bool(forKey: Self.offlineFoldedKey)
+        tabSort = defaults.string(forKey: Self.tabSortKey).flatMap(TabsSort.init(rawValue:)) ?? .activity
         recent = self.deviceState.recent
         collapsed = self.deviceState.collapsed
         spaceOrder = self.deviceState.spaceOrder
@@ -383,11 +393,12 @@ final class MobileTabs {
     }
 
     /// A space's tabs with their urgency, time and name (P2, P3), by activity: most recent first, tabs with no time yet
-    /// last, ties in server order (the Mac strip's). `serverOrder` keeps the server's alone: Edit's drags reorder it.
+    /// last, ties in server order (the Mac strip's). `serverOrder`, or the Manual sort (`tabSort`), keeps the server's
+    /// alone: Edit's drags reorder it.
     func rows(in space: MobileSpace, serverOrder: Bool = false) -> [TabsEntry] {
         guard let host = workspace(space.ref.host)?.host else { return [] }
         let rows = space.tabs.map { entry($0, space: space, host: host) }
-        guard !serverOrder else { return rows }
+        guard !serverOrder, tabSort == .activity else { return rows }
         return rows.enumerated().sorted { a, b in
             switch (a.element.activity, b.element.activity) {
             case let (x?, y?) where x != y: x > y
@@ -475,4 +486,16 @@ final class MobileTabs {
     }
 
     private func saveQuery() { defaults.set(try? JSONEncoder().encode(query), forKey: Self.queryKey) }
+}
+
+/// How a space's screen orders its tabs (`MobileTabs.tabSort`).
+enum TabsSort: String, CaseIterable, Identifiable, Sendable {
+    /// Most recent first (`MobileTabs.rows`).
+    case activity
+    /// The server's order, the one Edit's drags change.
+    case manual
+
+    var id: String { rawValue }
+    var title: String { self == .activity ? "By time" : "Manual" }
+    var symbol: String { self == .activity ? "clock" : "line.3.horizontal" }
 }

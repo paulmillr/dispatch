@@ -261,11 +261,15 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     }
 }
 
-/// What a tab's title capsule holds besides the title (`TabsScreenHeader.titleCapsule`): the host's disc, and the menu
-/// a tap opens (nil: no menu, a preview without the stack).
+/// What a title capsule holds besides the title (`TabsScreenHeader.titleCapsule`): the host's disc, the menu a tap
+/// opens (nil: no menu, a preview without the stack), and a space's branch after its name (P2).
 struct TabsTitleCapsule {
     let glyph: AnyView
     var menu: AnyView?
+    var branch: String? = nil
+    /// What VoiceOver says a tap opens.
+    var hint = "Opens the tab's menu"
+    var identifier = "tab-title-capsule"
 }
 
 /// A tab's title capsule (B7): the host's disc, then the title over its subtitle (host · folder), one line each, in one
@@ -274,7 +278,6 @@ struct TabsTitleCapsuleView<Subtitle: View>: View {
     let title: String
     let capsule: TabsTitleCapsule
     @ViewBuilder var subtitle: Subtitle
-    static var identifier: String { "tab-title-capsule" }
 
     var body: some View {
         Group {
@@ -283,7 +286,7 @@ struct TabsTitleCapsuleView<Subtitle: View>: View {
                     .menuStyle(.button)
                     .buttonStyle(.plain)
                     .tint(Color.primary)
-                    .accessibilityHint("Opens the tab's menu")
+                    .accessibilityHint(capsule.hint)
             } else {
                 label
             }
@@ -292,14 +295,14 @@ struct TabsTitleCapsuleView<Subtitle: View>: View {
         .contentShape(.hoverEffect, Capsule())
         .hoverEffect(.highlight)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .accessibilityIdentifier(Self.identifier)
+        .accessibilityIdentifier(capsule.identifier)
     }
 
     private var label: some View {
         HStack(spacing: 8) {
             capsule.glyph
             VStack(alignment: .leading, spacing: 0) {
-                Text(title)
+                titleText
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .accessibilityAddTraits(.isHeader)
@@ -315,6 +318,12 @@ struct TabsTitleCapsuleView<Subtitle: View>: View {
         .frame(minHeight: 44)
         .contentShape(Capsule())
         .accessibilityElement(children: .combine)
+    }
+
+    /// The title, a space's branch after it as one text (truncating as one line, `SpacesBranchChip.title`).
+    private var titleText: Text {
+        guard let branch = capsule.branch else { return Text(title) }
+        return Text("\(Text(title))  \(Text(branch).font(.caption.weight(.semibold)).foregroundStyle(.secondary))")
     }
 }
 

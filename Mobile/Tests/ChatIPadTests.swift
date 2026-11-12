@@ -285,15 +285,67 @@ final class ChatIPadTests: XCTestCase {
 
     // MARK: Agents
 
-    func testANarrowSidebarsAgentsRowKeepsTheNameWhole() {
-        let wide = AgentsScreen.rowText(host: "mba2", muted: false, preview: "Fitted the easing", narrow: false)
-        XCTAssertEqual(wide.detail, "mba2")
-        XCTAssertEqual(wide.subtitle, "Fitted the easing")
-        let narrow = AgentsScreen.rowText(host: "mba2", muted: false, preview: "Fitted the easing", narrow: true)
-        XCTAssertNil(narrow.detail, "nothing beside the name at 263 points")
-        XCTAssertEqual(narrow.subtitle, "mba2 · Fitted the easing")
-        XCTAssertEqual(AgentsScreen.rowText(host: "mba2", muted: true, preview: nil, narrow: true).detail, "muted")
-        XCTAssertEqual(AgentsScreen.rowText(host: "mba2", muted: true, preview: nil, narrow: true).subtitle, "mba2")
-        XCTAssertEqual(AgentsScreen.rowText(host: "mba2", muted: true, preview: nil, narrow: false).detail, "mba2 · muted")
+    func testAnAgentsRowSaysItsStateWhereItRunsAndWhetherItIsLive() {
+        XCTAssertEqual(AgentRow.capitalized("needs you"), "Needs you")
+        XCTAssertEqual(AgentRow.capitalized("Allow cargo test?"), "Allow cargo test?")
+        XCTAssertEqual(AgentsEmptyState.list(["mba2"]), "mba2")
+        XCTAssertEqual(AgentsEmptyState.list(["mba2", "studio", "ai", "vps"]), "mba2, studio and 2 more")
+    }
+
+    /// Group by host: the hosts in their list's order; by host and space: a host's spaces by their first row, the
+    /// host's last group marked (where an offline host says why).
+    func testAgentsGroupByHostKeepsTheHostsOrderAndBySpaceTheRowsOrder() {
+        let mba2 = UUID(), studio = UUID()
+        func row(_ node: String, host: UUID, name: String, space: String?) -> ChatConversation {
+            ChatConversation(key: ChatConversationKey(host: host, node: node), terminal: 1, hostName: name, name: node,
+                             space: space, spaceNode: nil, cwd: nil,
+                             binding: HelperTopology.Binding(session: node, transcript: nil, pid: nil, start: nil, executable: nil),
+                             summary: ChatConversationSummary(),
+                             urgency: PaneUrgency(waiting: false, working: false, unread: false), muted: false, unread: false)
+        }
+        let rows = [row("a", host: studio, name: "studio", space: "docs"), row("b", host: mba2, name: "mba2", space: "app"),
+                    row("c", host: studio, name: "studio", space: "billing"), row("d", host: studio, name: "studio", space: "docs")]
+        let hosts = AgentsGroup.groups(rows, by: .host, hosts: [mba2, studio])
+        XCTAssertEqual(hosts.map(\.title), ["mba2", "studio"])
+        XCTAssertEqual(hosts[1].rows.map(\.name), ["a", "c", "d"])
+        let spaces = AgentsGroup.groups(rows, by: .space, hosts: [mba2, studio])
+        XCTAssertEqual(spaces.map(\.title), ["mba2 · app", "studio · docs", "studio · billing"])
+        XCTAssertEqual(spaces[1].rows.map(\.name), ["a", "d"])
+        XCTAssertEqual(spaces.map(\.last), [true, false, true])
+    }
+
+    /// The rows the list warms ahead of a tap are its first as drawn: by status, Needs you, Working, Recent, then
+    /// Offline (not when folded), not the model's newest-first order; by host or space, group after group.
+    func testTheAgentsListsOrderIsTheOneItDraws() {
+        let mba2 = UUID(), studio = UUID()
+        func row(_ node: String, host: UUID, waiting: Bool = false, working: Bool = false) -> ChatConversation {
+            ChatConversation(key: ChatConversationKey(host: host, node: node), terminal: 1, hostName: host == mba2 ? "mba2" : "studio",
+                             name: node, space: nil, spaceNode: nil, cwd: nil,
+                             binding: HelperTopology.Binding(session: node, transcript: nil, pid: nil, start: nil, executable: nil),
+                             summary: ChatConversationSummary(),
+                             urgency: PaneUrgency(waiting: waiting, working: working, unread: false), muted: false, unread: false)
+        }
+        // The model's order: newest first.
+        let rows = [row("recent", host: studio), row("offline", host: mba2), row("working", host: studio, working: true),
+                    row("needs", host: studio, waiting: true)]
+        let offline = { (row: ChatConversation) in row.key.host == mba2 }
+        XCTAssertEqual(AgentsScreen.shownOrder(rows, grouping: .status, hosts: [mba2, studio], offline: offline,
+                                               offlineFolded: false).map(\.name), ["needs", "working", "recent", "offline"])
+        XCTAssertEqual(AgentsScreen.shownOrder(rows, grouping: .status, hosts: [mba2, studio], offline: offline,
+                                               offlineFolded: true).map(\.name), ["needs", "working", "recent"])
+        XCTAssertEqual(AgentsScreen.shownOrder(rows, grouping: .host, hosts: [mba2, studio], offline: offline,
+                                               offlineFolded: false).map(\.name), ["offline", "recent", "working", "needs"])
+    }
+
+    func testAgentsEmptyStateSaysWhyThereAreNoRows() {
+        let id = UUID()
+        XCTAssertEqual(AgentsEmptyState.kind([]), .noHosts)
+        XCTAssertEqual(AgentsEmptyState.kind([AgentsHost(id: id, name: "mba2", state: .connecting)]), .connecting(["mba2"]))
+        XCTAssertEqual(AgentsEmptyState.kind([AgentsHost(id: id, name: "mba2", state: .offline)]), .offline(["mba2"]))
+        XCTAssertEqual(AgentsEmptyState.kind([AgentsHost(id: id, name: "mba2", state: .connected)]), .noAgents)
+        XCTAssertEqual(AgentsEmptyState.kind([AgentsHost(id: id, name: "mba2", state: .connected, listsAgents: false)]),
+                       .notListed(["mba2"]))
+        XCTAssertEqual(AgentsEmptyState.kind([AgentsHost(id: id, name: "mba2", state: .offline),
+                                              AgentsHost(id: UUID(), name: "vps", state: .connected)]), .noAgents)
     }
 }

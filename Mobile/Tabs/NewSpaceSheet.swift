@@ -1,19 +1,19 @@
 import SwiftUI
 
-/// M7a: New space. Name (empty: named after its folder and following it until renamed, as the Mac names new spaces;
-/// the field's placeholder shows that name), the host as a pull-down (its tinted disc and up/down chevrons; the known hosts with the
-/// current one ticked, then New host… which opens M8a and comes back with the new host selected), the directory (home
-/// by default, or Other folder…). Create makes the space on the host's multiplexer and opens it in the terminal. The host
-/// field marks the multiplexer the host shows (`MultiplexerMark`), as Spaces' host header does.
-///
-/// Between Home and Other folder… the host's recent project folders from agent history, one tap each, with the
-/// footnote "Recent on <host>, from agent history": `projects.recent`, when the host's helper accepted that feature;
-/// without it the card is Home and Other folder…, whose field completes typed paths from the directories the host's
-/// open tabs are in.
+/// M7a: New space, a compact card sized to its content (the phone's sheet is as tall as the card, not the screen):
+/// Name (empty: named after its folder and following it until renamed, as the Mac names new spaces; the field's
+/// placeholder shows that name), the host as a pull-down (its tinted disc and up/down chevrons; the known hosts with the
+/// current one ticked, then New host… which opens M8a and comes back with the new host selected), and the folder, one
+/// row whose pull-down holds Home (the default), the host's recent project folders from agent history
+/// (`projects.recent`, when the host's helper accepted that feature) and Other folder…, which turns the row into a
+/// typed path with completions from the directories the host's open tabs are in. Create makes the space on the host's
+/// multiplexer and opens it in the terminal. The host row marks the multiplexer the host shows (`MultiplexerMark`), as
+/// Spaces' host header does.
 ///
 /// Not in the mockup: Multiplexer, the host's installed ones (herdr, tmux; never the helper's native one, whose sessions
-/// end with the connection), the one the host shows picked. A host shows one multiplexer's spaces at a time, so another
-/// one becomes the host's on Create (its footnote says so), as Multiplexer in Edit host would.
+/// end with the connection) under the card when there are two, the one the host shows picked. A host shows one
+/// multiplexer's spaces at a time, so another one becomes the host's on Create (its footnote says so), as Multiplexer in
+/// Edit host would.
 struct NewSpaceSheet: View {
     let model: MobileTabs
     /// A host's New space pre-selects it; New tab's picker passes the recent space's.
@@ -34,6 +34,8 @@ struct NewSpaceSheet: View {
     @State private var addingHost = false
     @State private var creating = false
     @State private var failure: String?
+    /// The card's height: the phone's sheet takes it (`presentationDetents`).
+    @State private var height: CGFloat = 300
     @FocusState private var focus: Field?
 
     private enum Field { case name, directory }
@@ -57,65 +59,34 @@ struct NewSpaceSheet: View {
     private var workspace: MobileWorkspace? { hosts.first { $0.id == selected } ?? hosts.first { $0.client != nil } ?? hosts.first }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        section("Name") {
-                            // The label names the field for VoiceOver; the placeholder is the name it gets when empty.
-                            TextField("Space name", text: $name, prompt: Text(automaticName ?? "Space name"))
-                                .font(.body)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.next)
-                                .focused($focus, equals: .name)
-                                .onSubmit { focus = other ? .directory : nil }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 6).frame(minHeight: 48)
-                                .background(Self.field, in: RoundedRectangle(cornerRadius: 12))
-                        }
-                        Text("Left empty, it’s named after its folder until you rename it.")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 16)
-                    }
-                    section("Host") { hostPicker }
-                    if let workspace, !options.choices.isEmpty {
-                        VStack(alignment: .leading, spacing: 7) {
-                            section("Multiplexer") { multiplexerPicker }
-                            if let note = options.note(for: chosen, host: workspace.host.name) {
-                                Text(note)
-                                    .font(.footnote)
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 16)
-                            }
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 7) {
-                        section("Directory") { directoryField }
-                        if !shownRecents.isEmpty, let host = workspace?.host {
-                            Text("Recent on \(host.name), from agent history")
-                                .font(.footnote)
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 16)
-                        }
-                    }
-                    if let warning = chosen?.warning {
-                        Text(warning)
-                            .font(.footnote)
-                            .foregroundStyle(Color.caution)
-                            .padding(.horizontal, 16)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                header
+                VStack(spacing: 0) {
+                    nameField
+                    divider
+                    hostPicker
+                    divider
+                    directoryField
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 24)
+                .background(Self.field, in: RoundedRectangle(cornerRadius: 14))
+                if let workspace, options.choices.count > 1 {
+                    multiplexerPicker
+                    if let note = options.note(for: chosen, host: workspace.host.name) { footnote(note) }
+                }
+                if let warning = chosen?.warning {
+                    footnote(warning).foregroundStyle(Color.caution)
+                }
             }
-            .scrollDismissesKeyboard(.interactively)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
         .background(Color(uiColor: .secondarySystemBackground))
         .mobileSheetGrabber()
+        .mobilePhoneDetents([.height(height)])
         .presentationBackground(Color(uiColor: .secondarySystemBackground))
         .onAppear { focus = .name }
         .task(id: workspace?.id) {
@@ -136,32 +107,61 @@ struct NewSpaceSheet: View {
         }
     }
 
+    private var divider: some View {
+        Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 54)
+    }
+
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 16)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A card row: the leading glyph in a 28 point column, then the content.
+    private func row(@ViewBuilder leading: () -> some View, @ViewBuilder content: () -> some View) -> some View {
+        HStack(spacing: 12) {
+            leading().frame(width: 28)
+            content()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4).frame(minHeight: 48)
+    }
+
+    /// The name; its placeholder is the name the space gets when it stays empty.
+    private var nameField: some View {
+        row {
+            Image(systemName: "character.cursor.ibeam")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        } content: {
+            // The label names the field for VoiceOver; the placeholder is the name it gets when empty.
+            TextField("Space name", text: $name, prompt: Text(automaticName ?? "Space name"))
+                .font(.body)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($focus, equals: .name)
+                .onSubmit { focus = nil }
+                .accessibilityHint("Left empty, it’s named after its folder until you rename it.")
+        }
+    }
+
     private static let field = Color(uiColor: .tertiarySystemBackground)
 
     private var options: NewSpaceMultiplexers { NewSpaceMultiplexers(workspace) }
     /// Where Create makes the space.
     private var chosen: MultiplexerChoice? { options.chosen(multiplexer) }
 
-    /// Two or more: a segmented control (the app's system controls, docs/ios.md); one: the field names it.
-    @ViewBuilder private var multiplexerPicker: some View {
-        if options.choices.count > 1 {
-            Picker("Multiplexer", selection: Binding(get: { chosen?.name ?? "" }, set: { multiplexer = $0 })) {
-                ForEach(options.choices, id: \.name) { Text($0.name).tag($0.name) }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.large)
-        } else if let only = options.choices.first {
-            HStack(spacing: 10) {
-                Text(only.name).font(.body)
-                Spacer()
-                if let version = only.version { Text(version).font(.footnote.monospaced()).foregroundStyle(.tertiary) }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6).frame(minHeight: 48)
-            .background(Self.field, in: RoundedRectangle(cornerRadius: 12))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Multiplexer, \(only.name)")
+    /// Two or more: a segmented control (the app's system controls, docs/ios.md). One needs no choice: the host row's
+    /// mark names it.
+    private var multiplexerPicker: some View {
+        Picker("Multiplexer", selection: Binding(get: { chosen?.name ?? "" }, set: { multiplexer = $0 })) {
+            ForEach(options.choices, id: \.name) { Text($0.name).tag($0.name) }
         }
+        .pickerStyle(.segmented)
     }
 
     private var header: some View {
@@ -194,9 +194,8 @@ struct NewSpaceSheet: View {
         }
         // The sheet's bar: it grows to xxxLarge, as a navigation bar does, so Create never covers the title.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
     }
 
     /// An empty name is the Mac's: the server names the space after its folder (`NewSpaceName`).
@@ -207,17 +206,6 @@ struct NewSpaceSheet: View {
         guard let host = workspace?.host else { return nil }
         let folder = other ? directory.trimmingCharacters(in: .whitespaces) : recent ?? "~"
         return NewSpaceName.automatic(folder.isEmpty ? "~" : folder, host: host)
-    }
-
-    private func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .textCase(.uppercase)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-            content()
-        }
     }
 
     private var hostPicker: some View {
@@ -236,31 +224,33 @@ struct NewSpaceSheet: View {
             Divider()
             Button { addingHost = true } label: { Label { Text("New host…") } icon: { Image("NewHost") } }
         } label: {
-            HStack(spacing: 10) {
-                if let host = workspace?.host {
-                    TabsHostDisc(host: host, size: 28, glyph: 15)
-                    Text(host.name).font(.body).foregroundStyle(.primary)
-                    if workspace?.isPlain == true {
-                        // One synthetic space (Shell): New space is not for this host.
-                        Text("plain SSH").font(.footnote).foregroundStyle(.tertiary)
-                    } else if workspace?.client == nil {
-                        Text("offline").font(.footnote).foregroundStyle(.tertiary)
+            row {
+                if let host = workspace?.host { TabsHostDisc(host: host, size: 28, glyph: 15) }
+            } content: {
+                HStack(spacing: 10) {
+                    if let host = workspace?.host {
+                        Text(host.name).font(.body).foregroundStyle(.primary).lineLimit(1)
+                        if workspace?.isPlain == true {
+                            // One synthetic space (Shell): New space is not for this host.
+                            Text("plain SSH").font(.footnote).foregroundStyle(.tertiary)
+                        } else if workspace?.client == nil {
+                            Text("offline").font(.footnote).foregroundStyle(.tertiary)
+                        }
+                        if let multiplexer = host.multiplexer { MultiplexerMark(name: multiplexer) }
+                    } else {
+                        Text("No host").font(.body).foregroundStyle(.secondary)
                     }
-                    if let multiplexer = host.multiplexer { MultiplexerMark(name: multiplexer) }
-                } else {
-                    Text("No host").font(.body).foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6).frame(minHeight: 48)
-            .background(Self.field, in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Host")
+        .accessibilityValue(workspace?.host.name ?? "No host")
     }
 
     private var suggestions: [String] {
@@ -268,66 +258,21 @@ struct NewSpaceSheet: View {
         return Self.complete(directory, in: workspace)
     }
 
-    /// Home, ticked by default, and Other folder…, which becomes a typed path with completions.
-    private var directoryField: some View {
-        VStack(spacing: 0) {
-            Button {
-                other = false
-                recent = nil
-                directory = "~"
-                focus = nil
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(workspace?.host.tint ?? .accentColor)
-                        .opacity(other || recent != nil ? 0 : 1)
-                        .frame(width: 16)
-                    Text("~").font(.subheadline.monospaced())
-                    Spacer()
-                    Text("Home").font(.footnote).foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6).frame(minHeight: 48)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 42)
-            ForEach(shownRecents, id: \.path) { project in
-                Button {
-                    other = false
-                    recent = project.path
-                    focus = nil
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "checkmark")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(workspace?.host.tint ?? .accentColor)
-                            .opacity(recent == project.path && !other ? 1 : 0)
-                            .frame(width: 16)
-                        Text(workspace?.host.abbreviate(project.path) ?? project.path)
-                            .font(.subheadline.monospaced())
-                            .foregroundStyle(recent == project.path && !other ? .primary : .secondary)
-                            .fittingLine()
-                        Spacer(minLength: 8)
-                        if let label = TabsTime.ago(project.time) {
-                            Text(label).font(.footnote).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6).frame(minHeight: 48)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 42)
-            }
-            if other {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(workspace?.host.tint ?? .accentColor)
-                        .frame(width: 16)
-                    TextField("", text: $directory, prompt: Text("~/src/project"))
+    /// The folder the space opens in, as `~`-abbreviated text.
+    private var folderLabel: String {
+        if let recent { return workspace?.host.abbreviate(recent) ?? recent }
+        return "~"
+    }
+
+    /// One row: the folder (Home by default) with a pull-down of Home, the recent folders and Other folder…; Other
+    /// folder… makes the row a typed path, its completions under it.
+    @ViewBuilder private var directoryField: some View {
+        if other {
+            row {
+                folderGlyph
+            } content: {
+                HStack(spacing: 8) {
+                    TextField("Folder", text: $directory, prompt: Text("~/src/project"))
                         .font(.subheadline.monospaced())
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -335,45 +280,105 @@ struct NewSpaceSheet: View {
                         .submitLabel(.go)
                         .focused($focus, equals: .directory)
                         .onSubmit(create)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6).frame(minHeight: 48)
-                ForEach(suggestions, id: \.self) { path in
-                    Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 42)
-                    Button { directory = path } label: {
-                        Text(path)
-                            .font(.subheadline.monospaced())
+                    folderMenu {
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.footnote.weight(.semibold))
                             .foregroundStyle(.secondary)
-                            .fittingLine()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 42)
-                            .padding(.trailing, 16)
-                            .padding(.vertical, 6).frame(minHeight: 44)
+                            .frame(width: 28, height: 36)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .accessibilityLabel("Folder choices")
                 }
-            } else {
+            }
+            ForEach(suggestions, id: \.self) { path in
+                divider
+                Button { directory = path } label: {
+                    Text(path)
+                        .font(.subheadline.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fittingLine()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 54)
+                        .padding(.trailing, 14)
+                        .padding(.vertical, 4).frame(minHeight: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        } else {
+            folderMenu {
+                row {
+                    folderGlyph
+                } content: {
+                    HStack(spacing: 10) {
+                        Text(folderLabel)
+                            .font(.subheadline.monospaced())
+                            .foregroundStyle(.primary)
+                            .fittingLine()
+                        Spacer(minLength: 8)
+                        if recent == nil { Text("Home").font(.footnote).foregroundStyle(.tertiary) }
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Folder")
+            .accessibilityValue(recent == nil ? "Home" : folderLabel)
+        }
+    }
+
+    private var folderGlyph: some View {
+        Image(systemName: "folder")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
+    }
+
+    /// The folder's pull-down: Home, the host's recent project folders from agent history, Other folder….
+    private func folderMenu(@ViewBuilder label: () -> some View) -> some View {
+        Menu {
+            Button {
+                other = false
+                recent = nil
+                directory = "~"
+                focus = nil
+            } label: {
+                Text("Home"); Text("~")
+                if !other && recent == nil { Image(systemName: "checkmark") }
+            }
+            if !shownRecents.isEmpty {
+                Section(workspace.map { "Recent on \($0.host.name), from agent history" } ?? "Recent") {
+                    ForEach(shownRecents, id: \.path) { project in
+                        Button {
+                            other = false
+                            recent = project.path
+                            focus = nil
+                        } label: {
+                            Text(workspace?.host.abbreviate(project.path) ?? project.path)
+                            if let label = TabsTime.ago(project.time) { Text(label) }
+                            if recent == project.path && !other { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            }
+            Section {
                 Button {
                     other = true
                     recent = nil
                     directory = ""
                     focus = .directory
                 } label: {
-                    HStack {
-                        Text("Other folder…").font(.body).foregroundStyle(Color.dispatchPink)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .padding(.leading, 42)
-                    .padding(.trailing, 16)
-                    .padding(.vertical, 6).frame(minHeight: 48)
-                    .contentShape(Rectangle())
+                    Text("Other folder…")
+                    if other { Image(systemName: "checkmark") }
                 }
-                .buttonStyle(.plain)
             }
+        } label: {
+            label()
         }
-        .background(Self.field, in: RoundedRectangle(cornerRadius: 12))
+        .menuOrder(.fixed)
+        .buttonStyle(.plain)
     }
 
     /// The newest few, as the mockup shows them (Home, three or four folders, Other folder…).

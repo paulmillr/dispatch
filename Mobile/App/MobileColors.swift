@@ -41,6 +41,9 @@ extension Color {
     /// The amber of text (M4c's banner, the tmux version warning): the state amber in dark, a darker amber that reads
     /// on the light canvas.
     static let caution = Color("Caution")
+    /// A plan limit past 80% (the working row's `ChatLimitsLine`): an orange in light, where `caution` reads brown at
+    /// caption size; `caution`'s amber in dark.
+    static let limitCaution = Color("LimitCaution")
     /// Close space, failed steps, removed lines.
     static let destructive = Color("Destructive")
     /// Added lines and patch steps; removed lines (`destructive` outside changes). In colorblind mode that vision's

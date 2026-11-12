@@ -96,12 +96,29 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Restore all"].exists)
     }
 
-    /// P2: the space's menu (P2c), a row's swipe (P2b), New tab held (P2e) and Edit (P2d) with its name fields.
+    /// P2: the space's menu behind its title capsule (P2c), the sort menu, a row's swipe (P2b) and Move to, New tab held
+    /// (P2e), New chat, and Edit (P2d) with its name fields.
     func testSpaceScreen() {
         let app = launch(Self.sample + ["-DispatchTabsShow", "space:herdr:app"])
         let zsh = Self.row(app, "space-tab", "zsh")
         wait(zsh)
-        app.buttons["space-menu"].tap()
+        XCTAssertTrue(app.buttons["space-new-chat"].exists, "New chat beside New tab")
+        app.buttons["space-sort"].tap()
+        wait(app.buttons["Manual"], "the sort menu")
+        XCTAssertTrue(app.buttons["By time"].exists)
+        app.buttons["Manual"].tap()
+        XCTAssertEqual(app.buttons["space-sort"].value as? String, "Manual")
+        // Back to the default: the choice is the device's, kept for the next launch.
+        app.buttons["space-sort"].tap()
+        wait(app.buttons["By time"])
+        app.buttons["By time"].tap()
+        zsh.press(forDuration: 1.2)
+        wait(app.buttons["Move to"], "the row's Move to")
+        app.buttons["Move to"].tap()
+        wait(app.buttons["e2e"], "the host's other spaces")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        Thread.sleep(forTimeInterval: 0.5)
+        app.descendants(matching: .any)["space-menu"].firstMatch.tap()
         wait(app.buttons["Edit"])
         XCTAssertFalse(app.buttons["Rename…"].exists, "renaming is Edit's")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Detach'")).firstMatch.exists)
@@ -172,7 +189,7 @@ final class SpacesUITests: XCTestCase {
             revealSwipe(row(app, "space-tab", "zsh"))
         }),
         Screen(id: "P2c", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"], then: { app in
-            app.buttons["space-menu"].tap()
+            app.descendants(matching: .any)["space-menu"].firstMatch.tap()
         }),
         Screen(id: "P2d", arguments: sample + ["-DispatchTabsShow", "space-edit:herdr:app"]),
         Screen(id: "P2e", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"], then: { app in

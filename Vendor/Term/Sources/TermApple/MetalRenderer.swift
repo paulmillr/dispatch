@@ -133,24 +133,84 @@ public final class MetalRenderer {
     public let images: Images
 
     /// What every renderer on a device and pixel format shares (Ghostty's shared device state): the shader library
-    /// and the pipelines, immutable once made. Made by the first renderer, kept for the process.
+    /// and the pipelines, immutable once made. Made by the first renderer or `prewarm`, kept for the process.
     struct Pipelines {
         let bgColor: MTLRenderPipelineState, cellBg: MTLRenderPipelineState, cellText: MTLRenderPipelineState
         let image: MTLRenderPipelineState, glow: MTLRenderPipelineState
     }
+    /// Guards `pipelines`, `made` and `compiling`, and is held for the whole compile: a renderer made on another thread
+    /// meanwhile waits here for the result rather than compiling it again.
     private static let pipelinesLock = NSLock()
     nonisolated(unsafe) private static var pipelines: [String: Pipelines] = [:]
+    nonisolated(unsafe) private static var made: [String: Int] = [:]
+    nonisolated(unsafe) private static var compiling: (@Sendable (MTLPixelFormat) -> Void)?
+    static func key(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) -> String { "\(device.registryID):\(pixelFormat.rawValue)" }
+
     /// Shader libraries compiled so far (once per device and pixel format; checks).
-    @_spi(Test) public private(set) nonisolated(unsafe) static var librariesMade = 0
+    @_spi(Test) public static var librariesMade: Int {
+        pipelinesLock.lock()
+        defer { pipelinesLock.unlock() }
+        return made.values.reduce(0, +)
+    }
+
+    /// Those compiled for one device and pixel format (checks).
+    @_spi(Test) public static func librariesMade(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) -> Int {
+        pipelinesLock.lock()
+        defer { pipelinesLock.unlock() }
+        return made[key(device, pixelFormat), default: 0]
+    }
+
+    /// Checks: called with the lock held, just before a compile starts (nil: nothing).
+    @_spi(Test) public static func whileCompiling(_ hook: (@Sendable (MTLPixelFormat) -> Void)?) {
+        pipelinesLock.lock()
+        defer { pipelinesLock.unlock() }
+        compiling = hook
+    }
+
+    /// Checks: a device and pixel format's pipelines are made again by the next renderer or prewarm (and counted from
+    /// zero), so a check can run again in one process. Renderers made before keep theirs.
+    @_spi(Test) public static func forgetPipelines(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) {
+        pipelinesLock.lock()
+        defer { pipelinesLock.unlock() }
+        (pipelines[key(device, pixelFormat)], made[key(device, pixelFormat)]) = (nil, nil)
+    }
+
+    /// Callers of `pipelines` that asked for the lock and have not taken it yet, by key (checks: a renderer made while a
+    /// prewarm compiles is seen waiting for it). Its own lock: `pipelinesLock` is what they wait for.
+    private static let waitingLock = NSLock()
+    nonisolated(unsafe) private static var waiting: [String: Int] = [:]
+    @_spi(Test) public static func pipelinesWaiting(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) -> Int {
+        waitingLock.lock()
+        defer { waitingLock.unlock() }
+        return waiting[key(device, pixelFormat), default: 0]
+    }
+
+    private static func waits(_ key: String, _ change: Int) {
+        waitingLock.lock()
+        waiting[key, default: 0] += change
+        waitingLock.unlock()
+    }
+
+    /// Makes the shared library and pipelines for a device and pixel format now, if no renderer or earlier call has:
+    /// an embedder calls it off the main thread at launch, so its first renderer finds them made. Compiling the shaders
+    /// from source takes most of a second without Metal's shader cache (a fresh install or an update). A renderer made
+    /// while it runs waits for it and shares its result; a failure leaves nothing made, so the next renderer tries again
+    /// (and throws, as without this).
+    public static func prewarm(device: MTLDevice, pixelFormat: MTLPixelFormat = .bgra8Unorm) throws {
+        _ = try pipelines(device, pixelFormat)
+    }
 
     /// Pipelines like metal/shaders.zig: premultiplied alpha blending (not for the background color).
     static func pipelines(_ device: MTLDevice, _ pixelFormat: MTLPixelFormat) throws -> Pipelines {
+        let key = Self.key(device, pixelFormat)
+        waits(key, 1)
         pipelinesLock.lock()
+        waits(key, -1)
         defer { pipelinesLock.unlock() }
-        let key = "\(device.registryID):\(pixelFormat.rawValue)"
         if let shared = pipelines[key] { return shared }
+        compiling?(pixelFormat)
         let library = try device.makeLibrary(source: ghosttyShaders + glowShaders, options: nil)
-        librariesMade += 1
+        made[key, default: 0] += 1
         func pipeline(_ vertex: String, _ fragment: String, blend: Bool, instances: MTLVertexDescriptor? = nil) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             (d.vertexFunction, d.fragmentFunction, d.vertexDescriptor) = (library.makeFunction(name: vertex), library.makeFunction(name: fragment), instances)

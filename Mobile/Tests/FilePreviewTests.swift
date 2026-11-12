@@ -323,6 +323,9 @@ final class FilePreviewTests: XCTestCase {
                        "src · 1.8 KB · 25m ago · TypeScript")
         XCTAssertEqual(FilePreviewScreen.subtitle(path: "/Users/sam/notes/todo", root: nil, home: "/Users/sam", revision: nil, now: modified),
                        "~/notes", "Outside the root: the folder with ~")
+        XCTAssertEqual(FilePreviewScreen.details(path: "/Users/sam/src/web/src/theme.ts", root: "/Users/sam/src/web", home: "/Users/sam",
+                                                 revision: revision, now: modified.addingTimeInterval(25 * 60)),
+                       ["src", "1.8 KB", "25m ago", "TypeScript"], "On its side, a line each")
         XCTAssertTrue(all.contains("Line 1, import { useEffect, useState } from \"react\";"), "\(all)")
         try tap("Find in file", in: view.view)
         try await TestSupport.eventually { labels(view.view).contains("Next match") }
@@ -420,5 +423,12 @@ final class FilePreviewTests: XCTestCase {
         walk(view)
         let element = try XCTUnwrap(found, "no \(label)")
         XCTAssertTrue(element.accessibilityActivate(), "\(label) did not activate")
+    }
+
+    /// Line numbers off: the code starts at the edge, its unwrapped width without the gutter and its gap.
+    func testLineNumbersOffDropTheGutter() {
+        let metrics = FileCodeView.Metrics(size: 12)
+        XCTAssertEqual(metrics.width(lines: 120, longest: 40) - metrics.width(lines: 120, longest: 40, numbers: false),
+                       metrics.gutter(lines: 120) + metrics.gap, accuracy: 0.01)
     }
 }

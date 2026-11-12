@@ -2,7 +2,7 @@ import XCTest
 
 /// The thread on a phone, driven as a user does through the Chat demo (`ChatDemo`, M4a's thread) with the demo peer
 /// answering what is sent (`DISPATCH_MOBILE_CHAT_DEMO_ECHO`): "Jump to latest" stays away while the thread follows its
-/// end, sending keeps it there, the pill leaves once the user is back at the end; the code keys, send's long press and
+/// end, sending keeps it there, the button leaves once the user is back at the end; the code keys, send's long press and
 /// the keyboard's drag down. The samples here run at XCUITest's snapshot pace (50 to 300 ms each): they catch a state
 /// that lasts, not one frame. That nothing shows for a frame is `ChatFollowTests`' per-transition check.
 @MainActor
@@ -94,7 +94,7 @@ final class ChatThreadUITests: XCTestCase {
         return answer.frame.maxY <= field.frame.minY && answer.frame.maxY > field.frame.minY - 200
     }
 
-    /// Sent at the end, the message and its answer arrive with the thread still following: no pill in any sample, and
+    /// Sent at the end, the message and its answer arrive with the thread still following: no button in any sample, and
     /// the answer's end is what shows.
     func testSendingKeepsTheThreadAtItsEndWithoutTheJumpPill() {
         let app = launch(echo: 1.5)
@@ -109,7 +109,7 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertTrue(eventually { atEnd(app, line: "Line 6 of the answer to “And the refund path”") })
     }
 
-    /// Scrolled up while an answer arrives, the pill shows with its count; back at the end it leaves at once and does
+    /// Scrolled up while an answer arrives, the button shows with its count; back at the end it leaves at once and does
     /// not come back.
     func testTheJumpPillLeavesAsSoonAsTheThreadIsBackAtItsEnd() {
         let app = launch(echo: 3)
@@ -127,24 +127,47 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertTrue(arrived, "the answer arrived while scrolled up")
         // Back to the end by hand.
         for _ in 0..<4 where jump(app).exists { scroll(app, down: false) }
-        XCTAssertTrue(eventually(2) { !jump(app).exists }, "the pill leaves at the end")
+        XCTAssertTrue(eventually(2) { !jump(app).exists }, "the button leaves at the end")
         XCTAssertEqual(sample(for: 2) { jump(app).exists }, 0, "and stays away")
     }
 
-    /// The pill's own tap goes to the end and the pill leaves.
+    /// The button's own tap goes to the end and the button leaves.
     func testTheJumpPillTakesTheThreadToItsEnd() {
         let app = launch(echo: 3)
         send("Check the retry path", in: app)
         let followed = eventually(6) { atEnd(app, line: "Line 6 of the answer to “Check the retry path”") }
-        shot("pill-first-answer")
+        shot("jump-first-answer")
         XCTAssertTrue(followed, "the first answer's end shows")
         send("And the refund path", in: app)
         scroll(app, down: true)
-        let pill = jump(app)
-        XCTAssertTrue(pill.waitForExistence(timeout: 6))
-        pill.tap()
-        XCTAssertTrue(eventually(2) { !jump(app).exists }, "the pill leaves")
+        let button = jump(app)
+        XCTAssertTrue(button.waitForExistence(timeout: 6))
+        button.tap()
+        XCTAssertTrue(eventually(2) { !jump(app).exists }, "the button leaves")
         XCTAssertEqual(sample(for: 1.5) { jump(app).exists }, 0)
+    }
+
+    /// The button tapped while a fling toward older rows still runs (its inertia): the fling stops and the thread goes to
+    /// its end; the button leaves and stays away.
+    func testTheJumpButtonStopsAFlingAndGoesToTheEnd() {
+        let app = launch(echo: 0.5)
+        for (index, text) in ["Check the retry path", "And the refund path", "Then the webhook path"].enumerated() {
+            send(text, in: app)
+            XCTAssertTrue(eventually(6) { atEnd(app, line: "Line 6 of the answer to “\(text)”") }, "answer \(index + 1)")
+        }
+        // A long, fast fling toward the top, and the button the moment it shows, the thread still moving.
+        let window = app.windows.firstMatch
+        // Above the keyboard: a drag into it takes it down and keeps the thread following.
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15))
+            .press(forDuration: 0.02, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)),
+                   withVelocity: XCUIGestureVelocity(4000), thenHoldForDuration: 0)
+        let button = jump(app)
+        XCTAssertTrue(button.waitForExistence(timeout: 2))
+        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let reached = eventually(3) { atEnd(app, line: "Line 6 of the answer to “Then the webhook path”") }
+        shot("jump-after-fling")
+        XCTAssertTrue(reached, "at the end")
+        XCTAssertEqual(sample(for: 1.5) { jump(app).exists }, 0, "the button stays away")
     }
 
     // MARK: The composer
@@ -273,7 +296,7 @@ final class ChatThreadUITests: XCTestCase {
     }
 
     /// The keyboard is down and stays down; the thread still follows its end: the answer that comes next shows at the
-    /// end with no pill.
+    /// end with no button.
     private func keyboardDownAndFollowing(_ app: XCUIApplication, shot name: String) {
         let keyboard = app.keyboards.firstMatch
         let window = app.windows.firstMatch

@@ -1,12 +1,19 @@
 import SwiftUI
 
-/// The iPad split's sidebar (I1–I5, the Mac's): Spaces' tree alone on its own stack, no tab bar. Its bar row holds the
-/// pink sidebar toggle, the title, the filter menu (All · Needs you · Agents, pink while one filters, the needs-you
-/// count on it) and Edit; New space ⌘N is its footer. A space's row shows the space's tab in the detail column and is
-/// marked while it shows; a host's glyph shows its stats in a popover. The tree itself is Spaces' (`SpacesRoot`), the
-/// one view the phone shows too: this is a wrapper around it.
+/// The iPad split's sidebar (I1–I5, the Mac's): Spaces' tree or the Agents list on its own stack, no tab bar. Its bar
+/// row holds the pink sidebar toggle and the title, which switches between Spaces and Agents (⌘1, ⌘2; the needs-you
+/// count beside it while Spaces shows); with Spaces the filter menu (All · Needs you · Agents, pink while one filters,
+/// the needs-you count on it) and Edit, and New space ⌘N as its footer; with Agents New chat. A space's row, or an
+/// agent's, shows the tab in the detail column and is marked while it shows; a host's glyph shows its stats in a
+/// popover. The tree and the list are the phone's own (`SpacesRoot`, `AgentsScreen`): this is a wrapper around them.
 struct PadSidebar: View {
     @Bindable var navigator: SpacesNavigator
+    @Binding var section: MobileSection
+    /// The Agents list (`MobileRoot.agentsList`), and New chat's sheet.
+    let agents: AnyView
+    let newChat: () -> Void
+    /// Conversations waiting for the user: the switch shows them while the sidebar shows Spaces.
+    let needsYou: Int
     let hostActions: SpacesHostActions
     let hostViews: SpacesHostViews
     let content: TabsContent
@@ -24,7 +31,12 @@ struct PadSidebar: View {
 
     var body: some View {
         NavigationStack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) })) {
-            SpacesRoot(navigator: navigator, hostActions: hostActions, addHost: addHost, settings: settings)
+            Group {
+                switch section {
+                case .spaces: SpacesRoot(navigator: navigator, hostActions: hostActions, addHost: addHost, settings: settings)
+                case .agents: agents
+                }
+            }
                 .background(Color.canvas)
                 .environment(\.spacesSidebar, true)
                 .environment(\.tabsSelectSpace, { navigator.selectSpace($0) })
@@ -32,13 +44,18 @@ struct PadSidebar: View {
                 .environment(\.tabsShownTab, navigator.splitPath.tab)
                 .environment(\.tabsSelectTab, { navigator.select($0) })
                 .environment(\.tabsColumnWidth, width)
-                .navigationTitle("Spaces")
+                .navigationTitle(section.title)
                 .toolbarTitleDisplayMode(.inline)
                 // The title is the bar's leading item, beside the toggle (the screen's name stays for VoiceOver).
                 .toolbar(removing: .title)
                 .toolbar { toolbar }
                 .safeAreaBar(edge: .bottom) {
-                    if !model.workspaces.isEmpty, !navigator.editing { PadNewSpaceButton(navigator: navigator) }
+                    if !model.workspaces.isEmpty, !navigator.editing {
+                        switch section {
+                        case .spaces: PadNewSpaceButton(navigator: navigator)
+                        case .agents: PadNewChatButton(action: newChat)
+                        }
+                    }
                 }
                 .navigationDestination(for: TabsRoute.self) { route in
                     TabsDestination(route: route, navigator: navigator, content: content, hostViews: hostViews)
@@ -64,18 +81,12 @@ struct PadSidebar: View {
                 .hoverEffect(.highlight)
                 .disabled(!navigator.canToggleSidebar)
                 .accessibilityLabel("Hide sidebar")
-                if Self.showsTitle(width: width, controls: controls) {
-                    Text("Spaces")
-                        .font(.title2.weight(.bold))
-                        .lineLimit(1)
-                        .fixedSize()
-                        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-                        .accessibilityAddTraits(.isHeader)
-                }
+                PadSectionSwitch(section: $section, needsYou: needsYou,
+                                 titled: Self.showsTitle(width: width, controls: controls))
             }
         }
         .sharedBackgroundVisibility(.hidden)
-        if !model.workspaces.isEmpty {
+        if section == .spaces, !model.workspaces.isEmpty {
             // One item: as two, the bar folded them into its overflow menu beside the window controls.
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 8) {
@@ -94,6 +105,11 @@ struct PadSidebar: View {
                 .accessibilityLabel(navigator.editing ? "Done" : "Edit")
                 }
                 .fixedSize()
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else if section == .agents {
+            ToolbarItem(placement: .topBarTrailing) {
+                AgentsGroupMenu(circle: true).fixedSize()
             }
             .sharedBackgroundVisibility(.hidden)
         }
@@ -178,5 +194,87 @@ struct PadNewSpaceButton: View {
         .padding(.bottom, 8)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .accessibilityLabel("New space")
+    }
+}
+
+/// The sidebar's title as the switch between its sections (the phone's tab bar): "Spaces ⌄" or "Agents ⌄" opens a menu
+/// of both with their shortcuts; while Spaces shows, the needs-you count sits beside it, as the phone's Agents tab
+/// item carries it. Without room for the title, the section's glyph.
+struct PadSectionSwitch: View {
+    @Binding var section: MobileSection
+    let needsYou: Int
+    let titled: Bool
+
+    var body: some View {
+        Menu {
+            Picker("Show", selection: $section) {
+                ForEach(MobileSection.allCases) { item in
+                    Label(item.title, systemImage: item.symbol).tag(item)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 6) {
+                if titled {
+                    Text(section.title)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(1)
+                        .fixedSize()
+                } else {
+                    Image(systemName: section.symbol).font(.title3.weight(.semibold))
+                }
+                Image(systemName: "chevron.down")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.secondary)
+                if section == .spaces, needsYou > 0 {
+                    Text("\(needsYou)")
+                        .font(.caption2.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Color.stateUnread, in: Capsule())
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        .accessibilityLabel(section.title)
+        .accessibilityHint("Switches between Spaces and Agents")
+        .accessibilityValue(section == .spaces && needsYou > 0 ? "\(needsYou) agents need you" : "")
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("pad-section")
+    }
+}
+
+/// The sidebar's footer while it shows Agents: New chat, as New space's capsule (`PadNewSpaceButton`).
+struct PadNewChatButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.and.pencil").font(.body.weight(.semibold)).accessibilityHidden(true)
+                Text("New chat").font(.body.weight(.semibold)).lineLimit(1)
+                Spacer(minLength: 4)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel("New chat")
+        .accessibilityIdentifier("pad-new-chat")
     }
 }

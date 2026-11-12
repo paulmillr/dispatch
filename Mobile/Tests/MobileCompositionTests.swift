@@ -283,6 +283,67 @@ final class MobileCompositionTests: XCTestCase {
         XCTAssertEqual(app.tabs.needsYou(excluding: ref), app.conversations.needsYouCount)
     }
 
+    /// A tab pushed on Chat (here a space's tab, as its link appends it) opens its conversation in the push's turn: the
+    /// session exists and `chat.open` is on the wire before anything else runs, its thread kept until it shows. A push
+    /// replaced before its thread showed lets the session go; a tab opened on Terminal opens none.
+    func testATabPushedOnChatOpensItsConversationInThePushsTurn() async throws {
+        let opened = DispatchSemaphore(value: 0)
+        let helper = ScriptedHelper.scripted { request in
+            guard request.method == "chat.open" else { return .empty }
+            opened.signal()
+            return .open
+        }
+        defer { helper.close() }
+        let client = helper.client
+        let driver = ScriptedHostSessionDriver { host in
+            [.event(.link(.connecting)), .event(.following("tmux")),
+             .readyWith(client: { client }, hello: HostFixture.hello(identity: host.tintSeed),
+                        multiplexers: HostFixture.multiplexers(["tmux"]), versions: ["tmux": "3.7"], topology: HostFixture.topology()),
+             .hold]
+        }
+        let studio = host("studio")
+        let app = composition(hosts: [studio], driver: driver)
+        try await TestSupport.eventually { app.conversations.hosts[studio.id]?.client != nil && app.conversations.conversations.count == 2 }
+        let agents = try XCTUnwrap(app.tabs.workspace(studio.id)?.tabs.filter(\.isChat))
+        XCTAssertEqual(agents.count, 2)
+        let (first, second) = (agents[0], agents[1])
+        let key = ChatConversationKey(host: studio.id, node: try XCTUnwrap(first.agentPane).key)
+        XCTAssertNil(app.conversations.sessions[key])
+
+        app.navigator.path.append(.tab(first.ref))
+        XCTAssertNotNil(app.conversations.sessions[key], "opened in the push's turn")
+        XCTAssertTrue(app.conversations.pending.contains(key))
+        XCTAssertTrue(app.conversations.agentsListCovered, "a phone's stack covers Agents")
+        // The main thread blocked from here on: only a request already handed to the transport can reach the helper,
+        // whose pipe is read on its own thread. The bound only ends a broken run.
+        XCTAssertEqual(opened.wait(timeout: .now() + 60), .success, "chat.open left in the push's turn")
+        XCTAssertEqual(helper.requests("chat.open").count, 1)
+
+        // Another tab replaces it before its thread showed: the first lets go.
+        app.navigator.path = [.tab(second.ref)]
+        XCTAssertNil(app.conversations.sessions[key], "trimmed as a session never shown")
+        XCTAssertFalse(app.conversations.pending.contains(key))
+        let other = ChatConversationKey(host: studio.id, node: try XCTUnwrap(second.agentPane).key)
+        XCTAssertTrue(app.conversations.pending.contains(other))
+
+        // Opened on Terminal: nothing opens.
+        app.navigator.path = []
+        XCTAssertFalse(app.conversations.agentsListCovered)
+        app.tabs.segments[first.ref] = .terminal
+        app.navigator.path.append(.tab(first.ref))
+        XCTAssertNil(app.conversations.sessions[key])
+        XCTAssertTrue(app.conversations.pending.isEmpty)
+
+        // On Chat again, but its thread shows another pane's conversation (the pane rebound meanwhile): the one the push
+        // opened goes now, not when the tab leaves the path.
+        app.navigator.path = []
+        app.tabs.segments[first.ref] = .chat
+        app.navigator.path.append(.tab(first.ref))
+        XCTAssertTrue(app.conversations.pending.contains(key))
+        app.pushed(first.ref, ChatConversationKey(host: studio.id, node: "tmux:fixture:rebound"))
+        XCTAssertFalse(app.conversations.pending.contains(key))
+    }
+
     /// Every connection with Chat on installs Claude Code's and Codex's hooks and Pi's extension, installed before or not,
     /// as the Mac does for a newly connected host. Chat off changes nothing.
     func testIntegrationsAreEnabledOnEachConnection() async throws {

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import XCTest
 @testable import DispatchMobile
@@ -1367,6 +1368,462 @@ final class ChatSessionTests: XCTestCase {
         for index in 0..<MobileAttachmentThumbnails.capacity { cache.store(UIImage(), for: "other-\(index)") }
         XCTAssertNil(cache.image(first, host: host, read: nil), "Dropped from the cache")
         XCTAssertTrue(cache.asks(firstKey), "and read again when shown")
+    }
+
+    // MARK: Opening from a kept transcript
+
+    /// A session for the fixture's terminal, its host not reached yet: what a new session is before its `chat.open`.
+    private func unopened(_ helper: ScriptedHelper, presence: (any ChatTerminalPresence)? = nil) -> MobileChatSession {
+        MobileChatSession.scripted(helper, presence: presence, connected: false)
+    }
+
+    /// The history `chat.open` answers with on `helper`'s newest subscription: pending first, then the page.
+    private func answer(_ helper: ScriptedHelper, records: [[String: Any]], earlier: String? = nil, session: String? = nil,
+                        state: [String: Any]? = nil) async throws {
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        let name = session ?? conversation
+        helper.notify(id, "chat.history", ChatFixture.history(session: name, state: state ?? ChatFixture.state(busy: false), pending: true))
+        helper.notify(id, "chat.history", ChatFixture.history(session: name, records: records, earlier: earlier))
+    }
+
+    private func newTurn(_ id: String, text: String, reply: String, time: Int64) -> [[String: Any]] {
+        [ChatFixture.record("\(id):started", "turn_started", turn: id, time: time),
+         ChatFixture.record("user-\(id)", "user", turn: id, text: text, time: time + 1),
+         ChatFixture.record("reply-\(id)", "assistant", turn: id, text: reply, time: time + 2),
+         ChatFixture.record("\(id):ended", "turn_ended", turn: id, time: time + 3)]
+    }
+
+    /// A released session's transcript paints the next session's rows before its `chat.open` answers, and the same
+    /// history reconciles into them without a change: the same rows under the same ids, the place it was read at kept.
+    func testAKeptTranscriptShowsAtOnceAndTheSameHistoryKeepsItsRows() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let chat = try await opened(first, records: records)
+        let rows = chat.transcript.rows
+        chat.readingPosition = ChatReadingPosition(row: rows[1].id, into: 12, last: rows.last?.id)
+        let kept = try XCTUnwrap(chat.kept())
+        XCTAssertEqual(kept.conversation, conversation)
+        XCTAssertGreaterThan(kept.bytes, 0)
+        chat.release()
+
+        let helper = ScriptedHelper()
+        script(helper)
+        let next = unopened(helper)
+        next.seed(kept)
+        XCTAssertEqual(next.transcript.rows.map(\.id), rows.map(\.id), "the first frame has the rows")
+        XCTAssertTrue(next.seeded)
+        XCTAssertFalse(next.loadingHistory, "no loading line over rows")
+        XCTAssertEqual(next.readingPosition, chat.readingPosition)
+        XCTAssertNil(next.conversation, "the conversation is the helper's to name")
+        next.update(link: .connected, client: helper.client)
+        XCTAssertEqual(next.phase, .opening)
+        XCTAssertFalse(next.loadingHistory)
+        try await answer(helper, records: records)
+        try await TestSupport.eventually { next.phase == .verified && !next.seeded }
+        XCTAssertEqual(next.transcript.rows.map(\.id), rows.map(\.id), "nothing moved")
+        XCTAssertEqual(next.transcript.rows, rows)
+        XCTAssertEqual(next.conversation, conversation)
+        XCTAssertEqual(next.readingPosition, chat.readingPosition, "the place it was read at still opens")
+    }
+
+    /// The conversation grew while no session held it: the new turn joins the kept rows, which keep their ids.
+    func testAKeptTranscriptTakesTheTurnsWrittenSince() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let chat = try await opened(first, records: records)
+        let rows = chat.transcript.rows
+        let kept = try XCTUnwrap(chat.kept())
+
+        let helper = ScriptedHelper()
+        script(helper)
+        let next = unopened(helper)
+        next.seed(kept)
+        next.update(link: .connected, client: helper.client)
+        let last = try XCTUnwrap(records.compactMap { $0["time_ms"] as? Int64 }.max())
+        try await answer(helper, records: records + newTurn("p9", text: "And the docs?", reply: "Updated the README.", time: last + 10))
+        try await TestSupport.eventually { next.phase == .verified && !next.seeded }
+        let grown = next.transcript.rows
+        XCTAssertEqual(Array(grown.prefix(rows.count)).map(\.id), rows.map(\.id))
+        XCTAssertEqual(grown.dropFirst(rows.count).map(\.item.text), ["And the docs?", "Updated the README."])
+    }
+
+    /// Another conversation in the pane (a /clear, a new one): its history replaces the kept rows instead of merging.
+    /// So does a page that shares nothing with them (more was written than one page holds): merged, a gap would sit
+    /// between them unseen.
+    func testAnotherConversationOrAGapReplacesTheKeptRows() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let previous = try await opened(first, records: records)
+        let kept = try XCTUnwrap(previous.kept())
+        let fresh = newTurn("n1", text: "Start over: list the open issues", reply: "Three are open.", time: 946_800_000_000)
+
+        let helper = ScriptedHelper()
+        script(helper)
+        let cleared = unopened(helper)
+        cleared.seed(kept)
+        cleared.update(link: .connected, client: helper.client)
+        try await answer(helper, records: fresh, session: "00000000-0000-4000-8000-000000000301")
+        try await TestSupport.eventually { cleared.phase == .verified && !cleared.loadingHistory }
+        XCTAssertEqual(cleared.transcript.rows.map(\.item.text), ["Start over: list the open issues", "Three are open."])
+        XCTAssertEqual(cleared.conversation, "00000000-0000-4000-8000-000000000301")
+        XCTAssertFalse(cleared.seeded)
+
+        // The pending notice already names the other conversation: the kept rows go then, and its loading line shows.
+        let pendingHelper = ScriptedHelper()
+        script(pendingHelper)
+        let pending = unopened(pendingHelper)
+        pending.seed(kept)
+        pending.update(link: .connected, client: pendingHelper.client)
+        try await TestSupport.eventually { pendingHelper.subscription("chat.open") != nil }
+        let id = try XCTUnwrap(pendingHelper.subscription("chat.open"))
+        pendingHelper.notify(id, "chat.history", ChatFixture.history(session: "00000000-0000-4000-8000-000000000301",
+                                                                     state: ChatFixture.state(busy: false), pending: true))
+        try await TestSupport.eventually { pending.phase == .verified }
+        XCTAssertTrue(pending.transcript.isEmpty)
+        XCTAssertTrue(pending.loadingHistory)
+
+        let gapHelper = ScriptedHelper()
+        script(gapHelper)
+        let gap = unopened(gapHelper)
+        gap.seed(kept)
+        gap.update(link: .connected, client: gapHelper.client)
+        try await answer(gapHelper, records: fresh, earlier: "cursor-9")
+        try await TestSupport.eventually { gap.phase == .verified && !gap.seeded }
+        XCTAssertEqual(gap.transcript.rows.map(\.item.text), ["Start over: list the open issues", "Three are open."])
+        XCTAssertEqual(gap.conversation, conversation)
+        XCTAssertTrue(gap.canLoadEarlier, "the page's own cursor")
+    }
+
+    /// The cursor kept with a transcript is never sent (the next `chat.open` ends it): rows the user paged in stay, and
+    /// paging goes on from the new history's cursor, or not at all when the kept rows reached the conversation's start.
+    func testPagedInRowsStayAndPagingUsesTheNewCursor() async throws {
+        let records = try ChatFixture.records("claude-thread")
+        let split = try XCTUnwrap(records.firstIndex { $0["turn"] as? String == "p2" })
+        let first = ScriptedHelper()
+        script(first) { request in
+            request.method == "chat.page" ? .result(["records": Array(records[..<split]), "earlier": NSNull()]) : nil
+        }
+        let chat = try await opened(first, records: Array(records[split...]), earlier: "cursor-1")
+        let partial = try XCTUnwrap(chat.kept())
+        XCTAssertEqual(partial.earlier, "cursor-1")
+        chat.loadEarlier()
+        try await TestSupport.eventually { !chat.hasEarlier && !chat.loadingEarlier }
+        let whole = try XCTUnwrap(chat.kept())
+        XCTAssertNil(whole.earlier, "it reached the start")
+
+        // Paged to the start: the newest page continues it, and nothing is left to page.
+        let helper = ScriptedHelper()
+        script(helper)
+        let next = unopened(helper)
+        next.seed(whole)
+        next.update(link: .connected, client: helper.client)
+        try await answer(helper, records: Array(records[split...]), earlier: "cursor-2")
+        try await TestSupport.eventually { next.phase == .verified && !next.seeded }
+        XCTAssertEqual(next.transcript.rows.map(\.id), chat.transcript.rows.map(\.id), "the paged-in rows stay")
+        XCTAssertFalse(next.hasEarlier)
+
+        // Not paged: the kept cursor keeps the spinner's place but is never sent; the new history's is.
+        let pagingHelper = ScriptedHelper()
+        script(pagingHelper) { request in
+            request.method == "chat.page" ? .result(["records": Array(records[..<split]), "earlier": NSNull()]) : nil
+        }
+        let paging = unopened(pagingHelper)
+        paging.seed(partial)
+        XCTAssertTrue(paging.hasEarlier)
+        XCTAssertFalse(paging.canLoadEarlier)
+        paging.update(link: .connected, client: pagingHelper.client)
+        try await TestSupport.eventually { pagingHelper.subscription("chat.open") != nil }
+        let id = try XCTUnwrap(pagingHelper.subscription("chat.open"))
+        pagingHelper.notify(id, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: false), pending: true))
+        try await TestSupport.eventually { paging.phase == .verified }
+        XCTAssertFalse(paging.canLoadEarlier, "verified, still the kept cursor")
+        paging.loadEarlier()
+        pagingHelper.notify(id, "chat.history", ChatFixture.history(records: Array(records[split...]), earlier: "cursor-2"))
+        try await TestSupport.eventually { !paging.seeded }
+        XCTAssertTrue(paging.canLoadEarlier)
+        paging.loadEarlier()
+        try await TestSupport.eventually { !paging.hasEarlier && !paging.loadingEarlier }
+        XCTAssertEqual(pagingHelper.requests("chat.page").map { $0.params["earlier"] as? String }, ["cursor-2"])
+        XCTAssertEqual(paging.transcript.rows.map(\.id), chat.transcript.rows.map(\.id))
+    }
+
+    /// A kept transcript carries no live state: a session seeded from one that was working with an approval open shows
+    /// neither the working row's state nor an answerable approval, and takes input only into the device queue, until
+    /// its own subscription says what holds now.
+    func testAKeptTranscriptBringsNoWorkingStateOrApproval() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let last = try XCTUnwrap(records.compactMap { $0["time_ms"] as? Int64 }.max())
+        let open = [ChatFixture.record("p9:started", "turn_started", turn: "p9", time: last + 1),
+                    ChatFixture.record("user-p9", "user", turn: "p9", text: "Run the suite", time: last + 2)]
+        let chat = try await opened(first, records: records + open, state: ChatFixture.state(busy: true, activity: "working"))
+        let id = try XCTUnwrap(first.subscription("chat.open"))
+        first.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval()])
+        try await TestSupport.eventually { chat.waitingForUser }
+        XCTAssertTrue(chat.busy)
+        let kept = try XCTUnwrap(chat.kept())
+
+        let helper = ScriptedHelper()
+        script(helper)
+        let next = unopened(helper)
+        next.seed(kept)
+        func checkNotLive(_ step: String) {
+            XCTAssertNotEqual(next.phase, .verified, step)
+            XCTAssertFalse(next.working, step)
+            XCTAssertFalse(next.busy, step)
+            XCTAssertNil(next.workingSince, step)
+            XCTAssertTrue(next.approvals.isEmpty, step)
+            XCTAssertFalse(next.waitingForUser, step)
+            XCTAssertEqual(next.route(steer: false), .outbox, step)
+            XCTAssertFalse(next.canLoadEarlier, step)
+            XCTAssertFalse(next.attachmentsAvailable, step)
+        }
+        checkNotLive("seeded")
+        XCTAssertNotNil(next.transcript.openTurn, "the rows are what was read, an open turn included")
+        let row = ChatConversation(key: next.key, terminal: 7, hostName: "mba2", name: "app", space: nil, spaceNode: nil, cwd: nil,
+                                   binding: ChatFixture.topologyBinding, summary: ChatConversationSummary(preview: "Done."),
+                                   urgency: .idle, muted: false, unread: false)
+        XCTAssertEqual(MobileComposition.status(row, session: next)?.text, "Done.", "Spaces' line is the row's, no step")
+        next.update(link: .connected, client: helper.client)
+        checkNotLive("opening")
+        let step = try XCTUnwrap(next.transcript.turns.first?.items.first)
+        do {
+            _ = try await next.fullOutput(of: step)
+            XCTFail("a kept step's output is read once the rows are confirmed")
+        } catch {}
+        XCTAssertTrue(helper.requests("chat.tools").isEmpty)
+        // The helper's answer is what holds: idle, nothing open.
+        try await answer(helper, records: records + open + [ChatFixture.record("p9:ended", "turn_ended", turn: "p9", time: last + 3)])
+        try await TestSupport.eventually { next.phase == .verified && !next.seeded }
+        XCTAssertFalse(next.working)
+        XCTAssertTrue(next.approvals.isEmpty)
+        XCTAssertNil(next.transcript.openTurn)
+    }
+
+    /// The helper answers `chat.open` twice: a pending notice (the conversation is live from then on) and, once read, the
+    /// page. What comes live in between (a working agent's records, a prompt the user sent) waits for the page, which is
+    /// set against the kept rows alone. A page that does not reach back to them replaces them, the live rows after it,
+    /// the prompt's bubble keeping its identity; one that reaches back continues them.
+    func testRecordsThatComeWhileThePageIsReadAreKeptAndDoNotBridgeAGap() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let previous = try await opened(first, records: records)
+        let kept = try XCTUnwrap(previous.kept())
+        let keptRows = previous.transcript.rows
+        let last = try XCTUnwrap(records.compactMap { $0["time_ms"] as? Int64 }.max())
+        let gap = newTurn("n1", text: "Rename the module", reply: "Renamed.", time: last + 1_000)
+        let prompt = "Also update the changelog"
+        let live = newTurn("p9", text: prompt, reply: "Updated the changelog.", time: last + 2_000)
+
+        /// Seeds a session, answers the pending notice, sends `prompt` and delivers `live` during the read, then the page.
+        func reading(page: [[String: Any]]) async throws -> (MobileChatSession, String) {
+            let helper = ScriptedHelper()
+            script(helper) { request in request.method == "chat.send" ? .result(ChatFixture.sent()) : nil }
+            let chat = unopened(helper)
+            chat.seed(kept)
+            chat.update(link: .connected, client: helper.client)
+            try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+            let id = try XCTUnwrap(helper.subscription("chat.open"))
+            helper.notify(id, "chat.history", ChatFixture.history(session: conversation, state: ChatFixture.state(busy: false), pending: true))
+            try await TestSupport.eventually { chat.phase == .verified }
+            chat.drafts.edit(text: prompt)
+            chat.send()
+            try await TestSupport.eventually { helper.requests("chat.send").count == 1 && !chat.sending }
+            let pending = try XCTUnwrap(chat.optimisticPrompt?.id)
+            helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": live])
+            // Notifications apply in order: once this state shows, the records before it were handled.
+            helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: true)])
+            try await TestSupport.eventually { chat.busy }
+            XCTAssertEqual(chat.transcript.rows.map(\.id), keptRows.map(\.id), "live rows wait for the page")
+            helper.notify(id, "chat.history", ChatFixture.history(session: conversation, records: page))
+            try await TestSupport.eventually { !chat.seeded }
+            return (chat, pending)
+        }
+
+        // (a) The page lies after a gap and has the live turn too: no kept row stays to bridge the gap.
+        let (bridged, bridgedPrompt) = try await reading(page: gap + live)
+        XCTAssertEqual(bridged.transcript.rows.map(\.item.text),
+                       ["Rename the module", "Renamed.", prompt, "Updated the changelog."])
+        XCTAssertEqual(bridged.transcript.rows.first { $0.item.text == prompt }?.id, bridgedPrompt, "the bubble stays")
+        XCTAssertNil(bridged.optimisticPrompt)
+
+        // (a') The page lies after a gap and was read before the live turn: the live turn is not lost.
+        let (lost, lostPrompt) = try await reading(page: gap)
+        XCTAssertEqual(lost.transcript.rows.map(\.item.text),
+                       ["Rename the module", "Renamed.", prompt, "Updated the changelog."])
+        XCTAssertEqual(lost.transcript.rows.first { $0.item.text == prompt }?.id, lostPrompt)
+        XCTAssertNil(lost.optimisticPrompt)
+
+        // (b) The page reaches back to the kept rows: they continue, with the live turn once.
+        let (continued, continuedPrompt) = try await reading(page: records + live)
+        XCTAssertEqual(Array(continued.transcript.rows.prefix(keptRows.count)).map(\.id), keptRows.map(\.id))
+        XCTAssertEqual(continued.transcript.rows.dropFirst(keptRows.count).map(\.item.text), [prompt, "Updated the changelog."])
+        XCTAssertEqual(continued.transcript.rows.first { $0.item.text == prompt }?.id, continuedPrompt)
+    }
+
+    /// A thread opened on kept rows is marked seen once the helper names its conversation, though its newest record
+    /// may not change (the seen marker is keyed by the conversation, unknown until then).
+    func testAThreadOpenedOnKeptRowsIsSeenOnceTheConversationIsNamed() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let records = try ChatFixture.records("claude-thread")
+        let previous = try await opened(first, records: records)
+        let kept = try XCTUnwrap(previous.kept())
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = unopened(helper)
+        chat.seed(kept)
+        final class Seen { var conversations: [String?] = [] }
+        let seen = Seen()
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            ChatThreadView(session: chat, space: "app", directory: "/work/app", seen: { seen.conversations.append(chat.conversation) })
+                // As the app's scene in the foreground (a window made by a test has none of its own).
+                .environment(\.scenePhase, .active)
+        })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await TestSupport.eventually { !seen.conversations.isEmpty }
+        XCTAssertTrue(seen.conversations.allSatisfy { $0 == nil }, "shown before the helper named it: nothing to mark yet")
+        chat.update(link: .connected, client: helper.client)
+        try await answer(helper, records: records)
+        try await TestSupport.eventually { seen.conversations.contains(self.conversation) }
+        XCTAssertEqual(chat.transcript.lastActivity, previous.transcript.lastActivity, "the newest record did not change")
+    }
+
+    /// A kept transcript seeds only a session that has not opened: one already opening keeps its own.
+    func testOnlyANewSessionTakesAKeptTranscript() async throws {
+        let first = ScriptedHelper()
+        script(first)
+        let previous = try await opened(first, records: try ChatFixture.records("claude-thread"))
+        let kept = try XCTUnwrap(previous.kept())
+        let helper = ScriptedHelper()
+        script(helper)
+        let opening = MobileChatSession.scripted(helper)
+        XCTAssertEqual(opening.phase, .opening)
+        opening.seed(kept)
+        XCTAssertTrue(opening.transcript.isEmpty)
+        XCTAssertFalse(opening.seeded)
+    }
+
+    /// `chat.open` is on the wire when the call that opens the session returns: the main actor runs nothing else first
+    /// (a push's build and layout took 75–100 ms before it did).
+    func testChatOpenLeavesInTheTurnTheSessionOpens() throws {
+        let helper = ScriptedHelper()
+        let arrived = DispatchSemaphore(value: 0)
+        script(helper) { request in
+            if request.method == "chat.open" { arrived.signal() }
+            return nil
+        }
+        let chat = unopened(helper)
+        chat.update(link: .connected, client: helper.client)
+        // The main thread blocked from here on, nothing else runs on it: only a request already handed to the transport
+        // can reach the helper, whose pipe is read on its own thread. The bound only ends a broken run.
+        XCTAssertEqual(arrived.wait(timeout: .now() + 60), .success, "chat.open left in the turn that opened the session")
+        XCTAssertEqual(chat.phase, .opening)
+    }
+
+    /// While a pushed thread builds its first frame the helper's answers wait, in order, and apply once it ends the
+    /// hold; a hold nothing ends lasts `holdLimit`.
+    func testAnswersHeldForTheFirstFrameApplyInOrderAfterIt() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = unopened(helper)
+        chat.holdUpdates(for: .seconds(3600))
+        chat.update(link: .connected, client: helper.client)
+        let records = try ChatFixture.records("claude-thread")
+        try await answer(helper, records: records, state: ChatFixture.state(busy: true))
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        // All three arrived, and wait.
+        try await TestSupport.eventually { chat.heldUpdates == 3 }
+        XCTAssertEqual(chat.phase, .opening, "nothing applied while held")
+        XCTAssertTrue(chat.transcript.isEmpty)
+        XCTAssertTrue(chat.holding)
+        chat.endHold()
+        XCTAssertFalse(chat.holding)
+        XCTAssertEqual(chat.phase, .verified, "applied at once, in the helper's order")
+        XCTAssertEqual(chat.transcript.rows.count, 4)
+        XCTAssertFalse(chat.busy, "the later state last")
+
+        let unended = ScriptedHelper()
+        script(unended)
+        let lone = unopened(unended)
+        lone.holdUpdates(for: .milliseconds(100))
+        lone.update(link: .connected, client: unended.client)
+        try await answer(unended, records: records)
+        try await TestSupport.eventually { lone.phase == .verified && !lone.holding }
+    }
+
+    /// A thread hosted while its session holds the helper's answers draws its first frame without them (the loading
+    /// line), and they apply just after it.
+    func testAHeldHistoryAppliesJustAfterTheThreadsFirstFrame() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = unopened(helper)
+        chat.holdUpdates(for: .seconds(3600))
+        chat.update(link: .connected, client: helper.client)
+        try await answer(helper, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { chat.heldUpdates == 2 }
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            ChatThreadView(session: chat, space: "app", directory: "/work/app")
+        })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        window.layoutIfNeeded()
+        XCTAssertTrue(chat.transcript.isEmpty, "the first frame is built without the history")
+        try await TestSupport.eventually { !chat.holding && chat.phase == .verified }
+        XCTAssertEqual(chat.transcript.rows.count, 4)
+    }
+
+    /// A session opened ahead of a tap attaches no terminal until its thread's first frame is committed: the composer
+    /// queues meanwhile, as it does while a terminal attaches, the first frame is laid out without attaching, and the
+    /// terminal attaches just after it; the thread never says it is attaching one.
+    func testADeferredTerminalAttachesAfterTheFirstFrame() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let presence = ChatTerminalPresenceStub()
+        let chat = unopened(helper, presence: presence)
+        chat.deferTerminal()
+        chat.update(link: .connected, client: helper.client)
+        try await answer(helper, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { chat.phase == .verified && !chat.loadingHistory }
+        XCTAssertTrue(presence.retained.isEmpty, "no terminal attached")
+        XCTAssertFalse(chat.terminalAttached)
+        XCTAssertTrue(chat.defersTerminal)
+        XCTAssertEqual(chat.route(steer: false), .queue, "a send waits for the attachment")
+
+        AccessibilityLabelTests.enableAccessibility()
+        let found = await TestSupport.windowScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(found))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            ChatThreadView(session: chat, space: "app", directory: "/work/app")
+        })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        window.layoutIfNeeded()
+        // The first frame was laid out in this turn, its view in the window: nothing attached inside it.
+        XCTAssertTrue(presence.retained.isEmpty, "not inside the first frame's layout")
+        XCTAssertTrue(chat.defersTerminal)
+        try await TestSupport.eventually { presence.retained[chat.key] == 7 }
+        XCTAssertFalse(chat.defersTerminal)
+        XCTAssertTrue(chat.terminalAttached)
+        XCTAssertEqual(chat.route(steer: false), .prompt)
+        XCTAssertFalse(AccessibilityLabelTests.elements(in: window).contains {
+            $0.accessibilityLabel?.hasPrefix("Attaching the terminal") == true
+        })
     }
 }
 

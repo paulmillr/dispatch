@@ -79,12 +79,18 @@ struct MobileRoot: View {
         case new
     }
 
+    /// The section the user left (`section.selected`), so a relaunch comes back to Agents if they were there. Debug
+    /// builds start where their launch arguments say (the UI tests and screenshots expect Spaces unless told).
     private static var initialSection: MobileSection {
         #if DEBUG
         if ChatDemo.screen != nil || UserDefaults.standard.string(forKey: "DispatchSection") == "agents" { return .agents }
-        #endif
         return .spaces
+        #else
+        return UserDefaults.standard.string(forKey: sectionKey) == "agents" ? .agents : .spaces
+        #endif
     }
+
+    static let sectionKey = "section.selected"
 
     /// The role that draws a tab as the bar's separate trailing circle: iOS 27's prominent tab, else iOS 26's search
     /// tab (the slot iOS 26 sets apart from the others).
@@ -106,7 +112,9 @@ struct MobileRoot: View {
     private var selection: Binding<Slot> {
         Binding(get: { .section(section) }, set: { slot in
             switch slot {
-            case .section(let next): section = next
+            case .section(let next):
+                section = next
+                UserDefaults.standard.set(next == .agents ? "agents" : "spaces", forKey: Self.sectionKey)
             case .new: new()
             }
         })
@@ -213,8 +221,10 @@ struct MobileRoot: View {
             HStack(spacing: 0) {
                 Group {
                     if device == .pad {
-                        // The iPad's: Spaces' tree alone, its bar row and New space (I1–I5); no tab bar.
-                        PadSidebar(navigator: navigator, hostActions: composition.hosts, hostViews: composition.hostViews,
+                        // The iPad's: Spaces' tree or Agents, its bar row and New space or New chat (I1–I5); no tab bar.
+                        PadSidebar(navigator: navigator, section: $section, agents: AnyView(agents),
+                                   newChat: { sheet = .newChat }, needsYou: conversations.needsYouCount,
+                                   hostActions: composition.hosts, hostViews: composition.hostViews,
                                    content: composition.content, addHost: { sheet = .newHost }, settings: { sheet = .settings },
                                    width: columns.sidebar)
                     } else {
@@ -261,6 +271,7 @@ struct MobileRoot: View {
                                         sidebarHidden: hidden)
             // Across the window whatever its width: a narrower stack centred the columns.
             detail
+                .environment(\.tabsRootTitle, section.title)
                 .frame(width: wide ? leading + columns.tab : columns.tab)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .offset(x: hidden ? 0 : leading)
@@ -279,11 +290,11 @@ struct MobileRoot: View {
     /// name, capsule and Edit in one row overflowed its 280-point sidebar.
     private func stack(path: Binding<[TabsRoute]>, titleInBar: Bool) -> some View {
         let narrow = titleInBar && MobileSplit.narrow(sidebar: columns.sidebar, device: device)
-        // Every host's last update under Agents' large title, where the rows mix hosts: the Spaces tree says it by host
-        // (an offline host's "as of"), and the Duo's sidebar has no line for it.
+        // No subtitle under the large titles: Agents says each host's last update in its list, under its chips (a
+        // subtitle there shifted and clipped the large title when the section changed). The modifier stays, empty,
+        // so the stack keeps its identity.
         let composition = composition
-        var subtitle: (@MainActor () -> [HostFreshness])?
-        if !titleInBar, section == .agents { subtitle = { composition.freshness } }
+        let subtitle: (@MainActor () -> [HostFreshness])? = nil
         return NavigationStack(path: path) {
             tabView
                 .navigationTitle(section.title)
@@ -302,9 +313,10 @@ struct MobileRoot: View {
                         }
                         .sharedBackgroundVisibility(.hidden)
                     }
-                    switch section {
-                    case .spaces: SpacesToolbar(model: tabs, editing: $navigator.editing, capsuleTrailing: titleInBar, glyphEdit: narrow)
-                    case .agents: AgentsToolbar(conversations: conversations)
+                    if section == .spaces {
+                        SpacesToolbar(model: tabs, editing: $navigator.editing, capsuleTrailing: titleInBar, glyphEdit: narrow)
+                    } else if !conversations.conversations.isEmpty {
+                        AgentsToolbar(glyph: narrow)
                     }
                 }
                 .navigationDestination(for: TabsRoute.self) { route in
@@ -313,6 +325,8 @@ struct MobileRoot: View {
                 }
         }
         .filesZoomScope()
+        // Back from a tab opened at the root names the section it returns to.
+        .environment(\.tabsRootTitle, section.title)
     }
 
     private var tabView: some View {
@@ -346,6 +360,8 @@ struct MobileRoot: View {
                         Label { Text(item.title) } icon: { Image(systemName: item.symbol).environment(\.symbolVariants, .none) }
                     }
                 }
+                // Agents counts the conversations that need the user, as the app icon's badge.
+                .badge(item == .agents ? conversations.needsYouCount : 0)
             }
             Tab(value: Slot.new, role: Self.newRole) {
                 // Never shown: New acts instead of opening.
@@ -372,12 +388,31 @@ struct MobileRoot: View {
     }
 
     private var agentsList: some View {
-        AgentsScreen(conversations: conversations, look: composition.look,
-                     open: { composition.openChat($0.key, keyboard: false) },
-                     close: { conversation in
-                         if let ref = composition.tab(for: conversation.key) { navigator.actions.close(.tab(ref), .close) }
-                     },
-                     chrome: false, refresh: { await composition.hosts.refresh() })
+        let composition = composition, navigator = navigator, conversations = conversations
+        let context = AgentsContext(
+            open: { composition.openChat($0.key, keyboard: false) },
+            openTerminal: { composition.openTerminal($0.key) },
+            close: { conversation in
+                if let ref = composition.tab(for: conversation.key) {
+                    navigator.actions.close(.tab(ref), .close)
+                } else {
+                    navigator.actions.failure = "\(conversation.name) is no longer on \(conversation.hostName)."
+                }
+            },
+            status: { MobileComposition.status($0, session: conversations.sessions[$0.key], detail: false) },
+            folder: { row in
+                guard let tab = composition.tab(for: row.key), let host = composition.tabs.workspace(tab.host)?.host else {
+                    return row.cwd.flatMap { $0.split(separator: "/").last.map(String.init) }
+                }
+                return TabScreenHeader.folder(row.cwd, host: host)
+            },
+            tab: { composition.tab(for: $0.key) },
+            actions: navigator.actions,
+            hosts: { composition.agentHosts },
+            addHost: { sheet = .newHost },
+            newChat: { sheet = .newChat })
+        return AgentsScreen(conversations: conversations, look: composition.look, context: context, chrome: false,
+                            refresh: { await composition.hosts.refresh(); await conversations.refreshAll() })
     }
 }
 
@@ -456,4 +491,53 @@ extension View {
     MobileRoot(composition: MobileComposition(hosts: hosts, tabs: MobileTabs(activity: TabActivityStore(url: nil),
                                                                              defaults: UserDefaults(suiteName: "preview")!)))
         .environment(hosts)
+}
+
+/// The shared stack's bar follows the shown section's list. The stack holds the tab bar, so its bar never found the
+/// tabs' lists: the large title stayed where it was and the rows scrolled under it, without the bar's edge effect.
+/// Behind a section's list, this hands the nearest scroll view to the stack's root (`setContentScrollView`) whenever
+/// the list comes on screen (its tab chosen, a tab screen popped).
+struct SectionScrollLink: UIViewRepresentable {
+    func makeUIView(context: Context) -> Anchor { Anchor() }
+    func updateUIView(_ view: Anchor, context: Context) {}
+
+    final class Anchor: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            // After the hierarchy settles: the list may come into the window after its background.
+            DispatchQueue.main.async { [weak self] in self?.link() }
+        }
+
+        private func link() {
+            guard window != nil, let navigation = owner?.navigationController, let root = navigation.topViewController,
+                  isDescendant(of: root.view), let scroll = nearestScrollView() else { return }
+            if root.contentScrollView(for: .top) !== scroll { root.setContentScrollView(scroll, for: .top) }
+        }
+
+        private var owner: UIViewController? {
+            var responder: UIResponder? = next
+            while let current = responder {
+                if let controller = current as? UIViewController { return controller }
+                responder = current.next
+            }
+            return nil
+        }
+
+        /// The first scroll view, breadth first, under the nearest ancestor that has one: the list beside this
+        /// background, not a chips row's scroll view inside it.
+        private func nearestScrollView() -> UIScrollView? {
+            var ancestor = superview
+            while let view = ancestor {
+                var queue = view.subviews
+                while !queue.isEmpty {
+                    let next = queue.removeFirst()
+                    if let scroll = next as? UIScrollView, scroll.bounds.height > 100 { return scroll }
+                    queue += next.subviews
+                }
+                ancestor = view.superview
+            }
+            return nil
+        }
+    }
 }

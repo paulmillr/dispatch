@@ -601,6 +601,22 @@ final class MobileWorkspace: Identifiable {
         try await commands().move(tab.node, parent: space.node, before: before?.node)
     }
 
+    /// A tab row's Move to: the tab goes to another of the host's spaces, after its last tab (`memberships.move` with the
+    /// other space as parent and no `before`; the `memberships.append` feature puts a herdr tab last), as a tab dragged
+    /// into another space's pane on the Mac. The topology brings it there; a server that cannot move it (tmux across
+    /// sessions) answers with an error.
+    func move(tab: MobileTab, to target: MobileSpace) async throws {
+        guard let source = space(of: tab), source.kind == .multiplexer, target.kind == .multiplexer, target.ref != source.ref
+        else { return }
+        try await commands().move(tab.node, parent: target.node, before: nil)
+    }
+
+    /// The spaces a tab of `space` can move to (Move to): the host's other multiplexer spaces, while it is connected.
+    func moveTargets(from space: MobileSpace) -> [MobileSpace] {
+        guard canReorder(space) else { return [] }
+        return spaces.filter { $0.kind == .multiplexer && $0.ref != space.ref }
+    }
+
     /// P2d's drag: the space's tabs show `keys`' order at once and `moved` goes before its new neighbour on the server.
     /// The order shown is the drag's until the move's answer arrives (done or refused) or a snapshot naming the moved
     /// tab does, whichever is first; meanwhile a tab the drag did not know keeps its server place.
