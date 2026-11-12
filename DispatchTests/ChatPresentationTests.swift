@@ -467,7 +467,7 @@ final class ChatPresentationTests: XCTestCase {
             return false
         }
         let sheet = try await PresentationTestSupport.capture(XCTUnwrap(popover), named: "shortcut-sheet", in: "chat-footer-validation").text()
-        XCTAssertTrue(sheet.contains("adds it to")); XCTAssertTrue(sheet.contains("current turn"))
+        XCTAssertTrue(sheet.contains("joins this turn")); XCTAssertTrue(sheet.contains("save draft"))
         popover?.performClose(nil)
         // Remounting also proves the onboarding state is persisted, not tied to a view instance.
         mount()

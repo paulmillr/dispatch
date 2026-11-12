@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// filter (`GitLogFilterButton`), and the Single view toggle (where two views fit: one view or both). The mode's label keeps its width drilled or not (`FilesBackButton.label`).
 /// Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the follow-the-shell link
 /// after it, the host first), and on Review and Commits the repository and its branch. The Files tab shows nothing of
-/// git. The files tabs are not here: the strip's mode button names the one shown and its menu switches (and ⌃⌘1–3).
+/// git. The files tabs are not here: the strip's mode button names the one shown and its menu switches (and ⌃⌘1–5).
 /// On one column with a row's detail in the list's place (`FilesSession.drilled`) the name is a button back to the list,
 /// what is open follows it (the file; the change, a menu of the others; the commit's subject), and on the git tabs ↑ ↓
 /// step to the next change or commit.
@@ -90,8 +90,10 @@ struct FilesHeader: View {
         .frame(maxWidth: .infinity)
         .font(typography, .label)
         .foregroundStyle(palette.muted)
-        .background(Chrome.window)
-        // Glass controls carry the bar themselves; the flat bar keeps its rule.
+        // On glass there is no bar: the header sits on the content's own background, its controls on their glass, and
+        // the list and preview fade in under it (FilesScrollEdge), as macOS 26 draws a toolbar over content. The flat
+        // bar keeps its fill and rule.
+        .background(glass ? Color.clear : Chrome.window)
         .overlay(alignment: .bottom) { if !glass { palette.separator.frame(height: 1) } }
         .onChange(of: session.findRequest) { _, _ in
             // ⌘F goes to the preview's find while the preview has focus and shows text (that pane answers it); an
@@ -342,7 +344,7 @@ struct FilesHeader: View {
         .accessibilityIdentifier("files-follow-shell")
     }
 
-    /// "main · 2 ahead of origin/main · 4 files uncommitted · Commits ⌃⌘3".
+    /// "main · 2 ahead of origin/main · 4 files uncommitted · Commits ⌃⌘5".
     /// Review's and Commits' place: the repository's name, its branch and how far it is from its upstream. No host and
     /// no path: on these tabs neither changes what they show, and the crumbs' clicks are the Files tab's.
     private var repositoryLine: some View {
@@ -673,18 +675,66 @@ struct FilesColumnHeader: View {
                     column("Modified", .modified).frame(width: FilesColumns.modified(typography), alignment: .trailing)
                 }
                 if shown.size { column("Size", .size).frame(width: FilesColumns.size(typography), alignment: .trailing) }
+                // A narrow list hides Size, then Modified: their sorts stay reachable here.
+                if !shown.modified || !shown.size { sortMenu(hidden: !shown.modified ? [.modified, .size] : [.size]) }
             }
             .padding(.leading, FilesColumns.leading)
             .padding(.trailing, FilesColumns.trailing)
             .frame(maxHeight: .infinity)
         }
-        // As tall as the preview's header beside it, its rule included.
+        // Every sort, at any width.
+        .contextMenu { sortItems }
+        // As tall as the preview's header beside it, its rule included (on glass, the rule's room without the rule).
         .frame(height: FilesColumns.headerHeight(typography) + 1)
         .font(typography, .caption)
         .foregroundStyle(palette.detail)
-        .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
+        .overlay(alignment: .bottom) { if !LiquidGlassStore.shared.active { palette.separator.frame(height: 1) } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("files-columns")
+    }
+
+    static func title(_ key: FilesSort) -> String {
+        switch key {
+        case .name: "Name"
+        case .modified: "Modified"
+        case .size: "Size"
+        }
+    }
+
+    /// Name, Modified and Size; the current one marked with its direction. Choosing it again flips the order, as a
+    /// column's click does (`FilesSession.chooseSort`).
+    @ViewBuilder private var sortItems: some View {
+        ForEach(FilesSort.allCases, id: \.self) { key in
+            Button { session.chooseSort(key) } label: {
+                if session.sort == key {
+                    Label(Self.title(key), systemImage: session.sortDescending ? "chevron.down" : "chevron.up")
+                } else {
+                    Text(Self.title(key))
+                }
+            }
+        }
+    }
+
+    /// At the header's end while columns are hidden: the sort glyph, or, while the list is sorted by a hidden column,
+    /// that column's name and direction, so the order it shows is explained.
+    private func sortMenu(hidden: Set<FilesSort>) -> some View {
+        // One text, in the column titles' color: a menu's label otherwise leads with its image and takes the ink.
+        let detail = Chrome.palette.detail
+        let arrow = Text(Image(systemName: session.sortDescending ? "chevron.down" : "chevron.up"))
+            .font(.system(size: typography.size(offset: -5), weight: .semibold))
+        return Menu { sortItems } label: {
+            (hidden.contains(session.sort)
+                ? Text(Self.title(session.sort) + " ").font(typography.font(.caption)) + arrow
+                : Text(Image(systemName: "arrow.up.arrow.down")).font(.system(size: typography.size(offset: -3))))
+                .foregroundColor(detail)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.leading, 8)
+        .help("Sort by")
+        .accessibilityLabel("Sort by \(Self.title(session.sort).lowercased())")
+        .accessibilityIdentifier("files-sort-menu")
     }
 
     private func column(_ title: String, _ key: FilesSort) -> some View {

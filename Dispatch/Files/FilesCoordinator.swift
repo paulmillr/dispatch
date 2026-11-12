@@ -115,7 +115,7 @@ enum TabMode: String, Hashable, Sendable {
         chat.toggle(id)
     }
 
-    /// ⌃⌘1–3, ⇧⌘U, ⇧⌘L and the mode button's menu: files on one of its tabs, from any mode. Changes and Commits need a
+    /// ⌃⌘3–5, ⇧⌘U, ⇧⌘L and the mode button's menu: files on one of its tabs, from any mode. Changes and Commits need a
     /// repository (or one still resolving: the tab falls back to Files if there is none); outside one nothing changes.
     func showFiles(_ id: UUID, tab: FilesTab) {
         guard isShowing(id) || canShowFiles(id) else { return }

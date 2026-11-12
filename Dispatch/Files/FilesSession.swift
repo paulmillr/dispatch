@@ -262,7 +262,7 @@ import Foundation
         return nil
     }
 
-    /// The mode button's menu, ⌃⌘1–3 or ⇧⌘U / ⇧⌘L: the tab shows `tab` if it can, and the new tab's view takes the keyboard
+    /// The mode button's menu, ⌃⌘3–5 or ⇧⌘U / ⇧⌘L: the tab shows `tab` if it can, and the new tab's view takes the keyboard
     /// (the one that had it is gone).
     func select(_ tab: FilesTab) {
         guard canShow(tab), tab != self.tab else { return }

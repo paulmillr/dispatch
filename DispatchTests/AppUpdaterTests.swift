@@ -499,4 +499,132 @@ final class AppUpdaterTests: XCTestCase {
         let prepared = UpdateInstaller.Prepared(context: context, release: try UpdateRelease(cask: cask), directory: directory)
         XCTAssertThrowsError(try System.updateValidate(prepared))
     }
+
+    // MARK: Release notes
+
+    /// A release's notes as GitHub keeps them (CRLF line ends): the items before `---`, five at most, each area's tag in
+    /// its spelling; what follows the rule (how to install, the build) is never shown.
+    private static let releaseBody = "- pi: harden installs\r\n- chat: fix a frozen reply\r\n- ssh: each user a colour\r\n"
+        + "* Files: Markdown folds\r\n- a fix without an area\r\n- ux: twelve fixes\r\n\r\n---\r\n\r\n"
+        + "- `brew install --cask paulmillr/tap/dispatch` or open `.dmg`.\r\n"
+
+    func testReleaseNotesReadAsTheSheetShowsThem() throws {
+        let notes = UpdateNotes(version: "0.2.0", body: Self.releaseBody)
+        XCTAssertEqual(notes.changes, [
+            .init(area: "Pi", text: "harden installs"), .init(area: "Chat", text: "fix a frozen reply"),
+            .init(area: "SSH", text: "each user a colour"), .init(area: "Files", text: "Markdown folds"),
+            .init(area: nil, text: "a fix without an area"),
+        ], "Five at most, the sixth and everything after the rule left out")
+        XCTAssertEqual(UpdateNotes(version: "0.2.0", body: "Stability\n\n- tmux: attaches\n- Fixed: a thing: twice\n").changes,
+                       [.init(area: "tmux", text: "attaches"), .init(area: "Fixed", text: "a thing: twice")])
+        XCTAssertEqual(UpdateNotes(version: "0.2.0", body: "- Two words: not an area\n-no space\n").changes,
+                       [.init(area: nil, text: "Two words: not an area")])
+        XCTAssertEqual(UpdateNotes.display("ux"), "UX")
+        XCTAssertEqual(UpdateNotes.display("iphone"), "iPhone")
+        XCTAssertEqual(UpdateNotes.display("docs"), "Docs")
+        XCTAssertEqual(UpdateNotes.display("Chat"), "Chat")
+
+        let json = { (tag: String, draft: Bool) in
+            try JSONSerialization.data(withJSONObject: ["tag_name": tag, "draft": draft, "body": Self.releaseBody])
+        }
+        XCTAssertEqual(try UpdateNotes(version: "0.2.0", release: json("0.2.0", false)).changes.count, 5)
+        XCTAssertThrowsError(try UpdateNotes(version: "0.2.0", release: json("0.1.9", false)), "another release's notes")
+        XCTAssertThrowsError(try UpdateNotes(version: "0.2.0", release: json("0.2.0", true)), "a draft's")
+        XCTAssertThrowsError(try UpdateNotes(version: "0.2.0", release: Data("<html>".utf8)))
+        XCTAssertEqual(UpdateNotes.api("0.2.0").absoluteString, "https://api.github.com/repos/paulmillr/dispatch/releases/tags/0.2.0")
+        XCTAssertTrue(UpdateDownloadDelegate.allowed(UpdateNotes.api("0.2.0")))
+        XCTAssertFalse(UpdateDownloadDelegate.allowed(URL(string: "https://api.github.com.example.org/x")!))
+    }
+
+    /// The notes are read once a newer release is found, beside its download, and go with it: none when up to date,
+    /// none when they could not be read, cleared by Cancel.
+    func testNotesAreReadForTheReleaseFoundAndGoWithIt() async throws {
+        let release = try UpdateRelease(cask: cask)
+        var reads: [String] = []
+        var ops = operations(release)
+        ops.notes = { reads.append($0.version); return UpdateNotes(version: $0.version, body: Self.releaseBody) }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        updater.check()
+        try await TestSupport.eventually { updater.state == .ready && updater.notes != nil }
+        XCTAssertEqual(updater.notes?.version, "0.2.0")
+        XCTAssertEqual(updater.notes?.changes.first, .init(area: "Pi", text: "harden installs"))
+        XCTAssertEqual(reads, ["0.2.0"])
+        await updater.stop()
+
+        var current = operations(release)
+        current.context = { UpdateInstaller.Context(target: self.context.target, version: "0.2.0", build: "1", identities: self.context.identities) }
+        current.notes = { reads.append($0.version); return UpdateNotes(version: $0.version, body: Self.releaseBody) }
+        let upToDate = AppUpdater(operations: current, defaults: nil)
+        upToDate.check()
+        try await TestSupport.eventually { upToDate.state == .upToDate }
+        XCTAssertNil(upToDate.notes)
+        XCTAssertEqual(reads, ["0.2.0"], "nothing read when up to date")
+
+        var failing = operations(release)
+        failing.notes = { _ in throw UpdateFailure("offline", transient: true) }
+        let unread = AppUpdater(operations: failing, defaults: nil)
+        unread.check()
+        try await TestSupport.eventually { unread.state == .ready }
+        XCTAssertNil(unread.notes, "an update installs without its notes")
+        await unread.stop()
+
+        var waiting = operations(release)
+        var pending: CheckedContinuation<UpdateInstaller.Prepared, Error>?
+        waiting.prepare = { _, _, _ in try await withCheckedThrowingContinuation { pending = $0 } }
+        waiting.notes = { UpdateNotes(version: $0.version, body: Self.releaseBody) }
+        let cancelled = AppUpdater(operations: waiting, defaults: nil)
+        cancelled.check()
+        try await TestSupport.eventually { cancelled.state == .downloading && cancelled.notes != nil }
+        cancelled.cancel()
+        XCTAssertNil(cancelled.notes)
+        pending?.resume(throwing: CancellationError())
+        await cancelled.stop()
+    }
+
+    /// The sheet over the main window: ready with the release's notes, Later closes it; checking to up to date, OK
+    /// closes it; Cancel while checking stops the check and the sheet goes by itself.
+    func testTheSheetShowsTheNotesAndFollowsTheUpdater() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let release = try UpdateRelease(cask: cask)
+        var ops = operations(release)
+        ops.notes = { UpdateNotes(version: $0.version, body: Self.releaseBody) }
+        let updater = AppUpdater(operations: ops, defaults: nil)
+        let window = NSWindow(contentRect: NSRect(x: 120, y: 120, width: 760, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView()
+        window.makeKeyAndOrderFront(nil)
+        addTeardownBlock { @MainActor in window.close(); window.contentView = nil }
+
+        updater.check()
+        let sheet = try XCTUnwrap(UpdateSheet.present(over: window, updater: updater))
+        XCTAssertTrue(window.attachedSheet === sheet)
+        try await TestSupport.eventually { updater.state == .ready && updater.notes != nil }
+        let content = try XCTUnwrap(sheet.contentView)
+        try await TestSupport.eventually(diagnostic: "the sheet's notes") {
+            content.layoutSubtreeIfNeeded()
+            return !PresentationTestSupport.accessibilityFrames("update-change-5", in: sheet).isEmpty
+        }
+        let snapshot = try await PresentationTestSupport.capture(sheet, named: "update-sheet-ready", in: "update-audit")
+        try PresentationTestSupport.assertText("Dispatch 0.2.0 is ready", in: snapshot)
+        try PresentationTestSupport.assertText("harden installs", in: snapshot)
+        XCTAssertTrue(UpdateSheet.present(over: window, updater: updater) === sheet, "one sheet at a time")
+        sheet.cancelOperation(nil)
+        try await TestSupport.eventually { window.attachedSheet == nil }
+        XCTAssertEqual(updater.state, .ready, "Later keeps the update")
+        await updater.stop()
+
+        var blocked = operations(release)
+        var answer: CheckedContinuation<UpdateRelease, Error>?
+        blocked.latest = { try await withCheckedThrowingContinuation { answer = $0 } }
+        let checking = AppUpdater(operations: blocked, defaults: nil)
+        checking.check()
+        let second = try XCTUnwrap(UpdateSheet.present(over: window, updater: checking))
+        XCTAssertEqual(UpdateSheet.phase(checking), .checking)
+        second.cancelOperation(nil)
+        try await TestSupport.eventually { window.attachedSheet == nil }
+        XCTAssertEqual(checking.state, .idle, "Escape cancels the check and the sheet goes with it")
+        answer?.resume(throwing: CancellationError())
+        await checking.stop()
+    }
 }
+

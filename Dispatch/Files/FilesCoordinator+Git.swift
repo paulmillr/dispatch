@@ -823,13 +823,15 @@ extension FilesCoordinator {
         job.task = Task { [weak self, weak watch, weak job] in
             let result: Result<GitDiff, GitError>
             do throws(GitError) { result = .success(try await body()) } catch { result = .failure(error) }
+            var parsed: GitDiffParsed?
+            if case .success(let diff) = result { parsed = await Self.parse(diff) }
             guard let self, let watch, let job, current(watch) === job else { return }
             job.task = nil
             job.timer?.cancel()
             job.timer = nil
             guard let session = valid(watch) else { return }
             switch result {
-            case .success(let diff): write(GitDiffState(key: key, diff: diff), session)
+            case .success(let diff): write(GitDiffState(key: key, diff: diff, parsed: parsed), session)
             case .failure(.source(.cancelled)):
                 // Read again on the next sync.
                 job.input = nil
@@ -840,6 +842,11 @@ extension FilesCoordinator {
                 write(GitDiffState(key: key, error: error.message), session)
             }
         }
+    }
+
+    /// The diff's lines for the view, parsed here rather than in the frame that first draws them.
+    @concurrent nonisolated private static func parse(_ diff: GitDiff) async -> GitDiffParsed? {
+        diff.binary ? nil : GitDiffParsed(presentation: GitDiffPresentation.parse(diff.text))
     }
 
     private func cancel(_ job: inout Job?) {

@@ -133,13 +133,14 @@ extension AppDelegate {
         // Files on a git tab from any mode (F5b); the tag is the FilesTab's index.
         add(view, "Review Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
         add(view, "Commits", #selector(openFilesTab(_:)), "L", [.command, .shift], target: self, tag: 2)
-        // Their keys yield to a Settings › Keyboard group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘2 and ⌃⌘3 reach the
-        // places Review Changes and Commits above name, and only while files shows, so the menu does not list them
-        // twice.
-        add(view, "Files Tab", #selector(showFilesTab(_:)), "1", [.control, .command], target: self, tag: 0)
-        add(view, "Review Tab", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1,
-            hidden: true)
-        add(view, "Commits Tab", #selector(showFilesTab(_:)), "3", [.control, .command], target: self, tag: 2, hidden: true)
+        // ⌃⌘1…5: the tab's modes, as the mode button's menu lists them (Terminal, Chat, Files, Review, Commits), from any
+        // mode. Their keys yield to a Settings › Keyboard group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘4 and ⌃⌘5 reach
+        // what Review Changes and Commits above name, so the menu does not list them twice.
+        add(view, "Terminal", #selector(showMode(_:)), "1", [.control, .command], target: self, tag: 0)
+        add(view, "Chat", #selector(showMode(_:)), "2", [.control, .command], target: self, tag: 1)
+        add(view, "Files", #selector(showMode(_:)), "3", [.control, .command], target: self, tag: 2)
+        add(view, "Review", #selector(showMode(_:)), "4", [.control, .command], target: self, tag: 3, hidden: true)
+        add(view, "Commits", #selector(showMode(_:)), "5", [.control, .command], target: self, tag: 4, hidden: true)
         // Its title follows the pane (validateMenuItem); ⌥⌘P reaches it only while files shows. ⇧⌘P is left alone: the
         // space search's test holds the menu to ⌘P only.
         add(view, "Show One View", #selector(togglePreview), "P", [.command, .option], target: self)
@@ -216,14 +217,14 @@ extension AppDelegate {
             case #selector(nextSpace): step(item, steps.spaces, next: true)
             case #selector(previousTab): step(item, steps.tabs, next: false)
             case #selector(nextTab): step(item, steps.tabs, next: true)
-            case #selector(showFilesTab(_:)): digit(item, Self.filesTabModifiers(groups) ?? [], key: String(item.tag + 1))
+            case #selector(showMode(_:)): digit(item, Self.modeModifiers(groups) ?? [], key: String(item.tag + 1))
             default: break
             }
         }
     }
 
-    /// ⌃⌘ for the files tabs' digits, or nil while a Settings › Keyboard group already uses ⌃⌘ for its own.
-    static func filesTabModifiers(_ groups: KeyGroups) -> NSEvent.ModifierFlags? {
+    /// ⌃⌘ for the modes' digits, or nil while a Settings › Keyboard group already uses ⌃⌘ for its own.
+    static func modeModifiers(_ groups: KeyGroups) -> NSEvent.ModifierFlags? {
         let modifiers: NSEvent.ModifierFlags = [.control, .command]
         return [groups.spaces, groups.tabs, groups.splits].contains(modifiers) ? nil : modifiers
     }

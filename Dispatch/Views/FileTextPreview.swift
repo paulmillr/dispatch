@@ -60,7 +60,7 @@ import SwiftUI
     }
 
     /// A displayed line past this many characters is cut: text layout of a megabyte-long line stalls the pane.
-    static let lineLimit = 10_000
+    nonisolated static let lineLimit = 10_000
     /// A small, newline-heavy file can otherwise create millions of Swift strings and view rows.
     static let linesLimit = 100_000
     /// Find stores one row index per match. Bound that independent of the file byte limit.
@@ -167,6 +167,8 @@ struct FileTextPreview: View {
     var find: FilePreviewFind?
     /// Whether the query highlights (the find field is open).
     var highlightsQuery = true
+    /// Keeps the scroll while the view goes and comes back.
+    var keeper: FilePreviewScrollKeeper?
     @State private var model = FileTextLines()
 
     var body: some View {
@@ -197,6 +199,7 @@ struct FileTextPreview: View {
                     // itself, which drew a short file in the middle of the pane.
                     .frame(minWidth: wrap ? nil : geometry.size.width, minHeight: geometry.size.height,
                            alignment: .topLeading)
+                    .background { keeper }
                     .background(alignment: .topLeading) {
                         if numbered {
                             Rectangle().fill(theme.border).frame(width: 1)
@@ -246,3 +249,107 @@ struct FileTextPreview: View {
         proxy.scrollTo(line, anchor: .center)
     }
 }
+
+/// Keeps a preview's scroll while its view goes and comes back (the split showing another tab, the pane hiding or
+/// collapsing): the clip's origin, by view, on the file's state (`FilePreviewState.scroll`), so the file shows where
+/// the reader left it. Set in the scroll view's content, whose enclosing `NSScrollView` it watches. The origin goes
+/// back once the document is tall (and wide) enough to hold it, at most a second after the view returns; a scroll by
+/// the reader first wins.
+struct FilePreviewScrollKeeper: NSViewRepresentable {
+    enum Key: Hashable {
+        /// The text with line numbers, Markdown's source included.
+        case text
+        /// Rendered Markdown.
+        case rendered
+        /// The first 64 KB of text too large to show.
+        case head
+    }
+
+    let preview: FilePreviewState
+    let key: Key
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+
+    func updateNSView(_ probe: Probe, context: Context) {
+        probe.preview = preview
+        probe.key = key
+    }
+
+    final class Probe: NSView {
+        weak var preview: FilePreviewState?
+        var key = Key.text
+        private weak var scroll: NSScrollView?
+        private var observers: [NSObjectProtocol] = []
+        /// The origin to go back to, until the document holds it or the reader scrolls.
+        private var pending: CGPoint?
+        private var deadline: TimeInterval = 0
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            // Before the view goes: the teardown's own clip moves are not the reader's.
+            if newWindow == nil { stop() }
+            super.viewWillMove(toWindow: newWindow)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, let scroll = enclosingScrollView, scroll !== self.scroll else { return }
+            stop()
+            self.scroll = scroll
+            if let saved = preview?.scroll[key], saved != .zero {
+                pending = saved
+                deadline = ProcessInfo.processInfo.systemUptime + 1
+            }
+            let center = NotificationCenter.default
+            scroll.contentView.postsBoundsChangedNotifications = true
+            observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView,
+                                                queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clipMoved() }
+            })
+            observers.append(center.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: scroll,
+                                                queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pending = nil }
+            })
+            if let document = scroll.documentView {
+                document.postsFrameChangedNotifications = true
+                observers.append(center.addObserver(forName: NSView.frameDidChangeNotification, object: document,
+                                                    queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.restore() }
+                })
+            }
+            DispatchQueue.main.async { [weak self] in self?.restore() }
+        }
+
+        private func clipMoved() {
+            guard let scroll else { return }
+            if pending != nil {
+                restore()
+                return
+            }
+            preview?.scroll[key] = scroll.contentView.bounds.origin
+        }
+
+        /// Puts the saved origin back once the document can hold it; gives up after the deadline.
+        private func restore() {
+            guard let target = pending, let scroll, let document = scroll.documentView else { return }
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                pending = nil
+                return
+            }
+            let clip = scroll.contentView.bounds.size
+            guard document.frame.height - clip.height >= target.y - 0.5,
+                  document.frame.width - clip.width >= target.x - 0.5 else { return }
+            pending = nil
+            scroll.contentView.scroll(to: target)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            preview?.scroll[key] = target
+        }
+
+        private func stop() {
+            for observer in observers { NotificationCenter.default.removeObserver(observer) }
+            observers = []
+            scroll = nil
+            pending = nil
+        }
+    }
+}
+

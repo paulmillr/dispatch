@@ -131,11 +131,21 @@ struct ChatSideSheet: View {
         max(1, min(6, Int(maximumHeight * 0.25 / max(1, theme.typography.replyLineHeight))))
     }
 
+    /// As the main composer's footer reads (ChatModelControls): the model's ID, then its effort; not choosable here.
     private var modelReadout: some View {
-        Text((side.title ?? side.agentID) + " · " + side.model + (side.steps > 0 ? " · \(side.steps) steps" : ""))
+        Text(Self.readout(side))
             .font(theme.typography.detail).foregroundStyle(theme.muted.opacity(0.65))
             .lineLimit(1).truncationMode(.middle)
-            .help((side.title ?? side.agentID) + " · " + side.model)
+            .help(side.model + (Self.effort(side).map { " · effort: " + $0 } ?? ""))
+    }
+
+    static func readout(_ side: ChatSideConversation) -> String {
+        ([ChatModelControls.label(for: side.model)] + [effort(side)].compactMap { $0 }
+            + (side.steps > 0 ? ["\(side.steps) steps"] : [])).joined(separator: " · ")
+    }
+
+    private static func effort(_ side: ChatSideConversation) -> String? {
+        ChatModelControls.effortLabel(side.effort, agentID: side.agentID, model: side.model, agentTitle: side.title)
     }
 
     private var badge: some View {

@@ -4,6 +4,35 @@ import XCTest
 
 @MainActor
 final class NativeTabCloseTests: XCTestCase {
+    /// As the phone's Close: a tab whose every pane runs an agent with its turn over closes without asking; a pane
+    /// without one, an agent working or waiting, or one that exited leaves it to the helper's check. A busy server
+    /// tab's question names the agent and its state, else nothing.
+    func testFinishedAgentsCloseWithoutAskingAndTheQuestionNamesWhatRuns() {
+        let chat = TerminalRuntime.shared.chat
+        let first = System.uuid(), second = System.uuid()
+        defer { chat.close(first); chat.close(second) }
+        XCTAssertFalse(AppDelegate.agentsFinished([]))
+        XCTAssertFalse(AppDelegate.agentsFinished([first]), "No agent")
+        let agent = chat.session(for: first)
+        agent.active = true
+        XCTAssertTrue(AppDelegate.agentsFinished([first]))
+        agent.busy = true
+        XCTAssertFalse(AppDelegate.agentsFinished([first]), "Working")
+        agent.busy = false
+        XCTAssertFalse(AppDelegate.agentsFinished([first, second]), "Every pane")
+        let other = chat.session(for: second)
+        other.active = true
+        XCTAssertTrue(AppDelegate.agentsFinished([first, second]))
+        other.agentExited = true
+        XCTAssertFalse(AppDelegate.agentsFinished([first, second]), "Exited")
+
+        let tail = " Terminating ends it; Detach keeps it running on the server."
+        XCTAssertEqual(AppDelegate.closeQuestion(agent: "Codex", working: true, waiting: false), "Codex is still working." + tail)
+        XCTAssertEqual(AppDelegate.closeQuestion(agent: "Claude Code", working: false, waiting: true), "Claude Code is waiting for you." + tail)
+        XCTAssertEqual(AppDelegate.closeQuestion(agent: "Pi", working: false, waiting: false), "Pi is still running." + tail)
+        XCTAssertEqual(AppDelegate.closeQuestion(agent: nil, working: false, waiting: false), "Something is still running in it." + tail)
+    }
+
     func testPreparedNativeCloseRestoresOnDisconnect() async throws {
         let app = try TmuxWalkthrough(server: false); defer { app.close() }
         try await app.wait { app.workspace.activeTab?.terminal != nil }
@@ -117,8 +146,10 @@ final class NativeTabCloseTests: XCTestCase {
         XCTAssertTrue(app.workspace.detached.isEmpty)
     }
 
+    /// ⌘W on a busy tmux window asks, as the phone's Close; Detach keeps every kind of job running.
     func testCommandWPreservesForegroundBackgroundAndStoppedTmuxJobs() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
+        let answerer = CloseConfirmationAnswerer(server: CloseConfirmationAnswerer.detach); defer { answerer.stop() }
         _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
         try await app.attach(); try await app.ready()
         for command in ["sleep 120", "sleep 120 &", "sleep 120 & kill -STOP $!"] {
@@ -130,10 +161,41 @@ final class NativeTabCloseTests: XCTestCase {
             let window = try XCTUnwrap(app.target(tab))
             let original = try app.server(["list-panes", "-t", window, "-F", "#{pane_id}:#{pane_pid}"])
             app.workspace.selectWindow(tab.id)
+            let asked = answerer.serverAnswered
             app.controller.closeCurrentTab()
+            // Gone at once; the question comes with the helper's answer.
+            try await app.wait { answerer.serverAnswered == asked + 1 }
             try await app.wait { !app.workspace.spaces.flatMap(\.windows).contains { $0.id == tab.id } }
             XCTAssertEqual(try app.server(["list-panes", "-t", window, "-F", "#{pane_id}:#{pane_pid}"]), original)
         }
+        XCTAssertTrue(answerer.questions.allSatisfy { $0.contains("Detach keeps it running") }, "\(answerer.questions)")
+    }
+
+    /// The same question's other answers: Cancel shows the tab again with its work; Terminate ends the window.
+    func testCommandWOnABusyTmuxWindowCancelsOrTerminates() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
+        try await app.attach(); try await app.ready()
+        let pane = try app.server(["new-window", "-P", "-F", "#{pane_id}", "/bin/sh"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try app.server(["send-keys", "-t", pane, "sleep 120", "Enter"])
+        try await app.wait { (try? app.server(["display-message", "-p", "-t", pane, "#{pane_current_command}"]))?.hasPrefix("sleep") == true }
+        try await app.wait { app.workspace.spaces.flatMap(\.windows).contains { $0.terminals.contains { app.target($0) == pane } } }
+        let tab = try XCTUnwrap(app.workspace.spaces.flatMap(\.windows).first { $0.terminals.contains { app.target($0) == pane } })
+        let window = try XCTUnwrap(app.target(tab))
+        app.workspace.selectWindow(tab.id)
+        let cancel = CloseConfirmationAnswerer(server: CloseConfirmationAnswerer.cancel)
+        app.controller.closeCurrentTab()
+        try await app.wait { cancel.serverAnswered == 1 }
+        cancel.stop()
+        try await app.wait { app.workspace.spaces.flatMap(\.windows).contains { $0.id == tab.id } }
+        XCTAssertTrue(app.workspace.detached.isEmpty, "Cancel neither detaches nor ends it")
+        XCTAssertTrue(try app.server(["list-windows", "-F", "#{window_id}"]).split(separator: "\n").contains(Substring(window)))
+        let terminate = CloseConfirmationAnswerer(server: CloseConfirmationAnswerer.terminate); defer { terminate.stop() }
+        app.workspace.selectWindow(tab.id)
+        app.controller.closeCurrentTab()
+        try await app.wait { (try? app.server(["list-windows", "-F", "#{window_id}"]).split(separator: "\n").contains(Substring(window))) == false }
+        XCTAssertEqual(terminate.serverAnswered, 1)
+        XCTAssertTrue(app.workspace.detached.isEmpty)
     }
 
     func testLocalHerdrCloseTerminatesIdleButDetachesBackgroundJob() async throws {
@@ -154,7 +216,10 @@ final class NativeTabCloseTests: XCTestCase {
         app.controller.detachTab(hidden.id)
         app.controller.closeTab(idle.id)
         try await app.wait { (try? app.server(["list-panes", "-t", window, "-F", "#{pane_id}"]).split(separator: "\n").count) == 2 }
+        // The window with the hidden pane's job asks; Detach keeps that work.
+        let answerer = CloseConfirmationAnswerer(); defer { answerer.stop() }
         app.controller.closeWindow(tab.id)
+        try await app.wait { answerer.serverAnswered == 1 }
         try await app.wait { !app.workspace.spaces.flatMap(\.windows).contains { $0.id == tab.id } }
         XCTAssertEqual(try app.server(["list-panes", "-t", window, "-F", "#{pane_id}"]).split(separator: "\n").count, 2)
     }
@@ -178,7 +243,9 @@ final class NativeTabCloseTests: XCTestCase {
         let pane = try XCTUnwrap(busy.terminals.first.flatMap { app.target($0) })
         _ = try app.server(["send-keys", "-t", pane, "sleep 120 & printf 'JOB_%s\\n' STARTED", "Enter"])
         try await app.wait { (try? app.server(["capture-pane", "-p", "-t", pane]).contains("JOB_STARTED")) == true }
+        let answerer = CloseConfirmationAnswerer(server: CloseConfirmationAnswerer.detach); defer { answerer.stop() }
         app.controller.closeCurrentTab()
+        try await app.wait { answerer.serverAnswered == 1 }
         try await app.wait { !app.workspace.spaces.flatMap(\.windows).contains { $0.id == busy.id } }
         XCTAssertTrue(try app.server(["list-windows", "-F", "#{window_id}"]).split(separator: "\n").contains(Substring(busyWindow)))
     }
@@ -236,7 +303,9 @@ final class NativeTabCloseTests: XCTestCase {
             return !snapshot.tabs.contains { $0.tab_id == idleTab }
         }
         app.workspace.selectTab(busy.id)
+        let answerer = CloseConfirmationAnswerer(server: CloseConfirmationAnswerer.detach); defer { answerer.stop() }
         app.controller.closeCurrentTab()
+        try await app.wait { answerer.serverAnswered == 1 }
         try await app.wait { !app.workspace.allTabIDs.contains(busy.id) }
         let retained = try HerdrRPC.snapshot(from: HerdrSocket(path: socket).request("session.snapshot"))
         XCTAssertTrue(retained.tabs.contains { $0.tab_id == busyTab })

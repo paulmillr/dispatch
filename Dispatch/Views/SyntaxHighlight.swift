@@ -41,15 +41,45 @@ enum SyntaxHighlight {
         }
     }
 
+    /// `text` split at its newlines, built line by line from the tokens in one pass over the code: no index
+    /// conversions into a whole-text `AttributedString` and no walk of its characters (64 KB of Swift: 25 ms rather
+    /// than 30, of which lexing is 12).
     static func lines(_ code: String, language: String, theme: ChatTheme = .standard) -> [AttributedString] {
-        let highlighted = text(code, language: language, theme: theme)
+        let code = TextRendering.visible(code)
+        let utf16 = code.utf16
         var lines: [AttributedString] = []
-        var start = highlighted.startIndex
-        for index in highlighted.characters.indices where highlighted.characters[index] == "\n" {
-            lines.append(AttributedString(highlighted[start..<index]))
-            start = highlighted.characters.index(after: index)
+        var line = AttributedString()
+        var position = 0, index = code.startIndex
+        // Appends the code from where the last piece ended to `end` in `color`, starting a line at each newline.
+        func append(to end: String.Index, offset: Int, color: Color) {
+            let parts = code[index..<end].split(separator: "\n", omittingEmptySubsequences: false)
+            for (number, part) in parts.enumerated() {
+                if number > 0 {
+                    lines.append(line)
+                    line = AttributedString()
+                }
+                guard !part.isEmpty else { continue }
+                var piece = AttributedString(String(part))
+                piece.foregroundColor = color
+                line.append(piece)
+            }
+            position = offset
+            index = end
         }
-        lines.append(AttributedString(highlighted[start...]))
+        let sorted = tokens(code, language: language, theme: theme).sorted { $0.range.location < $1.range.location }
+        for token in sorted {
+            let lower = token.range.location, upper = NSMaxRange(token.range)
+            // As `text`: a token that overlaps the last one, or does not fall on whole scalars, is not coloured.
+            guard lower >= position, upper > lower, upper <= utf16.count else { continue }
+            let start = utf16.index(index, offsetBy: lower - position)
+            let end = utf16.index(start, offsetBy: upper - lower)
+            guard start.samePosition(in: code.unicodeScalars) != nil, end.samePosition(in: code.unicodeScalars) != nil
+            else { continue }
+            append(to: start, offset: lower, color: theme.ink)
+            append(to: end, offset: upper, color: token.color)
+        }
+        append(to: code.endIndex, offset: utf16.count, color: theme.ink)
+        lines.append(line)
         return lines
     }
 

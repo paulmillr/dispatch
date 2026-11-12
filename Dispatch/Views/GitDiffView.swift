@@ -10,6 +10,8 @@ import SwiftUI
 /// The same reader fills the lines git leaves out between hunks when one of those rows is opened.
 struct GitDiffView: View {
     let diff: GitDiff
+    /// `diff`'s lines as the data layer parsed them off the main thread; nil parses them here.
+    var parsed: GitDiffParsed?
     @Binding var mode: GitDiffMode
     /// Long lines wrap to the pane rather than scroll sideways; nil wraps in a compact split (`wraps`).
     @Binding var wrap: Bool?
@@ -37,6 +39,8 @@ struct GitDiffView: View {
     /// Diff | Source as glyphs.
     @Environment(\.filesCompact) private var compact
     @State private var model = GitDiffLines()
+    /// Bumped when a hunk coloured in the background is ready: its rows draw again, in colour.
+    @State private var coloredHunks = 0
     @State private var opened: Set<Int> = []
     /// The `Gap.hunk` of every gap between hunks the user opened; its lines show once the file is read.
     @State private var openedGaps: Set<Int> = []
@@ -56,7 +60,8 @@ struct GitDiffView: View {
     }
 
     var body: some View {
-        model.prepare(diff, theme: theme)
+        model.prepare(diff, parsed: parsed, theme: theme)
+        _ = coloredHunks
         let comments = review?.comments ?? []
         let draft = review?.draft
         let layout = model.reviewLayout(displayRows(comments: comments, draft: draft), comments: comments, draft: draft,
@@ -649,7 +654,7 @@ struct GitDiffView: View {
         default: .clear
         }
         let sign = line.kind == .added ? "+" : line.kind == .removed ? "−" : ""
-        let code = marked(model.attributed(index, theme: theme))
+        let code = marked(model.attributed(index, theme: theme) { coloredHunks &+= 1 })
         // The 11 pt numbers sit on the 12.5 pt code's baseline.
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if inset > 0 { Color.clear.frame(width: inset, height: 1) }
@@ -786,7 +791,7 @@ struct GitSourceText: Equatable {
 
 /// The parsed diff, its colour and its widths, computed once per diff and theme (as `FileTextLines` does for the
 /// preview), never per frame. A hunk is coloured when one of its rows first draws, so a 2 MB diff costs only the
-/// hunks scrolled to.
+/// hunks scrolled to; a long one is coloured off the main thread, its rows in plain ink until then.
 @MainActor final class GitDiffLines {
     private struct Key: Equatable {
         let diff: GitDiff
@@ -806,7 +811,15 @@ struct GitSourceText: Equatable {
     private(set) var presentation = GitDiffPresentation()
     /// The hunk each line belongs to.
     private var hunkOf: [Int] = []
+    /// Each hunk's text in UTF-8 bytes, which decides where it is coloured.
+    private var hunkBytes: [Int] = []
     private var colored: [Int: [AttributedString]] = [:]
+    /// The hunks being coloured off the main thread, and the colouring they belong to: a new diff or theme starts
+    /// another, and what the last one finishes is dropped.
+    private var coloring: Set<Int> = []
+    private var coloringGeneration = 0
+    /// A hunk longer than this is coloured off the main thread: lexing 64 KB took about 30 ms, a few frames.
+    static let inlineColoring = 8 * 1024
     private var widestDiff = 0
     private var digitsDiff = 1
     private var rowsKey: RowsKey?
@@ -816,18 +829,25 @@ struct GitSourceText: Equatable {
     private var sourceRows: [GitDiffDisplayRow] = []
     private var widestSource = 0
 
-    func prepare(_ diff: GitDiff, theme: ChatTheme) {
+    /// `parsed`: the diff's lines as the data layer parsed them off the main thread, else parsed here.
+    func prepare(_ diff: GitDiff, parsed: GitDiffParsed? = nil, theme: ChatTheme) {
         let key = Key(diff: diff, theme: theme)
         guard key != self.key else { return }
         let reparse = self.key?.diff != diff
         self.key = key
         colored = [:]
+        coloring = []
+        coloringGeneration &+= 1
         sourceText = nil
         guard reparse else { return }
         reviewKey = nil
         foldsKey = nil
-        presentation = diff.binary ? GitDiffPresentation() : GitDiffPresentation.parse(diff.text)
+        presentation = diff.binary ? GitDiffPresentation()
+            : parsed?.presentation ?? GitDiffPresentation.parse(diff.text)
         hunkOf = Array(repeating: 0, count: presentation.lines.count)
+        hunkBytes = presentation.hunks.map { hunk in
+            presentation.lines[hunk.lines].reduce(0) { $0 + $1.text.utf8.count + 1 }
+        }
         for (number, hunk) in presentation.hunks.enumerated() { for index in hunk.lines { hunkOf[index] = number } }
         widestDiff = presentation.lines.reduce(0) { max($0, min($1.text.count, FileTextLines.lineLimit + 2)) }
         digitsDiff = String(presentation.lines.reduce(0) { max($0, $1.old ?? 0, $1.new ?? 0) }).count
@@ -1014,8 +1034,11 @@ struct GitSourceText: Equatable {
     }
 
     /// A diff line's text in the file's colours. Each side of its hunk is highlighted as one text, so a string or
-    /// comment that spans lines colours through, and a removed line never changes how an added one lexes.
-    func attributed(_ index: Int, theme: ChatTheme) -> AttributedString {
+    /// comment that spans lines colours through, and a removed line never changes how an added one lexes. A hunk over
+    /// `inlineColoring` is coloured off the main thread: its lines come back in plain ink, and `colored` is called on
+    /// the main thread once its colours are ready.
+    func attributed(_ index: Int, theme: ChatTheme,
+                    colored ready: @escaping @MainActor () -> Void = {}) -> AttributedString {
         let line = presentation.lines[index]
         if line.text.isEmpty { return AttributedString(" ") }
         if line.text.utf8.count > FileTextLines.lineLimit {
@@ -1027,15 +1050,40 @@ struct GitSourceText: Equatable {
             }
         }
         let number = hunkOf[index]
-        let lines = colored[number] ?? color(presentation.hunks[number], theme: theme)
-        colored[number] = lines
-        let offset = index - presentation.hunks[number].lines.lowerBound
-        return lines.indices.contains(offset) ? lines[offset] : AttributedString(TextRendering.visible(line.text))
+        let hunk = presentation.hunks[number]
+        let offset = index - hunk.lines.lowerBound
+        if let lines = colored[number] {
+            return lines.indices.contains(offset) ? lines[offset] : AttributedString(TextRendering.visible(line.text))
+        }
+        let path = key?.diff.path ?? ""
+        let members = Array(presentation.lines[hunk.lines])
+        guard hunkBytes[number] > Self.inlineColoring else {
+            let lines = Self.color(members, path: path, theme: theme)
+            colored[number] = lines
+            return lines.indices.contains(offset) ? lines[offset] : AttributedString(TextRendering.visible(line.text))
+        }
+        if coloring.insert(number).inserted {
+            let generation = coloringGeneration
+            Task { [weak self] in
+                let lines = await Self.colorAway(members, path: path, theme: theme)
+                guard let self, self.coloringGeneration == generation else { return }
+                self.coloring.remove(number)
+                self.colored[number] = lines
+                ready()
+            }
+        }
+        var plain = AttributedString(TextRendering.visible(line.text))
+        plain.foregroundColor = theme.ink
+        return plain
     }
 
-    private func color(_ hunk: GitDiffPresentation.Hunk, theme: ChatTheme) -> [AttributedString] {
-        let path = key?.diff.path ?? ""
-        let lines = Array(presentation.lines[hunk.lines])
+    @concurrent nonisolated private static func colorAway(_ lines: [GitDiffPresentation.Line], path: String,
+                                                          theme: ChatTheme) async -> [AttributedString] {
+        color(lines, path: path, theme: theme)
+    }
+
+    nonisolated private static func color(_ lines: [GitDiffPresentation.Line], path: String,
+                                          theme: ChatTheme) -> [AttributedString] {
         var result = lines.map { line -> AttributedString in
             var text = AttributedString(TextRendering.visible(line.text))
             text.foregroundColor = theme.ink

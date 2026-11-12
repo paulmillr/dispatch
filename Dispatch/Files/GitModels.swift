@@ -251,4 +251,16 @@ struct GitDiffState: Hashable, Sendable {
     var diff: GitDiff?
     var error: String?
     var loading = false
+    /// `diff`'s lines, parsed where it was read, off the main thread (nil: the view parses them).
+    var parsed: GitDiffParsed?
+}
+
+/// A diff's lines parsed before the view draws it, so a large diff (48,000 lines took 11 ms, 21,000 long ones 23 ms)
+/// is never parsed in a frame. It follows from `GitDiff.text` alone, which the state compares already, so it takes
+/// no part in equality and costs no line-by-line comparison.
+struct GitDiffParsed: Hashable, Sendable {
+    let presentation: GitDiffPresentation
+
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
+    func hash(into hasher: inout Hasher) {}
 }

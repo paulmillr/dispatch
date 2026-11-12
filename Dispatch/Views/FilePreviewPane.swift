@@ -106,9 +106,11 @@ private struct FilePreviewDetail: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(theme.border).frame(height: 1)
+            // On glass the rule's room without the rule, so the title stays level with the list's column names.
+            Rectangle().fill(LiquidGlassStore.shared.active ? Color.clear : theme.border).frame(height: 1)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .top) { FilesScrollEdge() }
                 .contentShape(Rectangle())
                 .focusable()
                 .focusEffectDisabled()
@@ -194,7 +196,7 @@ private struct FilePreviewDetail: View {
         .padding(.leading, bar ? 12 : 14).padding(.trailing, 14)
         // The list's column header beside it is as tall (FilesColumns.headerHeight); as the bar, the files header is.
         .frame(height: bar ? FilesHeader.height(typography) : FilesColumns.headerHeight(typography))
-        .background { if bar { Chrome.window } }
+        .background { if bar && !LiquidGlassStore.shared.active { Chrome.window } }
         .overlay(alignment: .bottom) { if bar && !LiquidGlassStore.shared.active { Chrome.palette.separator.frame(height: 1) } }
         .background {
             // Edit › Find reaches the preview through `findRequest`; this keeps ⌘F working while the preview has
@@ -374,15 +376,16 @@ private struct FilePreviewDetail: View {
             }
         case .text(let text, let language):
             FileTextPreview(owner: owner, content: .text(text, language: language), wrap: wrap, lineNumbers: lineNumbers,
-                            find: find, highlightsQuery: find.open)
+                            find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text))
         case .markdown(let text):
             if rendered {
-                FileMarkdownView(session: session, path: preview.path, text: text)
+                FileMarkdownView(session: session, path: preview.path, text: text,
+                                 keeper: .init(preview: preview, key: .rendered))
                     .environment(\.chatSearchQuery, find.open ? find.query : "")
                     .accessibilityIdentifier("file-preview-markdown")
             } else {
                 FileTextPreview(owner: owner, content: .text(text, language: "markdown"), wrap: wrap, lineNumbers: lineNumbers,
-                                find: find, highlightsQuery: find.open)
+                                find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text))
             }
         case .image(let data, let pixels):
             FileImagePreview(data: data, revision: preview.revision, pixelSize: pixels, zoom: $zoom, focused: focused,
@@ -403,7 +406,7 @@ private struct FilePreviewDetail: View {
                 VStack(spacing: 0) {
                     headBar("First 64 KB of \(FilesFormatting.size(size))")
                     FileTextPreview(owner: owner, content: .text(head, language: preview.name), wrap: wrap, lineNumbers: lineNumbers,
-                                    find: find, highlightsQuery: find.open)
+                                    find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .head))
                 }
             } else {
                 FileLargeNotice(title: "Too large to preview here",

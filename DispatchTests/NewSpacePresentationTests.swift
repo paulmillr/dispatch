@@ -392,7 +392,7 @@ final class NewSpacePresentationTests: XCTestCase {
             window.sendEvent(try PresentationTestSupport.mouseEvent(.mouseMoved, in: window, at: to))
         }
         let identifier = "host-new-space-\(remote.hostID.rawValue)"
-        try await TestSupport.eventually { controls() == ["sidebar-new-space"] }
+        try await TestSupport.eventually { Set(controls()) == ["sidebar-new-space", "host-new-space-local"] }
         let heading = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("host-card-\(remote.hostID.rawValue)", in: window).first)
         try point(NSPoint(x: heading.minX + 10, y: heading.midY))
         try await TestSupport.eventually(diagnostic: "controls: \(controls())") { controls().contains(identifier) }
@@ -407,10 +407,10 @@ final class NewSpacePresentationTests: XCTestCase {
         try await TestSupport.eventually(diagnostic: "controls: \(controls())") { !controls().contains(identifier) }
     }
 
-    /// In tree order New Space is the header's round plus (no heading has one): it makes a space where ⌘N would, on the
-    /// shown space's host (other hosts from its menu), and the tree's headings keep their discs. Flat order has none in
-    /// its header: "+ space" and, while a remote host is connected, "+ local" follow the last space.
-    func testTreeHasTheHeadersPlusAndFlatItsListButtons() async throws {
+    /// The sidebar's header has no New Space in either order: "+ space" and, while a remote host is connected, "+ local"
+    /// follow the last space (in tree order the last host's group). "+ space" makes a space where ⌘N would, on the shown
+    /// space's host, and the tree's headings keep their discs.
+    func testBothOrdersHaveTheListButtonsAndNoHeaderPlus() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let controller = AppDelegate(), workspace = controller.workspace
@@ -441,33 +441,10 @@ final class NewSpacePresentationTests: XCTestCase {
             root.layoutSubtreeIfNeeded()
             return PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
         }
-        try await TestSupport.eventually(diagnostic: "controls: \(controls().map { $0.accessibilityIdentifier() })") {
-            controls().map { $0.accessibilityIdentifier() } == ["sidebar-new-space"]
-        }
-        let treeText = try await PresentationTestSupport.capture(window, named: "tree-header-plus", in: "new-space-validation").text()
-        XCTAssertTrue(treeText.contains("LOCAL"), "Headings in capitals: \(treeText)")
-        // The plus heads the list, above every space.
-        let plus = try XCTUnwrap(controls().first)
-        let plusFrame = root.convert(plus.bounds, from: plus)
-        for row in PresentationTestSupport.views(of: ReorderTrackingView.self, in: root) where row.configuration.item == .space(local) {
-            let rowFrame = root.convert(row.bounds, from: row)
-            XCTAssertTrue(root.isFlipped ? plusFrame.maxY <= rowFrame.minY + 1 : plusFrame.minY >= rowFrame.maxY - 1,
-                          "The plus is the header's: \(plusFrame) over \(rowFrame)")
-        }
-        workspace.selectSpace(remote.id)
-        plus.performClick(nil)
-        XCTAssertEqual(workspace.spaces.count, 3)
-        XCTAssertEqual(workspace.current?.hostID, remote.hostID, "On the shown space's host, as ⌘N")
-        workspace.selectSpace(local)
-        plus.performClick(nil)
-        XCTAssertEqual(workspace.spaces.count, 4)
-        XCTAssertEqual(workspace.current?.hostID, .local)
-        controller.settings.values.spaceOrder = .flat
-        for style in SidebarStyle.bySize {
-            controller.settings.values.sidebarStyle = style
-            // Under the last space, not in the header, once the style's layout settled.
+        // Under every space, once the order's layout settled.
+        func placed(_ label: String) async throws {
             var placed = ""
-            try await TestSupport.eventually(diagnostic: "\(style): \(placed)") {
+            try await TestSupport.eventually(diagnostic: "\(label): \(placed)") {
                 let buttons = controls()
                 let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root).filter {
                     if case .space = $0.configuration.item { return true } else { return false }
@@ -480,6 +457,23 @@ final class NewSpacePresentationTests: XCTestCase {
                         rows.allSatisfy { root.isFlipped ? frame.minY >= $0.maxY - 1 : frame.maxY <= $0.minY + 1 }
                     }
             }
+        }
+        try await placed("tree")
+        let treeText = try await PresentationTestSupport.capture(window, named: "tree-list-buttons", in: "new-space-validation").text()
+        XCTAssertTrue(treeText.contains("LOCAL"), "Headings in capitals: \(treeText)")
+        let plus = try XCTUnwrap(controls().first { $0.accessibilityIdentifier() == "sidebar-new-space" })
+        workspace.selectSpace(remote.id)
+        plus.performClick(nil)
+        XCTAssertEqual(workspace.spaces.count, 3)
+        XCTAssertEqual(workspace.current?.hostID, remote.hostID, "On the shown space's host, as ⌘N")
+        workspace.selectSpace(local)
+        plus.performClick(nil)
+        XCTAssertEqual(workspace.spaces.count, 4)
+        XCTAssertEqual(workspace.current?.hostID, .local)
+        controller.settings.values.spaceOrder = .flat
+        for style in SidebarStyle.bySize {
+            controller.settings.values.sidebarStyle = style
+            try await placed("\(style)")
         }
         let flatText = try await PresentationTestSupport.capture(window, named: "flat-list-buttons", in: "new-space-validation").text()
         XCTAssertTrue(flatText.contains("space") && flatText.contains("local"), flatText)
@@ -494,7 +488,7 @@ final class NewSpacePresentationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close(); window.contentView = nil }
-        window.contentView = NSHostingView(rootView: NewSpaceButton(workspace: workspace)
+        window.contentView = NSHostingView(rootView: NewSpaceListButton(workspace: workspace)
             .frame(width: 280, height: 60))
         window.makeKeyAndOrderFront(nil)
         let root = try XCTUnwrap(window.contentView)

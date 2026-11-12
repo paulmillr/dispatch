@@ -261,6 +261,17 @@ final class HostRegistry {
         assignColors()
     }
 
+    /// Accounts the saved connections name for hosts that recorded none (`HostSessionStore.Snapshot.accounts`): a
+    /// login split from its machine without one, a host still saved under its machine. A reconnect keeps its host's
+    /// record, so this is how such a host comes to say its account beside another login on its machine.
+    func learn(accounts: [HostID: String]) {
+        var changed = false
+        for (host, account) in accounts where records[host] != nil && records[host]?.account == nil {
+            records[host]?.account = account; changed = true
+        }
+        if changed { recordsChanged() }
+    }
+
     /// Sidebar tree order. Local takes part so it can move below remote hosts.
     func move(_ host: HostID, relativeTo target: HostID, after: Bool) {
         guard host != target, records[host] != nil, records[target] != nil else { return }

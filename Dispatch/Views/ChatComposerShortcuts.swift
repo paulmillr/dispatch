@@ -8,7 +8,8 @@ struct ChatComposerShortcuts: View {
     @Binding var presented: Bool
 
     var body: some View {
-        // The ⌘/ chip sits beside the paperclip and microphone: as tall and heavy as those symbols, in their square.
+        // The ⌘/ chip sits beside the paperclip and microphone: as tall and heavy as those symbols, in their square. A
+        // click opens it, as the sidebar's does; hovering does not.
         ShortcutSheetButton(presented: $presented,
                             keyFont: .system(size: theme.typography.detailSize + 2, weight: .medium, design: .monospaced),
                             ink: theme.ink, muted: theme.muted, label: "Composer shortcuts", identifier: "chat-shortcuts",
@@ -16,55 +17,74 @@ struct ChatComposerShortcuts: View {
             ShortcutSheet(style: .init(ink: theme.ink, muted: theme.muted, background: theme.sidebar,
                                        colorScheme: theme.isDark ? .dark : .light, font: theme.typography.detail,
                                        keyFont: AppFont.shortcut(size: theme.typography.codeDetailSize)),
-                          primary: [.init(rows: composer)],
-                          more: [.init(rows: moreComposer + attachmentRows),
-                                 .init(title: "Navigation", rows: ShortcutRow.navigation),
-                                 .init(title: "Window", rows: ShortcutRow.window)])
+                          primary: composer.map { .init(rows: $0) },
+                          more: moreComposer.map { .init(rows: $0) }
+                            + Self.titled("Workspace", ShortcutRow.navigationGroups)
+                            + Self.titled("Window", ShortcutRow.windowGroups))
                 .accessibilityIdentifier("chat-shortcut-sheet")
         }
     }
 
-    private var composer: [ShortcutRow] {
+    /// Groups under one heading: the first carries it, the rest follow a little apart.
+    private static func titled(_ title: String, _ groups: [[ShortcutRow]]) -> [ShortcutGroup] {
+        groups.enumerated().map { index, rows in .init(title: index == 0 ? title : nil, rows: rows) }
+    }
+
+    /// The composer's everyday keys, a chord a row and a line each, in groups: sending; editing, stopping and leaving;
+    /// dictation.
+    private var composer: [[ShortcutRow]] {
         let multiline = session.drafts.shape.multiline
-        return (multiline ? [.init("⏎", "newline · insert a new line")] : []) + [
-            .init(multiline ? "⌘⏎" : "⏎", !session.busy ? "send · start a new turn" : steers ? steer : queue),
+        let send: [ShortcutRow] = (multiline ? [.init("⏎", "new line")] : []) + [
+            .init(multiline ? "⌘⏎" : "⏎", !session.busy ? "send" : steers ? steer : queue),
             .init("⌥⌘⏎", steers ? queue : steer),
-            .init("⌥⏎ / ⇧⏎", "insert a newline"),
-            .init("⌘E", multiline ? "editor · return to single-line mode" : "editor · Return inserts a newline"),
+            .init("⌥⏎", "new line"),
+            .init("⇧⏎", "also"),
+        ]
+        let edit: [ShortcutRow] = [
+            .init("⌘E", multiline ? "back to one line" : "editor · ⏎ makes new lines"),
             .init("⌘S", "save draft"),
-            .init("/", "commands · type / to browse agent commands"),
-            multiline && !session.busy ? .init("⎋", "exit editor · keep your draft")
-                : .init("⎋ twice", "stop · end the current turn, keeping your draft"),
-        ] + (DictationStore.shared.shortcut.map { key in [
-            .init("hold \(key.name)", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
-            .init("tap \(key.name)", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
-        ] } ?? [])
+            .init("/", "agent commands"),
+            multiline && !session.busy ? .init("⎋", "leave the editor, keep the draft") : .init("⎋ twice", "stop the turn, keep the draft"),
+            .init("⌃D twice", "close tab, quit agent · empty draft"),
+        ]
+        let voice: [ShortcutRow] = DictationStore.shared.shortcut.map { key in [
+            // The key alone, so it stands in the modifiers' column; how to press it leads the words.
+            .init(key.name, "hold: dictate · ⏎ sends, ⎋ cancels"),
+            .init(key.name, "tap: talk · “\(DictationStore.shared.wakeWord), send”, “… stop”"),
+        ] } ?? []
+        return [send, edit, voice].filter { !$0.isEmpty }
     }
 
-    private var queue: String { "queue · runs after the current turn" }
-    private var steer: String { "steer · adds it to the current turn now" }
+    private var queue: String { "queue · runs after this turn" }
+    private var steer: String { "steer · joins this turn now" }
 
-    /// Only where the conversation's helper keeps attachments (the paperclip shows then too).
-    private var attachmentRows: [ShortcutRow] {
-        session.acceptsAttachments ? [.init("⇧⌘A", "attach files or images · or drop or paste them")] : []
-    }
-
-    private var moreComposer: [ShortcutRow] { [
-        .init("⌘⏎ / ⌃⏎", "send from either editor mode · follows your queue/steer setting"),
-        .init("⏎", "jump to new messages · empty single-line draft"),
-        .init("⇧⌘M", "choose model · in single-line mode"),
-        .init("⇧⌘E", "choose effort · in single-line mode"),
-        .init("⌥⇧⌘E", "cycle effort · in single-line mode"),
-        .init("↑↓ / ⇥ / ⏎", "select / complete an agent command"),
-        .init("⇥ / ⇧⇥", "indent / outdent text"),
-        .init("⌘[ / ⌘]", "outdent / indent lines in editor mode"),
-        .init("↑ / ↓", "select queued messages when the draft is empty"),
-        .init("E", "edit the selected queued message"),
-        .init("⌥⌘⏎", "send the selected queued message now"),
-        .init("⌘⌫", "delete the selected queued message"),
-        .init("⎋", "clear queue selection or cancel a queued edit first"),
-        .init("⇧⌘⏎ / ⇧⌘⌫", "allow once / deny the newest permission request"),
-        .init("⌃D twice", "close tab and quit agent, or show Terminal if busy · empty single-line draft only"),
+    /// Under More, in groups: sending and choosing; commands and indents; the queue; attachments and permissions.
+    private var moreComposer: [[ShortcutRow]] { [
+        [
+            .init("⌘⏎", "send from either mode"),
+            .init("⌃⏎", "also"),
+            .init("⏎", "jump to new messages · empty draft"),
+            .init("⇧⌘M", "choose model · one-line mode"),
+            .init("⇧⌘E", "choose effort · one-line mode"),
+            .init("⌥⇧⌘E", "next effort · one-line mode"),
+        ],
+        [
+            .init("↑ / ↓", "pick an agent command"),
+            .init("⇥ / ⏎", "complete it"),
+            .init("⇥", "indent"),
+            .init("⇧⇥", "outdent"),
+            .init("⌘[ / ⌘]", "outdent / indent lines · editor"),
+        ],
+        [
+            .init("↑ / ↓", "pick a queued message · empty draft"),
+            .init("E", "edit it"),
+            .init("⌥⌘⏎", "send it now"),
+            .init("⌘⌫", "delete it"),
+            .init("⎋", "leave the queue or the edit"),
+        ],
+        (session.acceptsAttachments ? [ShortcutRow("⇧⌘A", "attach files or images · or drop or paste")] : []) + [
+            .init("⇧⌘⏎ / ⇧⌘⌫", "allow once / deny the newest request"),
+        ],
     ] }
 }
 

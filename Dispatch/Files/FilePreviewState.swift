@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// What the right pane shows for the selected row. The preview loader fills
@@ -31,6 +32,9 @@ import Foundation
     var encoding: String?
     /// A read of the file as it changed on disk is under way (`FilePreviewLoader.refresh`).
     @ObservationIgnored var refreshing = false
+    /// Where each of its views was scrolled (`FilePreviewScrollKeeper.Key`): the file comes back where it was left when
+    /// its view goes and returns (the split showing another tab, the pane hiding), while it stays selected.
+    @ObservationIgnored var scroll: [FilePreviewScrollKeeper.Key: CGPoint] = [:]
 
     init(path: String, entry: FileEntry?) {
         self.path = path

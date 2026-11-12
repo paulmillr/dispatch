@@ -248,6 +248,10 @@ struct ChatSelectableText: NSViewRepresentable {
         // asks the hosting views for another constraint pass. In a long transcript inside the
         // window's nested hosting views, AppKit stopped with "repeated Update Constraints passes".
         let view = SelectableTextView(usingTextLayoutManager: false)
+        // Draws a selection across blocks in the active colour in every block, not only the focused one.
+        let layout = GroupSelectionLayoutManager()
+        layout.owner = view
+        view.textContainer?.replaceLayoutManager(layout)
         ChatTextMetrics.views += 1
         view.isEditable = false; view.isSelectable = true; view.drawsBackground = false
         view.textContainerInset = .zero; view.textContainer?.lineFragmentPadding = 0
@@ -440,14 +444,63 @@ struct ChatSelectableText: NSViewRepresentable {
             selection.selectAll()
         }
         override func copy(_ sender: Any?) {
-            guard selection?.isWhole == true else { return super.copy(sender) }
+            guard let text = selection?.copiedText(source: source) else { return super.copy(sender) }
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(source, forType: .string)
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        /// A plain click's drag selects across the message's blocks (`ChatMessageSelection.select`), as one text would.
+        /// A link's click, a double or triple click (words, lines), a Shift or Command click, and a drag of the
+        /// selection itself stay the text view's.
+        override func mouseDown(with event: NSEvent) {
+            guard let window, selection != nil, event.clickCount == 1,
+                  event.modifierFlags.intersection([.shift, .command, .control, .option]).isEmpty else { return super.mouseDown(with: event) }
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            if let storage = textStorage, index < storage.length, storage.attribute(.link, at: index, effectiveRange: nil) != nil {
+                return super.mouseDown(with: event)
+            }
+            if selectedRange().length > 0, NSLocationInRange(index, selectedRange()) { return super.mouseDown(with: event) }
+            trackSelection(from: event) { window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) }
+        }
+        /// The drag's loop, its events from `nextEvent` (tests hand their own).
+        func trackSelection(from event: NSEvent, nextEvent: () -> NSEvent?) {
+            guard let selection else { return }
+            window?.makeFirstResponder(self)
+            let anchor = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+            selection.select(from: (self, anchor), to: (self, anchor))
+            while let next = nextEvent() {
+                if let target = selection.target(at: next.locationInWindow, in: window) {
+                    selection.select(from: (self, anchor), to: target)
+                }
+                if next.type == .leftMouseUp { return }
+                autoscroll(with: next)
+            }
         }
         override func resignFirstResponder() -> Bool {
             let resigned = super.resignFirstResponder()
             if resigned { selection?.clear(except: nil) }
             return resigned
+        }
+    }
+    /// A block's layout: while a drag's selection spans the message's blocks in the key window, the blocks without focus
+    /// fill their part of it in the active selection colour, as the focused one does, rather than the unfocused grey.
+    final class GroupSelectionLayoutManager: NSLayoutManager {
+        weak var owner: SelectableTextView?
+        override func fillBackgroundRectArray(_ rects: UnsafePointer<NSRect>, count: Int, forCharacterRange range: NSRange, color: NSColor) {
+            // Drawing runs on the main thread, with the view.
+            nonisolated(unsafe) let owner = self.owner
+            let active = MainActor.assumeIsolated { () -> Bool in
+                guard let owner, let window = owner.window, window.isKeyWindow, owner.selection?.spans == true,
+                      window.firstResponder !== owner else { return false }
+                return (window.firstResponder as? SelectableTextView)?.selection === owner.selection
+                    && NSIntersectionRange(range, owner.selectedRange()).length > 0
+            }
+            guard active else {
+                return super.fillBackgroundRectArray(rects, count: count, forCharacterRange: range, color: color)
+            }
+            // The rects are filled with the current fill colour; `color` only names it.
+            NSColor.selectedTextBackgroundColor.setFill()
+            super.fillBackgroundRectArray(rects, count: count, forCharacterRange: range, color: .selectedTextBackgroundColor)
         }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -476,7 +529,7 @@ struct ChatSelectableText: NSViewRepresentable {
         init(open: OpenURLAction) { self.open = open }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let view = notification.object as? SelectableTextView,
-                  let selection = view.selection, selection.isWhole, !selection.applying else { return }
+                  let selection = view.selection, selection.spans, !selection.applying else { return }
             selection.clear(except: view)
         }
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -491,19 +544,92 @@ struct ChatSelectableText: NSViewRepresentable {
 @MainActor final class ChatMessageSelection {
     let views = NSHashTable<NSTextView>.weakObjects()
     private(set) var isWhole = false
+    /// A drag selected across more than one block (`select`).
+    private(set) var isSpanning = false
     private(set) var applying = false
+    /// The selection is the group's (Select All or a drag across blocks), not one view's own: it clears as a whole.
+    var spans: Bool { isWhole || isSpanning }
 
     func selectAll() {
         applying = true; defer { applying = false }
         for view in views.allObjects { view.setSelectedRange(NSRange(location: 0, length: view.string.utf16.count)) }
-        isWhole = true
+        isWhole = true; isSpanning = false
     }
     /// Drops the message-wide selection; `kept` retains the user's new selection.
     func clear(except kept: NSTextView?) {
-        guard isWhole else { return }
-        isWhole = false
+        guard spans else { return }
+        isWhole = false; isSpanning = false
         applying = true; defer { applying = false }
         for view in views.allObjects where view !== kept { view.setSelectedRange(NSRange(location: 0, length: 0)) }
+    }
+
+    /// The message's blocks in `window`, in reading order: top to bottom, then left to right (a table row's cells).
+    func ordered(in window: NSWindow?) -> [NSTextView] {
+        views.allObjects.filter { $0.window === window && window != nil }
+            .map { ($0, $0.convert($0.bounds, to: nil)) }
+            .sorted { $0.1.maxY != $1.1.maxY ? $0.1.maxY > $1.1.maxY : $0.1.minX < $1.1.minX }
+            .map(\.0)
+    }
+
+    /// The block and character a drag at `point` (window coordinates) reaches: the block under it; between blocks, the
+    /// start of the next one (so the one above is taken whole); past the last, its end.
+    func target(at point: NSPoint, in window: NSWindow?) -> (view: NSTextView, index: Int)? {
+        let blocks = ordered(in: window)
+        guard let last = blocks.last else { return nil }
+        for view in blocks {
+            let frame = view.convert(view.bounds, to: nil)
+            if frame.contains(point) { return (view, view.characterIndexForInsertion(at: view.convert(point, from: nil))) }
+            // Window coordinates rise upwards: a block whose bottom is below the point is the first one not wholly above it.
+            if frame.minY <= point.y {
+                if point.y > frame.maxY { return (view, 0) }
+                // Beside it, on its lines: the nearest character.
+                return (view, view.characterIndexForInsertion(at: view.convert(point, from: nil)))
+            }
+        }
+        return (last, last.string.utf16.count)
+    }
+
+    /// Selects from `anchor` to `target` across the blocks between them, in reading order either way; every other block
+    /// of the message is cleared.
+    func select(from anchor: (view: NSTextView, index: Int), to target: (view: NSTextView, index: Int)) {
+        let blocks = ordered(in: anchor.view.window)
+        applying = true; defer { applying = false }
+        isWhole = false
+        guard let start = blocks.firstIndex(where: { $0 === anchor.view }), let end = blocks.firstIndex(where: { $0 === target.view }) else {
+            anchor.view.setSelectedRange(NSRange(location: min(anchor.index, target.index), length: abs(anchor.index - target.index)))
+            isSpanning = false
+            return
+        }
+        let low = min(start, end), high = max(start, end)
+        for (position, view) in blocks.enumerated() {
+            let length = view.string.utf16.count
+            let range: NSRange
+            if position < low || position > high { range = NSRange(location: 0, length: 0) }
+            else if start == end { range = NSRange(location: min(anchor.index, target.index), length: abs(anchor.index - target.index)) }
+            else if position == low {
+                let from = start < end ? anchor.index : target.index
+                range = NSRange(location: from, length: length - from)
+            } else if position == high {
+                let to = start < end ? target.index : anchor.index
+                range = NSRange(location: 0, length: to)
+            } else { range = NSRange(location: 0, length: length) }
+            view.setSelectedRange(range)
+        }
+        isSpanning = start != end
+    }
+
+    /// What Copy puts on the pasteboard for the group: after Select All the message's markdown; after a drag across
+    /// blocks their selected text in reading order, a blank line between blocks; nil while one view's own selection
+    /// is all there is.
+    func copiedText(source: String) -> String? {
+        if isWhole { return source }
+        guard isSpanning, let window = views.allObjects.first(where: { $0.window != nil })?.window else { return nil }
+        let parts = ordered(in: window).compactMap { view -> String? in
+            let range = view.selectedRange()
+            guard range.length > 0 else { return nil }
+            return (view.string as NSString).substring(with: range)
+        }
+        return parts.joined(separator: "\n\n")
     }
 }
 

@@ -100,6 +100,13 @@ struct StripTab: View {
         // and remote tabs.
         .frame(width: width, height: style == .strip ? nil : Self.glassTrackHeight(typography))
         .frame(minHeight: style == .strip ? typography.expanded(30) : nil, maxHeight: style == .strip ? .infinity : nil)
+        // Hover in the tab's own shape: glass's pill, inset as the selected one's; flat strips' tab, rounded inside it.
+        .background {
+            if hovered && !glassSelected {
+                if style == .outlined { Capsule().inset(by: 2).fill(Chrome.palette.hover) }
+                else { RoundedRectangle(cornerRadius: 5).inset(by: 3).fill(Chrome.palette.hover) }
+            }
+        }
         .modifier(SelectedTabGlass(on: glassSelected))
         .overlay(alignment: .bottom) {
             if selected && style == .strip && !alone {

@@ -1902,6 +1902,21 @@ struct ChatUsage: Sendable, Equatable {
         guard let contextTokens, let contextWindow, contextWindow > 0 else { return nil }
         return min(1, max(0, 1 - Double(contextTokens) / Double(contextWindow)))
     }
+
+    /// "$0.042", as Pi's footer, "(sub)" for a subscription; nil without a cost or while nothing was spent on an API key.
+    var costText: String? {
+        guard let costUSD, costUSD > 0 || subscription else { return nil }
+        return String(format: "$%.3f", costUSD) + (subscription ? " (sub)" : "")
+    }
+
+    /// A token count as the Mac's activity popover and the phone's working row show it: "980", "12.3K", "1.2M"; "—"
+    /// when unknown.
+    static func count(_ value: Int?) -> String {
+        guard let value else { return "—" }
+        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
+        return String(value)
+    }
 }
 
 struct ChatRecord: Sendable {
@@ -1976,5 +1991,75 @@ enum AgentInput {
         guard !multiline else { return false }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.hasPrefix("/") || trimmed.hasPrefix("!")
+    }
+}
+
+/// One usage window of `chat.limits`, as the agent reports it.
+struct ChatLimitWindow: Decodable, Equatable, Sendable {
+    let name: String
+    let used: Int
+    let resets_at: TimeInterval
+
+    /// "5-hour", "Weekly"; another length (`window_<minutes>`, Codex) in the largest whole unit.
+    var title: String {
+        if name == "five_hour" { return "5-hour" }
+        if name == "seven_day" { return "Weekly" }
+        guard name.hasPrefix("window_"), let minutes = Int(name.dropFirst("window_".count)), minutes > 0 else { return name }
+        if minutes % 1440 == 0 { return "\(minutes / 1440)-day" }
+        if minutes % 60 == 0 { return "\(minutes / 60)-hour" }
+        return "\(minutes)-minute"
+    }
+    var resets: Date { Date(timeIntervalSince1970: resets_at) }
+
+    /// The window's length in minutes (`five_hour` 300, `seven_day` 10080, `window_<minutes>`); nil for a name not known.
+    var minutes: Int? {
+        if name == "five_hour" { return 300 }
+        if name == "seven_day" { return 10080 }
+        guard name.hasPrefix("window_") else { return nil }
+        return Int(name.dropFirst("window_".count)).flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// "resets in 2h 18m" within a day, then "resets Thu 9:40am".
+    func resetText(now: Date, timeZone: TimeZone = .current) -> String {
+        let left = resets.timeIntervalSince(now)
+        if left < 24 * 3600 { return "resets in " + ChatTranscript.elapsed(max(0, left)) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.amSymbol = "am"; formatter.pmSymbol = "pm"
+        formatter.dateFormat = "EEE h:mma"
+        return "resets " + formatter.string(from: resets)
+    }
+}
+
+/// What the Mac's popover and the phone's working row say about one agent's limits.
+struct ChatLimitsWording: Equatable {
+    let agent: String
+    let title: String
+    let plan: String
+    let explanation: String
+    let none: String
+
+    /// A Pi extension the user installed.
+    static func `extension`(_ name: String) -> Self {
+        Self(agent: name, title: "Show limits from \(name)?", plan: "From \(name)",
+             explanation: "This Pi extension, which you installed, contacts its provider when you open this popover, at most once a minute. Dispatch only shows what it reports.",
+             none: "\(name) reported no limits.")
+    }
+
+    /// `opening`: what the user does that reads the limits ("open this popover" on the Mac, "unfold the working row" on
+    /// the phone); `pace`: how often at most ("once a minute" on the Mac, "every 10 minutes" on the phone).
+    static func of(_ agentID: String, opening: String = "open this popover", pace: String = "once a minute") -> Self? {
+        switch agentID {
+        case "claude":
+            Self(agent: "Claude Code", title: "Show Claude Code limits here?", plan: "Your Claude plan",
+                 explanation: "Dispatch asks Claude Code only when you \(opening), at most \(pace). It sets Claude Code's status line for a moment, then puts it back.",
+                 none: "No limits to show. Claude Code reports them for Pro, Max and Ultra plans.")
+        case "codex":
+            Self(agent: "Codex", title: "Show Codex limits here?", plan: "Your ChatGPT plan",
+                 explanation: "Dispatch asks Codex only when you \(opening), at most \(pace). Codex then asks OpenAI for your plan's usage.",
+                 none: "No limits to show. Codex reports them when you sign in with ChatGPT.")
+        default: nil
+        }
     }
 }

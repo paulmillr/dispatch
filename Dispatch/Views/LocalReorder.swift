@@ -38,7 +38,6 @@ final class ReorderTrackingView: NSView {
     private static let targets = NSHashTable<ReorderTrackingView>.weakObjects()
     let hover = SpaceHoverPresenter()
     private var hoverTracking: NSTrackingArea?
-    private var hovered = false { didSet { needsDisplay = true } }
     var configuration: LocalReorder
     private(set) var insertionAfter: Bool? { didSet { needsDisplay = true } }
 
@@ -60,11 +59,12 @@ final class ReorderTrackingView: NSView {
         addTrackingArea(area); hoverTracking = area
     }
 
+    // No hover fill of its own: the row or tab under it draws one in its own shape (a rectangle here would show past
+    // their rounded corners).
     override func mouseEntered(with event: NSEvent) {
-        hovered = true
         if configuration.spaceHover != nil { hover.schedule(from: self) }
     }
-    override func mouseExited(with event: NSEvent) { hovered = false; hover.dismiss() }
+    override func mouseExited(with event: NSEvent) { hover.dismiss() }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         hover.dismiss()
         super.viewWillMove(toWindow: newWindow)
@@ -79,10 +79,6 @@ final class ReorderTrackingView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if hovered, configuration.spaceHover != nil {
-            NSColor.white.withAlphaComponent(0.04).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
-        }
         guard let after = insertionAfter else { return }
         NSColor(white: 0.8, alpha: 1).setFill()
         switch configuration.edge {

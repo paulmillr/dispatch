@@ -350,7 +350,7 @@ struct SpaceTabRow: View {
                     if hovered {
                         Button { close() } label: { CloseGlyph() }
                             .buttonStyle(.plain)
-                            .help(tab.window ? "Close tab · detaches if jobs are running" : "Close tab")
+                            .help(tab.window ? "Close tab · asks first if something runs there" : "Close tab")
                             .accessibilityLabel("Close \(name)")
                     } else {
                         AgentActivityGlyph(tabIDs: tab.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
@@ -422,7 +422,7 @@ struct SpaceTabRow: View {
         if tab.window { workspace.selectWindow(tab.id) } else { workspace.selectTab(tab.id) }
     }
 
-    /// As the strip tab's close: a window detaches if jobs are running.
+    /// As the strip tab's close: a window asks first if something runs there.
     private func close() {
         if tab.window { controller.closeWindow(tab.id) } else { controller.closeTab(tab.id) }
     }
@@ -492,7 +492,7 @@ struct SpaceTabCard: View {
                         if tab.window { controller.closeWindow(tab.id) } else { controller.closeTab(tab.id) }
                     } label: { Image(systemName: "xmark").font(.system(size: metrics.detailSize, weight: .semibold)) }
                         .buttonStyle(.plain)
-                        .help(tab.window ? "Close tab · detaches if jobs are running" : "Close tab")
+                        .help(tab.window ? "Close tab · asks first if something runs there" : "Close tab")
                         .accessibilityLabel("Close \(name)")
                 } else if statusInOrb {
                     AgentActivityGlyph(tabIDs: tab.surfaceIDs, connecting: connecting, size: metrics.activitySize).fixedSize()

@@ -16,8 +16,55 @@ final class PrefixKeysTests: XCTestCase {
         let rows = ShortcutRow.prefixRows(table)
         XCTAssertEqual(rows.first?.key, "⌃A 0…1")
         XCTAssertTrue(rows.contains { $0.key == "⌃A c" && $0.explanation == "new tab" })
-        XCTAssertTrue(rows.contains { $0.key == "⌃A y" && $0.explanation.contains("which Dispatch can't run") })
+        XCTAssertTrue(rows.contains { $0.key == "⌃A y" && $0.explanation.contains("can't run") })
         XCTAssertEqual(rows.last?.key, "⌃A ⌃A")
+    }
+
+    /// The ⌘/ sheet's key names: modifiers join their key with "+", a word's hyphen and a sentence's space stay.
+    func testShortcutSheetNamesKeys() {
+        let named = ShortcutKeyStyle.named
+        XCTAssertEqual(named("⇧⌘C"), "shift+cmd+C")
+        XCTAssertEqual(named("⌃⌘1…5"), "ctrl+cmd+1…5")
+        XCTAssertEqual(named("⌘[ / ⌘]"), "cmd+[ / cmd+]")
+        XCTAssertEqual(named("⌃⇥ / ⌃⇧⇥"), "ctrl+tab / ctrl+shift+tab")
+        XCTAssertEqual(named("⌘+ / ⌘- / ⌘0"), "cmd++ / cmd+- / cmd+0")
+        XCTAssertEqual(named("⌘-click"), "cmd-click")
+        XCTAssertEqual(named("open a link · hold ⌘ to see where"), "open a link · hold cmd to see where")
+        XCTAssertEqual(named("⌥↓ / ⌥↑"), "opt+down / opt+up")
+        XCTAssertEqual(named("⇧⌘⏎"), "shift+cmd+return")
+        XCTAssertEqual(named("↑↓ / ⎋"), "up down / esc")
+        XCTAssertEqual(named("right-click"), "right-click")
+    }
+
+    /// The sheet's two key columns: modifiers flush against the key, shared modifiers once, a prefix in the modifiers'
+    /// place; a pair with different modifiers spans both, and a word with ⌘ in it is all key.
+    func testShortcutSheetSplitsChordsIntoColumns() {
+        func chord(_ key: String) -> [String]? { ShortcutRow(key, "").chord.map { [$0.modifiers, $0.key] } }
+        XCTAssertEqual(chord("⇧⌘1…9"), ["⇧⌘", "1…9"])
+        XCTAssertEqual(chord("⌥⌘[ ]"), ["⌥⌘", "[ ]"])
+        XCTAssertEqual(chord("⌘\\"), ["⌘", "\\"])
+        XCTAssertEqual(chord("⌥↓ / ⌥↑"), ["⌥", "↓ / ↑"])
+        XCTAssertEqual(chord("⌘+ / ⌘- / ⌘0"), ["⌘", "+ / - / 0"])
+        XCTAssertEqual(chord("⌃B c"), ["⌃B", "c"])
+        XCTAssertEqual(chord("⌘-click"), ["", "⌘-click"])
+        XCTAssertEqual(chord("right ⌘"), ["right ⌘", ""])
+        XCTAssertEqual(chord("⌃1…4, 6, 8"), ["⌃", "1…4, 6, 8"])
+        XCTAssertEqual(chord("⌃B 0…9"), ["⌃B", "0…9"])
+        XCTAssertEqual(chord("⎋ twice"), ["", "⎋ twice"])
+        XCTAssertNil(chord("⌥⏎ / ⇧⏎"))
+        XCTAssertNil(chord("⇥ / ⇧⇥"))
+    }
+
+    /// The sheet's first rows are the everyday ones; the rest wait under More.
+    func testShortcutSheetSplitsEverydayKeysFromMore() {
+        let main = ShortcutRow.navigation.map(\.key), more = ShortcutRow.windowRows(KeyGroups()).map(\.key)
+        for key in ["⌘N", "⇧⌘N", "⌘T", "⌘W", "⇧⌘W", "⌘D", "⇧⌘D", "⇧⌘C", "⇧⌘F", "⌘\\", "⌃⌘S"] {
+            XCTAssertTrue(main.contains(key), key); XCTAssertFalse(more.contains(key), key)
+        }
+        for key in ["⌃⇥", "⌃⇧⇥", "⌘P", "⌃⌘1…5"] {
+            XCTAssertTrue(more.contains(key), key); XCTAssertFalse(main.contains(key), key)
+        }
+        XCTAssertFalse(ShortcutRow.navigation.contains { $0.explanation.contains("prefix") }, "prefix keys are More's")
     }
 
     private func key(_ code: UInt16, _ text: String, _ flags: NSEvent.ModifierFlags = [], up: Bool = false,

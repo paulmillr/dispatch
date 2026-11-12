@@ -285,6 +285,37 @@ final class HostSessionStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.hosts.map(\.id), [machine])
     }
 
+    /// `mini` whose ssh_config gives the account (`User alice`), saved without it; then `ssh bob@mini` logs in: both
+    /// cards say their account, never the default one as the bare machine.
+    func testASavedLoginLearnsItsAccountFromItsConnection() throws {
+        let alice = HostID.authenticated("machine", uid: 501), legacy = HostID.authenticated("legacy")
+        let scope = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "mini", configuration: "hostname mini\nuser alice\nport 22\n"))
+        func connection(_ host: HostID, _ destination: String, scope: SSHIntegrationScope?) -> HostSessionStore.Connection {
+            let tab = System.uuid()
+            return .init(.init(connection: SSHConnectionID(), host: host, shell: SSHShell(destination: destination), scope: scope,
+                               accountUID: nil, origin: tab, surfaces: [tab]))
+        }
+        let snapshot = HostSessionStore.Snapshot(
+            hosts: [HostRecord(id: alice, name: "mini", destinations: ["mini"], order: 0),
+                    HostRecord(id: legacy, name: "box", destinations: ["box"], order: 1)],
+            spaces: [], selectedSpace: nil, contexts: [:],
+            connections: [connection(alice, "mini", scope: scope), connection(legacy, "carol@box", scope: nil),
+                          connection(legacy, "dave@box", scope: nil)])
+        XCTAssertEqual(snapshot.accounts(), [alice: "alice"], "Connections that disagree name no account")
+
+        let hosts = HostRegistry(defaults: nil)
+        hosts.restore(snapshot.hosts)
+        hosts.learn(accounts: snapshot.accounts())
+        XCTAssertEqual(hosts.record(alice).name, "mini", "A login alone on its machine needs no account")
+        let terminal = System.uuid(), generation = System.uuid()
+        hosts.begin(terminal, generation: generation, destination: "bob@mini")
+        hosts.update(terminal, generation: generation, destination: "bob@mini",
+                     greeting: SSHGreeting(version: 1, host: "machine", boot: "boot", uid: 502, home: "/Users/bob", capabilities: []),
+                     state: .connected)
+        XCTAssertEqual(hosts.record(.authenticated("machine", uid: 502)).name, "bob@mini")
+        XCTAssertEqual(hosts.record(alice).name, "alice@mini")
+    }
+
     func testRestoredBackendInheritsAuthenticatedEndpointWithoutAFrontend() {
         let workspace = Workspace(), host = HostID.authenticated("restored")
         let connections = [SSHConnectionID(), SSHConnectionID()]

@@ -496,7 +496,7 @@ private struct GitUncommittedButton: View {
                               height: height)
         }
         .buttonStyle(.plain)
-        .help("Review the uncommitted changes · ⌃⌘2")
+        .help("Review the uncommitted changes · ⌃⌘4")
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("git-commits-uncommitted")
     }
@@ -1041,13 +1041,15 @@ private struct GitCommitDetailPane: View {
 
     @ViewBuilder private var detail: some View {
         if let commit = GitCommitsText.selected(session) {
-            let summary = ScrollView(.vertical) {
-                VStack(spacing: 0) {
-                    GitCommitSummary(session: session, commit: commit)
-                    GitCommitFiles(session: session, commit: commit, focus: focus)
+            let summary = ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(spacing: 0) {
+                        GitCommitSummary(session: session, commit: commit)
+                        GitCommitFiles(session: session, commit: commit, focus: focus, proxy: proxy)
+                    }
                 }
+                .scrollBounceBehavior(.basedOnSize)
             }
-            .scrollBounceBehavior(.basedOnSize)
             Group {
                 if !narrow {
                     GitCommitDetailStack {
@@ -1284,6 +1286,8 @@ private struct GitCommitFiles: View {
     @Bindable var session: FilesSession
     let commit: GitCommit
     var focus: FocusState<GitCommitsFocus?>.Binding
+    /// The summary's scroll view: the arrows keep the picked file in sight.
+    let proxy: ScrollViewProxy
     @Environment(\.appTypography) private var typography
     /// One column: a file opens its diff in the commit's place (`FilesSession.narrowFile`).
     @Environment(\.filesSplitNarrow) private var narrow
@@ -1336,7 +1340,9 @@ private struct GitCommitFiles: View {
                     .frame(height: typography.expanded(32))
                     .accessibilityIdentifier("git-commit-files-loading")
             } else {
-                VStack(spacing: 0) {
+                // Lazy: a commit of thousands of files builds only the rows in sight, so choosing it or stepping
+                // through its files never lays out every row (2,048 rows took 860 ms eagerly, 35 ms a step).
+                LazyVStack(spacing: 0) {
                     ForEach(files) { file in
                         // A button, not a tap gesture, as for the log's rows.
                         Button {
@@ -1349,6 +1355,7 @@ private struct GitCommitFiles: View {
                                              diff: file.path == session.commitFile ? GitCommitDiff.shown(session)?.diff : nil)
                         }
                         .buttonStyle(.plain)
+                        .id(Self.rowID(file.path))
                     }
                 }
                 .focusable()
@@ -1393,8 +1400,12 @@ private struct GitCommitFiles: View {
         let next = current.map { min(max($0 + step, 0), files.count - 1) } ?? 0
         session.commitFile = files[next].path
         session.commitDiffFocusPending = false
+        proxy.scrollTo(Self.rowID(files[next].path))
         return .handled
     }
+
+    /// A file row's scroll identity, apart from the log's hashes and the uncommitted row.
+    private static func rowID(_ path: String) -> String { "file:" + path }
 }
 
 struct GitCommitFileRow: View {
@@ -1481,8 +1492,8 @@ private struct GitCommitDiff: View {
             if session.commitFile == nil {
                 Color.clear
             } else if let state, let diff = state.diff {
-                GitDiffView(diff: diff, mode: $session.diffMode, wrap: $session.diffWrap, source: reader(diff),
-                            focusRequest: session.commitDiffFocus, onEscape: leave,
+                GitDiffView(diff: diff, parsed: state.parsed, mode: $session.diffMode, wrap: $session.diffWrap,
+                            source: reader(diff), focusRequest: session.commitDiffFocus, onEscape: leave,
                             review: review(diff), session: session, focusOnAppear: session.commitDiffFocusPending)
                     // Each commit's file gets its own folds, scroll and cursor.
                     .id(state.key)

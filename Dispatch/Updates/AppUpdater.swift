@@ -16,13 +16,16 @@ final class AppUpdater {
         var install: (UpdateInstaller.Prepared) async throws -> Void
         /// Removes what interrupted updates left beside the app.
         var sweep: () async -> Void = {}
+        /// The release's notes (`UpdateNotes`), read beside its download; none by default.
+        var notes: (UpdateRelease) async throws -> UpdateNotes = { _ in throw CancellationError() }
         /// The running app's version, which a copy that can't update itself (no `context`) compares the feed's with.
         var installedVersion: () -> String? = { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }
 
         static func live(_ installer: UpdateInstaller = UpdateInstaller()) -> Self {
             Self(context: { try await installer.context() }, latest: { try await installer.latest() },
                  prepare: { try await installer.prepare($0, context: $1, step: $2) }, discard: { await installer.discard($0) },
-                 install: { try await installer.install($0) }, sweep: { await installer.sweep() })
+                 install: { try await installer.install($0) }, sweep: { await installer.sweep() },
+                 notes: { try await installer.notes($0) })
         }
     }
 
@@ -36,12 +39,16 @@ final class AppUpdater {
     /// A newer release this copy can't install itself (not in a writable folder, or not a signed release): the last
     /// check says so and Settings offers its download.
     private(set) var available: UpdateRelease?
+    /// The notes of the newer release found (`release` or `available`), once read; nil until then, or when they could
+    /// not be read (the sheet and Settings then show none).
+    private(set) var notes: UpdateNotes?
     /// An update the daily check downloaded is ready. One started in Settings shows there instead.
     @ObservationIgnored var onReady: (() -> Void)?
     @ObservationIgnored var onRestart: (() -> Void)?
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private var schedule: Task<Void, Never>?
     @ObservationIgnored private var prepared: UpdateInstaller.Prepared?
+    @ObservationIgnored private var notesRead: Task<Void, Never>?
     /// Tells a cancelled download's late progress from the current one's.
     @ObservationIgnored private var attempt = 0
     /// The current or last check is the daily one: turning automatic updates off stops it and discards what it staged,
@@ -61,6 +68,9 @@ final class AppUpdater {
         self.operations = operations
         self.defaults = defaults
     }
+
+    /// The running app's version as the updater compares it ("from 0.1.7" in the sheet).
+    var installed: String { operations.installedVersion() ?? "" }
 
     var busy: Bool { cancellable || state == .installing }
     /// Checking, downloading or verifying, which Settings offers to cancel.
@@ -97,7 +107,7 @@ final class AppUpdater {
         return (error as? UpdateFailure)?.transient == true
     }
 
-    private static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+    static func size(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
     func setAutomaticUpdates(_ enabled: Bool) {
         guard automatic != enabled else { return }
@@ -144,6 +154,8 @@ final class AppUpdater {
     private func reset() {
         release = nil
         available = nil
+        notesRead?.cancel(); notesRead = nil
+        notes = nil
         progress = nil
         failure = nil
         state = .idle
@@ -185,6 +197,7 @@ final class AppUpdater {
                         return
                     }
                     available = latest
+                    readNotes(latest)
                     throw UpdateFailure("Dispatch \(latest.version) is available, but this copy can’t update itself: \(error.localizedDescription) "
                         + "Update with Homebrew (brew upgrade --cask paulmillr/tap/dispatch), or download it.")
                 }
@@ -197,6 +210,7 @@ final class AppUpdater {
                     return
                 }
                 release = latest
+                readNotes(latest)
                 try await prepare(latest, context: context, announce: announce)
                 checked()
             } catch {
@@ -213,6 +227,19 @@ final class AppUpdater {
                 failure = (step, System.date())
                 state = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    /// Reads `release`'s notes beside its download, unless they are the ones shown; a failure shows none.
+    private func readNotes(_ release: UpdateRelease) {
+        guard notes?.version != release.version else { return }
+        notesRead?.cancel()
+        notes = nil
+        let operations = operations
+        notesRead = Task { [weak self] in
+            guard let read = try? await operations.notes(release), !Task.isCancelled, let self,
+                  self.release == release || self.available == release else { return }
+            notes = read
         }
     }
 
@@ -267,6 +294,7 @@ final class AppUpdater {
 
     func stop() async {
         schedule?.cancel(); schedule = nil
+        notesRead?.cancel()
         work?.cancel()
         await work?.value
         work = nil
