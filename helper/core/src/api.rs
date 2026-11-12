@@ -717,6 +717,12 @@ pub enum Update {
         binding: Binding,
         interaction: Interaction,
     },
+    /// What a list row shows of this conversation changed (a binding `Harness::listen` named).
+    /// Internal: core tells clients of the `agents.activity` feature with `agent.changed`.
+    Overview {
+        binding: Binding,
+        overview: Overview,
+    },
     Clipboard {
         bytes: Vec<u8>,
     },
@@ -864,6 +870,81 @@ pub use tool::{ReadSelection, Tool, ToolRead, ToolSearch, ToolShell};
 pub struct Page {
     pub records: Vec<Record>,
     pub earlier: Option<String>,
+}
+
+/// What a conversation list row shows of a transcript (chat.list, `Harness::overview`). Never
+/// encoded as a record: chat.list and agent.changed write its fields one by one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Overview {
+    /// The newest non-empty assistant text, trimmed, at most `Overview::PREVIEW` characters
+    /// (then …).
+    pub preview: Option<String>,
+    /// The newest record's time, of any kind (a tool result, a native command's output).
+    pub time_ms: Option<i64>,
+    /// The time of the record `preview` came from, or of the newest turn end when that is
+    /// later: when the agent last answered.
+    pub reply_ms: Option<i64>,
+    /// The newest turn start's time: a prompt the agent took (list pushes only).
+    pub started_ms: Option<i64>,
+    /// The conversation's title as the transcript names it (Claude's title records).
+    pub title: Option<String>,
+}
+
+impl Overview {
+    /// Characters of the last assistant text a row keeps.
+    pub const PREVIEW: usize = 280;
+
+    /// `text` trimmed and cut at `PREVIEW` characters (then …); None when it is blank.
+    pub fn cut(text: &str) -> Option<String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        Some(match text.char_indices().nth(Self::PREVIEW) {
+            Some((end, _)) => format!("{}…", &text[..end]),
+            None => text.to_owned(),
+        })
+    }
+
+    /// A page's row, newest record last.
+    pub fn of(records: &[Record]) -> Self {
+        let answer = records
+            .iter()
+            .rev()
+            .find(|record| record.kind == RecordKind::Assistant && !record.text.trim().is_empty());
+        let ended = records
+            .iter()
+            .rev()
+            .filter(|record| record.kind == RecordKind::TurnEnded)
+            .find_map(|record| record.time_ms);
+        Self {
+            preview: answer.and_then(|record| Self::cut(&record.text)),
+            time_ms: records.iter().rev().find_map(|record| record.time_ms),
+            reply_ms: Self::reply(answer.and_then(|record| record.time_ms), ended),
+            started_ms: records
+                .iter()
+                .rev()
+                .filter(|record| record.kind == RecordKind::TurnStarted)
+                .find_map(|record| record.time_ms),
+            title: None,
+        }
+    }
+
+    /// The later of the answer's time and the newest turn end's.
+    pub fn reply(answer: Option<i64>, ended: Option<i64>) -> Option<i64> {
+        match (answer, ended) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Whether a list client should ask for this row again: what it shows changed (the answer,
+    /// when the agent last answered, a new turn, the title). The newest record's time alone
+    /// moves with every tool call and is not a reason.
+    pub fn differs(&self, other: &Self) -> bool {
+        (&self.preview, self.reply_ms, self.started_ms, &self.title)
+            != (&other.preview, other.reply_ms, other.started_ms, &other.title)
+    }
 }
 
 mod transcript;
@@ -1246,6 +1327,21 @@ pub trait Harness {
         earlier: Option<&str>,
         done: Done<Page>,
     );
+    /// What a conversation list row shows (chat.list). The default reads the recent page as
+    /// chat.page does; a harness with a cheaper read of its transcript's end overrides it, and
+    /// that read leaves open chats as they were (their pages, cursors, state and cards).
+    fn overview(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Overview>) {
+        self.history(
+            io,
+            binding,
+            None,
+            Box::new(move |io, result| done(io, result.map(|page| Overview::of(&page.records)))),
+        );
+    }
+    /// The bindings clients list now (feature `agents.activity`; the whole set each time, empty
+    /// for none). A harness that can keeps cheap watches on them and publishes `Update::State`
+    /// and `Update::Overview` as they change; one that cannot ignores it (clients also poll).
+    fn listen(&mut self, _io: &mut dyn Io, _bindings: &[Binding]) {}
     /// Archived transcripts use the same native reader without manufacturing a Binding.
     /// c1654cc TranscriptReader.read(path:sessionID:) and ChatCommands history.
     fn read(&mut self, io: &mut dyn Io, _source: &Transcript, done: Done<Archive>) {

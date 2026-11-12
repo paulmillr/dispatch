@@ -11,6 +11,7 @@ use std::{
 
 pub(crate) type Replies = Rc<RefCell<VecDeque<(RawFd, wire::Kind, u64, Vec<u8>)>>>;
 pub(crate) type Drains = Rc<RefCell<VecDeque<(RawFd, u64, Done<()>)>>>;
+mod activity;
 mod client;
 mod limits;
 mod observers;
@@ -114,6 +115,8 @@ pub struct DispatchHelper {
     sources: BTreeMap<Id, (bool, bool)>,
     /// Attach subscriptions whose output their client holds (dispatch/following.rs, feature terminals.follow).
     pub(crate) follows: crate::dispatch::following::Follows,
+    /// What list clients were told of each bound agent (helper/activity.rs, feature agents.activity).
+    pub(crate) activity: activity::Shared,
     /// HOME as the user's login environment sees it (hello.account.login_home for feature
     /// clients when it differs from the passwd home).
     pub login_home: Option<std::path::PathBuf>,
@@ -154,6 +157,7 @@ struct Updates<'a> {
     login: Option<login::SharedLogin>,
     features: crate::dispatch::features::Features,
     follows: crate::dispatch::following::Follows,
+    activity: activity::Shared,
 }
 impl Updates<'_> {
     /// A terminal's agent conversation is over: its questions expire and its interactions and
@@ -230,9 +234,34 @@ impl Ui for Updates<'_> {
             | Update::History { binding, .. }
             | Update::State { binding, .. }
             | Update::Queue { binding, .. }
-            | Update::Interaction { binding, .. } => self.terminal(binding),
+            | Update::Interaction { binding, .. }
+            | Update::Overview { binding, .. } => self.terminal(binding),
             _ => None,
         };
+        // agents.activity: what list rows show, for clients of the feature (helper/activity.rs).
+        if let Some(id) = terminal
+            && matches!(&update, Update::State { .. } | Update::Interaction { .. } | Update::Overview { .. })
+            && activity::wanted(&self.features)
+        {
+            let parent = self.nodes.borrow().get(&id).and_then(|(_, node)| node.agent.as_ref().map(|(_, b)| b.clone()));
+            if let Some(parent) = parent {
+                let mut activity = self.activity.borrow_mut();
+                match &update {
+                    // A side conversation's state is not its terminal's row.
+                    Update::State { binding, state } if crate::dispatch::same(binding, &parent) => {
+                        activity.state(id, &parent, state)
+                    }
+                    Update::Overview { binding, overview } if crate::dispatch::same(binding, &parent) => {
+                        activity.overview(id, &parent, overview)
+                    }
+                    Update::Interaction { .. } => activity.touch(id, &parent),
+                    _ => {}
+                }
+            }
+        }
+        if matches!(&update, Update::Overview { .. }) {
+            return;
+        }
         if let Update::Topology { nodes, .. } = &update {
             let current = self.nodes.borrow();
             self.candidates.borrow_mut().dirty.extend(nodes.iter().filter_map(|node| {
@@ -452,13 +481,27 @@ impl Ui for Updates<'_> {
             }
             _ => None,
         };
+        // A multiplexer's agent.changed (the terminal's binding changed): agents.activity clients
+        // get the summary they were last told instead of the empty one.
+        let listed = match &update {
+            Update::Agent { terminal, .. } if activity::wanted(&self.features) => {
+                let id = crate::dispatch::reference(self.module, *terminal);
+                let (told, revision) = self.activity.borrow().told(id).unwrap_or_default();
+                Some(activity::body(id, &told, revision))
+            }
+            _ => None,
+        };
         let output = if matches!(&update, Update::Stderr { .. }) {
             "terminal.stderr"
         } else {
             "terminal.output"
         };
         let body = match update {
-            Update::Identity(_) | Update::Prompt(_) | Update::Client { .. } | Update::Candidate { .. } => {
+            Update::Identity(_)
+            | Update::Prompt(_)
+            | Update::Client { .. }
+            | Update::Candidate { .. }
+            | Update::Overview { .. } => {
                 unreachable!("client observations are scheduled before encoding")
             }
             Update::Topology {
@@ -604,6 +647,15 @@ impl Ui for Updates<'_> {
             });
             let body = match &legacy {
                 _ if attached.is_some() => attached.cloned().unwrap_or_default(),
+                _ if listed.is_some()
+                    && crate::dispatch::features::enabled(
+                        &self.features,
+                        fd,
+                        crate::dispatch::features::AGENTS_ACTIVITY,
+                    ) =>
+                {
+                    listed.clone().unwrap_or_default()
+                }
                 Some(legacy)
                     if !crate::dispatch::features::enabled(
                         &self.features,
@@ -727,6 +779,7 @@ impl DispatchHelper {
             publishers: Default::default(),
             sources: BTreeMap::new(),
             follows: Default::default(),
+            activity: Default::default(),
             login_home: None,
             stdio: false,
             liveness: None,
@@ -821,6 +874,7 @@ impl DispatchHelper {
                 login: self.login.clone(),
                 features: self.features.clone(),
                 follows: self.follows.clone(),
+                activity: self.activity.clone(),
             };
             let backends: BTreeSet<_> = self
                 .backends
@@ -1469,11 +1523,13 @@ impl DispatchHelper {
                     login: self.login.clone(),
                 features: self.features.clone(),
                 follows: self.follows.clone(),
+                activity: self.activity.clone(),
                 }
                 .update(update);
             }
             crate::dispatch::queue::drain(&self, &mut system);
             self.candidates(&mut system, &replies, &observers);
+            self.activity(&mut system, &replies, &observers);
             let pending: Vec<_> = self
                 .probes
                 .borrow_mut()
@@ -1743,6 +1799,12 @@ impl DispatchHelper {
                 system.section("ui");
                 continue;
             }
+            if section == activity::SECTION {
+                // Held agent.changed notifications go out at the top of the loop.
+                system.section("ui");
+                self.activity.borrow_mut().armed = None;
+                continue;
+            }
             if section == limits::PARTIAL {
                 system.section("ui");
                 watching = false;
@@ -1819,6 +1881,7 @@ impl DispatchHelper {
                     login: self.login.clone(),
                 features: self.features.clone(),
                 follows: self.follows.clone(),
+                activity: self.activity.clone(),
                 };
                 self.multiplexers[index]
                     .borrow_mut()
@@ -1854,6 +1917,7 @@ impl DispatchHelper {
                     login: self.login.clone(),
                 features: self.features.clone(),
                 follows: self.follows.clone(),
+                activity: self.activity.clone(),
                 };
                 self.harnesses[index]
                     .borrow_mut()
@@ -1883,6 +1947,7 @@ impl DispatchHelper {
                     login: self.login.clone(),
                 features: self.features.clone(),
                 follows: self.follows.clone(),
+                activity: self.activity.clone(),
                 };
                 self.plugins[index]
                     .borrow_mut()

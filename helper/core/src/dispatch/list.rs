@@ -1,10 +1,12 @@
 //! `chat.list` (feature `chat.list`): every agent-bound terminal of this helper with what a
 //! conversation list row shows, in one call: binding, label, busy/attention, the last
-//! assistant text and its time. Built from the same harness calls as chat.page and chat.state.
+//! assistant text and its time. Built from the harness's list read (`Harness::overview`: Claude
+//! and Codex read only their transcript's end and leave open chats alone) and chat.state.
 use super::*;
 
 /// Characters of the last assistant text a row keeps.
-const PREVIEW: usize = 280;
+#[cfg(test)]
+const PREVIEW: usize = Overview::PREVIEW;
 
 /// One row; encoded field by field (no wire record, no schema change).
 struct Row {
@@ -16,8 +18,7 @@ struct Row {
     cwd: Option<std::path::PathBuf>,
     state: Option<State>,
     state_error: Option<Error>,
-    preview: Option<String>,
-    time_ms: Option<i64>,
+    listing: Overview,
     history_error: Option<Error>,
     /// An approval or blocking question of this conversation is open: the agent waits for the
     /// user (a list row's "needs you" without opening the chat).
@@ -29,7 +30,9 @@ impl crate::encode::Encode for Row {
         let busy = self.state.as_ref().map(|state| state.busy);
         let attention = self.state.as_ref().and_then(|state| state.attention.clone());
         let activity = self.state.as_ref().and_then(|state| state.activity.clone());
-        let title = self.state.as_ref().and_then(|state| state.title.clone());
+        // The agent's own name for the conversation first (Claude's registry, Codex's thread
+        // name, a title the harness read before), else the one the list read found.
+        let title = self.state.as_ref().and_then(|state| state.title.clone()).or_else(|| self.listing.title.clone());
         crate::encode::object(
             out,
             &[
@@ -45,36 +48,35 @@ impl crate::encode::Encode for Row {
                 ("activity", &activity),
                 ("title", &title),
                 ("state_error", &self.state_error),
-                ("preview", &self.preview),
-                ("time_ms", &self.time_ms),
+                ("preview", &self.listing.preview),
+                ("time_ms", &self.listing.time_ms),
                 ("history_error", &self.history_error),
                 ("waiting", &self.waiting),
+                ("reply_ms", &self.listing.reply_ms),
             ],
         );
     }
 }
 
 /// The newest assistant text and the newest timestamp of a page.
+#[cfg(test)]
 pub(crate) fn last(records: &[Record]) -> (Option<String>, Option<i64>) {
-    let preview = records
-        .iter()
-        .rev()
-        .find(|record| record.kind == RecordKind::Assistant && !record.text.trim().is_empty())
-        .map(|record| {
-            let text = record.text.trim();
-            match text.char_indices().nth(PREVIEW) {
-                Some((end, _)) => format!("{}…", &text[..end]),
-                None => text.to_owned(),
-            }
-        });
-    let time = records.iter().rev().find_map(|record| record.time_ms);
-    (preview, time)
+    let listing = Overview::of(records);
+    (listing.preview, listing.time_ms)
+}
+
+/// Whether an approval or blocking question of `session` in `terminal` is open (published and
+/// not yet answered or closed).
+pub(crate) fn waiting(interactions: &Interactions, terminal: Id, session: &str) -> bool {
+    interactions.borrow().iter().any(|((id, conversation, _), (questions, holds))| {
+        *id == terminal && conversation == session && *holds && !questions.is_empty()
+    })
 }
 
 impl Request<'_> {
     /// Protocol result: Vec of rows (terminal, session, binding, key, label, name, cwd, busy,
-    /// attention, activity, title, state_error, preview, time_ms, history_error, waiting), by
-    /// terminal.
+    /// attention, activity, title, state_error, preview, time_ms, history_error, waiting,
+    /// reply_ms), by terminal.
     pub(super) fn chat_list(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if p.object().is_some_and(|mut fields| fields.next().is_some()) {
             return Err(invalid("params"));
@@ -89,20 +91,6 @@ impl Request<'_> {
                 Some((terminal, harness, binding, node.name.clone(), node.cwd.clone()))
             })
             .collect();
-        let interactions = self.helper.interactions.borrow();
-        let waiting = |terminal: Id, session: &str| {
-            interactions.iter().any(|((id, conversation, _), (questions, holds))| {
-                *id == terminal && conversation == session && *holds && !questions.is_empty()
-            })
-        };
-        let rows: Vec<_> = rows
-            .into_iter()
-            .map(|(terminal, harness, binding, name, cwd)| {
-                let open = waiting(terminal, &binding.session);
-                (terminal, harness, binding, name, cwd, open)
-            })
-            .collect();
-        drop(interactions);
         let done = self.done::<Vec<Row>>(None);
         let collected: Rc<RefCell<Vec<Row>>> = Rc::new(RefCell::new(Vec::new()));
         let remaining = Rc::new(Cell::new(rows.len()));
@@ -112,7 +100,7 @@ impl Request<'_> {
             deferred(done)(self.io, Ok(Vec::new()));
             return Ok(());
         }
-        for (terminal, index, binding, name, cwd, waiting) in rows {
+        for (terminal, index, binding, name, cwd) in rows {
             let Some(harness) = self.helper.harnesses.get(index).cloned() else {
                 remaining.set(remaining.get() - 1);
                 continue;
@@ -130,24 +118,23 @@ impl Request<'_> {
                 cwd,
                 state: None,
                 state_error: None,
-                preview: None,
-                time_ms: None,
+                listing: Overview::default(),
                 history_error: None,
-                waiting,
+                waiting: false,
             })));
             let (next, state_binding) = (harness.clone(), binding.clone());
             let (collected, remaining, done) = (collected.clone(), remaining.clone(), done.clone());
-            // History first: reading the transcript is what names the conversation (Claude's
-            // title records), so a state asked before it on a helper that has not read that
-            // transcript yet has no title, and the phone's row and tab keep the window's name.
-            harness.borrow_mut().history(
+            let interactions = self.helper.interactions.clone();
+            // The list read first, as the page came first before it (the harness default is
+            // that page): reading the transcript is what names the conversation (Claude's
+            // title records) on a helper whose chats have not read it.
+            harness.borrow_mut().overview(
                 self.io,
                 &binding,
-                None,
                 deferred(Box::new(move |io, result| {
                     if let Some(row) = row.borrow_mut().as_mut() {
                         match result {
-                            Ok(page) => (row.preview, row.time_ms) = last(&page.records),
+                            Ok(listing) => row.listing = listing,
                             Err(error) => row.history_error = Some(error),
                         }
                     }
@@ -160,6 +147,9 @@ impl Request<'_> {
                                 Ok(state) => row.state = Some(state),
                                 Err(error) => row.state_error = Some(error),
                             }
+                            // After the harness calls, which may have published or closed the
+                            // conversation's approvals and questions (Pi's state does).
+                            row.waiting = waiting(&interactions, row.terminal, &row.binding.session);
                             collected.borrow_mut().push(row);
                             remaining.set(remaining.get() - 1);
                             if remaining.get() == 0

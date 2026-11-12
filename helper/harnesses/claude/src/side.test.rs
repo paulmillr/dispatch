@@ -222,6 +222,7 @@ fn an_api_key_helper_reading_a_custom_variable_gets_it_in_the_side() {
         directory: root.join("work"),
         question: "what changed?".into(),
         model: Some("dispatch-fixture".into()),
+        effort: None,
         read_only: true,
         done: Box::new(move |_, value| *saved.borrow_mut() = Some(value)),
     });
@@ -275,4 +276,14 @@ fn an_api_key_helper_reading_a_custom_variable_gets_it_in_the_side() {
     ]);
     // The refused spawn ends the launch with its error, once.
     assert!(matches!(result.borrow_mut().take(), Some(Err(_))));
+}
+
+#[test]
+fn the_fork_runs_on_the_parents_model_and_effort() {
+    assert_eq!(pinned(Some("claude-fable-5-2"), Some("xhigh")), strings(&["--model", "claude-fable-5-2", "--effort", "xhigh"]));
+    assert_eq!(pinned(Some("claude-fable-5-2"), Some("High")), strings(&["--model", "claude-fable-5-2", "--effort", "high"]));
+    // No effort, or one the command line would refuse: Claude's own default, never a failed fork.
+    assert_eq!(pinned(Some("claude-fable-5-2"), None), strings(&["--model", "claude-fable-5-2"]));
+    assert_eq!(pinned(Some("claude-fable-5-2"), Some("ultra")), strings(&["--model", "claude-fable-5-2"]));
+    assert_eq!(pinned(None, Some("low")), strings(&["--effort", "low"]));
 }

@@ -23,10 +23,14 @@ fn known_features_are_accepted_and_unknown_ones_dropped() {
             Data::String(TERMINALS_COALESCE),
             Data::String("future.thing"),
             Data::String(CHAT_LIST),
+            Data::String(AGENTS_ACTIVITY),
         ]),
     )]));
     let accepted = requested(&root).unwrap().unwrap();
-    let expected: Vec<_> = [CHAT_LIST, TERMINALS_COALESCE].into_iter().filter(|f| KNOWN.contains(f)).collect();
+    let expected: Vec<_> =
+        [AGENTS_ACTIVITY, CHAT_LIST, TERMINALS_COALESCE].into_iter().filter(|f| KNOWN.contains(f)).collect();
+    // agents.activity is a behaviour, no operation: nothing joins `ops`.
+    assert_eq!(operation(AGENTS_ACTIVITY), None);
     assert_eq!(accepted.into_iter().collect::<Vec<_>>(), expected);
     // The ordinary request check then sees a hello without params.
     let stripped = without(&root).unwrap();

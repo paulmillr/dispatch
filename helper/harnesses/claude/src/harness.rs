@@ -18,6 +18,8 @@ type Key = (u32, [u64; 2], String);
 mod archive;
 #[path = "live.rs"]
 mod live;
+#[path = "overview.rs"]
+mod overview;
 #[path = "subagents.rs"]
 mod subagents;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -94,6 +96,13 @@ pub struct Claude {
     usages: BTreeMap<Key, crate::menu::Usage>,
     /// `chat.limits` reads under way (limits.rs).
     limits: crate::limits::Limits,
+    /// chat.list's summaries of transcript ends (overview.rs), apart from the chats' cache.
+    tails: dispatch_helper_core::tail::Shared,
+    /// What list clients list (`Harness::listen`), and what each row was last given.
+    listed: BTreeMap<Key, Binding>,
+    overviews: std::rc::Rc<std::cell::RefCell<BTreeMap<Key, Overview>>>,
+    /// Row changes read in a job's callback, published at the next event.
+    pushed: std::rc::Rc<std::cell::RefCell<Vec<Update>>>,
 }
 
 fn finish<T: 'static>(io: &mut dyn Io, done: Done<T>, result: Result<T, Error>) {
@@ -354,6 +363,13 @@ impl Claude {
         self.dirty.retain(|(owner, _, _)| *owner != pid);
         self.waits.retain(|(owner, _, _), _| *owner != pid);
         self.due.retain(|(owner, _, _)| *owner != pid);
+        for binding in self.listed.values().filter(|binding| binding.process.pid == pid) {
+            if let Some(path) = &binding.transcript {
+                self.tails.borrow_mut().forget(path);
+            }
+        }
+        self.listed.retain(|(owner, _, _), _| *owner != pid);
+        self.overviews.borrow_mut().retain(|(owner, _, _), _| *owner != pid);
         let watches = self
             .watches
             .iter()
@@ -565,6 +581,13 @@ impl Harness for Claude {
             },
             Box::new(move |io, result| finish(io, done, result.map(|archive| archive.page))),
         );
+    }
+    /// The transcript's end only (overview.rs): no page, cache, generation, state or cards.
+    fn overview(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Overview>) {
+        self.overview_of(io, binding, done);
+    }
+    fn listen(&mut self, io: &mut dyn Io, bindings: &[Binding]) {
+        self.listen_to(io, bindings);
     }
     fn read(&mut self, io: &mut dyn Io, source: &Transcript, done: Done<Archive>) {
         self.page(
@@ -841,8 +864,7 @@ impl Harness for Claude {
         };
         let directory = session.directory.clone();
         let (parent, question, sides) = (parent.clone(), question.to_owned(), self.sides.clone());
-        // A fresh verified observation supplies the parent's current model; c1654cc
-        // ChatSideConversation.swift:37-45 starts the fork on the parent's model.
+        // A fresh verified observation supplies the parent's current model and effort, which the fork starts on.
         self.observe(
             io,
             &parent.clone(),
@@ -854,6 +876,7 @@ impl Harness for Claude {
                         directory,
                         question,
                         model: state.model,
+                        effort: state.effort,
                         read_only,
                         done,
                     },
@@ -879,7 +902,7 @@ impl Harness for Claude {
         let Some(directory) = self.sessions.get(&key(binding)).map(|session| session.directory.clone()) else {
             return finish(io, done, Err(error("changed", "Claude conversation changed")));
         };
-        match crate::limits::command(io) {
+        match crate::limits::reading_command(io) {
             Ok(command) => self.limits.read(io, &directory, command, binding.session.clone(), done),
             Err(e) => finish(io, done, Err(e)),
         }
@@ -927,6 +950,10 @@ impl Harness for Claude {
         for update in std::mem::take(&mut self.queued) {
             ui.update(update);
         }
+        let pushed = std::mem::take(&mut *self.pushed.borrow_mut());
+        for update in pushed {
+            ui.update(update);
+        }
         if self.limits.event(io, &event) {
             return;
         }
@@ -958,10 +985,13 @@ impl Harness for Claude {
             }
             return;
         }
+        // A chat watching, or a list client listing (`listen`), keeps the registry and transcript
+        // watches; the last one gone, they end at their next event.
         if let Event::Changed { watch, .. } = &event
             && let Some(binding) = self.registrations.get(watch).cloned()
         {
-            if ui.watching(&binding) && ui.terminal(&binding).is_some() {
+            let listed = self.listed.contains_key(&key(&binding));
+            if (ui.watching(&binding) || listed) && ui.terminal(&binding).is_some() {
                 self.observe(io, &binding, None);
             } else {
                 io.unwatch(*watch);
@@ -972,8 +1002,14 @@ impl Harness for Claude {
         if let Event::Changed { watch, .. } = event
             && let Some((binding, path)) = self.watches.get(&watch).cloned()
         {
-            if ui.watching(&binding) && ui.terminal(&binding).is_some() {
-                self.refresh(io, binding, path);
+            let (watching, listed) = (ui.watching(&binding), self.listed.contains_key(&key(&binding)));
+            if (watching || listed) && ui.terminal(&binding).is_some() {
+                if listed {
+                    self.relist(io, &binding, &path);
+                }
+                if watching {
+                    self.refresh(io, binding, path);
+                }
             } else {
                 io.unwatch(watch);
                 self.watches.remove(&watch);

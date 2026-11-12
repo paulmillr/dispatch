@@ -168,7 +168,7 @@ impl Parser {
         });
     }
     /// c1654cc ClaudeTranscript.swift:174-178: a title record (Some), with its title if it has one.
-    fn title(root: Value<'_>) -> Option<Option<String>> {
+    pub(crate) fn title(root: Value<'_>) -> Option<Option<String>> {
         let field = match text(root, "type") {
             Some("ai-title") => "aiTitle",
             Some("custom-title") => "customTitle",
@@ -537,7 +537,7 @@ impl Parser {
         ]
         .contains(&s)
     }
-    fn parse(&mut self, root: Value<'_>, id: &str) -> Vec<Record> {
+    pub(crate) fn parse(&mut self, root: Value<'_>, id: &str) -> Vec<Record> {
         let mut out = Vec::new();
         let record = Record {
             time_ms: Some(time(text(root, "timestamp").unwrap_or(""))),

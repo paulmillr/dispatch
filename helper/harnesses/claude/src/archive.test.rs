@@ -14,12 +14,16 @@ use std::{
     time::Instant,
 };
 
+type Callback = Box<dyn FnOnce(&mut dyn Io, io::Result<Output>)>;
+
 #[derive(Default)]
 struct Fake {
     next: u64,
     jobs: VecDeque<(Work, Job)>,
     deferred: VecDeque<Box<dyn FnOnce(&mut dyn Io)>>,
     watches: Vec<u64>,
+    /// Jobs chained with `then` (the list read): their results go to these, not to Claude.
+    callbacks: std::collections::BTreeMap<Work, Callback>,
 }
 fn unsupported<T>() -> io::Result<T> {
     Err(io::ErrorKind::Unsupported.into())
@@ -48,8 +52,11 @@ impl Io for Fake {
     fn now(&self) -> Instant {
         Instant::now()
     }
+    /// Other bytes each time, as a cache generation is new each time.
     fn random(&mut self, bytes: &mut [u8]) -> io::Result<()> {
-        bytes.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8 ^ 0x5a);
+        self.next += 1;
+        let seed = self.next as u8;
+        bytes.iter_mut().enumerate().for_each(|(i, b)| *b = i as u8 ^ 0x5a ^ seed);
         Ok(())
     }
     fn submit(&mut self, job: Job) -> io::Result<Work> {
@@ -61,6 +68,9 @@ impl Io for Fake {
         let count = self.jobs.len();
         self.jobs.retain(|(w, _)| *w != work);
         count != self.jobs.len()
+    }
+    fn then(&mut self, work: Work, callback: Callback) {
+        self.callbacks.insert(work, callback);
     }
     fn watch(&mut self, _: &Path, _: bool) -> io::Result<u64> {
         self.next += 1;
@@ -89,18 +99,19 @@ impl Io for Fake {
 }
 
 /// What watching chats are given: replace pages and record batches, with their record counts.
+/// `.1`: no chat is open; `.2`: the other updates (states, cards, list rows).
 #[derive(Default)]
-struct Shown(Vec<(&'static str, usize)>);
+struct Shown(Vec<(&'static str, usize)>, bool, Vec<Update>);
 impl Ui for Shown {
     fn update(&mut self, update: Update) {
         match update {
             Update::History { page, .. } => self.0.push(("history", page.records.len())),
             Update::Records { records, .. } => self.0.push(("records", records.len())),
-            _ => {}
+            other => self.2.push(other),
         }
     }
     fn watching(&self, _: &Binding) -> bool {
-        true
+        !self.1
     }
     fn terminal(&self, _: &Binding) -> Option<Id> {
         Some(1)
@@ -119,6 +130,9 @@ fn metadata(m: std::fs::Metadata) -> Metadata {
 }
 fn run(job: &Job) -> io::Result<Output> {
     use std::io::{Read, Seek, SeekFrom};
+    if let Job::Stat { path, .. } = job {
+        return Ok(Output::Metadata(metadata(std::fs::metadata(path)?)));
+    }
     let Job::Read { path, offset, length } = job else { panic!("unexpected job") };
     let mut file = std::fs::File::open(path)?;
     let before = metadata(file.metadata()?);
@@ -199,7 +213,10 @@ impl World {
             before(self, index);
             let result = run(&job);
             after(self, index);
-            self.claude.event(&mut self.io, &mut self.shown, Event::Done { work, result });
+            match self.io.callbacks.remove(&work) {
+                Some(callback) => callback(&mut self.io, result),
+                None => self.claude.event(&mut self.io, &mut self.shown, Event::Done { work, result }),
+            }
             index += 1;
         }
     }
@@ -341,8 +358,8 @@ fn an_opening_that_races_a_write_is_read_again_on_its_watch_event() {
 
 #[test]
 fn the_title_is_known_once_the_history_is_read() {
-    // chat.list asks for the history before the state: a helper that has not read this transcript
-    // knows no title for it until it has.
+    // A chat's read names the conversation: a helper that has not read this transcript knows no
+    // title for it until it has (chat.list's own read finds it too, below).
     let title = format!("{{\"type\":\"ai-title\",\"aiTitle\":\"Fix the login form\",\"sessionId\":\"{SESSION}\"}}\n");
     let mut world = World::new("title", &(turns(0..3) + &title + &turns(3..5)));
     let state = |world: &mut World| {
@@ -358,4 +375,132 @@ fn the_title_is_known_once_the_history_is_read() {
     let _ = world.open();
     world.settle();
     assert_eq!(state(&mut world), Some(Some("Fix the login form".into())));
+}
+
+impl World {
+    /// chat.list's read of the row (`Harness::overview`).
+    fn overview(&mut self) -> Overview {
+        let found = Rc::new(RefCell::new(None));
+        let saved = found.clone();
+        self.claude.overview(&mut self.io, &self.binding.clone(), Box::new(move |_, result| *saved.borrow_mut() = Some(result)));
+        self.settle();
+        found.take().expect("answered").expect("read")
+    }
+    /// An open chat's page before `cursor` (None: the recent page), or why it failed.
+    fn page(&mut self, cursor: Option<&str>) -> Result<Page, String> {
+        let found = Rc::new(RefCell::new(None));
+        let saved = found.clone();
+        self.claude.history(&mut self.io, &self.binding.clone(), cursor, Box::new(move |_, result: Result<Page, Error>| {
+            *saved.borrow_mut() = Some(result.map_err(|e| e.message));
+        }));
+        self.settle();
+        found.take().expect("answered")
+    }
+    /// Claude's next event, which publishes what its jobs' callbacks queued.
+    fn wake(&mut self) {
+        self.claude.event(&mut self.io, &mut self.shown, Event::Timer { at: Instant::now() });
+    }
+    /// The list rows Claude published.
+    fn rows(&self) -> Vec<Overview> {
+        self.shown.2.iter().filter_map(|update| match update {
+            Update::Overview { overview, .. } => Some(overview.clone()),
+            _ => None,
+        }).collect()
+    }
+}
+
+fn at(stamp: &str) -> Option<i64> {
+    dispatch_helper_core::date::parse(stamp)
+}
+fn system(subtype: &str, n: usize, stamp: &str, extra: &str) -> String {
+    format!(
+        "{{\"parentUuid\":null,\"isSidechain\":false,\"type\":\"system\",\"subtype\":\"{subtype}\",{extra}\"uuid\":\"{}\",\"timestamp\":\"{stamp}\",\"sessionId\":\"{SESSION}\"}}\n",
+        uuid(n)
+    )
+}
+fn tool_result(n: usize, stamp: &str) -> String {
+    format!(
+        "{{\"parentUuid\":\"{}\",\"isSidechain\":false,\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_{n}\",\"content\":\"done\"}}]}},\"uuid\":\"{}\",\"timestamp\":\"{stamp}\",\"sessionId\":\"{SESSION}\"}}\n",
+        uuid(7),
+        uuid(n)
+    )
+}
+
+#[test]
+fn a_row_answers_with_the_reply_not_a_later_command_or_compaction() {
+    // A Terminal `/model` and a compaction after the last turn: newer records, not a new answer.
+    let model = system(
+        "local_command",
+        900,
+        "2026-10-20T13:00:00.000Z",
+        "\"content\":\"<local-command-stdout>Set model to `Sonnet 5.5` for this session only</local-command-stdout>\",",
+    );
+    let compact = system("compact_boundary", 901, "2026-10-20T13:05:00.000Z", "");
+    let title = format!("{{\"type\":\"ai-title\",\"aiTitle\":\"Fix the login form\",\"sessionId\":\"{SESSION}\"}}\n");
+    let text = turns(0..3) + &title + &model + &compact + &tool_result(902, "2026-10-20T13:06:00.000Z");
+    let mut world = World::new("row-reply", &text);
+    let overview = world.overview();
+    assert_eq!(overview.preview.as_deref(), Some("answer 2"));
+    assert_eq!(overview.title.as_deref(), Some("Fix the login form"));
+    // The newest record is the tool result; the reply is turn 2's end, after its answer.
+    assert_eq!(overview.time_ms, at("2026-10-20T13:06:00.000Z"));
+    assert_eq!(overview.reply_ms, at("2026-10-20T12:02:02.000Z"));
+    assert_eq!(overview.started_ms, at("2026-10-20T12:02:00.000Z"));
+    // The page a chat reads gives the same row.
+    let page = world.page(None).unwrap();
+    assert_eq!(Overview { title: overview.title.clone(), ..Overview::of(&page.records) }, overview);
+}
+
+#[test]
+fn the_list_read_leaves_an_open_chats_page_and_cursor_as_they_were() {
+    // 600 lines: the recent page is the last 400.
+    let mut world = World::new("row-cursor", &turns(0..200));
+    let cursor = world.page(None).unwrap().earlier.expect("an earlier page");
+    let published = world.shown.2.len();
+    for _ in 0..2 {
+        let _ = world.overview();
+    }
+    assert!(world.claude.queued.is_empty(), "no cards queued for the open chat");
+    world.wake();
+    assert_eq!(world.shown.2.len(), published, "no state, card or row published");
+    assert_eq!(world.shown.0, []);
+    // The chat's earlier page still reads.
+    assert!(world.page(Some(&cursor)).is_ok_and(|page| !page.records.is_empty()));
+    // What chat.list did before (the recent page again) drops the live cache, publishes
+    // chat.state, and mints a new generation, which ends that cursor.
+    let _ = world.page(None);
+    assert!(world.shown.2.iter().skip(published).any(|update| matches!(update, Update::State { .. })));
+    assert_eq!(world.page(Some(&cursor)).map(|_| ()), Err("Claude history changed".into()));
+}
+
+#[test]
+fn a_listed_transcript_publishes_its_row_only_when_what_it_shows_changes() {
+    let mut world = World::new("row-push", &turns(0..3));
+    world.shown.1 = true;
+    world.claude.listen(&mut world.io, &[world.binding.clone()]);
+    let _ = world.overview();
+    // A tool result: a newer record, the same answer: nothing to publish.
+    append(&world.path, &tool_result(903, "2026-10-20T12:40:00.000Z"));
+    world.changed();
+    world.settle();
+    world.wake();
+    assert_eq!(world.rows(), []);
+    // A new answer.
+    append(&world.path, &turn(3));
+    world.changed();
+    world.settle();
+    world.wake();
+    let rows = world.rows();
+    assert_eq!(rows.iter().map(|row| row.preview.as_deref()).collect::<Vec<_>>(), [Some("answer 3")]);
+    assert_eq!(rows[0].reply_ms, at("2026-10-20T12:03:02.000Z"));
+    // No chat is open, so no chat was given anything.
+    assert_eq!(world.shown.0, []);
+    // No longer listed: the next change ends the watch, and publishes nothing.
+    world.claude.listen(&mut world.io, &[]);
+    append(&world.path, &turn(4));
+    world.changed();
+    world.settle();
+    world.wake();
+    assert_eq!(world.rows().len(), 1);
+    assert!(world.claude.watches.is_empty());
 }
