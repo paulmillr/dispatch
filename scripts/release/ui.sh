@@ -56,11 +56,12 @@ since() {
 
 # Runs a command with its output in a log, status in $status. Never call it from an if, && or ||: set -e would be off in
 # the command itself (bash ignores it there), and a failing check inside it would pass.
+# Its locals are named so no caller's variable is hidden: bash shows a function's locals to every command it runs.
 logged() {
-  local log="$1"
+  local logged_to="$1"
   shift
   set +e
-  ( set -e; "$@" ) > "$log" 2>&1
+  ( set -e; "$@" ) > "$logged_to" 2>&1
   status=$?
   set -e
 }
@@ -77,21 +78,23 @@ progress() {
 
 # step LABEL LOG COMMAND...: one line with its time; a failure stops the script with the log's tail, the log and how
 # to go on (the same command again: finished steps are skipped).
+# Its locals are step_*, as logged's are: a plain label or log here would be what the command sees under those names
+# (iphone.sh's build name, $label, read "recorded" inside its step and named the record's folder so).
 step() {
-  local label="$1" log="$2" begun=$SECONDS
+  local step_label="$1" step_log="$2" step_begun=$SECONDS
   shift 2
-  pending "$label"
-  export RELEASE_PROGRESS_LABEL="$label" RELEASE_PROGRESS_TTY="$tty"
+  pending "$step_label"
+  export RELEASE_PROGRESS_LABEL="$step_label" RELEASE_PROGRESS_TTY="$tty"
   export -f progress
-  logged "$log" "$@" 3>&1
+  logged "$step_log" "$@" 3>&1
   export -n -f progress
   unset RELEASE_PROGRESS_LABEL RELEASE_PROGRESS_TTY
   if [[ $status != 0 ]]; then
-    bad "$label failed"
-    note "$(tail -15 "$log")"
-    note "log: $log"
+    bad "$step_label failed"
+    note "$(tail -15 "$step_log")"
+    note "log: $step_log"
     resume "$(script_name) ${arguments[*]}  (finished steps are skipped)"
     exit 1
   fi
-  ok "$label" "$(since "$begun")"
+  ok "$step_label" "$(since "$step_begun")"
 }

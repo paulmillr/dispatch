@@ -16,7 +16,7 @@ rest. The commit machine has no way into the signing machine. No tag exists befo
 fails on the way leaves a version commit on `main` and nothing else; fix the problem and run the same command again.
 
 The iPhone app is released Ad Hoc, to registered devices only, by a third command on the signing machine,
-`scripts/release/iphone.sh [BRANCH|COMMIT]`, from any pushed commit and with no version of its own
+`scripts/release/iphone.sh [BRANCH|COMMIT]`, from the checked-out commit or any other, with no version of its own
 ([iPhone](#iphone)).
 
 The maintainer's everyday Mac takes no part: it builds nothing that ships and holds no key. Anyone can check a
@@ -256,13 +256,16 @@ The sheet shows once per Mac, answered or not: `settings.json` records it (`setu
 builds, which keep separate defaults. Settings › General › Updates can change the choice and
 check manually without enabling it. Unanswered or off (also the default for older settings files), there are no
 automatic requests. On, Dispatch checks once a day
-while running and downloads newer versions, then offers **Restart and Install** in a sheet on the main window.
-**Check for Updates** downloads a newer release it finds straight away, without opting in; Settings shows the
-download's size and progress, then verification, with **Cancel**, and then **Restart and Install** (no sheet: the
-click came from Settings). The feed request goes out while the installed app's signature is checked, so a build that
-cannot update itself still makes that one request when you click, and says whether a newer version is out, with a
-**Download…** button for its DMG instead of installing it. Dispatch › Check for Updates… opens Settings there and checks.
-An offer that finds a sheet over the main window (the SSH consent, a close confirmation) waits for it to end. Restart goes through the normal
+while running and downloads newer versions, then offers **Restart and install** in the updater's sheet on the main
+window (`UpdateSheet`, mockups U1–U4) with the release's notes; **Later** closes it and leaves the update in Settings.
+**Check for Updates** downloads a newer release it finds straight away, without opting in. Dispatch › Check for
+Updates… does it in that sheet, which follows the check to "up to date" (OK) or shows the download's size and
+progress (a ring round its tile, its footer's edge filling), then verification, with **Cancel**, and then **Restart and
+install**; without the main window, or while another sheet is over it, Settings checks instead. Settings › General ›
+Updates' own Check for Updates shows the same steps in its row, the notes under it. The feed request goes out while the
+installed app's signature is checked, so a build that cannot update itself still makes that one request when you
+click, and says whether a newer version is out, with a **Download…** button for its DMG instead of installing it. An
+offer that finds a sheet over the main window (the SSH consent, a close confirmation) waits for it to end. Restart goes through the normal
 running-process confirmation and session cleanup. An ordinary quit never installs a pending update.
 
 The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks/dispatch.rb`: the cask's literal
@@ -270,7 +273,22 @@ The feed is `https://raw.githubusercontent.com/paulmillr/homebrew-tap/HEAD/Casks
 version and checksum; the updater sees a release only after the cask changes. Keep those three fields literal and
 unique. Versions are numeric dot-separated components; equal or older versions are not installed.
 
-Downloads use ephemeral HTTPS sessions to `github.com` and `*.githubusercontent.com`, without cookies or stored
+**Release notes.** Once a newer version is found, the updater reads its GitHub release
+(`https://api.github.com/repos/paulmillr/dispatch/releases/tags/X.Y.Z`, at most 512 KB, the published release only)
+beside the download and shows its notes (`UpdateNotes`): the text before the first `---` line, its `- ` or `* ` items,
+the first five, one line each; `area: text` tags an item when the area is one word of at most 12 characters (`ssh`
+shows as SSH, `ux` as UX, any other word capitalised). Write them as the summary `release.sh -m` takes, or edit the
+release on GitHub before the cask moves:
+
+```
+- chat: replies no longer freeze
+- ssh: each user gets a colour of their own
+- ux: 40 fixes
+```
+
+Notes that cannot be read (offline, a rate limit, none written) show none; the update itself never waits for them.
+
+Downloads (and the notes) use ephemeral HTTPS sessions to `github.com`, `api.github.com` and `*.githubusercontent.com`, without cookies or stored
 credentials. Release downloads redirect to an asset host GitHub has renamed before (`objects.`, then
 `release-assets.githubusercontent.com`), so any of its content subdomains is accepted: a rename must not strand every
 installed copy, and the feed's checksum and the signature checks vouch for the file, not the host. A refused redirect
@@ -349,20 +367,24 @@ public: the `.ipa` lists every registered device's UDID (each app in it carries 
 build the way `release/verify.sh` checks the DMG, so GitHub builds no iPhone app; the signing machine builds it once,
 from a signed commit.
 
-An iPhone build needs no version commit: it is made from any commit pushed to `main` or another branch, as often as
-there is something to test. For now the commit key's signature is only checked, not required: an unsigned commit gets a
-warning, and its scripts run on the signing machine with its keys, so build only commits you know (`--build-as-user`
-keeps the build itself away from them). It keeps the version the commit has (the Mac app's), and its
-build number is the commit's UTC time. On the signing machine:
-`scripts/release/iphone.sh [BRANCH|COMMIT] [--variant NAME] [--no-push] [--build-as-user USER]`, in the same
-checklist style; with neither, origin's `main`.
+An iPhone build needs no version commit: it is made from any commit, as often as there is something to test. For now
+the commit key's signature is only checked, not required: an unsigned commit gets a warning, and its scripts run on the
+signing machine with its keys, so build only commits you know (`--build-as-user` keeps the build itself away from
+them). It keeps the version the commit has (the Mac app's), and its build number is the commit's UTC time. On the
+signing machine: `scripts/release/iphone.sh [BRANCH|COMMIT] [--variant NAME] [--no-push] [--build-as-user USER]`, in
+the same checklist style; with neither, the commit checked out in that clone. A branch name means origin's branch;
+anything else, a commit the clone has.
 
-1. **Checks.** The commit (a branch of origin, or a commit on one) and whether the pinned key signed it, then the
+1. **Checks.** The commit and whether the pinned key signed it. Warnings only, none stops the build: not signed, on no
+   branch of origin (nobody else can see what was built), behind origin's copy of the checked-out branch (`git pull`
+   first to build that) and uncommitted changes in the clone (the build has the commit's code, not the files). Then the
    commit's own scripts (in the work folder's `iphone/<commit>/source/`), as `release-publish.sh` does. Then: the team
    in `<variant>.env`, the login keychain, the Apple Distribution identity, the Ad Hoc profiles (`release/adhoc.py`: the
    three bundle ids, Ad Hoc, unexpired, the App Group on the two watch ones, made for this machine's certificate; it
    names what is wrong), the release record and its install site (below: clean, on a branch, a git author, push access,
    not a public GitHub repository; a site it can fill in), the deploy command, the pinned Xcode and the build user.
+   Then it shows the plan (build, sign, record, deploy), the install page's full address and asks
+   `ship 0.1.7-20261110.1432 for iPhone? [y/N]` once, before the build: nothing after waits on you.
 2. **Build.** `release/builder.sh --platform ios --cache`, as you or as the build user: an `.xcarchive` built unsigned
    and signed ad hoc with each target's entitlements (`release/app.sh`). Unlike the Mac build, which starts from nothing
    so that it matches GitHub's, it keeps the tree's `build/` between builds, in
@@ -371,7 +393,7 @@ checklist style; with neither, origin's `main`.
    empties `/private/tmp`) downloads and compiles all of them; later ones mostly archive the app. Every source file gets
    the current time first, so Cargo never takes an output for another commit's. The step's line shows the phase (tools,
    Xcode archive and its target, ad hoc signatures, zipping), and afterwards how long each took.
-3. **Ship.** It shows the plan and asks `ship 0.1.7-20261110.1432 for iPhone? [y/N]`. The archive is exported with Apple
+3. **Ship.** The archive is exported with Apple
    Distribution and the profiles (manual signing) into `Dispatch.ipa`, checked (signature, profile, bundle id,
    version, build). Then recorded and deployed (below).
 

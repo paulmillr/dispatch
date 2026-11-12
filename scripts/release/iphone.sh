@@ -1,21 +1,23 @@
 #!/bin/bash
-# The iPhone build, Ad Hoc, on the signing machine (docs/releasing.md, Ad Hoc builds); by hand, from any commit you
-# pushed, a version commit or not: no version to bump, as many builds as you like.
+# The iPhone build, Ad Hoc, on the signing machine (docs/releasing.md, Ad Hoc builds); by hand, from any commit, a
+# version commit or not: no version to bump, as many builds as you like.
 #
 #   scripts/release/iphone.sh [BRANCH|COMMIT] [--variant NAME] [--no-push] [--build-as-user USER]
 #
-# 1. Checks, every problem listed at once: the commit (origin's main by default; a branch of origin, or a commit on
-#    one), and whether the pinned commit key signed it: for now only a warning (scripts/release/source.sh, signed_ref);
+# 1. Checks, every problem listed at once: the commit (the one checked out in this clone by default; a branch of
+#    origin, or any commit the clone has), and whether the pinned commit key signed it; unsigned, unpushed, behind
+#    origin's branch or with uncommitted changes here are only warnings, for now (scripts/release/source.sh, signed_ref);
 #    then, run from that commit's tree (exported to the work folder, work/<variant>/iphone/<commit>): <variant>.env's
 #    team, the keychain, the Apple Distribution identity, the Ad Hoc profiles in <variant>-adhoc-profiles/
 #    (scripts/release/adhoc.py), the release record (<cask>-release, a private clone next to this one; RELEASE_RECORD
 #    in release.env moves it) and its install site, adhoc-site/ there, the folder it is served from and the deploy
 #    command (RELEASE_ADHOC_SITE and RELEASE_ADHOC_DEPLOY in <variant>-adhoc.env), the pinned Xcode and the build user.
-# 2. The build: scripts/release/builder.sh --platform ios, as you or, with --build-as-user, as a macOS user without
+#    Then the plan, and one question for all of it: nothing is built before a yes.
+# 2. On yes, the build: scripts/release/builder.sh --platform ios, as you or, with --build-as-user, as a macOS user without
 #    keys: an .xcarchive signed ad hoc with each target's entitlements. The version is the commit's (the Mac app's), the
 #    build number its UTC time, and the build's name both: 0.1.7-20261110.1432. One build: GitHub builds no iPhone
 #    app, and nobody can check an Ad Hoc build against one (its .ipa lists the testers' devices).
-# 3. On yes: the archive exported with Apple Distribution and the profiles (Dispatch.ipa, checked). Then the build goes
+# 3. The archive exported with Apple Distribution and the profiles (Dispatch.ipa, checked). Then the build goes
 #    into the record: the site's .ipa, its manifest's version and its page's (adhoc.py site; the addresses stay as the
 #    site has them), and <variant>/<name>/ with the .ipa and build.json, committed and pushed; then the site copied
 #    into the folder it is served from, if it has one (pushed, if a clone), and the deploy command run there (or in
@@ -46,7 +48,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-ref="${ref:-main}"
+ref="${ref:-HEAD}"
 [[ -z "$usage" && "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] ||
   die "usage: scripts/release/iphone.sh [BRANCH|COMMIT] [--variant NAME] [--no-push] [--build-as-user USER]"
 variant="$(config variant "$variant" 2>&1)" || die "$variant"
@@ -161,6 +163,23 @@ REBUILD_AS_YOU="the build runs with access to your keys (--build-as-user builder
 rebuild_checks "$build_user"
 [[ -z "$failed" ]] || die "stopped; nothing was built or signed"
 
+# Asked before the build, which takes minutes: then nothing waits on an answer, and a no costs none of them.
+if [[ -f "$work/build/build.json" ]]; then plan="build: done earlier, in $work/build"
+else plan="build $label from ${commit:0:8}${build_user:+ as $build_user}"; fi
+plan+=$'\n'"sign $phone $label (build $number) with Apple Distribution and the Ad Hoc profiles"
+if [[ -z "$push" ]]; then plan+=$'\n'"recorded and deployed nowhere (--no-push)"
+else
+  plan+=$'\n'"into $site and $record/$variant/$label, committed and pushed"
+  [[ -z "$served" ]] || plan+=$'\n'"copied into $served${served_root:+, committed and pushed}"
+  [[ -z "$deploy" ]] || plan+=$'\n'"then, in ${served_root:-${served:-$site}}: $deploy"
+fi
+block "plan" "$plan"
+# The page's address on its own line, where the answer is given: the one to open on the phone afterwards.
+if [[ -n "$push" ]]; then printf '\n  install: %s%s%s\n' "$bold" "$page" "$reset"
+else printf '\n  install: %s  %s(not updated: --no-push)%s\n' "$page" "$gray" "$reset"; fi
+ask "$([[ -n "$push" ]] && echo ship || echo sign)" "$label for iPhone" || die "stopped; nothing was built or signed"
+started=$SECONDS
+
 # 2. The build.
 field() { plutil -extract "$2" raw "$1/build.json"; }
 if [[ -f "$work/build/build.json" ]]; then
@@ -185,18 +204,6 @@ file="$work/build/$(field "$work/build" ios.file)"
   die "build.json is not the iPhone build of $variant $version ($number) at ${commit:0:8} with Xcode $xcode"
 
 # 3. Sign, then record and deploy.
-plan="sign $phone $label (build $number) with Apple Distribution and the Ad Hoc profiles"
-if [[ -z "$push" ]]; then plan+=$'\n'"recorded and deployed nowhere (--no-push)"
-else
-  plan+=$'\n'"into $site and $record/$variant/$label, committed and pushed"
-  [[ -z "$served" ]] || plan+=$'\n'"copied into $served${served_root:+, committed and pushed}"
-  [[ -z "$deploy" ]] || plan+=$'\n'"then, in ${served_root:-${served:-$site}}: $deploy"
-  plan+=$'\n'"installed from $page"
-fi
-block "plan" "$plan"
-ask "$([[ -n "$push" ]] && echo ship || echo sign)" "$label for iPhone" || die "stopped; nothing was signed"
-started=$SECONDS
-
 ipa="$work/adhoc/Dispatch.ipa"
 export_build() {
   rm -rf "$work/archive" "$work/export" "$work/adhoc"
