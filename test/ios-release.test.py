@@ -434,6 +434,21 @@ class AdHocTests(unittest.TestCase):
             adhoc.site(str(self.root / 'nothing'), self.PHONE)
 
 
+class ReleaseScriptTests(unittest.TestCase):
+    """scripts/release/ui.sh, which the signing machine's scripts share."""
+
+    def test_a_step_hides_none_of_the_callers_variables(self):
+        # iphone.sh's publish_record runs in a step and names the record's folder and the page after $label: a local
+        # of step's under that name made every build "recorded".
+        script = ('source "$1/scripts/release/ui.sh"; out="$2" label=0.1.7-20261110.1432 log=mine begun=early; '
+                  'record() { echo "$label $log $begun" > "$out/seen"; }; step recorded "$out/step.log" record')
+        with tempfile.TemporaryDirectory() as folder:
+            result = subprocess.run(['bash', '-c', script, '_', str(ROOT), folder], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((Path(folder) / 'seen').read_text(), '0.1.7-20261110.1432 mine early\n')
+        self.assertIn('recorded', result.stdout)
+
+
 class ReleaseBundleTests(unittest.TestCase):
     def bundle(self, directory, protocol=42):
         helper = Path(directory) / 'DispatchMobile.app/helper'
