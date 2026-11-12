@@ -13,6 +13,9 @@ enum FilesModes {
             // FilesTab.tabName: a file's parent folder and its name.
             window(tab: "Theme/Palette.swift", segment: .files) { FilesTab() }
         },
+        Screen("J1g-files-glass", group: "files", "Files on Liquid Glass: today's bars, and the proposal at rest and scrolled") {
+            FilesGlassBoard()
+        },
         Screen("J2-review", group: "files", "Review: the changes, a diff with a comment and a comment being written") {
             // FilesTab.tabName: "Review" and the branch.
             window(tab: "Review dark-mode", segment: .review) { ReviewTab() }
@@ -27,15 +30,28 @@ enum FilesModes {
     ]
 
     @MainActor static func window<Content: View>(tab: String, segment: FilesSegment, finishing: Bool = false,
+                                                 width: CGFloat = 1180, height: CGFloat = 780, floating: Bool = false,
                                                  @ViewBuilder content: () -> Content) -> some View {
-        DispatchWindow(width: 1180, height: 780, sidebar: nil) {
+        DispatchWindow(width: width, height: height, sidebar: nil) {
             Pane(strip: StripModel(tabs: [
                 TabItem(title: tab, shortcut: 1, selected: true),
                 TabItem(title: "Theme contrast", activity: .finished, shortcut: 2),
             ], mode: .files, titleRow: true, modeSymbol: segment.symbol)) {
-                VStack(spacing: 0) {
-                    FilesHeader(segment: segment)
-                    content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                Group {
+                    if floating {
+                        // Proposal (J1g): no bar. The content runs to the top, under the header and the column
+                        // headers it pins there, behind one soft scroll edge, as macOS 26's toolbars over content.
+                        // The content draws the edge under the rows it pins (FilesTab.floatingBody).
+                        ZStack(alignment: .top) {
+                            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            FilesHeader(segment: segment, floating: true)
+                        }
+                    } else {
+                        VStack(spacing: 0) {
+                            FilesHeader(segment: segment)
+                            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        }
+                    }
                 }
                 .background(ChatColors.current.terminal)
                 // ReviewHeaderButton's popover (`.popover(arrowEdge: .bottom)`), under Create review.
@@ -105,6 +121,10 @@ struct FilesHeader: View {
     /// `fileMenu` open) and where it is among them; ↑ ↓ step through them.
     var reviewFile = false
     var fileMenu = false
+    /// Proposal (J1g): no fill of its own; it floats over the content's scroll edge.
+    var floating = false
+    /// FilesHeader.height: expanded(34).
+    static var height: CGFloat { t.expanded(34) }
     var body: some View {
         HStack(spacing: 12) {
             FilesPill(segment: segment, back: commit != nil || reviewFile)
@@ -152,11 +172,10 @@ struct FilesHeader: View {
             .modifier(GlassControlGroup())
         }
         .padding(.horizontal, 12)
-        // FilesHeader.height: expanded(34).
-        .frame(height: t.expanded(34))
+        .frame(height: Self.height)
         .font(t.font(.label)).foregroundStyle(p.muted)
-        .background(Chrome.window)
-        .overlay(alignment: .bottom) { if !Mock.glass { p.separator.frame(height: 1) } }
+        .background(floating ? Color.clear : Chrome.window)
+        .overlay(alignment: .bottom) { if !Mock.glass && !floating { p.separator.frame(height: 1) } }
     }
 }
 
@@ -856,7 +875,83 @@ struct FilesTab: View {
         FileNode(name: "Package.swift", modified: "3d", size: "1.2 KB"),
         FileNode(name: "README.md", modified: "2d", size: "3.4 KB"),
     ]
+    /// Proposal (J1g): the rows and the code run under the files header and the pinned column headers, `scrolled`
+    /// points past the top; no fills or rules on the headers, the footer and the transfer.
+    var floating = false
+    var scrolled: CGFloat = 0
     var body: some View {
+        if floating { floatingBody } else { barsBody }
+    }
+
+    private var columns: some View {
+        HStack(spacing: 0) {
+            Text("Name").frame(maxWidth: .infinity, alignment: .leading)
+            Text("Modified").frame(width: t.expanded(64), alignment: .trailing)
+            Text("Size").frame(width: t.expanded(72), alignment: .trailing)
+        }
+        .font(t.font(.caption)).foregroundStyle(p.detail)
+        .padding(.leading, 14).padding(.trailing, 12)
+        .frame(height: Self.headerHeight)
+    }
+
+    private var previewTitle: some View {
+        HStack(spacing: 10) {
+            Text("Palette.swift").font(t.font(.content)).foregroundStyle(theme.ink).lineLimit(1).layoutPriority(1)
+            IconButton { Image(systemName: "doc.on.doc").font(.system(size: 11)) }
+            Text("572 B · modified 6m ago").font(t.font(.body)).foregroundStyle(theme.muted).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            IconButton { WrapGlyph() }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: Self.headerHeight)
+    }
+
+    private var floatingBody: some View {
+        let top = FilesHeader.height
+        return FilesSplit {
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    ForEach(Array(nodes.enumerated()), id: \.offset) { _, node in row(node) }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, top + Self.headerHeight - scrolled)
+                ScrollEdge(solid: top + Self.headerHeight)
+                columns.padding(.top, top)
+                // The transfer and the count float over the rows' bottom edge: a glass capsule, and words on it.
+                VStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    transferCapsule
+                    HStack(spacing: 0) { Text("7 items · 1 selected"); Spacer(minLength: 12) }
+                        .lineLimit(1).font(t.font(.caption)).foregroundStyle(p.detail)
+                        .padding(.leading, 14).padding(.trailing, 12).frame(height: t.expanded(24))
+                }
+                .background(alignment: .bottom) { ScrollEdge(solid: t.expanded(24), bottom: true) }
+            }
+        } detail: {
+            ZStack(alignment: .top) {
+                SourcePreview(lines: Self.palette).padding(.top, top + Self.headerHeight - scrolled)
+                ScrollEdge(solid: top + Self.headerHeight)
+                previewTitle.padding(.top, top)
+            }
+        }
+    }
+
+    private var transferCapsule: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.up").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(p.accent)
+            Text("Sending").foregroundStyle(p.secondary).lineLimit(1)
+            Text("31 of 48 MB · 12 MB/s").foregroundStyle(p.muted).lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "xmark").font(t.symbol(.caption, weight: .semibold)).foregroundStyle(p.sidebarDetail)
+        }
+        .font(t.font(.label))
+        .padding(.horizontal, 14)
+        .frame(height: 32)
+        .background(GlassCapsule())
+        .padding(.horizontal, 10)
+    }
+
+    private var barsBody: some View {
         FilesSplit {
             VStack(spacing: 0) {
                 // FilesColumnHeader: the caption size `detail`, as tall as the preview's header with its rule
@@ -1458,5 +1553,65 @@ struct GlyphModePicker: View {
                     if Mock.glass { Capsule().fill(GlassTone.selected) } else { RoundedRectangle(cornerRadius: 4).fill(p.selectedControl) }
                 }
             }
+    }
+}
+
+
+// MARK: J1g, Files on Liquid Glass
+
+/// macOS 26's soft scroll edge, as the kit draws glass offscreen (materials do not render): the content's background
+/// almost solid behind the pinned rows (`solid` points from the top, or the bottom), then fading out over `fade`, so
+/// what scrolls under the header dims and blurs away rather than meeting a bar's edge.
+struct ScrollEdge: View {
+    let solid: CGFloat
+    var fade: CGFloat = 18
+    var bottom = false
+    var body: some View {
+        let bg = ChatColors.current.terminal, height = solid + fade
+        LinearGradient(stops: [.init(color: bg.opacity(0.96), location: 0), .init(color: bg.opacity(0.9), location: solid / height),
+                               .init(color: bg.opacity(0), location: 1)],
+                       startPoint: bottom ? .bottom : .top, endPoint: bottom ? .top : .bottom)
+            .frame(height: height).allowsHitTesting(false)
+            .frame(maxHeight: .infinity, alignment: bottom ? .bottom : .top)
+    }
+}
+
+/// Today's three bars (the header, the column and preview headers, each with its fill and rule; the transfer and the
+/// footer as bars) beside the proposal: one glass band, at rest and with the list and the code scrolled under it.
+struct FilesGlassBoard: View {
+    var body: some View {
+        let colors = ChatColors.current
+        VStack(alignment: .leading, spacing: 28) {
+            HStack(alignment: .top, spacing: 28) {
+                tile("Today", "Three opaque bands with hard edges: the header, then the list's and the preview's own header rows; the transfer and the count are bars too.") {
+                    FilesModes.window(tab: "Theme/Palette.swift", segment: .files, width: 1000, height: 560) { FilesTab() }
+                }
+                tile("Proposed, at rest", "One band: the header and the pinned column headers float on the content, no fills or rules; the transfer is a glass capsule.") {
+                    FilesModes.window(tab: "Theme/Palette.swift", segment: .files, width: 1000, height: 560, floating: true) {
+                        FilesTab(floating: true)
+                    }
+                }
+            }
+            tile("Proposed, scrolled", "The rows and the code pass under the band and fade into its soft edge, as in Finder and Xcode on macOS 26.") {
+                FilesModes.window(tab: "Theme/Palette.swift", segment: .files, width: 1000, height: 560, floating: true) {
+                    FilesTab(floating: true, scrolled: 46)
+                }
+            }
+        }
+        .padding(32)
+        .background(colors.terminal.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func tile(_ title: String, _ note: String, @ViewBuilder _ content: () -> some View) -> some View {
+        let colors = ChatColors.current
+        return VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(colors.ink)
+                Text(note).font(.system(size: 12)).foregroundStyle(colors.muted)
+                    .lineLimit(2, reservesSpace: true).frame(maxWidth: 900, alignment: .leading)
+            }
+            content()
+        }
+        .fixedSize()
     }
 }

@@ -33,6 +33,8 @@ GROUPS = {
         'pushed': ['F2-file', 'C2-commit'],
         'spaces': ['P1-spaces', 'P1b-spaces-needs-you', 'P2-space', 'P2b-space-swipe', 'P2c-space-menu', 'P2d-space-edit',
                    'P2e-space-new-tab', 'P3-space-switcher'],
+        'agents': ['A1-agents', 'A1b-agents-needs-you', 'A1c-agents-menu', 'A1d-agents-scrolled', 'A1e-agents-by-host',
+                   'A2-agents-no-host', 'A2b-agents-no-agents'],
         'host': ['W0-spaces-tree', 'W0b-offline-collapsed', 'W0c-offline-menu', 'W1a-host-small', 'W1b-host-dragging',
                  'W1c-host-small-offline', 'W1-host-cpu', 'W2-host-mem', 'W3-host-scrub', 'W5-host-stale',
                  'W6-host-plain', 'W7-host-lowpower'],
@@ -40,8 +42,9 @@ GROUPS = {
         'settings': ['G1-settings', 'G2-terminal-font', 'G3-chat-font', 'G5-notifications'],
         'terminal': ['T1-terminal-search', 'T2-terminal-menu'],
         'chat': ['C1-chat-search', 'C2-chat-slash', 'C3-chat-side', 'C4-chat-goal', 'C4b-chat-goal-sheet',
-                 'C5-chat-conversation', 'C6-chat-jump'],
+                 'C5-chat-conversation', 'C7a-jump-corner', 'C7b-jump-corner-new'],
         'queue': ['Q1-queue-bubbles', 'Q1b-queue-menu', 'Q1c-queue-editing', 'Q6-queue-paused'],
+        'usage': ['N4a-usage-steps-ring', 'N4c-usage-steps-ring-5h', 'N4d-usage-steps-ring-low', 'N4e-usage-steps-ring-5h-low'],
         'message': ['M1-message-info', 'M1b-message-info-unfolded', 'M1c-message-info-short', 'M1d-message-info-stopped'],
     },
     'ipad': {
@@ -53,6 +56,7 @@ GROUPS = {
         'onerail': ['L12-one-rail-chat', 'L12b-one-rail-chat-typing', 'L12c-one-rail-chat-draft', 'L13-one-rail-review',
                     'L14-one-rail-terminal', 'L14b-one-rail-terminal-typing', 'L14c-one-rail-terminal-keys',
                     'L15-edge-terminal', 'L15b-edge-chat'],
+        'host-landscape': ['L19a-host-rail', 'L19b-host-rail-opening', 'L19c-host-rail-facts'],
     },
     'duo': {
         'duo': ['V1-duo-chat', 'V2-duo-files', 'V3-duo-terminal', 'V7-duo-space', 'V8-duo-empty'],

@@ -330,39 +330,3 @@ struct Waveform: View {
         }
     }
 }
-
-/// C6: scrolled up while the agent writes: a "Jump to latest" pill with the new-message count, over the thread.
-struct ChatJumpScreen: View {
-    var body: some View {
-        ChatShell {
-            ScrollView {
-                VStack(spacing: 10) {
-                    Bubble(text: "Make billing webhook retries idempotent.", user: true)
-                    BubbleH(text: "Stripe retries the same event with a new attempt counter, so a counter-based guard can double-process. I'll key on the event id instead and persist what we've seen.")
-                    Bubble(text: "Also cover invoice.paid — it has a separate handler.", user: true)
-                    Bubble(text: "Right, the invoice.paid path has its own handler in src/routes/invoices.ts and bypasses the guard.", user: false)
-                    Bubble(text: "What about the Stripe CLI's replay command, does it reuse event ids?", user: true)
-                    Bubble(text: "Yes, stripe events resend keeps the original id, so the guard treats it as a retry and skips it. That is what we want for replays of real events.", user: false)
-                    Spacer(minLength: 300)
-                }
-                .padding(.horizontal, 16).padding(.top, 8)
-            }
-            .defaultScrollAnchor(.top)
-        } bottom: {
-            Composer()
-        } overlay: {
-            VStack {
-                Spacer()
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.down")
-                    Text("Jump to latest")
-                    Text("2").font(.caption.weight(.bold)).foregroundStyle(.white).padding(.horizontal, 6).frame(height: 18).background(Color.stateUnread, in: Capsule())
-                }
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16).frame(height: 40)
-                .glassEffect(.regular.interactive(), in: Capsule())
-                .padding(.bottom, 12)
-            }
-        }
-    }
-}

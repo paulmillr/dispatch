@@ -416,6 +416,8 @@ struct ComposerModel {
     /// The pane is focused. Unfocused, the editor and the footer's details hide: on glass the round reply button
     /// stands where Send was (or, while the agent works, the footer's activity alone); flat, "Reply…".
     var focused = true
+    /// Explorations: drawn in place of the footer's model and effort.
+    var chip: AnyView? = nil
 }
 
 /// The composer (ChatView.input, ChatComposerFocusChrome): on Liquid Glass its frame is the glass, 12-point corners,
@@ -503,14 +505,18 @@ struct ComposerCard: View {
         return HStack(spacing: 0) {
             HStack(spacing: 12) {
                 HStack(spacing: 7) {
-                    Text(model.model).lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: compact ? ChatType.detailSize * 9 : nil, alignment: .leading)
-                        .overlay(alignment: .bottom) { Rectangle().fill(colors.muted.opacity(0.4)).frame(height: 1).offset(y: 2) }
-                    if !compact { Text("·") }
-                    Group {
-                        if compact { EffortMeter(effort: model.effort) } else { Text(model.effort) }
+                    if let chip = model.chip {
+                        chip.frame(minHeight: 20)
+                    } else {
+                        Text(model.model).lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: compact ? ChatType.detailSize * 9 : nil, alignment: .leading)
+                            .overlay(alignment: .bottom) { Rectangle().fill(colors.muted.opacity(0.4)).frame(height: 1).offset(y: 2) }
+                        if !compact { Text("·") }
+                        Group {
+                            if compact { EffortMeter(effort: model.effort) } else { Text(model.effort) }
+                        }
+                        .frame(minWidth: 24, minHeight: 20)
                     }
-                    .frame(minWidth: 24, minHeight: 20)
                 }
                 .foregroundStyle(colors.muted.opacity(0.65))
                 .fixedSize()

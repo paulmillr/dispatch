@@ -70,7 +70,81 @@ enum ModelLadder {
         Screen("E5-ladder-storyboard", group: "ladder", "A track frame by frame: the pointer, the keys, the edges") {
             storyboard
         },
+        Screen("E6-ladder-labels", group: "ladder", "The stops' labels: words, icons, capitals, for both families") {
+            board {
+                ForEach(Array([("Codex", sol), ("Claude", claude)].enumerated()), id: \.offset) { _, family in
+                    HStack(alignment: .top, spacing: 32) {
+                        tile("\(family.0): words", "As today.") { Popover(picker: family.1) }
+                        tile("\(family.0): icons", "The header names the choice; effort as a rising meter.") {
+                            Popover(picker: with(family.1) { $0.look = .icons })
+                        }
+                        tile("\(family.0): capitals", "The same words, upcased and a size down to fit six stops.") {
+                            Popover(picker: with(family.1) { $0.look = .caps })
+                        }
+                    }
+                }
+            }
+        },
+        Screen("E7-ladder-footer-glyphs", group: "ladder", "The composer's footer with the model as a sun and the effort as words or a meter") {
+            board {
+                HStack(alignment: .top, spacing: 32) {
+                    composerTile("Today", "The model's ID and the effort in words.", nil)
+                    composerTile("Emoji, word", "☀️ in its own colours, the effort still a word.", GlyphChip(mark: .emoji("☀️"), effort: .word))
+                }
+                HStack(alignment: .top, spacing: 32) {
+                    composerTile("Emoji, meter", "The footer's own four-bar meter: high is two.", GlyphChip(mark: .emoji("☀️"), effort: .meter))
+                    composerTile("Emoji, six bars", "The popover's meter: high is the third of six.", GlyphChip(mark: .emoji("☀️"), effort: .rising))
+                }
+                HStack(alignment: .top, spacing: 32) {
+                    composerTile("Symbol, word", "The monochrome sun, in the footer's grey.", GlyphChip(mark: .symbol("sun.max.fill"), effort: .word))
+                    composerTile("Symbol, meter", "Both marks monochrome.", GlyphChip(mark: .symbol("sun.max.fill"), effort: .meter))
+                }
+            }
+        },
+        Screen("E8-ladder-footer-window", group: "ladder", "The sun and the high-effort meter in the composer's footer, in the window") {
+            DispatchWindow(sidebar: Sample.sidebar) {
+                Pane(strip: StripModel(tabs: [
+                    TabItem(title: "Fix the invoice rounding", activity: .finished, shortcut: 1, selected: true),
+                    TabItem(title: "tests", shortcut: 2),
+                ], mode: .chat, agent: true)) {
+                    ChatPane(items: Sample.chat, composer: ComposerModel(draft: "Also cover the zero-amount case", model: "sol-6.1",
+                                                                         chip: AnyView(GlyphChip(mark: .emoji("☀️"), effort: .meter))))
+                }
+            }
+        },
     ]
+
+    /// The footer's model and effort as marks: the model an emoji or a symbol, the effort a word or bars.
+    struct GlyphChip: View {
+        enum Mark { case emoji(String), symbol(String) }
+        enum Effort { case word, meter, rising }
+        var mark: Mark
+        var effort: Effort
+        var body: some View {
+            let colors = ChatColors.current
+            HStack(spacing: 7) {
+                switch mark {
+                case .emoji(let emoji): Text(emoji).font(.system(size: ChatType.detailSize + 1))
+                case .symbol(let name): Image(systemName: name).font(.system(size: ChatType.detailSize + 1, weight: .medium))
+                }
+                switch effort {
+                case .word: Text("high")
+                case .meter: Meter(effort: "high")
+                case .rising: Bars(filled: 3, count: 6, color: colors.ink.opacity(0.8))
+                }
+            }
+        }
+    }
+
+    @MainActor private static func composerTile(_ title: String, _ note: String, _ chip: GlyphChip?) -> some View {
+        let colors = ChatColors.current
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(colors.ink)
+            Text(note).font(.system(size: 11.5)).foregroundStyle(colors.muted)
+            ComposerCard(model: ComposerModel(draft: "Also cover the zero-amount case", model: "sol-6.1", chip: chip.map { AnyView($0) }))
+                .frame(width: 560)
+        }
+    }
 
     // MARK: Data
 
@@ -80,9 +154,15 @@ enum ModelLadder {
         /// The agent's own line for the model (its menu row's description).
         var detail = ""
         let efforts: [String]
+        /// The stop's SF Symbol when the track draws icons.
+        var glyph = ""
     }
 
+    /// How a track labels its stops.
+    enum Look { case words, icons, caps }
+
     struct Ladder {
+        var look = Look.words
         var rungs: [Rung]
         /// The family's security model: listed by the agent, never a rung.
         var special: Rung?
@@ -117,6 +197,8 @@ enum ModelLadder {
         var modelRow: LevelRow {
             let hovered = hover?.row == .model ? hover?.stop : nil
             var level = Level(stops: rungs.map(\.name))
+            level.look = look
+            level.glyphs = rungs.map(\.glyph)
             level.current = specialOn ? nil : model
             level.hover = hovered
             level.ghost = specialOn ? model : unconfirmed ? wasModel : nil
@@ -148,6 +230,7 @@ enum ModelLadder {
             let hovered = hover?.row == .effort ? hover?.stop : nil
             let missing = Set(levels.indices.filter { !shown.efforts.contains(levels[$0]) })
             var level = Level(stops: levels)
+            level.look = look
             level.current = levels.firstIndex(of: effort)
             level.hover = hovered
             level.ghost = wasEffort.flatMap { levels.firstIndex(of: $0) }
@@ -167,11 +250,19 @@ enum ModelLadder {
 
     static let five = ["low", "medium", "high", "xhigh", "max"]
     static let claude = Ladder(rungs: [
-        Rung(name: "haiku", id: "haiku-5.5", detail: "Fastest, for quick answers.", efforts: ["low", "medium", "high"]),
-        Rung(name: "sonnet", id: "sonnet-5.5", detail: "Best for everyday tasks.", efforts: five),
-        Rung(name: "opus", id: "opus-5.5", detail: "Complex work and long tasks.", efforts: five),
-        Rung(name: "fable", id: "fable-5.2", detail: "Most capable, for the hardest work.", efforts: five),
+        Rung(name: "haiku", id: "haiku-5.5", detail: "Fastest, for quick answers.", efforts: ["low", "medium", "high"], glyph: "leaf.fill"),
+        Rung(name: "sonnet", id: "sonnet-5.5", detail: "Best for everyday tasks.", efforts: five, glyph: "scroll.fill"),
+        Rung(name: "opus", id: "opus-5.5", detail: "Complex work and long tasks.", efforts: five, glyph: "music.quarternote.3"),
+        Rung(name: "fable", id: "fable-5.2", detail: "Most capable, for the hardest work.", efforts: five, glyph: "book.closed.fill"),
     ], special: Rung(name: "mythos", id: "mythos-5.2", efforts: five), model: 3, effort: "high")
+
+    /// Codex's family with four rungs and six levels, as the shipped popover shows it.
+    static let sol = Ladder(rungs: [
+        Rung(name: "luna", id: "luna-6.1", detail: "Fast and light.", efforts: five + ["ultra"], glyph: "moon.fill"),
+        Rung(name: "terra", id: "terra-6.1", detail: "Everyday coding.", efforts: five + ["ultra"], glyph: "globe.americas.fill"),
+        Rung(name: "sol", id: "sol-6.1", detail: "Hard problems.", efforts: five + ["ultra"], glyph: "sun.max.fill"),
+        Rung(name: "astra", id: "astra-6.1", detail: "Deep reasoning for the hardest work.", efforts: five + ["ultra"], glyph: "sparkles"),
+    ], special: Rung(name: "daybreak-blue", id: "daybreak-blue", efforts: five), model: 2, effort: "high")
 
     static let codex = Ladder(rungs: [
         Rung(name: "luna", id: "luna-6", detail: "Fast and light.", efforts: ["minimal", "low", "medium", "high"]),
@@ -451,6 +542,9 @@ enum ModelLadder {
 
     struct Level {
         var stops: [String]
+        var look = Look.words
+        /// Each stop's SF Symbol for the icons look; none draws a meter rising stop by stop.
+        var glyphs: [String] = []
         /// The choice: where the thumb rests.
         var current: Int?
         /// The pointer's stop.
@@ -532,8 +626,7 @@ enum ModelLadder {
                     HStack(spacing: 0) {
                         ForEach(Array(level.stops.enumerated()), id: \.offset) { index, stop in
                             let label = level.label(index)
-                            Text(stop).font(ChatType.font(12, weight: label.weight)).foregroundStyle(label.color)
-                                .lineLimit(1).frame(width: width, height: height)
+                            stopLabel(index, stop, label).frame(width: width, height: height)
                         }
                     }
                     if level.held != nil {
@@ -558,6 +651,23 @@ enum ModelLadder {
             .padding(3)
             .overlay { if level.focused { PillStroke(color: colors.accent.opacity(0.7), lineWidth: 1.5) } }
             .padding(-3)
+        }
+
+        @ViewBuilder private func stopLabel(_ index: Int, _ stop: String, _ label: (color: Color, weight: Font.Weight)) -> some View {
+            switch level.look {
+            case .words:
+                Text(stop).font(ChatType.font(12, weight: label.weight)).foregroundStyle(label.color).lineLimit(1)
+            case .caps:
+                Text(stop.uppercased()).font(ChatType.font(10, weight: label.weight == .regular ? .medium : .bold)).kerning(0.4)
+                    .foregroundStyle(label.color).lineLimit(1)
+            case .icons:
+                if level.glyphs.indices.contains(index) {
+                    Image(systemName: level.glyphs[index]).font(.system(size: 14, weight: label.weight == .regular ? .regular : .semibold))
+                        .foregroundStyle(label.color)
+                } else {
+                    Bars(filled: index + 1, count: level.stops.count, color: label.color)
+                }
+            }
         }
 
         /// The thumb: a raised pill; translucent while unconfirmed; on its way, a head with a fading tail; a lens while
@@ -590,6 +700,22 @@ enum ModelLadder {
                         .frame(width: slot.width, height: slot.height).offset(x: place * width + 3)
                 }
             }
+        }
+    }
+
+    /// An effort level as an icon: bars rising left to right, lit up to the level.
+    struct Bars: View {
+        var filled: Int
+        var count: Int
+        var color: Color
+        var body: some View {
+            HStack(alignment: .bottom, spacing: 1.5) {
+                ForEach(0..<count, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 0.75).fill(color.opacity(index < filled ? 1 : 0.28))
+                        .frame(width: 2.5, height: 4 + CGFloat(index) * 10 / CGFloat(max(count - 1, 1)))
+                }
+            }
+            .frame(height: 14, alignment: .bottom)
         }
     }
 
