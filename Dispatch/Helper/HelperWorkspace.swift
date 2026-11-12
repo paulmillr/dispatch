@@ -2005,6 +2005,11 @@
       restored(route)
     }
 
+    /// Whether the node is a server's (tmux, herdr), whose busy work a close can detach, rather than the app's own.
+    func serverNode(_ node: UInt64) -> Bool {
+      snapshots.values.contains { topology in topology.nodes.contains { $0.id == node } && external(topology.backend) }
+    }
+
     /// Whether every pane of `node` sits at its shell with nothing running, as the helper's close check finds it
     /// (`close.request` with `check`, which closes nothing); nil when the helper cannot say.
     func idle(_ node: UInt64) async -> Bool? {
@@ -2013,9 +2018,21 @@
       return !closed.confirmation
     }
 
+    /// `deciding`: the user's Close of a server's tab (`AppDelegate.closeServerTab`). The tab goes at once, as any
+    /// close's; then `deciding` picks the policy sent instead of `policy` (it checks, and asks while busy): Detach
+    /// detaches it, nil (Cancel) shows it again and sends nothing.
     @discardableResult
     func close(_ node: UInt64, policy: HelperClient.Policy,
-               preparing: (@MainActor () async throws -> Void)? = nil) -> Task<Void, Never> {
+               preparing: (@MainActor () async throws -> Void)? = nil,
+               deciding: (@MainActor () async -> HelperClient.Policy?)? = nil) -> Task<Void, Never> {
+      close(node, policy: policy, preparing: preparing, deciding: deciding, gated: true)
+    }
+
+    /// `gated` false: the detach a deciding close turns into, which must not wait for that close itself.
+    @discardableResult
+    private func close(_ node: UInt64, policy: HelperClient.Policy,
+                       preparing: (@MainActor () async throws -> Void)?,
+                       deciding: (@MainActor () async -> HelperClient.Policy?)?, gated: Bool) -> Task<Void, Never> {
       if policy == .detach, let pending = dismissals[node] { return pending.task }
       // A space still restoring shows the view saved from an earlier connection: its node ids are that connection's,
       // not this helper's, until the restore has matched them to this server's topology. Sent here, an old id names
@@ -2123,7 +2140,9 @@
         if policy != .detach { workspace?.onCloseTabs(released) }
         return Task {}
       }
-      let task = perform { client in
+      // A deciding close does not wait for the ones before it (each decides on its own); a close turned into a detach
+      // does not wait for the close it came from.
+      let task = perform(gated: gated && deciding == nil) { client in
         for task in waiting { await task.value }
         guard !self.stopped, !Task.isCancelled else { return }
         let result: HelperClient.Closed
@@ -2140,7 +2159,20 @@
               return
             }
           }
-          result = try await client.close(.init(node: node, policy: policy))
+          var sent = policy
+          if let deciding {
+            guard let decided = await deciding() else {
+              if !self.stopped, !Task.isCancelled { self.reveal(node) }
+              return
+            }
+            guard !self.stopped, !Task.isCancelled else { return }
+            if decided == .detach {
+              self.close(node, policy: .detach, preparing: nil, deciding: nil, gated: false)
+              return
+            }
+            sent = decided
+          }
+          result = try await client.close(.init(node: node, policy: sent))
         } catch {
           self.preparingCloses.removeValue(forKey: node)
           // Exit can remove the terminal before a checked quit reply settles. There is no tab to restore;
@@ -2181,7 +2213,8 @@
           dismiss()
         }
         // A busy multiplexer window keeps its work: it is detached without asking (old NativeTabClose:
-        // busy or unknown detaches); only the app's own shells ask before ending their processes.
+        // busy or unknown detaches); only the app's own shells ask before ending their processes. The user's Close of a
+        // server's tab asks before this (`AppDelegate.closeServerTab`), as the phone's does.
         if result.confirmation, self.snapshots.values.contains(where: { topology in
           topology.nodes.contains { $0.id == node } && self.external(topology.backend)
         }) {
@@ -2217,6 +2250,11 @@
         }
         dismissals[node] = (route, dismissal)
         return dismissal
+      }
+      if deciding != nil {
+        let id = System.uuid()
+        decidingCloses[id] = task
+        Task { await task.value; self.decidingCloses[id] = nil }
       }
       return task
     }
@@ -2490,12 +2528,20 @@
       workspace.onCloseTabs(ended)
     }
 
+    /// The user's server-tab closes still deciding (`close` `deciding`: a check, maybe a question). Operations made
+    /// after one wait until it has gone out and been answered, so the server sees them in the order made: a move sent
+    /// first would count the closing tab in its index.
+    @ObservationIgnored private var decidingCloses: [UUID: Task<Void, Never>] = [:]
+
     @discardableResult
-    private func perform(moving: Bool = false, _ operation: @escaping @MainActor (HelperClient) async throws -> Void) -> Task<Void, Never> {
+    private func perform(moving: Bool = false, gated: Bool = true,
+                         _ operation: @escaping @MainActor (HelperClient) async throws -> Void) -> Task<Void, Never> {
       operations += 1
       if moving { moves += 1 }
+      let earlier = gated ? Array(decidingCloses.values) : []
       return Task {
         defer { operations -= 1; retire() }
+        for close in earlier { await close.value }
         do {
           let client = try await client()
           try await operation(client)

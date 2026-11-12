@@ -102,8 +102,10 @@ private struct ChatCommandResultView: View {
                     .buttonStyle(.plain).foregroundStyle(theme.muted).help("Copy").accessibilityLabel("Copy command result")
                 close
             }
-            // The text's own height while it fits; a scroll view only past the cap.
-            ViewThatFits(in: .vertical) {
+            // The text's own size while it fits; a scroll view only past the cap, or for a shell's output (which never
+            // wraps) past the panel's width: measured on that axis too, a long line would widen the panel past the
+            // chat, which then centred it with both edges cut off.
+            ViewThatFits(in: shellOutput ? [.horizontal, .vertical] : .vertical) {
                 output
                 ScrollView(shellOutput ? [.horizontal, .vertical] : .vertical) { output }
             }
@@ -122,7 +124,9 @@ private struct ChatCommandResultView: View {
 
     /// The command, as a small monospaced chip.
     private var label: some View {
+        // A long command keeps both ends: the program and what it was asked (`!git -C … cherry-pick 1a2b3c4d`).
         Text(result.title).font(theme.typography.codeDetail).foregroundStyle(theme.muted).lineLimit(1)
+            .truncationMode(.middle)
             .padding(.horizontal, 6).padding(.vertical, 1)
             .background(theme.ink.opacity(0.06), in: Capsule())
     }

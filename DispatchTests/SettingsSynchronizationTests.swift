@@ -561,8 +561,8 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         let originalGlass = LiquidGlassStore.shared.enabled
         defer { LiquidGlassStore.shared.enabled = originalGlass }
-        // Tree's New Space is the header's glass circle, flat's "+ space" and "+ local" capsules; both as tall as the
-        // glass track (28 points at the 12.5 design base).
+        // New Space is "+ space" and "+ local" under the list in either order, as tall as the glass track (28 points at
+        // the 12.5 design base).
         let trackHeight = StripTab.glassTrackHeight(AppTypography(contentSize: controller.settings.values.fontSize))
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
@@ -584,12 +584,11 @@ final class SettingsSynchronizationTests: XCTestCase {
                         if large {
                             let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                 .filter { !$0.isHiddenOrHasHiddenAncestor }
-                                // A chip's + shows only under the pointer (headingPlus), wherever the pointer rests.
-                                .filter { order == .flat || $0.accessibilityIdentifier() == "sidebar-new-space" }
-                            // Tree: one New Space, the header's circle. Flat: "+ space" and "+ local".
-                            let buttonHeight = order == .flat || glass ? trackHeight : 24
-                            guard buttons.count == (order == .tree ? 1 : 2)
-                                    && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
+                                // A chip's + shows only under the pointer (headingPlus), wherever the pointer rests, and
+                                // is smaller than the list's.
+                                .filter { abs($0.bounds.height - trackHeight) < 1 }
+                            guard buttons.count == 2, Set(buttons.map { $0.accessibilityIdentifier() })
+                                    == ["sidebar-new-space", "host-new-space-local"] else { return false }
                             if order == .tree {
                                 let hosts = PresentationTestSupport.views(of: HostSecondaryClickView.self, in: root)
                                     .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - metrics.headerHeight) < 1 }

@@ -603,6 +603,74 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(body.attributedString(), text)
     }
 
+    /// A drag runs across the message's blocks, as through one text: from the middle of the first paragraph into the
+    /// third, the first's tail, the second whole and the third's head are selected; Copy joins them in reading order; past
+    /// the message it stops at its end; and a later click in one block leaves only its own selection.
+    func testDragSelectsAcrossBlocksAndCopiesThemInOrder() async throws {
+        guard #available(macOS 26, *) else { throw XCTSkip("Native selection bridge requires macOS 26") }
+        AppFont.register()
+        let theme = ChatTheme.standard
+        let source = "First paragraph here.\n\n- Second item\n\nThird paragraph there."
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatMarkdown(text: source).font(theme.typography.body).padding(20))
+        window.makeKeyAndOrderFront(nil)
+        let root = try XCTUnwrap(window.contentView)
+        try await TestSupport.eventually { PresentationTestSupport.views(of: NSTextView.self, in: root).count == 3 }
+        root.layoutSubtreeIfNeeded()
+        let views = PresentationTestSupport.views(of: ChatSelectableText.SelectableTextView.self, in: root)
+        let first = try XCTUnwrap(views.first { $0.string.hasPrefix("First") })
+        let second = try XCTUnwrap(views.first { $0.string == "Second item" })
+        let third = try XCTUnwrap(views.first { $0.string.hasPrefix("Third") })
+        let selection = try XCTUnwrap(first.selection)
+        XCTAssertEqual(selection.ordered(in: window), [first, second, third])
+        func point(_ view: NSTextView, at word: String) throws -> NSPoint {
+            let layout = try XCTUnwrap(view.layoutManager), container = try XCTUnwrap(view.textContainer)
+            let range = (view.string as NSString).range(of: word)
+            let rect = layout.boundingRect(forGlyphRange: layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil), in: container)
+            return view.convert(NSPoint(x: rect.minX + view.textContainerOrigin.x + 0.5, y: rect.midY + view.textContainerOrigin.y), to: nil)
+        }
+        let start = try point(first, at: "paragraph here"), end = try point(third, at: "paragraph there")
+        var events = [try PresentationTestSupport.mouseEvent(.leftMouseDragged, in: window, at: end),
+                      try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: end)]
+        first.trackSelection(from: try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: start)) {
+            events.isEmpty ? nil : events.removeFirst()
+        }
+        XCTAssertEqual((first.string as NSString).substring(with: first.selectedRange()), "paragraph here.")
+        XCTAssertEqual(second.selectedRange(), NSRange(location: 0, length: second.string.utf16.count))
+        XCTAssertEqual((third.string as NSString).substring(with: third.selectedRange()), "Third ")
+        XCTAssertEqual(selection.copiedText(source: source), "paragraph here.\n\nSecond item\n\nThird ")
+        _ = try await PresentationTestSupport.capture(window, named: "drag-across-blocks", in: "chat-formatting-validation")
+
+        // Upwards: from the third back into the first selects the same blocks.
+        events = [try PresentationTestSupport.mouseEvent(.leftMouseDragged, in: window, at: start),
+                  try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: start)]
+        third.trackSelection(from: try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: end)) {
+            events.isEmpty ? nil : events.removeFirst()
+        }
+        XCTAssertEqual(selection.copiedText(source: source), "paragraph here.\n\nSecond item\n\nThird ")
+
+        // Past the message (below its last block, or outside the window's content) the selection stops at its end: it
+        // never runs into another message.
+        let below = NSPoint(x: end.x, y: -200)
+        events = [try PresentationTestSupport.mouseEvent(.leftMouseDragged, in: window, at: below),
+                  try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: below)]
+        first.trackSelection(from: try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: start)) {
+            events.isEmpty ? nil : events.removeFirst()
+        }
+        XCTAssertEqual(selection.copiedText(source: source), "paragraph here.\n\nSecond item\n\nThird paragraph there.")
+
+        // A click (no drag) in the second leaves nothing selected anywhere.
+        let click = try point(second, at: "item")
+        events = [try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: click)]
+        second.trackSelection(from: try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: click)) {
+            events.isEmpty ? nil : events.removeFirst()
+        }
+        XCTAssertEqual([first, second, third].map { $0.selectedRange().length }, [0, 0, 0])
+        XCTAssertNil(selection.copiedText(source: source))
+    }
+
     func testMarkdownAllowsWebAndSourceLinks() {
         let value = ChatMarkdown.safeInlineMarkdown(
             "[secure](https://example.com/docs) [web](http://example.com) [file](file:///etc/passwd) " +

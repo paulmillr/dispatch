@@ -382,6 +382,9 @@ final class TmuxPresentationTests: XCTestCase {
             let thirdView = try XCTUnwrap(app.runtime.views[try XCTUnwrap(app.workspace.activeTab?.id)])
             XCTAssertEqual(thirdView.bounds.height, hiddenHeight - tabHeight, accuracy: 1, "Multiple window tabs show the bar")
             _ = try await PresentationTestSupport.capture(app.window, named: remote ? "ssh-two-tabs" : "local-two-tabs", in: "tmux-presentation-audit")
+            // A window just made may not be at its prompt yet (a remote login still starting): Close then asks, and
+            // Detach keeps it, as closing without asking did.
+            let answerer = CloseConfirmationAnswerer(); defer { answerer.stop() }
             app.controller.closeWindow(third.id)
             try await app.wait { app.workspace.current?.windows.count == 1 && abs(secondView.bounds.height - hiddenHeight) < 1 }
             XCTAssertEqual(firstScreens.count, 3, "Observe attach, a new space, and a new window tab")

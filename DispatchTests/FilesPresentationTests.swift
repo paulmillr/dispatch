@@ -428,8 +428,8 @@ final class FilesPresentationTests: XCTestCase {
             window.contentView.map { !PresentationTestSupport.views(of: FilesOutlineView.self, in: $0).isEmpty } ?? false
         }
 
-        // ⌃⌘2: Review, the list and its footer gone with the Files tab.
-        XCTAssertTrue(press(19, "2", [.control, .command]))
+        // ⌃⌘4: Review, the list and its footer gone with the Files tab.
+        XCTAssertTrue(press(21, "4", [.control, .command]))
         XCTAssertEqual(session.tab, .changes)
         try await TestSupport.eventually(diagnostic: "the Files tab's list stayed") {
             !outlineShows() && PresentationTestSupport.accessibilityFrames("files-footer", in: window).isEmpty
@@ -441,13 +441,20 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty,
                        "every tab searches from the same place")
         _ = try await PresentationTestSupport.capture(window, named: "files-tab-changes", in: "files-audit")
-        // ⌃⌘3: Commits; ⌃⌘1: Files again, the list back.
-        XCTAssertTrue(press(20, "3", [.control, .command]))
+        // ⌃⌘5: Commits; ⌃⌘3: Files again, the list back.
+        XCTAssertTrue(press(23, "5", [.control, .command]))
         XCTAssertEqual(session.tab, .commits)
-        XCTAssertTrue(press(18, "1", [.control, .command]))
+        XCTAssertTrue(press(20, "3", [.control, .command]))
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(diagnostic: "the list did not come back") { outlineShows() }
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty, "no git on Files")
+
+        // ⌃⌘1: the terminal; ⌃⌘4 from there opens files on Review, as ⇧⌘U does.
+        XCTAssertTrue(press(18, "1", [.control, .command]))
+        XCTAssertEqual(runtime.files.mode(for: tab.id), .terminal)
+        XCTAssertTrue(press(21, "4", [.control, .command]))
+        XCTAssertEqual(runtime.files.mode(for: tab.id), .files)
+        XCTAssertEqual(session.tab, .changes)
 
         // ⇧⌘U and ⇧⌘L open files on their tab from the terminal.
         runtime.files.switchMode(tab.id, to: .terminal)
@@ -462,7 +469,7 @@ final class FilesPresentationTests: XCTestCase {
         // The shell left the repository: back on Files, and the git keys do nothing.
         session.git = .none
         XCTAssertEqual(session.tab, .files)
-        _ = press(19, "2", [.control, .command]); _ = press(32, "U", [.command, .shift])
+        _ = press(21, "4", [.control, .command]); _ = press(32, "U", [.command, .shift])
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(diagnostic: "the list did not come back") { outlineShows() }
     }
@@ -646,6 +653,27 @@ final class FilesPresentationTests: XCTestCase {
         try await dividerSits(at: 620.5, in: window)
         try await TestSupport.eventually { source.calls.contains("read \(health)") }
         try await read(["health", "ok"], in: window, named: "files-preview-shown-again")
+    }
+
+    /// A narrow list hides Size, then Modified; their sorts stay in a menu at the header's end, which names the hidden
+    /// column while the list is sorted by it. Wide enough for every column, the menu goes.
+    func testNarrowColumnHeaderKeepsEverySortInAMenu() async throws {
+        AppFont.register()
+        let session = FilesSession(id: System.uuid())
+        let narrow = FilesColumns.shown(width: 200, typography: AppTypography())
+        XCTAssertFalse(narrow.modified || narrow.size, "200 pt hides both")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: FilesColumnHeader(session: session))
+        window.makeKeyAndOrderFront(nil)
+        try await TestSupport.eventually { !PresentationTestSupport.accessibilityFrames("files-sort-menu", in: window).isEmpty }
+        session.chooseSort(.modified)
+        try await read(["Name", "Modified"], in: window, named: "files-columns-narrow-sorted")
+        window.setContentSize(NSSize(width: 900, height: 60))
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("files-sort-menu", in: window).isEmpty }
+        try await read(["Name", "Modified", "Size"], in: window, named: "files-columns-wide")
     }
 
     func testNarrowHeaderKeepsThePreviewToggleClearOfTheSwitch() async throws {

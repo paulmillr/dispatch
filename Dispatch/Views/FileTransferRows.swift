@@ -46,8 +46,7 @@ struct FileTransferRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(palette.window)
-        .overlay(alignment: .top) { Rectangle().fill(palette.separator).frame(height: 1) }
+        .modifier(TransferRowChrome())
         .accessibilityElement(children: .contain)
         .accessibilityLabel(text.spoken)
         .accessibilityIdentifier("file-transfer-\(transfer.id.uuidString)")
@@ -218,5 +217,23 @@ struct FileTransferButtonStyle: ButtonStyle {
             .background(quiet ? Color.clear : palette.ink.opacity(configuration.isPressed ? 0.12 : 0.07),
                         in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
+    }
+}
+
+/// A transfer row's chrome: flat, a bar under the list with a rule along its top; on Liquid Glass a rounded glass
+/// panel floating over the list's foot, inset from its edges, its progress bar clipped to the panel's corners.
+private struct TransferRowChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        let palette = Chrome.palette
+        if LiquidGlassStore.shared.active {
+            let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+            content.clipShape(shape)
+                .liquidGlass(in: shape, fallback: palette.window)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+        } else {
+            content
+                .background(palette.window)
+                .overlay(alignment: .top) { Rectangle().fill(palette.separator).frame(height: 1) }
+        }
     }
 }

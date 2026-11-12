@@ -609,21 +609,54 @@ extension AgentModelMenu {
 }
 
 /// Close confirmation is always on. Tests that close or quit running work answer the real
-/// alert as a user would ("Close"), from a timer that also fires inside its modal loop.
+/// alert as a user would, from a timer that also fires inside its modal loop: the app's own question with `answer`
+/// (its second button by default: "Close", "Quit"); a server tab's (tmux, herdr: Cancel, Terminate, Detach) with
+/// `server`, Detach by default, which keeps the work as a close without asking did.
 @MainActor final class CloseConfirmationAnswerer {
-    private let timer: Timer
+    static let cancel = NSApplication.ModalResponse.alertFirstButtonReturn
+    static let terminate = NSApplication.ModalResponse.alertSecondButtonReturn
+    static let detach = NSApplication.ModalResponse.alertThirdButtonReturn
+    private var timer: Timer?
+    private let answer: NSApplication.ModalResponse
+    private let server: NSApplication.ModalResponse
+    /// How many close questions it answered, and how many of them were a server tab's.
+    private(set) var answered = 0
+    private(set) var serverAnswered = 0
+    /// Each answered question's words.
+    private(set) var questions: [String] = []
 
-    init() {
-        timer = Timer(timeInterval: 0.05, repeats: true) { _ in
-            MainActor.assumeIsolated {
-                guard let window = NSApp.modalWindow, window.identifier?.rawValue == AppDelegate.closeConfirmationIdentifier else { return }
-                NSApp.stopModal(withCode: .alertSecondButtonReturn); Self.wake() // from a timer, stopModal ends the loop only at its next event
-            }
+    init(_ answer: NSApplication.ModalResponse = .alertSecondButtonReturn, server: NSApplication.ModalResponse = detach) {
+        self.answer = answer
+        self.server = server
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
+        self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    func stop() { timer.invalidate() }
+    /// The question last answered: it can stay up past an answer (stopModal from a timer ends the loop only at its
+    /// next event, and not always the first time), so it is answered on every tick until it goes, and counted once.
+    private weak var last: NSWindow?
+
+    private func tick() {
+        guard let window = NSApp.modalWindow, window.identifier?.rawValue == AppDelegate.closeConfirmationIdentifier else { return }
+        let repeated = window === last
+        last = window
+        func views(_ view: NSView?) -> [NSView] { view.map { [$0] + $0.subviews.flatMap(views) } ?? [] }
+        let words = views(window.contentView?.superview ?? window.contentView).compactMap { ($0 as? NSTextField)?.stringValue }
+            .filter { !$0.isEmpty }.joined(separator: " | ")
+        // A server tab's question offers Detach (`AppDelegate.closeQuestion`).
+        let isServer = words.contains("Detach keeps it running")
+        if !repeated {
+            answered += 1
+            if isServer { serverAnswered += 1 }
+            questions.append(words)
+        }
+        NSApp.stopModal(withCode: isServer ? server : answer); Self.wake() // from a timer, stopModal ends the loop only at its next event
+    }
+
+    func stop() { timer?.invalidate() }
     private static func wake() { NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0).map { NSApp.postEvent($0, atStart: true) } }
 }
 

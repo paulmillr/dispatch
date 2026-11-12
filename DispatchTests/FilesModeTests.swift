@@ -303,28 +303,25 @@ final class FilesModeTests: XCTestCase {
         defer { files.forget(plain.id); files.forget(local.id); runtime.chat.close(plain.id); runtime.chat.close(local.id) }
         let controller = AppDelegate()
 
-        // ⇧⌘U / ⇧⌘L from the terminal: a tab never shown in files has not been resolved, so they may go.
+        // ⇧⌘U / ⇧⌘L (and ⌃⌘4 / ⌃⌘5) from the terminal: a tab never shown in files has not been resolved, so they may go.
         XCTAssertNil(files.existing(local.id))
-        XCTAssertTrue(controller.filesTabMenuEnabled(local, .changes, showing: false))
-        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits, showing: false))
-        XCTAssertFalse(controller.filesTabMenuEnabled(plain, .changes, showing: false), "no files on a plain SSH login")
-        XCTAssertFalse(controller.filesTabMenuEnabled(nil, .changes, showing: false))
-        // ⌃⌘2 / ⌃⌘3 select a tab while files shows, and only then.
-        XCTAssertFalse(controller.filesTabMenuEnabled(local, .changes, showing: true))
+        XCTAssertTrue(controller.filesTabMenuEnabled(local, .changes))
+        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits))
+        XCTAssertFalse(controller.filesTabMenuEnabled(plain, .changes), "no files on a plain SSH login")
+        XCTAssertFalse(controller.filesTabMenuEnabled(nil, .changes))
 
         let session = files.session(for: local.id)
         session.git = .none
-        XCTAssertFalse(controller.filesTabMenuEnabled(local, .changes, showing: false), "outside a repository")
-        XCTAssertFalse(controller.filesTabMenuEnabled(local, .commits, showing: false))
-        XCTAssertTrue(controller.filesMenuEnabled(local), "⇧⌘F and ⌃⌘1 do not need one")
+        XCTAssertFalse(controller.filesTabMenuEnabled(local, .changes), "outside a repository")
+        XCTAssertFalse(controller.filesTabMenuEnabled(local, .commits))
+        XCTAssertTrue(controller.filesMenuEnabled(local), "⇧⌘F and ⌃⌘3 do not need one")
         files.switchMode(local.id, to: .files)
-        XCTAssertFalse(controller.filesTabMenuEnabled(local, .changes, showing: true))
+        XCTAssertFalse(controller.filesTabMenuEnabled(local, .changes))
         session.git = .repository(GitRepository(root: "/tmp"))
-        XCTAssertTrue(controller.filesTabMenuEnabled(local, .changes, showing: true))
-        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits, showing: true))
+        XCTAssertTrue(controller.filesTabMenuEnabled(local, .changes))
+        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits))
         files.switchMode(local.id, to: .terminal)
-        XCTAssertFalse(controller.filesTabMenuEnabled(local, .commits, showing: true))
-        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits, showing: false))
+        XCTAssertTrue(controller.filesTabMenuEnabled(local, .commits), "from any mode")
     }
 
     func testModeMenuEnablesTheGitTabsOnlyInsideARepository() {
@@ -413,15 +410,19 @@ final class FilesModeTests: XCTestCase {
             XCTAssertEqual(items.filter { $0.keyEquivalent.lowercased() == key
                 && $0.keyEquivalentModifierMask.intersection(KeyGroups.modifierMask) == [.command, .shift] }, [owner])
         }
-        let digits = try (0..<3).map { try item(#selector(AppDelegate.showFilesTab(_:)), tag: $0) }
-        XCTAssertEqual(digits.map(\.keyEquivalent), ["1", "2", "3"])
+        // ⌃⌘1…5: Terminal, Chat, Files, Review, Commits.
+        let digits = try (0..<5).map { try item(#selector(AppDelegate.showMode(_:)), tag: $0) }
+        XCTAssertEqual(digits.map(\.keyEquivalent), ["1", "2", "3", "4", "5"])
+        XCTAssertEqual(digits.map(\.title), ["Terminal", "Chat", "Files", "Review", "Commits"])
         XCTAssertTrue(digits.allSatisfy { $0.keyEquivalentModifierMask == [.control, .command] })
-        XCTAssertEqual(digits.map(\.isHidden), [false, true, true], "⌃⌘2 and ⌃⌘3 reach what Review Changes and Commits name")
-        XCTAssertTrue(digits[1].allowsKeyEquivalentWhenHidden)
+        XCTAssertEqual(digits.map(\.isHidden), [false, false, false, true, true], "⌃⌘4 and ⌃⌘5 reach what Review Changes and Commits name")
+        XCTAssertTrue(digits[3].allowsKeyEquivalentWhenHidden)
+        XCTAssertEqual((2..<5).map { AppDelegate.modeTab($0) }, [.files, .changes, .commits])
+        XCTAssertNil(AppDelegate.modeTab(1))
         var keys = KeyGroups()
         keys.tabs = [.control, .command]
         controller.applyKeyGroups(keys)
-        XCTAssertEqual(digits.map(\.keyEquivalent), ["", "", ""], "a Keys group on ⌃⌘ digits takes all three")
+        XCTAssertEqual(digits.map(\.keyEquivalent), ["", "", "", "", ""], "a Keys group on ⌃⌘ digits takes all five")
         XCTAssertEqual(changes.keyEquivalent, "U", "⇧⌘U is not a digit")
     }
 
@@ -448,7 +449,7 @@ final class FilesModeTests: XCTestCase {
         XCTAssertTrue(state.dimmed); XCTAssertEqual(state.glyph, "folder")
         XCTAssertEqual(state.help(chatHint: "unused"), "Files need dispatch-helper on nightly")
 
-        // ⇧⌘F and ⌃⌘1 are validated like ⇧⌘C.
+        // ⇧⌘F and ⌃⌘3 are validated like ⇧⌘C.
         let controller = AppDelegate()
         XCTAssertFalse(controller.filesMenuEnabled(plain))
         XCTAssertTrue(controller.filesMenuEnabled(local))
@@ -554,16 +555,14 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(bare.help(chatHint: "Start an agent"), "Start an agent")
     }
 
-    func testFilesTabKeyYieldsToAKeysGroupUsingControlCommand() {
+    func testModeKeysYieldToAKeysGroupUsingControlCommand() {
         var keys = KeyGroups()
-        XCTAssertEqual(AppDelegate.filesTabModifiers(keys), [.control, .command])
-        XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⌃⌘1…3" })
-        XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⇧⌘F" })
+        XCTAssertEqual(AppDelegate.modeModifiers(keys), [.control, .command])
+        XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⌃⌘1…5" })
         XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⇧⌘U / ⇧⌘L" })
         keys.splits = [.control, .command]
-        XCTAssertNil(AppDelegate.filesTabModifiers(keys))
-        XCTAssertFalse(ShortcutRow.windowRows(keys).contains { $0.key == "⌃⌘1…3" })
-        XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⇧⌘F" })
+        XCTAssertNil(AppDelegate.modeModifiers(keys))
+        XCTAssertFalse(ShortcutRow.windowRows(keys).contains { $0.key == "⌃⌘1…5" })
         XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⇧⌘U / ⇧⌘L" }, "the git tabs' letters are not digits")
         XCTAssertTrue(ShortcutRow.windowRows(keys).contains { $0.key == "⌥⌘P" }, "the preview's chord is not a digit")
     }

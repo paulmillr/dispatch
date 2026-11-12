@@ -63,13 +63,13 @@ final class UpdateDownloadDelegate: NSObject, URLSessionDownloadDelegate, Sendab
         self.progress = progress
     }
 
-    /// GitHub and its content hosts. Release downloads redirect to an asset host that GitHub has renamed before
+    /// GitHub, its API (a release's notes, `UpdateNotes`) and its content hosts. Release downloads redirect to an asset host that GitHub has renamed before
     /// (objects., then release-assets.githubusercontent.com): any of its subdomains, so a rename does not strand every
     /// installed copy. The feed's checksum and the signature checks, not the host, vouch for the file.
     static func allowed(_ url: URL) -> Bool {
         guard url.scheme == "https", url.user == nil, url.password == nil, url.port == nil || url.port == 443,
               let host = url.host?.lowercased() else { return false }
-        return host == "github.com" || (host.hasSuffix(".githubusercontent.com") && !host.dropLast(".githubusercontent.com".count).isEmpty
+        return host == "github.com" || host == "api.github.com" || (host.hasSuffix(".githubusercontent.com") && !host.dropLast(".githubusercontent.com".count).isEmpty
             && host.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || ".-".contains($0)) })
     }
 

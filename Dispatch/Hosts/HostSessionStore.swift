@@ -89,6 +89,18 @@ struct HostSessionStore {
             hosts = hosts.filter { !retired.contains($0.id) } + logins.values
             return retired
         }
+
+        /// The account each remote host's saved connections log in as (ssh's resolved `User`, else the destination's
+        /// user), where they agree on one.
+        func accounts() -> [HostID: String] {
+            var found: [HostID: Set<String>] = [:]
+            for connection in connections where connection.host.rawValue.hasPrefix("ssh:") {
+                let account = connection.scope?.account ?? HostRegistry.account(destination: connection.shell.destination, home: "")
+                guard let account, !account.isEmpty else { continue }
+                found[connection.host, default: []].insert(account)
+            }
+            return found.compactMapValues { $0.count == 1 ? $0.first : nil }
+        }
     }
 
     /// `history`: also replace the saved output of plain local and SSH tabs (as the app quits).
@@ -223,6 +235,7 @@ struct HostSessionStore {
         guard !spaces.isEmpty else { return false }
         workspace.hosts.restore(snapshot.hosts)
         splitMachines.forEach(workspace.hosts.forget)
+        workspace.hosts.learn(accounts: snapshot.accounts())
         workspace.updateLayout { $0.spaces += spaces }
         for (surface, context) in snapshot.contexts where workspace.allSurfaceIDs.contains(surface) {
             workspace.hosts.associate(surface, context: .init(host: context.host, generation: context.generation,

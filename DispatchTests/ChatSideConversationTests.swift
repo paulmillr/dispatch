@@ -114,6 +114,22 @@ final class ChatSideConversationTests: XCTestCase {
         XCTAssertEqual(closes, 1)
     }
 
+    func testSideFooterNamesModelAndEffortAsTheMainFooterDoes() {
+        let side = ChatSideConversation(mode: .btw, parentID: "parent", agentID: "claude", model: "claude-fable-5-2")
+        side.title = "Claude Code"
+        side.effort = "xhigh"
+        // The main footer's label for the model (no vendor prefix), and no agent name: the main footer shows none.
+        XCTAssertEqual(ChatSideSheet.readout(side), ChatModelControls.label(for: "claude-fable-5-2") + " · xhigh")
+        XCTAssertEqual(ChatSideSheet.readout(side), "fable-5.2 · xhigh")
+        side.steps = 3
+        XCTAssertEqual(ChatSideSheet.readout(side), "fable-5.2 · xhigh · 3 steps")
+        // A known model without a reported effort is on its default, as the main footer says.
+        side.effort = nil; side.steps = 0
+        XCTAssertEqual(ChatSideSheet.readout(side), "fable-5.2 · default")
+        let pi = ChatSideConversation(mode: .side, parentID: "parent", agentID: "pi", model: "fixture-model")
+        XCTAssertEqual(ChatSideSheet.readout(pi), "fixture-model")
+    }
+
     func testModesHaveSeparatePermissionBoundaries() throws {
         XCTAssertEqual(ChatSideMode.parse("/btw what happened?")?.mode, .btw)
         XCTAssertEqual(ChatSideMode.parse("/side change it")?.mode, .side)

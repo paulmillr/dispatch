@@ -101,6 +101,8 @@ struct FileMarkdownView: View {
     let session: FilesSession
     let path: String
     let text: String
+    /// Keeps the scroll while the view goes and comes back.
+    var keeper: FilePreviewScrollKeeper?
 
     var body: some View {
         let typography = FileMarkdownStyle.typography(TerminalRuntime.shared.preferences)
@@ -116,6 +118,7 @@ struct FileMarkdownView: View {
                     .padding(.horizontal, FileMarkdownStyle.margin)
                     .padding(.top, 28).padding(.bottom, 48)
                     .frame(maxWidth: .infinity)
+                    .background { keeper }
             }
             .onChange(of: session.previewReveal, initial: true) { _, reveal in
                 guard let reveal, reveal.path == path else { return }

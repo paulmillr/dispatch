@@ -407,6 +407,51 @@ final class FilePreviewPresentationTests: XCTestCase {
         try PresentationTestSupport.assertText("const short", in: snapshot)
     }
 
+    /// A file's view goes when the split shows another tab and comes back when it shows this one: the text and the
+    /// rendered Markdown come back where they were scrolled to, not at the top.
+    func testScrollComesBackWhenTheViewReturns() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let long = base + "/LONG.md"
+        source.file(long, (1...80).map { "## Part \($0)\n\nA paragraph for part \($0), long enough to read as prose.\n" }
+            .joined(separator: "\n"))
+        let (window, session) = try host(source, preview: base + "/src/routes/billing.ts")
+        try await TestSupport.eventually { if case .text = session.preview?.kind { return true }; return false }
+        try await TestSupport.eventually { line(2, in: window) != nil }
+        try await assertScrollReturns(to: 600, in: window, session: session, key: .text)
+
+        show(long, from: source, in: session)
+        try await TestSupport.eventually { if case .markdown = session.preview?.kind { return true }; return false }
+        try await TestSupport.eventually(diagnostic: "no scroll view for the page") {
+            (scrollView(in: window)?.documentView?.frame.height ?? 0) > 1_500
+        }
+        try await assertScrollReturns(to: 900, in: window, session: session, key: .rendered)
+    }
+
+    /// Scrolls the preview to `y`, takes its view out of the window as a tab switch does and puts a new one in.
+    private func assertScrollReturns(to y: CGFloat, in window: NSWindow, session: FilesSession,
+                                     key: FilePreviewScrollKeeper.Key) async throws {
+        let scroll = try XCTUnwrap(scrollView(in: window))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await TestSupport.eventually(diagnostic: "kept: \(String(describing: session.preview?.scroll[key]))") {
+            abs((session.preview?.scroll[key]?.y ?? 0) - y) < 1
+        }
+        window.contentView = NSView()
+        try await TestSupport.eventually { scrollView(in: window) == nil }
+        window.contentView = NSHostingView(rootView: FilePreviewPane(session: session))
+        try await TestSupport.eventually(diagnostic: "came back at \(String(describing: scrollView(in: window)?.contentView.bounds.origin))") {
+            guard let clip = scrollView(in: window)?.contentView else { return false }
+            return abs(clip.bounds.origin.y - y) < 1
+        }
+    }
+
+    /// The preview's vertical scroll view: its tallest document.
+    private func scrollView(in window: NSWindow) -> NSScrollView? {
+        guard let root = window.contentView else { return nil }
+        return PresentationTestSupport.views(of: NSScrollView.self, in: root, includingNestedMatches: true)
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
     // MARK: Support
 
     private func host(_ source: FakeFilesSource, preview path: String,

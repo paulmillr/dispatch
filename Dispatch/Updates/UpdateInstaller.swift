@@ -76,6 +76,14 @@ actor UpdateInstaller {
         return try UpdateRelease(cask: String(decoding: System.read(file), as: UTF8.self))
     }
 
+    /// The release's notes (`UpdateNotes`), from GitHub's API; off the actor, beside the download.
+    nonisolated func notes(_ release: UpdateRelease) async throws -> UpdateNotes {
+        let file = System.temporary.appendingPathComponent("dispatch-update-notes-" + System.uuid().uuidString)
+        defer { try? System.remove(file) }
+        try await System.updateDownload(UpdateNotes.api(release.version), to: file, limit: UpdateNotes.sizeLimit)
+        return try UpdateNotes(version: release.version, release: System.read(file))
+    }
+
     func prepare(_ release: UpdateRelease, context: Context, step: @escaping @Sendable (Step) -> Void = { _ in }) async throws -> Prepared {
         guard try UpdateRelease.compare(release.version, context.version) == .orderedDescending else {
             throw UpdateFailure("This update is not newer than the installed app.")

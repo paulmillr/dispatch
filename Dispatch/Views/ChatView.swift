@@ -697,18 +697,10 @@ struct ChatSessionStats: View {
         }
     }
     private func count(_ value: Int?) -> String { Self.count(value) }
-    /// "$0.042", as Pi's footer, "(sub)" for a subscription; nil without a cost or while nothing was spent on an API key.
-    static func cost(_ usage: ChatUsage) -> String? {
-        guard let cost = usage.costUSD, cost > 0 || usage.subscription else { return nil }
-        return String(format: "$%.3f", cost) + (usage.subscription ? " (sub)" : "")
-    }
-    /// "980", "12.3K", "1.2M"; "—" when unknown.
-    static func count(_ value: Int?) -> String {
-        guard let value else { return "—" }
-        if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
-        return String(value)
-    }
+    /// `ChatUsage.costText`, shared with the phone.
+    static func cost(_ usage: ChatUsage) -> String? { usage.costText }
+    /// `ChatUsage.count`, shared with the phone.
+    static func count(_ value: Int?) -> String { ChatUsage.count(value) }
 }
 
 private extension View {

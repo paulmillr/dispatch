@@ -88,7 +88,7 @@ final class GitDiffTests: XCTestCase {
     /// Review with nothing uncommitted says where comments can still be written, or that some are still to send.
     func testTheEmptyReviewTabPointsAtCommitsAndHeldComments() {
         XCTAssertEqual(GitChangesText.empty(comments: 0),
-                       "No changes · the working tree matches HEAD\nComment on a commit’s lines in Commits (⌃⌘3)")
+                       "No changes · the working tree matches HEAD\nComment on a commit’s lines in Commits (⌃⌘5)")
         XCTAssertEqual(GitChangesText.empty(comments: 2),
                        "No changes · the working tree matches HEAD\n2 comments still to send · Create Review")
     }

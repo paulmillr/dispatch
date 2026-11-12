@@ -132,26 +132,6 @@ final class HostBackendCache {
     }
 }
 
-/// The sidebar's New Space (⌘N) in tree order: a round glass button at the end of the spaces' header row, as New Tab
-/// ends the bar inside a space (flat order has `NewSpaceListButton` under its list instead). A click makes a space where ⌘N would; a secondary click or a held press lists the hosts and
-/// backends to start one on (NewSpaceMenu).
-struct NewSpaceButton: View {
-    let workspace: Workspace
-
-    var body: some View {
-        SidebarGlassCircle { Image(systemName: "plus").font(SidebarGlassCircle<EmptyView>.glyph) }
-            .allowsHitTesting(false)
-            .overlay {
-                NewSpaceControl(workspace: workspace, host: nil, identifier: "sidebar-new-space")
-                    .accessibilityLabel("New space")
-                    .accessibilityIdentifier("sidebar-new-space")
-            }
-            // The control's own view takes the pointer: the circle's hover is tracked over it.
-            .glassHover(LiquidGlassStore.shared.active ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 4)))
-            .help("New space (⌘N) · Right-click or hold for options")
-    }
-}
-
 /// The new-space buttons' plus: the SF Symbol at the label's size, a little smaller and heavier than its text so it
 /// sits on the text's cap height with a matching stroke.
 private struct NewSpacePlus: View {
@@ -161,8 +141,8 @@ private struct NewSpacePlus: View {
     }
 }
 
-/// Flat order's "+ space" (⌘N) and, while a remote host is connected, "+ local" (⇧⌘N, `host` the Mac), side by side
-/// under the last space: a capsule each on Liquid Glass, their glass blending with their neighbour's; otherwise tiles
+/// "+ space" (⌘N) and, while a remote host is connected, "+ local" (⇧⌘N, `host` the Mac), side by side under the last
+/// space (in tree order under the last host's group): a capsule each on Liquid Glass, their glass blending with their neighbour's; otherwise tiles
 /// in Large or rows in compact. A click makes the space; a secondary click lists the backends (NewSpaceMenu).
 struct NewSpaceListButton: View {
     let workspace: Workspace
@@ -191,7 +171,7 @@ struct NewSpaceListButton: View {
         .help(title + " (\(shortcut)) · Right-click or hold for options")
     }
 
-    /// Compact flat list: a row like a space's, the icon in the status column.
+    /// Compact: a row like a space's, the icon in the status column.
     private var rowLabel: some View {
         fitted(iconSize: metrics.hostIconSize, iconWidth: max(metrics.activitySize, metrics.hostIconSize), shortcutSize: metrics.shortcutSize)
             .interfaceFont(size: metrics.nameSize)

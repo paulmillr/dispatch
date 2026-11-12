@@ -6,7 +6,12 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     let workspace: Workspace = Workspace()
     let settings: SettingsStore
+    #if DEBUG
+    /// `DISPATCH_UPDATE_DEMO=0.1.7` plays that release against the real feed (`UpdateDemo`).
+    let updater = AppUpdater(operations: UpdateDemo.operations() ?? .live())
+    #else
     let updater = AppUpdater()
+    #endif
     private var updateOnQuit = false
     let windowState: WindowState = WindowState()
     var window: NSWindow! {
@@ -488,23 +493,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if confirmClosing([id], .tab(name), detaching: true) { workspace.closeTab(id) }
     }
 
+    /// The user's Close Tab (⌘W, a tab's ×, its menu), as the phone's: a tab whose every pane runs an agent with its
+    /// turn over ends at once; a server's tab (tmux, herdr) asks the helper first and ends verified-idle work, else
+    /// asks Terminate or Detach (`closeServerTab`); the app's own shells close through the helper's policy, which asks
+    /// before ending a busy one (`HelperWorkspace.close`).
     func closeTab(_ id: UUID) {
         guard let tab = workspace.spaces.flatMap(\.tabs).first(where: { $0.id == id }) else { return }
-        if workspace.helper(containing: id) != nil, tab.terminal != nil {
+        if let helper = workspace.helper(containing: id), let terminal = tab.terminal {
+            if Self.agentsFinished(tab.surfaceIDs) { return workspace.closeTab(id, policy: .terminate) }
+            if helper.serverNode(terminal) {
+                closeServerTab(helper, node: terminal, name: workspace.liveTab(id)?.label ?? tab.label, terminals: tab.surfaceIDs)
+                return
+            }
             workspace.closeTab(id, policy: .prompt)
             return
         }
         detachTab(id)
     }
 
-    /// Window tabs of any structured space; helper containers close through the helper's policy.
+    /// Window tabs of any structured space; helper containers close as `closeTab`'s.
     func closeWindow(_ id: UUID) {
         if workspace.helpers.values.contains(where: { $0.dismiss(id) }) { return }
         if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id && $0.gone }) {
             return workspace.removeGone(Set(container.terminals.map(\.id)))
         }
-        if let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id }) {
-            workspace.helper(containing: id)?.close(container.node, policy: .prompt)
+        guard let container = workspace.spaces.flatMap(\.containers).first(where: { $0.id == id }),
+              let helper = workspace.helper(containing: id) else { return }
+        let terminals = container.terminals.flatMap(\.surfaceIDs), node = container.node
+        if Self.agentsFinished(terminals) { helper.close(node, policy: .terminate); return }
+        if helper.serverNode(node) {
+            let name = TerminalRuntime.shared.label(for: container, automatic: settings.values.automaticTabNames)
+            closeServerTab(helper, node: node, name: name, terminals: terminals)
+            return
+        }
+        helper.close(node, policy: .prompt)
+    }
+
+    /// A server's tab, as the phone's Close. It goes at once, as every close; then the helper checks it without closing
+    /// anything (`close.request` `check`): verified idle, it closes through `prompt` (which detaches instead should work
+    /// have started since); busy, or not known (a host out of reach), it asks "Close “name”?" naming what runs, with
+    /// Terminate, Detach and Cancel (which shows the tab again).
+    private func closeServerTab(_ helper: HelperWorkspace, node: UInt64, name: String, terminals: [UUID]) {
+        helper.close(node, policy: .prompt, deciding: { [weak self, weak helper] in
+            guard let helper else { return nil }
+            if await helper.idle(node) == true { return .prompt }
+            let sessions = terminals.compactMap { TerminalRuntime.shared.chat.sessions[$0] }.filter { $0.active && !$0.agentExited }
+            let message = Self.closeQuestion(
+                agent: sessions.first.map { $0.helperTitle ?? "The agent" }, working: sessions.contains(where: \.busy),
+                waiting: sessions.contains { $0.waitingForAnswer || $0.approvals.contains(where: \.pending) })
+            switch Self.askTerminateOrDetach(tab: name, message: message, in: self?.window) {
+            case .terminate: return .terminate
+            case .detach: return .detach
+            case .cancel: return nil
+            }
+        })
+    }
+
+    /// Every one of these terminals runs an agent whose turn is over (Chat knows it live: attached, not working, no
+    /// approval or question waiting for you), so Close ends them without asking, as the phone's does. A terminal
+    /// without an agent, or an agent working or waiting, leaves it to the helper's check.
+    static func agentsFinished(_ terminals: [UUID]) -> Bool {
+        let chat = TerminalRuntime.shared.chat
+        return !terminals.isEmpty && terminals.allSatisfy { id in
+            guard let session = chat.sessions[id], session.active, !session.agentExited else { return false }
+            return !session.busy && !session.approvals.contains { $0.pending } && !session.waitingForAnswer
+        }
+    }
+
+    /// What a server's busy tab runs, for its close question: the agent by its name and state, else nothing named (a
+    /// window's name is no program's: herdr numbers its tabs, a tmux window can be named after a host). The phone's
+    /// words (`TabsCloseCopy`), with Detach on the question.
+    static func closeQuestion(agent: String?, working: Bool, waiting: Bool) -> String {
+        let running: String
+        if let agent {
+            running = working ? "\(agent) is still working." : waiting ? "\(agent) is waiting for you." : "\(agent) is still running."
+        } else {
+            running = "Something is still running in it."
+        }
+        return running + " Terminating ends it; Detach keeps it running on the server."
+    }
+
+    enum CloseChoice { case terminate, detach, cancel }
+
+    /// A server's busy tab: "Close “name”?" with Terminate (destructive), Detach and Cancel (the default). A sheet on
+    /// `window` while it shows, as `confirmClose`.
+    static func askTerminateOrDetach(tab name: String, message: String, in window: NSWindow?) -> CloseChoice {
+        let alert = NSAlert()
+        alert.messageText = "Close “\(name)”?"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Terminate").hasDestructiveAction = true
+        alert.addButton(withTitle: "Detach")
+        alert.window.identifier = NSUserInterfaceItemIdentifier(closeConfirmationIdentifier)
+        switch runSheet(alert, in: window) {
+        case .alertSecondButtonReturn: return .terminate
+        case .alertThirdButtonReturn: return .detach
+        default: return .cancel
         }
     }
 
@@ -623,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return }
         TerminalRuntime.shared.files.toggleFiles(id)
     }
-    /// ⇧⌘F and ⌃⌘1 work on any tab but a plain SSH login (whose files no helper lists), and leave a files view shown.
+    /// ⇧⌘F and ⌃⌘3 work on any tab but a plain SSH login (whose files no helper lists), and leave a files view shown.
     func filesMenuEnabled(_ tab: TerminalTab?) -> Bool {
         guard let id = tab?.focusedSurfaceID else { return false }
         let files = TerminalRuntime.shared.files
@@ -635,20 +719,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
         files.toggleViews()
     }
-    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Review or Commits while files shows.
-    @objc func showFilesTab(_ sender: NSMenuItem) {
+    /// ⌃⌘1…5 from any mode: the terminal, chat (where an agent runs or ran), then files on its Files, Review or Commits
+    /// tab (`modeTab`).
+    @objc func showMode(_ sender: NSMenuItem) {
+        guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return }
+        let files = TerminalRuntime.shared.files
+        switch sender.tag {
+        case 0: if files.mode(for: id) != .terminal { files.switchMode(id, to: .terminal) }
+        case 1: if files.mode(for: id) != .chat { files.switchMode(id, to: .chat) }
+        default: if let tab = Self.modeTab(sender.tag) { files.showFiles(id, tab: tab) }
+        }
+    }
+    /// ⇧⌘U and ⇧⌘L: files on the Review or Commits tab, from any mode.
+    @objc func openFilesTab(_ sender: NSMenuItem) {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID, let tab = Self.filesTab(sender.tag) else { return }
         TerminalRuntime.shared.files.showFiles(id, tab: tab)
     }
-    /// ⇧⌘U and ⇧⌘L: files on the Review or Commits tab, from any mode.
-    @objc func openFilesTab(_ sender: NSMenuItem) { showFilesTab(sender) }
+    /// The files tab of ⌃⌘3…5 (`showMode`'s tags 2…4).
+    static func modeTab(_ tag: Int) -> FilesTab? { tag >= 2 ? filesTab(tag - 2) : nil }
     static func filesTab(_ tag: Int) -> FilesTab? { FilesTab.allCases.indices.contains(tag) ? FilesTab.allCases[tag] : nil }
-    /// ⇧⌘U / ⇧⌘L, and ⌃⌘2 / ⌃⌘3 (`showing`: only while files shows): a tab that can show files, on a folder not known to
-    /// be outside a repository (one never shown in files has not been resolved, and falls back to Files if it is).
-    func filesTabMenuEnabled(_ tab: TerminalTab?, _ filesTab: FilesTab, showing: Bool) -> Bool {
+    /// ⇧⌘U / ⇧⌘L and ⌃⌘4 / ⌃⌘5, from any mode: a tab that can show files, on a folder not known to be outside a
+    /// repository (one never shown in files has not been resolved, and falls back to Files if it is).
+    func filesTabMenuEnabled(_ tab: TerminalTab?, _ filesTab: FilesTab) -> Bool {
         guard let id = tab?.focusedSurfaceID else { return false }
-        let files = TerminalRuntime.shared.files
-        return (!showing || files.isShowing(id)) && files.canShowFiles(id, tab: filesTab)
+        return TerminalRuntime.shared.files.canShowFiles(id, tab: filesTab)
     }
     @objc func applyLayout(_ sender: NSMenuItem) {
         guard LayoutPreset.allCases.indices.contains(sender.tag) else { return }
@@ -705,15 +799,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// Dispatch › Check for Updates…: Settings › General › Updates, checking there.
+    /// Dispatch › Check for Updates…: checks, in the updater's sheet over the main window (`UpdateSheet`), which follows
+    /// it to up to date or through the download to Restart and install, the release's notes in it. Without the window,
+    /// or while another sheet is over it, Settings › General › Updates checks instead.
     @objc func checkForUpdates() {
+        updater.check()
+        if let window, window.isVisible, termination == nil, window.attachedSheet == nil || window.attachedSheet is UpdateSheet.Panel {
+            window.makeKeyAndOrderFront(nil)
+            UpdateSheet.present(over: window, updater: updater)
+            return
+        }
         SettingsNavigation.shared.page = .general
         showSettings()
-        updater.check()
     }
 
     private func offerUpdate() {
         guard termination == nil, let window, updater.state == .ready else { return }
+        // The updater's sheet already shows it (Check for Updates… opened it).
+        if window.attachedSheet is UpdateSheet.Panel { return }
         // A sheet over the window (SSH consent, a close confirmation) keeps the offer until it ends.
         if window.attachedSheet != nil {
             guard pendingUpdateOffer == nil else { return }
@@ -729,14 +832,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             }
             return
         }
-        let alert = NSAlert()
-        alert.messageText = "Dispatch \(updater.release?.version ?? "") is ready"
-        alert.informativeText = "Restart Dispatch to install the update. You can also do this later in Settings › General › Updates."
-        alert.addButton(withTitle: "Later")
-        alert.addButton(withTitle: "Restart and Install")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertSecondButtonReturn { self?.updater.restart() }
-        }
+        // The release's notes in it; Later leaves the update in Settings › General › Updates.
+        UpdateSheet.present(over: window, updater: updater)
     }
 
     /// Typing the Nautical code anywhere in Settings, fields included, unlocks the theme; Settings then switches to it.
@@ -797,10 +894,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return session.showChat || chat.canEnterChat(session)
         case #selector(toggleFiles):
             return NSApp.keyWindow === window && filesMenuEnabled(workspace.activeTab)
-        case #selector(showFilesTab(_:)), #selector(openFilesTab(_:)):
+        case #selector(showMode(_:)):
+            guard NSApp.keyWindow === window, let tab = workspace.activeTab else { return false }
+            switch item.tag {
+            case 0: return true
+            case 1:
+                let chat = TerminalRuntime.shared.chat, session = chat.session(for: tab.focusedSurfaceID)
+                return session.showChat || chat.canEnterChat(session)
+            case 2: return filesMenuEnabled(tab)
+            default: return Self.modeTab(item.tag).map { filesTabMenuEnabled(tab, $0) } ?? false
+            }
+        case #selector(openFilesTab(_:)):
             guard NSApp.keyWindow === window, let tab = Self.filesTab(item.tag) else { return false }
-            if tab == .files { return filesMenuEnabled(workspace.activeTab) }
-            return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
+            return filesTabMenuEnabled(workspace.activeTab, tab)
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
             item.title = files?.splitNarrow == true ? "Show List and Detail" : "Show One View"

@@ -55,6 +55,8 @@ final class ChatSideConversation: Identifiable {
     var steps = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     var model: String
+    /// The parent's effort when the side opened, which its fork runs on.
+    var effort: String?
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var parent: HelperChat?
     @ObservationIgnored private var helper: HelperChat?
@@ -245,6 +247,7 @@ extension ChatCoordinator {
         }
         let side = ChatSideConversation(mode: mode, parentID: parent, agentID: session.agentID, model: session.model)
         side.title = session.agentTitle
+        side.effort = session.effort
         session.sideConversation = side
         if consumeDraft { session.clearDraft() }
         side.start(helper: helper, question: question)

@@ -316,10 +316,16 @@ final class HostCoordinator {
 
     func recovered(from old: UUID, request: SSHLaunchRequest) {
         guard let workspace = runtime?.workspace else { return }
+        var hosts: Set<HostID> = []
         for (surface, context) in workspace.hosts.terminals where context.generation == old {
             workspace.hosts.associate(surface, context: .init(host: context.host, generation: request.connectionID.rawValue,
                                                             state: .connected, authenticated: true))
             workspace.hostPlacements[surface]?.generation = request.connectionID.rawValue
+            hosts.insert(context.host)
+        }
+        // The reconnect keeps its host's record: one saved without an account learns it here.
+        if let account = request.integrationScope?.account, hosts.count == 1, let host = hosts.first, host.rawValue.hasPrefix("ssh:") {
+            workspace.hosts.learn(accounts: [host: account])
         }
         if bindings[request.tabID]?.generation == old {
             bindings[request.tabID] = Binding(generation: request.connectionID.rawValue, shell: request.shell, process: nil, integrated: true)

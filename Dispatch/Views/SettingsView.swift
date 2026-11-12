@@ -312,12 +312,12 @@ struct SettingsView: View {
         if let updater {
             settingsGroup("Updates") {
                 row("Automatic updates", detail: "downloads new releases; asks before restarting",
-                    privacy: "Checks the Homebrew release feed on GitHub daily. Downloads are verified before installation. No analytics are sent.") {
+                    privacy: "Checks the Homebrew release feed on GitHub daily, and reads a newer release’s notes from GitHub. Downloads are verified before installation. No analytics are sent.") {
                     settingToggle("Automatic updates", isOn: Binding(
                         get: { draft.automaticUpdates == true }, set: { draft.automaticUpdates = $0 }))
                         .accessibilityIdentifier("settings-automatic-updates")
                 }
-                row("Dispatch \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")", detail: updater.status) {
+                row("Dispatch \(updater.installed)", detail: updater.status) {
                     if updater.state == .ready {
                         Button("Restart and Install") { updater.restart() }
                             .accessibilityIdentifier("settings-install-update")
@@ -342,6 +342,11 @@ struct SettingsView: View {
                             .disabled(updater.busy)
                             .accessibilityIdentifier("settings-check-updates")
                     }
+                }
+                // The newer release's notes while it downloads, waits to install, or is one to download by hand.
+                if let notes = updater.notes, notes.version == (updater.release ?? updater.available)?.version,
+                   !notes.changes.isEmpty, updater.state != .upToDate, updater.state != .idle {
+                    UpdateChanges(notes: notes).padding(.bottom, 10)
                 }
             }
         }

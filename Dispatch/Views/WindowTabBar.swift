@@ -72,7 +72,7 @@ struct WindowTabBar: View {
         return StripTab(title: title, activityIDs: tab.terminals.map(\.id),
                         connecting: tab.terminals.contains { workspace.hostMoveMotion.connecting.contains($0.id) }, shortcut: shortcut,
                         width: width, selected: selected == tab.id, hovered: hovered, hostTint: tabTint,
-                        closeHelp: "Close tab · detaches it if jobs are running",
+                        closeHelp: "Close tab · asks first if something runs there",
                         select: { workspace.selectWindow(tab.id) }, close: { controller.closeWindow(tab.id) },
                         style: tabStyle, divider: tabStyle == .outlined && StripTab.divider(after: tab.id, in: tabs.map(\.id), selected: selected),
                         alone: tabs.count == 1)
@@ -132,7 +132,7 @@ struct MoveTargetsSection: View {
 
     static let inlineSpaces = 4
     static let detachHelp = "Keep it running on the server; it is listed under Detached"
-    static let closeHelp = "Ends it if nothing runs there; otherwise detaches it"
+    static let closeHelp = "Ends it if nothing runs there; otherwise asks: Terminate or Detach"
 
     var body: some View {
         Section("Move to") {

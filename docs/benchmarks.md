@@ -521,6 +521,23 @@ Measure, don't judge by feel: launch a Release simulator build with `simctl laun
 `ps -o time= -p <pid>` deltas, plus the device's `backboardd` for render-server cost. `xcrun xctrace record --device
 <udid> --attach <pid>` (Time Profiler) gives the stacks. The simulator caps at 60 fps; devices run 120.
 
+### The first terminal on the iPhone
+
+What a process's first terminal costs the main thread ([iPhone](ios.md#behaviour), The first terminal). Metal's shader
+cache goes with the app, so `simctl uninstall` and `install` before a launch measure an install or update; without
+them, a later launch. A throwaway probe prints milliseconds since the process started (`sysctl` `KERN_PROC_PID`'s
+`p_starttime`) at `didFinishLaunching`, the prewarm's start and end and around `TerminalSession.init`, each followed by
+`fflush(stdout)` (stdout to a file is buffered); `simctl launch --stdout=<file>` collects them. `-DispatchTabsSample YES
+-DispatchTabsShow tab:herdr:app:2` shows a terminal with the first frame (about 250 ms after `didFinishLaunching`), and
+`DISPATCH_MOBILE_DEMO=1` with `-DispatchTabsScript "spaces,tab:herdr:billing:2"` opens one 3.5 s in. Simulator, Debug,
+2026-11-12, `TerminalSession.init` on the main thread:
+
+| Launch | Before | Prewarmed at launch |
+| --- | --- | --- |
+| After an install, terminal 3.5 s in | 625–993 ms | 9–11 ms (the prewarm: 680–715 ms in the background) |
+| After an install, terminal with the first frame | 621–631 ms | 408–418 ms (waiting for the rest of the compile) |
+| Later launches | 10 ms | 4–5 ms (the prewarm: 12 ms) |
+
 ### SSH over a slow or lossy link
 
 The Lima guest's sshd is reached over vsock, so `tc netem` on the guest's interfaces changes nothing for `limactl`'s

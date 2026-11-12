@@ -147,7 +147,7 @@ struct PaneView: View {
                 CloseGlyph()
                     .frame(width: 24, height: glassStrip ? StripTab.glassTrackHeight(typography) : typography.expanded(26))
                     .contentShape(Rectangle())
-            }.accessibilityLabel("Close pane").help("Close pane · detaches if jobs are running")
+            }.accessibilityLabel("Close pane").help("Close pane · asks first if something runs there")
         }
         // On glass a split pane's capsule like a native pane's strip, the strip's margin above it and none below; its
         // chat switch sits on the capsule's glass. Leading the window in full screen, it starts with the sidebar

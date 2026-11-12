@@ -384,6 +384,7 @@ private struct FilesListColumn: View, Equatable {
                     .allowsHitTesting(false)
             }
             .frame(maxHeight: .infinity)
+            .overlay(alignment: .top) { FilesScrollEdge() }
             if let error = result.rootError { FilesRootErrorLine(message: error) }
             FileTransferRows(session: session)
             FilesFooter(session: session, itemCount: result.itemCount, shown: result.ids)
@@ -544,5 +545,23 @@ private struct FilesListState: View {
             .padding(.horizontal, 24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier(identifier)
+    }
+}
+
+/// macOS 26's soft scroll edge where Files has no bar (Liquid Glass): the content's background fading out over a few
+/// points at the top of the list or the preview, under the header and the column names, so rows scrolling up dim
+/// away rather than meeting a bar's edge. A static gradient over the scroll view, not a mask: scrolling redraws
+/// nothing more. Flat chrome keeps its bars and rules, and draws none.
+struct FilesScrollEdge: View {
+    @Environment(\.chatTheme) private var theme
+    static let height: CGFloat = 10
+
+    var body: some View {
+        if LiquidGlassStore.shared.active {
+            LinearGradient(colors: [theme.terminal.opacity(0.9), theme.terminal.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: Self.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }

@@ -319,7 +319,8 @@ private struct GitChangesDetail: View {
             if let change = status.changes.first(where: { $0.id == session.changesSelection }) {
                 if let state = session.changesDiff, Self.matches(state, change, in: status) {
                     if let diff = state.diff {
-                        GitDiffView(diff: diff, mode: $session.diffMode, wrap: $session.diffWrap, kind: change.kind,
+                        GitDiffView(diff: diff, parsed: state.parsed, mode: $session.diffMode, wrap: $session.diffWrap,
+                                    kind: change.kind,
                                     source: reader(change), focusRequest: focusRequest, onEscape: leave,
                                     review: session.reviewScope.map {
                                         GitDiffReview(session: session, scope: $0, path: change.path, area: change.area,
@@ -370,7 +371,7 @@ extension GitChangesText {
     /// that Create Review still sends; and where a commit's lines take comments.
     static func empty(comments: Int) -> String {
         let clean = "No changes · the working tree matches HEAD"
-        guard comments > 0 else { return clean + "\nComment on a commit’s lines in Commits (⌃⌘3)" }
+        guard comments > 0 else { return clean + "\nComment on a commit’s lines in Commits (⌃⌘5)" }
         return clean + "\n\(ReviewText.count(comments)) still to send · Create Review"
     }
 

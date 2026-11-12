@@ -212,8 +212,8 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// Flat order's "+ space", and "+ local" beside it while a remote host is connected (tree order's New Space is the
-    /// header's).
+    /// "+ space" under the last space (in tree order under the last host's group), and "+ local" beside it while a remote
+    /// host is connected. The header has none: inside a space (vertical tabs) its plus is New Tab.
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
         return HStack(spacing: glass ? 4 : 6) {
@@ -356,8 +356,8 @@ struct SpaceSidebar: View {
     }
 
     /// The header row after the sidebar toggle (or the full-screen slot), icons only: the grouping toggle, then at the
-    /// end the shortcuts button and, in tree order, New Space (flat order has "+ space" under its list); where the row is
-    /// tight the shortcuts button goes (Help › Keyboard Shortcuts, ⌘/, still opens the sheet). Inside a space (vertical
+    /// end the shortcuts button (New Space is "+ space" under the list, in either order); where the row is tight the
+    /// shortcuts button goes (Help › Keyboard Shortcuts, ⌘/, still opens the sheet). Inside a space (vertical
     /// tabs), the layout picker and New Tab (SpaceTabsBar). Nautical's radar keeps its title instead.
     private var headerControls: some View {
         // Overlaid, so going into a space and back crossfades the two bars in place (`push`).
@@ -379,15 +379,13 @@ struct SpaceSidebar: View {
         }
     }
 
-    /// The keyboard shortcuts right after the sidebar toggle; at the end the grouping toggle and New Space, which ends
-    /// where the rows' shortcuts do, over the tree headings' host discs, as New Tab ends the bar inside a space.
+    /// The grouping toggle after the sidebar toggle; at the end the keyboard shortcuts, which end where the rows'
+    /// shortcuts do, over the tree headings' host discs, as New Tab ends the bar inside a space.
     private func headerControls(shortcuts: Bool) -> some View {
         HStack(spacing: 4) {
             groupingToggle
             Spacer(minLength: 8)
             if shortcuts { shortcutsButton }
-            // Flat order's New Space is the list's "+ space" (newSpaceButtons): the shortcuts end the row there.
-            if settings.values.spaceOrder == .tree { NewSpaceButton(workspace: workspace) }
         }
         .padding(.leading, 4)
         .padding(.trailing, max(0, listInset + metrics.shortcutInset - barTrailing))
@@ -499,6 +497,7 @@ struct SpaceSidebar: View {
                         }
                     }
                 }
+                newSpaceButtons
             } else {
                 ForEach(listed) { space in
                     spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")

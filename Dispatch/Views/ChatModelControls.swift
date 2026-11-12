@@ -15,7 +15,10 @@ struct ChatModelControls: View {
     /// model's default, and Codex reports none while it is unset, so a known model
     /// without one is on its default effort.
     private var effortLabel: String? {
-        session.effort ?? (["claude", "codex"].contains(session.agentID) && session.model != session.agentTitle ? "default" : nil)
+        Self.effortLabel(session.effort, agentID: session.agentID, model: session.model, agentTitle: session.agentTitle)
+    }
+    static func effortLabel(_ effort: String?, agentID: String, model: String, agentTitle: String?) -> String? {
+        effort ?? (["claude", "codex"].contains(agentID) && model != agentTitle ? "default" : nil)
     }
     /// Why the picker is dimmed (the agent works, a request waits), instead of the help for a picker that opens.
     private var blocked: String? { coordinator.modelPickBlockReason(session) }

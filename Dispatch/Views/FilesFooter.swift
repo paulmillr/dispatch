@@ -24,8 +24,9 @@ struct FilesFooter: View {
         .frame(height: typography.expanded(24))
         .font(typography, .caption)
         .foregroundStyle(palette.detail)
-        .background(Chrome.window)
-        .overlay(alignment: .top) { palette.separator.frame(height: 1) }
+        // On glass the count sits on the list's own background, no bar (as the files header); flat, a bar with a rule.
+        .background(LiquidGlassStore.shared.active ? Color.clear : Chrome.window)
+        .overlay(alignment: .top) { if !LiquidGlassStore.shared.active { palette.separator.frame(height: 1) } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("files-footer")
     }

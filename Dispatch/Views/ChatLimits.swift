@@ -1,35 +1,5 @@
 import SwiftUI
 
-/// One usage window of `chat.limits`, as the agent reports it.
-struct ChatLimitWindow: Decodable, Equatable, Sendable {
-    let name: String
-    let used: Int
-    let resets_at: TimeInterval
-
-    /// "5-hour", "Weekly"; another length (`window_<minutes>`, Codex) in the largest whole unit.
-    var title: String {
-        if name == "five_hour" { return "5-hour" }
-        if name == "seven_day" { return "Weekly" }
-        guard name.hasPrefix("window_"), let minutes = Int(name.dropFirst("window_".count)), minutes > 0 else { return name }
-        if minutes % 1440 == 0 { return "\(minutes / 1440)-day" }
-        if minutes % 60 == 0 { return "\(minutes / 60)-hour" }
-        return "\(minutes)-minute"
-    }
-    var resets: Date { Date(timeIntervalSince1970: resets_at) }
-
-    /// "resets in 2h 18m" within a day, then "resets Thu 9:40am".
-    func resetText(now: Date, timeZone: TimeZone = .current) -> String {
-        let left = resets.timeIntervalSince(now)
-        if left < 24 * 3600 { return "resets in " + ChatTranscript.elapsed(max(0, left)) }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.amSymbol = "am"; formatter.pmSymbol = "pm"
-        formatter.dateFormat = "EEE h:mma"
-        return "resets " + formatter.string(from: resets)
-    }
-}
-
 extension HelperChat {
     func limits() async throws -> [ChatLimitWindow] { try await call("chat.limits", input: Input(route)) }
 }
@@ -54,36 +24,6 @@ extension HelperChat {
         var input = Input(route)
         input.read = read
         return try await call("chat.limits.rows", input: input)
-    }
-}
-
-/// What the popover says about one agent's limits.
-struct ChatLimitsWording: Equatable {
-    let agent: String
-    let title: String
-    let plan: String
-    let explanation: String
-    let none: String
-
-    /// A Pi extension the user installed.
-    static func `extension`(_ name: String) -> Self {
-        Self(agent: name, title: "Show limits from \(name)?", plan: "From \(name)",
-             explanation: "This Pi extension, which you installed, contacts its provider when you open this popover, at most once a minute. Dispatch only shows what it reports.",
-             none: "\(name) reported no limits.")
-    }
-
-    static func of(_ agentID: String) -> Self? {
-        switch agentID {
-        case "claude":
-            Self(agent: "Claude Code", title: "Show Claude Code limits here?", plan: "Your Claude plan",
-                 explanation: "Dispatch asks Claude Code only when you open this popover, at most once a minute. It sets Claude Code's status line for a moment, then puts it back.",
-                 none: "No limits to show. Claude Code reports them for Pro, Max and Ultra plans, after a session's first reply.")
-        case "codex":
-            Self(agent: "Codex", title: "Show Codex limits here?", plan: "Your ChatGPT plan",
-                 explanation: "Dispatch asks Codex only when you open this popover, at most once a minute. Codex then asks OpenAI for your plan's usage.",
-                 none: "No limits to show. Codex reports them when you sign in with ChatGPT.")
-        default: nil
-        }
     }
 }
 
