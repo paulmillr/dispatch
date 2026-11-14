@@ -369,6 +369,7 @@
 		7A5472631BA57CE421C09CE7 /* Face.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEE9069D9674FA632B2E7261 /* Face.swift */; };
 		7AB2CB11476E0659A411AD59 /* PaneSpace.swift in Sources */ = {isa = PBXBuildFile; fileRef = F01DDEDE7DFBAB9F163DCE96 /* PaneSpace.swift */; };
 		7ABB2A4A17413C4809146D78 /* ChatLimitsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4260CD88C7AEC5CDF6F71B /* ChatLimitsTests.swift */; };
+		7AFF6F2ACA7480F1B4CF45F4 /* FileTextDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 184CF8DC4A97DC8102557BD6 /* FileTextDocument.swift */; };
 		7B551A5D53AB0719CB5354FE /* ChatCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 142B215A54A37B869B2FC662 /* ChatCommands.swift */; };
 		7B5D5D51DC6E53B08D692176 /* RecMonoCasual-BoldItalic.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 71C974C4B9DE9D58526AD02F /* RecMonoCasual-BoldItalic.ttf */; };
 		7B86A8F7A47AB83999A48EC4 /* HelperChatTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0FE44D14C8CD323B17B051A /* HelperChatTransport.swift */; };
@@ -956,6 +957,7 @@
 		17DE6C2858C4BC66D57F9188 /* HarbourRadarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarbourRadarTests.swift; sourceTree = "<group>"; };
 		1807EA864A238F454BFC2FE5 /* Resize.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Resize.swift; sourceTree = "<group>"; };
 		18472915057B27E46F334516 /* CoreText.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreText.framework; path = System/Library/Frameworks/CoreText.framework; sourceTree = SDKROOT; };
+		184CF8DC4A97DC8102557BD6 /* FileTextDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTextDocument.swift; sourceTree = "<group>"; };
 		18E2C30453C025A737C5C897 /* GitLoadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitLoadingTests.swift; sourceTree = "<group>"; };
 		18F97F499A76CFA7148D971F /* Hasklig-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Hasklig-Regular.otf"; sourceTree = "<group>"; };
 		194E1A9D104D065EBBD63326 /* IoskeleyMonoTerm-BoldItalic.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "IoskeleyMonoTerm-BoldItalic.ttf"; sourceTree = "<group>"; };
@@ -2126,6 +2128,7 @@
 				2436E69D598972D55C5BB3B9 /* FilesUnavailableView.swift */,
 				60065DB88D960B17177F4BB5 /* FilesView.swift */,
 				E48178B4C8BCB55D1BAA0E99 /* FilesWriteRefusal.swift */,
+				184CF8DC4A97DC8102557BD6 /* FileTextDocument.swift */,
 				434FC9E14EE677457AB63248 /* FileTextPreview.swift */,
 				0C40761C492EFF808D5ED33B /* FileTransferRows.swift */,
 				D7A74D85A084A4864B0F7A54 /* GitChangesView.swift */,
@@ -3112,6 +3115,7 @@
 				F241BFCE683712F0FAD31B16 /* FilePreviewPane.swift in Sources */,
 				3CD3C083492E948BCC2CB5C9 /* FilePreviewState.swift in Sources */,
 				36FA99463AB2BD728D5A4D73 /* FilePreviewVideo.swift in Sources */,
+				7AFF6F2ACA7480F1B4CF45F4 /* FileTextDocument.swift in Sources */,
 				6C33ABABDA98B3E750EFFB02 /* FileTextPreview.swift in Sources */,
 				DAD0085135E20CD8D19510B8 /* FileTransfer.swift in Sources */,
 				94F903C698A8A5B3B955104B /* FileTransferEngine.swift in Sources */,

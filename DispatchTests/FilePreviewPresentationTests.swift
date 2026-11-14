@@ -20,14 +20,51 @@ final class FilePreviewPresentationTests: XCTestCase {
         try PresentationTestSupport.assertText("billing.ts", in: snapshot)
         try PresentationTestSupport.assertText("3.8 KB", in: snapshot)
         try PresentationTestSupport.assertText("export const billing", in: snapshot)
-        XCTAssertEqual(try headerHeight(snapshot, in: window), 40, accuracy: 0.5, "The 40 pt header over its 1 pt rule")
+        // Once the pane has settled: the text can be there while the pane still fades in, its rule between pixels.
+        var header = try headerHeight(snapshot, in: window)
+        try await TestSupport.eventually(diagnostic: "header \(header)") {
+            header = try headerHeight(try await PresentationTestSupport.capture(window), in: window)
+            return abs(header - 40) <= 0.5
+        }
+        XCTAssertEqual(header, 40, accuracy: 0.5, "The 40 pt header over its 1 pt rule")
         let first = try XCTUnwrap(line(1, in: window)), second = try XCTUnwrap(line(2, in: window))
         // 12.5 pt code on 20 pt rows at the design base; both grow with the text.
         let row = FilePreviewMetrics.metrics(ChatTypography()).rowHeight
         XCTAssertEqual(first.maxY - second.maxY, row, accuracy: 0.5, "Code rows as tall as the preview's metrics")
         XCTAssertLessThan(first.height, row + 0.5, "One line of text in the row")
-        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-preview-line-150", in: window)
-            .contains { window.contentView!.bounds.intersects($0) }, "Rows below the fold are not drawn")
+        XCTAssertFalse(line(150, in: window).map { window.contentView!.bounds.intersects($0) } ?? false,
+                       "Line 150 is below the fold")
+    }
+
+    /// The text is one selectable text: a click gives it the keyboard, ⌘A takes every line, and a copy is the text as
+    /// shown, plain: a rogue file's escape sequence and right-to-left override come out spelled, never as the
+    /// characters, so a paste into a terminal or an editor carries nothing hidden.
+    func testTextSelectsAcrossLinesAndCopiesWhatItShows() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        let path = base + "/rogue.sh"
+        let rogue = "echo safe\u{202E}txt.exe\u{1B}[2J\u{07}"
+        source.file(path, "first line\n" + rogue + "\nlast line\n")
+        let (window, session) = try host(source, preview: path)
+        try await TestSupport.eventually { if case .text = session.preview?.kind { return true }; return false }
+        try await TestSupport.eventually { line(3, in: window) != nil }
+        let text = try XCTUnwrap(textView(in: window))
+        let second = try XCTUnwrap(line(2, in: window))
+        try PresentationTestSupport.click(window, at: NSPoint(x: second.minX + 4, y: second.midY))
+        try await TestSupport.eventually(diagnostic: "the click did not reach the text") {
+            window.firstResponder === text && session.previewFocused
+        }
+        text.selectAll(nil)
+        XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: (text.string as NSString).length))
+        // A private pasteboard: the test leaves the user's clipboard alone.
+        let board = NSPasteboard(name: NSPasteboard.Name("dispatch-test-\(System.uuid().uuidString)"))
+        defer { board.releaseGlobally() }
+        XCTAssertTrue(text.writeSelection(to: board, type: .string))
+        let copied = try XCTUnwrap(board.string(forType: .string))
+        XCTAssertEqual(copied, "first line\n" + TextRendering.visible(rogue) + "\nlast line")
+        XCTAssertFalse(copied.unicodeScalars.contains { [0x1B, 0x07, 0x202E].contains($0.value) }, "nothing hidden: \(copied)")
+        XCTAssertTrue(copied.contains("⟦ESC⟧") && copied.contains("⟦RLO⟧"), copied)
+        XCTAssertFalse(board.types?.contains { [.rtf, .rtfd, .html].contains($0) } ?? true, "plain text only: \(String(describing: board.types))")
+        XCTAssertFalse(text.isEditable)
     }
 
     func testShortTextStartsUnderTheHeaderInBothWrapModes() async throws {
@@ -574,11 +611,16 @@ final class FilePreviewPresentationTests: XCTestCase {
         """ + (1...12).map { "## Section \($0)\n\n" + String(repeating: "Filler sentence for section \($0). ", count: 8) + "\n\n" }.joined()
         + "## Appendix\n\nThe end.\n"
 
-    /// A line's frame in window coordinates. The row's identifier reaches its gutter number and its text, so the
-    /// line is their union: its top is the row's top plus the row's inset, its height the text's.
+    /// A line's text in window coordinates (`FileTextView.lineRect`): its top is the row's top plus the row's inset,
+    /// its height the text's, across every row it wraps onto.
     private func line(_ number: Int, in window: NSWindow) -> NSRect? {
-        let frames = PresentationTestSupport.accessibilityFrames("file-preview-line-\(number)", in: window)
-        return frames.dropFirst().reduce(frames.first) { $0?.union($1) }
+        textView(in: window)?.lineRect(number)
+    }
+
+    private func textView(in window: NSWindow) -> FileTextView? {
+        guard let root = window.contentView else { return nil }
+        root.layoutSubtreeIfNeeded()
+        return PresentationTestSupport.views(of: FileTextView.self, in: root, includingNestedMatches: true).first
     }
 
     /// An opaque PNG: red across, blue down, 40 % green. (`FilePreviewTests.png` sets sRGB colours on a device RGB

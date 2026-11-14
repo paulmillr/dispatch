@@ -703,6 +703,7 @@
     "DispatchTests/FilePreviewPresentationTests/testMarkdownBlocksReadAsADocument": "full",
     "DispatchTests/FilePreviewPresentationTests/testMarkdownOpensRenderedInAReadingColumnAndTheEyeIsTheTabsChoice": "full",
     "DispatchTests/FilePreviewPresentationTests/testMarkdownSectionsFoldAndTheOutlineScrollsToAHeading": "full",
+    "DispatchTests/FilePreviewPresentationTests/testTextSelectsAcrossLinesAndCopiesWhatItShows": "full",
     "DispatchTests/FilePreviewPresentationTests/testShortTextStartsUnderTheHeaderInBothWrapModes": "full",
     "DispatchTests/FilePreviewPresentationTests/testTextPreviewShowsHeaderGutterAndHighlightedLines": "full",
     "DispatchTests/FilePreviewPresentationTests/testWrapSoftWrapsLongLinesAtThePaneWidth": "full",

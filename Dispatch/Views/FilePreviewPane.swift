@@ -85,6 +85,8 @@ extension FilesFormatting {
 private struct FilePreviewDetail: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
+    /// The floating mode switch's room, which the files header leaves when this bar takes its place.
+    @Environment(\.filesHeaderAccessory) private var accessory
     let session: FilesSession
     let preview: FilePreviewState
     var root: String?
@@ -97,6 +99,8 @@ private struct FilePreviewDetail: View {
     /// A video's bytes were asked for in place of its Play.
     @State private var showBytes = false
     @FocusState private var focus: Field?
+    /// The text view (`FileTextDocument`) has the keyboard: AppKit's, so SwiftUI's `focus` is nil meanwhile.
+    @State private var textFocused = false
 
     enum Field: Hashable { case content, find }
 
@@ -115,7 +119,8 @@ private struct FilePreviewDetail: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused($focus, equals: .content)
-                .simultaneousGesture(TapGesture().onEnded { if focus != .content { focus = .content } })
+                // A click in the text is the text view's (its selection); elsewhere the pane takes the keyboard.
+                .simultaneousGesture(TapGesture().onEnded { if !showsText, focus != .content { focus = .content } })
                 .onKeyPress(.escape) {
                     guard find.open else { return .ignored }
                     closeFind()
@@ -126,7 +131,8 @@ private struct FilePreviewDetail: View {
                     return FileHexPreview.key(press, in: document)
                 }
         }
-        .onChange(of: focus) { session.previewFocused = focus != nil }
+        .onChange(of: focus) { session.previewFocused = focus != nil || textFocused }
+        .onChange(of: textFocused) { session.previewFocused = focus != nil || textFocused }
         .onChange(of: session.findRequest) {
             guard session.previewFocused else { return }
             openFind()
@@ -152,26 +158,30 @@ private struct FilePreviewDetail: View {
             if bar { FilesBackButton(session: session).padding(.trailing, 2) }
             // As the bar, the list and its path are out of sight: the file's folder, dimmed, before its name (relative to
             // the list's folder, as its crumbs show it), while there is room; it gives way before the name does.
-            if bar {
-                ViewThatFits(in: .horizontal) {
-                    Text(verbatim: TextRendering.visible(FilesFormatting.location(of: preview.path, root: root, home: session.home)) + " /")
-                        .font(typography, .content)
-                        .foregroundStyle(theme.muted)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .help(FilesPath.parent(preview.path) ?? preview.path)
-                        .accessibilityIdentifier("file-preview-location")
-                    Color.clear.frame(width: 0, height: 0)
+            // The folder and the name in one stack: the folder's gap goes with it, so a name alone starts where it would.
+            HStack(spacing: 0) {
+                if bar {
+                    ViewThatFits(in: .horizontal) {
+                        Text(verbatim: TextRendering.visible(FilesFormatting.location(of: preview.path, root: root, home: session.home)) + " /")
+                            .font(typography, .content)
+                            .foregroundStyle(theme.muted)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .help(FilesPath.parent(preview.path) ?? preview.path)
+                            .accessibilityIdentifier("file-preview-location")
+                            .padding(.trailing, 10)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .layoutPriority(0.5)
                 }
-                .layoutPriority(0.5)
-            }
-            Text(verbatim: TextRendering.visible(preview.name))
-                .font(typography, .content)
-                .foregroundStyle(theme.ink)
-                .lineLimit(1).truncationMode(.middle)
-                .layoutPriority(1)
-                .help(TextRendering.visible(preview.path))
-                .accessibilityIdentifier("file-preview-name")
+                Text(verbatim: TextRendering.visible(preview.name))
+                    .font(typography, .content)
+                    .foregroundStyle(theme.ink)
+                    .lineLimit(1).truncationMode(.middle)
+                    .layoutPriority(1)
+                    .help(TextRendering.visible(preview.path))
+                    .accessibilityIdentifier("file-preview-name")
+            }.layoutPriority(1)
             if !isFolder {
                 Button(action: copyPath) {
                     Image(systemName: "doc.on.doc").font(.system(size: 11))
@@ -192,8 +202,17 @@ private struct FilePreviewDetail: View {
             if find.open { findField }
             // The buttons keep their room before the folder takes any; with previews off there is no content to set.
             if !infoOnly { controls.fixedSize().layoutPriority(1) }
+            // As the bar, the files header's trailing end too: the views toggle where it stood, then the mode switch's
+            // room, so neither moves when a file takes the list's place.
+            if bar {
+                // The files header's spacing (12), so the toggle lands where it was.
+                HStack(spacing: 12) {
+                    if session.canShowBoth { FilesViewsToggle(session: session).glassControlGroup() }
+                    if let accessory { accessory.fixedSize() }
+                }.layoutPriority(1)
+            }
         }
-        .padding(.leading, bar ? 12 : 14).padding(.trailing, 14)
+        .padding(.leading, bar ? 12 : 14).padding(.trailing, bar ? 12 : 14)
         // The list's column header beside it is as tall (FilesColumns.headerHeight); as the bar, the files header is.
         .frame(height: bar ? FilesHeader.height(typography) : FilesColumns.headerHeight(typography))
         .background { if bar && !LiquidGlassStore.shared.active { Chrome.window } }
@@ -208,14 +227,6 @@ private struct FilePreviewDetail: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("file-preview-header")
-    }
-
-    /// The text the preview holds whole: a text or Markdown file (not the first 64 KB of a larger one).
-    private var copyableText: String? {
-        switch preview.kind {
-        case .text(let text, _), .markdown(let text): text
-        default: nil
-        }
     }
 
     private var isFolder: Bool {
@@ -240,16 +251,6 @@ private struct FilePreviewDetail: View {
                 if !document.headings.isEmpty {
                     FileMarkdownOutlineButton(session: session, path: preview.path, document: document)
                 }
-            }
-            if let text = copyableText {
-                // The whole file, as the per-line selection cannot take more than a line at a time.
-                Button { GitPasteboard.copy(text) } label: {
-                    Image(systemName: "doc.on.clipboard").font(.system(size: 11))
-                }
-                .buttonStyle(FilePreviewIconButtonStyle(on: false))
-                .help("Copy the file’s text")
-                .accessibilityLabel("Copy text")
-                .accessibilityIdentifier("file-preview-copy-text")
             }
             if case .markdown = preview.kind {
                 Button { session.previewRendered = !rendered } label: {
@@ -307,6 +308,29 @@ private struct FilePreviewDetail: View {
     }
 
     private var findable: Bool { preview.findable && !infoOnly }
+
+    /// The preview is the text view (`FileTextDocument`): text, Markdown's source, a large file's first 64 KB.
+    private var showsText: Bool {
+        guard !infoOnly else { return false }
+        switch preview.kind {
+        case .text: return true
+        case .markdown: return !rendered
+        case .tooLarge(_, let head): return head != nil
+        default: return false
+        }
+    }
+
+    private func textFocusChanged(_ focused: Bool) {
+        // After this update: the pane's focus is SwiftUI state.
+        DispatchQueue.main.async { if textFocused != focused { textFocused = focused } }
+    }
+
+    /// Esc in the text closes find while it is open; otherwise it is the files pane's (back to the list).
+    private func escapeText() -> Bool {
+        guard find.open else { return false }
+        closeFind()
+        return true
+    }
 
     /// Settings › Files › Disable file previews: a file shows what its listing entry says of it (its kind, size and
     /// date), never its contents, whatever was read before the setting changed. A folder still shows its summary.
@@ -376,7 +400,8 @@ private struct FilePreviewDetail: View {
             }
         case .text(let text, let language):
             FileTextPreview(owner: owner, content: .text(text, language: language), wrap: wrap, lineNumbers: lineNumbers,
-                            find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text))
+                            find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text),
+                            focusChanged: textFocusChanged, wantsFocus: focus == .content, escape: escapeText)
         case .markdown(let text):
             if rendered {
                 FileMarkdownView(session: session, path: preview.path, text: text,
@@ -385,7 +410,8 @@ private struct FilePreviewDetail: View {
                     .accessibilityIdentifier("file-preview-markdown")
             } else {
                 FileTextPreview(owner: owner, content: .text(text, language: "markdown"), wrap: wrap, lineNumbers: lineNumbers,
-                                find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text))
+                                find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .text),
+                            focusChanged: textFocusChanged, wantsFocus: focus == .content, escape: escapeText)
             }
         case .image(let data, let pixels):
             FileImagePreview(data: data, revision: preview.revision, pixelSize: pixels, zoom: $zoom, focused: focused,
@@ -406,7 +432,8 @@ private struct FilePreviewDetail: View {
                 VStack(spacing: 0) {
                     headBar("First 64 KB of \(FilesFormatting.size(size))")
                     FileTextPreview(owner: owner, content: .text(head, language: preview.name), wrap: wrap, lineNumbers: lineNumbers,
-                                    find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .head))
+                                    find: find, highlightsQuery: find.open, keeper: .init(preview: preview, key: .head),
+                            focusChanged: textFocusChanged, wantsFocus: focus == .content, escape: escapeText)
                 }
             } else {
                 FileLargeNotice(title: "Too large to preview here",

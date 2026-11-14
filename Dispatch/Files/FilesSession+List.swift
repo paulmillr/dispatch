@@ -255,15 +255,26 @@ extension FilesSession {
     }
 
     /// ⌥⌘P and the header's views button: one view at a time, or the list with its detail, whichever is not shown, where
-    /// there is room for both. One view opens on the list. The detail keeps `previewWidth` for when it returns; a preview
+    /// there is room for both. One view opens on the detail when it shows something (`detailShowing`), else on the list. The detail keeps `previewWidth` for when it returns; a preview
     /// that had the keyboard is unmounted with it, so the list takes the keyboard rather than leaving none.
     func toggleViews() {
         guard canShowBoth else { return }
         let one = !splitNarrow
         oneView = one
         if one {
-            narrowDetail = false
-            if previewFocused { previewFocused = false; focusRequest = System.uuid() }
+            // One view shows what was being looked at: the file's preview, the change's diff, the commit, in the list's
+            // place; the list only when the detail shows nothing.
+            narrowDetail = detailShowing
+            if !narrowDetail, previewFocused { previewFocused = false; focusRequest = System.uuid() }
+        }
+    }
+
+    /// The detail beside the list shows something of its own: a file's preview, a change's diff, a commit.
+    var detailShowing: Bool {
+        switch tab {
+        case .files: preview != nil
+        case .changes: changesSelection != nil
+        case .commits: selectedCommit != nil
         }
     }
 

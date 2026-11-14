@@ -297,11 +297,14 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertLessThan(preview.minX, 2, "the preview takes the list's place")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-header", in: window).isEmpty, "no second row")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty)
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).isEmpty)
+        // 480 pt tall fits both, so the bar keeps the views toggle, where the files header has it (checked below).
+        let drilledToggle = try await frame("files-views-toggle", in: window)
         try await says("billing.ts", "file-preview-name", in: window)
         let name = try await frame("file-preview-name", in: window)
-        let location = PresentationTestSupport.accessibilityFrames("file-preview-location", in: window).first
         let drilled = try await PresentationTestSupport.capture(window, named: "files-one-column-preview", in: "files-audit")
+        // `ViewThatFits` keeps the folder's element when it does not draw it: the capture says whether it shows.
+        let location = try drilled.text().contains("routes")
+            ? PresentationTestSupport.accessibilityFrames("file-preview-location", in: window).first : nil
         // The test VM's desktop sometimes drops a synthesized click; another is harmless.
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the way back did not take the click") {
             if !session.narrowDetail { return true }
@@ -324,6 +327,8 @@ final class FilesPresentationTests: XCTestCase {
         // 480 pt tall has room for both: the Single view toggle shows (lit) and stacks the preview under the list.
         try await says("Show list and preview", "files-views-toggle", in: window)
         let views = try await frame("files-views-toggle", in: window)
+        XCTAssertEqual(views.midX, drilledToggle.midX, accuracy: 1, "the toggle stands where it stood inside the file")
+        XCTAssertEqual(views.midY, drilledToggle.midY, accuracy: 1)
         try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: views.midX, y: views.midY))
         try await TestSupport.eventually { session.oneView == false && !session.splitNarrow }
         try await says("Show one view", "files-views-toggle", in: window)
@@ -352,7 +357,8 @@ final class FilesPresentationTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the folder stayed at 300 pt") {
             window.contentView?.layoutSubtreeIfNeeded()
             let text = try await PresentationTestSupport.capture(window, named: "files-one-column-location-300", in: "files-audit").text()
-            return text.contains("billing.ts") && !text.contains("routes")
+            // The name may be cut in its middle ("bil…ts") with the toggle in the bar: only the folder must go.
+            return text.contains("bil") && !text.contains("routes")
         }
         try await says("billing.ts", "file-preview-name", in: window)
     }
@@ -623,10 +629,21 @@ final class FilesPresentationTests: XCTestCase {
         try await TestSupport.eventually { source.calls.contains("read \(billing)") }
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty)
 
-        // The header's views button: one view, no divider, no preview, the list spans the view.
+        // The header's views button: one view, on the file being previewed, in the list's place.
         let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first)
         try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: toggle.midX, y: toggle.midY))
         try await TestSupport.eventually { session.oneView == true }
+        try await TestSupport.eventually(diagnostic: "the previewed file did not take the list's place") {
+            session.narrowDetail && self.divider(in: window) == nil
+                && !PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty
+        }
+        // The file's bar takes the header's place, and the toggle stays where it was.
+        let kept = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-views-toggle", in: window).first,
+                                 "the views toggle left with the files header")
+        XCTAssertEqual(kept.midX, toggle.midX, accuracy: 1)
+        XCTAssertEqual(kept.midY, toggle.midY, accuracy: 1)
+        // Back, as esc: the list spans the view, with no divider and no preview.
+        session.goBack()
         try await says("Show list and preview", "files-views-toggle", in: window)
         try await TestSupport.eventually(diagnostic: "the divider or the preview is still mounted") {
             self.divider(in: window) == nil && PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty
