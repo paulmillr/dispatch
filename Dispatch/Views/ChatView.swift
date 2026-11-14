@@ -10,7 +10,7 @@ struct ChatView: View {
     var workspace: Workspace?
     /// A glass tab strip over the pane's top: the transcript scrolls under it, other content starts below it.
     var topInset: CGFloat = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var availableChatHeight: CGFloat = 800
     @State private var chatWidth: CGFloat = 0
     @State private var alternateSendHeld = false
@@ -536,6 +536,7 @@ struct ChatView: View {
                     .foregroundStyle(theme.muted)
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.border))
                     .contentShape(Rectangle())
+                    .hoverFill(RoundedRectangle(cornerRadius: 4))
             }.buttonStyle(.plain).disabled(!coordinator.canInterrupt(session))
                 .help(coordinator.interruptBlockReason(session)
                       ?? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋⎋ · Draft kept")
@@ -684,12 +685,8 @@ struct ChatSessionStats: View {
                     .accessibilityLabel("\(Int(fraction * 100)) percent context remaining")
             }
             if let usage = session.usage {
-                // An agent that reports neither count does not count tokens for this chat: say so, not "— in, — out".
-                if usage.input == nil && usage.output == nil {
-                    Text("Token counter is disabled for this chat")
-                        .help("The agent reports no token counts for this chat")
-                        .accessibilityIdentifier("chat-session-tokens-off")
-                } else {
+                // An agent that reports neither count does not count tokens for this chat: nothing, not "— in, — out".
+                if usage.input != nil || usage.output != nil {
                     Text("(\(count(usage.input)) in, \(count(usage.output)) out)")
                         .help("Cumulative session tokens")
                 }

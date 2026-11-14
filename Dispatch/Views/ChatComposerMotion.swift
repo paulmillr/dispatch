@@ -10,7 +10,7 @@ struct ChatComposerFocusChrome: View {
     let lineHeight: CGFloat
     /// Glass only: where the unfocused reply button sits, from the composer's bottom-trailing corner.
     var buttonInset = CGSize.zero
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     var body: some View {
         let open = shown ?? focused
@@ -47,7 +47,7 @@ struct ChatComposerFocusChrome: View {
 
 struct ChatComposerBorder: ViewModifier {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let session: ChatSession
     var active = true
     /// Follows the surface it borders: the flat panel's 8 points, or the glass composer's rounder corners.

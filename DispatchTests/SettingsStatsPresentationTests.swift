@@ -89,7 +89,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let root = try XCTUnwrap(window.contentView)
         let memoryRows = try await PresentationTestSupport.capture(window).recognizedText()
         let memoryLabel = try XCTUnwrap(memoryRows
-            .first { $0.topCandidates(1).first?.string == "MEM" })
+            .first { $0.topCandidates(1).first?.string == "MEMORY" })
         let box = memoryLabel.boundingBox
         let point = root.convert(NSPoint(x: box.midX * root.bounds.width,
             y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil)
@@ -111,7 +111,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let enlarged = try await capture(window, "stats-popover-large-font").text()
         // Vision sometimes recognizes the short CPU label as Cyrillic; the
         // load detail verifies that column remains visible at larger sizes.
-        for label in ["2.71 load", "MEM", "DISK"] {
+        for label in ["2.71 load", "MEMORY", "DISK"] {
             XCTAssertTrue(enlarged.contains(label), "Missing \(label) with larger text: \(enlarged)")
         }
     }
@@ -785,7 +785,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
                          "On launch", "Reopen spaces", "Scrollback", "Tabs & spaces", "login shell", "Startup command",
                          "Show git branch in spaces", "Show sidebar with one space", "Automatic tab names", "Vertical tabs",
                          "Security", "programs can copy"]),
-            ("Theme", ["Colors", "Follow system", "light or dark, as macOS is", "Appearance", "space size, opacity, colorblind mode, host colors and glass",
+            ("Theme", ["Colors", "Follow system", "light or dark, as macOS is", "Appearance", "space size, opacity, contrast, host colors, glass and animations",
                        "Color scheme", "Dark", "Light", "Dispatch", "Fun", "Your color schemes"]),
             ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Key bindings", "Prefix keys", "Dictate", "Option as Alt"]),
             ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "git with review mode", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device", "Notifications"]),
@@ -1154,7 +1154,7 @@ extension SettingsStatsPresentationTests {
         let first = try await PresentationTestSupport.capture(window, named: "remote-partial-unknown-cpu", in: "stats-validation")
         XCTAssertTrue(try first.text().contains("partial")); XCTAssertTrue(try first.text().contains("Measuring process CPU"))
         let root = try XCTUnwrap(window.contentView)
-        let label = try XCTUnwrap(try first.recognizedText().first { $0.topCandidates(1).first?.string == "MEM" })
+        let label = try XCTUnwrap(try first.recognizedText().first { $0.topCandidates(1).first?.string == "MEMORY" })
         let box = label.boundingBox
         try PresentationTestSupport.click(window, at: root.convert(NSPoint(x: box.midX * root.bounds.width,
             y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil))

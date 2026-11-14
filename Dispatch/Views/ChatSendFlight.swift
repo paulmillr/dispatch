@@ -7,7 +7,7 @@ extension ChatCoordinator {
     /// own messages, a transcript scrolled away from its end and one held off screen keep the plain entrance.
     func launchFlight(_ session: ChatSession, text: String, hasAttachments: Bool,
                       from: ChatSendFlight.Place, to: ChatSendFlight.Place) {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, session.showChat, !session.transcriptHeld, !hasAttachments,
+        guard !MotionStore.reduced, session.showChat, !session.transcriptHeld, !hasAttachments,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !ChatThemeStore.shared.current.radioLog,
               var source = session.flightFrames[from] else { return }
         if case .prompt = to, !session.atBottom { return }

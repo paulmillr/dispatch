@@ -100,7 +100,7 @@ struct ChatModeSwitch: View {
     /// The tab's files; defaults to the chat coordinator's own. Without one (a stand-alone chat) the button is chat's
     /// two-way switch.
     var files: FilesCoordinator?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var hovering = false
     @State private var typing = false
 
@@ -126,7 +126,8 @@ struct ChatModeSwitch: View {
                     // On glass the capsule below is the ground and answers the pointer itself.
                     if LiquidGlassStore.shared.active {
                     } else if floating && !state.lit {
-                        RoundedRectangle(cornerRadius: 5).fill(theme.ink.opacity(0.06))
+                        // The floating ground darkens under the pointer: the shared hover fill is fainter than it.
+                        RoundedRectangle(cornerRadius: 5).fill(theme.ink.opacity(hovering && !state.dimmed ? 0.1 : 0.06))
                     } else if hovering && !state.dimmed {
                         RoundedRectangle(cornerRadius: 5).fill(Chrome.palette.hover)
                     }
@@ -134,10 +135,13 @@ struct ChatModeSwitch: View {
                 // The floating ground leaves with the terminal, in step with the glyph's cross-fade.
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: state.lit)
                 .stripGlassButton()
+                // The tracker above takes the pointer from SwiftUI: the glass button's hover learns it from here.
+                .environment(\.pointerOver, hovering && !state.dimmed)
                 .contentShape(Rectangle())
                 // Clicks and press-and-hold are AppKit's: either opens the modes menu under the button.
                 .overlay {
-                    ModeSwitchPressTracker(enabled: !state.dimmed || state.retained, help: help, menu: { menuItems(state) })
+                    ModeSwitchPressTracker(enabled: !state.dimmed || state.retained, help: help, menu: { menuItems(state) },
+                                           hovering: { hovering = $0 })
                 }
         }
         .buttonStyle(.plain)
@@ -228,7 +232,7 @@ struct ModeSwitchMenuItem: Identifiable {
 
 private struct ModeSwitchLabel: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// Nil marks no mode (a slot's placeholder).
     var state: ModeSwitchState?
     /// Nautical's radio segment (chat is on) and hold segment (Files is on).
@@ -331,12 +335,15 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
     let enabled: Bool
     let help: String
     let menu: @MainActor () -> [ModeSwitchMenuItem]
+    /// The pointer entering and leaving: this view takes it from the button's SwiftUI `onHover` beneath.
+    var hovering: (Bool) -> Void = { _ in }
 
     func makeNSView(context: Context) -> TrackerView { TrackerView() }
 
     func updateNSView(_ view: TrackerView, context: Context) {
         view.enabled = enabled
         view.items = menu
+        view.hovering = hovering
         // The tracker is what the pointer is over, so it carries the hover text.
         if view.toolTip != help { view.toolTip = help }
     }
@@ -346,6 +353,8 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
         static let holdDelay: TimeInterval = 0.45
         var enabled = true
         var items: @MainActor () -> [ModeSwitchMenuItem] = { [] }
+        var hovering: (Bool) -> Void = { _ in }
+        private var hoverTracking: NSTrackingArea?
         /// Shows the menu at `point` in the view (tests record it rather than run the menu's modal loop).
         var presentMenu: @MainActor (NSMenu, NSView, NSPoint) -> Void = { menu, view, point in
             menu.popUp(positioning: nil, at: point, in: view)
@@ -353,6 +362,19 @@ struct ModeSwitchPressTracker: NSViewRepresentable {
 
         override var mouseDownCanMoveWindow: Bool { false }
         override func isAccessibilityElement() -> Bool { false }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let hoverTracking { removeTrackingArea(hoverTracking) }
+            let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+            addTrackingArea(area); hoverTracking = area
+        }
+        override func mouseEntered(with event: NSEvent) { hovering(true) }
+        override func mouseExited(with event: NSEvent) { hovering(false) }
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil { hovering(false) }
+            super.viewWillMove(toWindow: newWindow)
+        }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func hitTest(_ point: NSPoint) -> NSView? {

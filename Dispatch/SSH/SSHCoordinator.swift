@@ -144,9 +144,15 @@ final class SSHCoordinator {
     func presentationScope(for terminal: UUID) -> String? { terminalScopes[terminal] }
 
     func integrationEntries(for host: HostID) -> [SSHIntegrationPermissions.Entry] {
+        // Consent records a typed login's scope; a connection that asked none (restored at launch, reconnected) is
+        // found through its terminals' connection, and an offline one through the recipe kept to reconnect it.
         var keys = scopeHosts[host] ?? []
         for (tab, context) in TerminalRuntime.shared.workspace?.hosts.terminals ?? [:] where context.host == host {
             if let key = terminalScopes[tab] { keys.insert(key) }
+            if let scope = connections[SSHConnectionID(context.generation)]?.request.integrationScope { keys.insert(scope.key) }
+        }
+        for recipe in TerminalRuntime.shared.hosts.reconnect.recipes.values where recipe.host == host {
+            if let scope = recipe.scope { keys.insert(scope.key) }
         }
         return keys.compactMap { permissions.entries[$0] }.sorted {
             ($0.scope.account, $0.scope.destination, $0.scope.key) < ($1.scope.account, $1.scope.destination, $1.scope.key)
@@ -1022,6 +1028,8 @@ final class SSHCoordinator {
         for id in Array(requests.keys) { finish(id) }
         for state in connections.values { state.intentionalDisconnect = false }
         hostTints.removeAll()
+        // Quitting: which logins asked consent is this run's knowledge, as after a relaunch (`integrationEntries`).
+        scopeHosts.removeAll(); terminalScopes.removeAll()
         // Include cleanup started by an earlier close as well as this stop.
         // Its private control paths must survive until ssh -O exit completes.
         let pending = connections.values.compactMap(\.cleanupTask)

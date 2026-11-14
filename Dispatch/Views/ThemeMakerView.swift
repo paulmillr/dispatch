@@ -23,7 +23,7 @@ struct ThemeMakerView: View {
     /// the hue (a gray) or chroma (a lightness that can't hold it). Nil follows the stored seed (Random, the color
     /// picker).
     @State private var target: OKLCH?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     /// Who the scheme is for: Settings' colorblind mode, or the vision of the scheme being changed.
     private let vision: ColorVision

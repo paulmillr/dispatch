@@ -8,7 +8,7 @@ struct FilesView: View {
     /// The tab's pane has the focus (as for `ChatView`): the list takes the keyboard only then.
     var focused = true
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// Sorted levels kept between renders: the loading code replaces listings every 2 s.
     @State private var builder = FilesRowBuilder()
 

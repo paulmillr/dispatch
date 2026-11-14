@@ -91,8 +91,25 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     struct Effects: Equatable { var passes = 0, badges = 0, removals = 0 }
     @ObservationIgnored private(set) var effects = Effects()
     var notificationError: String?
+    /// macOS refuses Dispatch's banners (System Settings › Notifications): Settings says so in the card, with a link there.
+    var notificationsDenied = false
 
     init(controller: AppDelegate) { self.controller = controller }
+
+    /// Dispatch's page in System Settings › Notifications.
+    static var systemSettingsURL: URL? {
+        URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+            + (Bundle.main.bundleIdentifier.map { "?id=" + $0 } ?? ""))
+    }
+
+    /// Reads whether macOS allows banners now, without asking: after a visit to System Settings the card follows.
+    func refreshAuthorization() {
+        Task { [weak self] in
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            self?.notificationsDenied = status == .denied
+            if status == .authorized { self?.notificationError = nil }
+        }
+    }
 
     var entries: [AttentionEntry] {
         guard let controller else { return [] }
@@ -160,7 +177,10 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
                 Task { [weak self] in
                     do {
                         let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
-                        self?.notificationError = allowed ? nil : "Notifications are disabled in macOS System Settings → Notifications → Dispatch."
+                        self?.notificationsDenied = !allowed; self?.notificationError = nil
+                    } catch let error as UNError where error.code == .notificationsNotAllowed {
+                        // macOS's own words ("Notifications are not allowed for this application") say less than the card.
+                        self?.notificationsDenied = true; self?.notificationError = nil
                     } catch { self?.notificationError = error.localizedDescription }
                 }
             }

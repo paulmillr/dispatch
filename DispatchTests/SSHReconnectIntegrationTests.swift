@@ -200,6 +200,10 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
         XCTAssertEqual(app.workspace.hosts.state(host), .disconnected)
         XCTAssertEqual(app.workspace.activeTab?.id, tab.id)
+        // No login asks consent after a relaunch: the host's widget finds its helper choice through the saved connection
+        // offline, and through the private login's connection once reconnected (else it says "helper unavailable").
+        let choices = app.runtime.ssh.integrationEntries(for: host).map(\.id)
+        XCTAssertEqual(choices.count, 1, "Offline after a relaunch")
         let spaces = app.workspace.spaces.map(\.id), selected = app.workspace.selectedSpace
         var added = false
         app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: tab.id)
@@ -210,6 +214,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         }
         try await app.ready()
         XCTAssertFalse(added, "reconnect adds no space")
+        XCTAssertEqual(app.runtime.ssh.integrationEntries(for: host).map(\.id), choices, "Reconnected")
         XCTAssertEqual(app.workspace.spaces.map(\.id), spaces)
         XCTAssertEqual(app.workspace.selectedSpace, selected)
         XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}"]), processes)

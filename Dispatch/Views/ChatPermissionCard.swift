@@ -9,7 +9,7 @@ struct ChatPermissionCard: View {
     /// the keys.
     var keyed = false
     let openTerminal: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var arrived = false
     @State private var details = false
     private var allowButton: some View {
@@ -181,6 +181,8 @@ struct ApprovalButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.padding(.horizontal, 10).padding(.vertical, 6)
             .foregroundStyle(primary || configuration.isPressed ? theme.window : theme.ink)
+            // The primary one is filled with ink: the window's color lifts it.
+            .hoverFill(RoundedRectangle(cornerRadius: 5), color: primary ? theme.window.opacity(0.18) : nil)
             .chatPanel(configuration.isPressed ? theme.accent : primary ? theme.ink : .clear, cornerRadius: 5)
     }
 }

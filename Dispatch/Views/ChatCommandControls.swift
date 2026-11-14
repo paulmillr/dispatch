@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatCommandControls: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Bindable var session: ChatSession
     let coordinator: ChatCoordinator
 

@@ -112,7 +112,7 @@ struct AgentActivityGlyph: View {
     var tile = false
     /// Draw the "·" when nothing is reported; without it the slot stays, empty, so rows keep their alignment.
     var showsQuiet = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Environment(\.appTypography) private var typography
     var body: some View {
         let activity = AgentActivity(tabIDs: tabIDs, connecting: connecting)

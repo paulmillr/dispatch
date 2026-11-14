@@ -234,7 +234,7 @@ private struct HostTintStrip: ViewModifier {
     let tint: HostTint?
     let surface: StripSurface
     @Environment(\.remoteTabHighlight) private var highlight
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     @ViewBuilder func body(content: Content) -> some View {
         if surface == .none {
@@ -264,7 +264,7 @@ private struct HostTintStrip: ViewModifier {
 private struct HostBorder: View {
     let tint: HostTint?
     let stripHeight: CGFloat
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Environment(\.remoteTabHighlight) private var highlight
     @State private var displayedTint: HostTint?
     @State private var started: Date?

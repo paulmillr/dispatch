@@ -19,12 +19,30 @@ enum InterfaceMotion {
     }
 }
 
+/// Settings › Theme › Appearance › Enable animations (`Preferences.animations`): off, the app moves as it does under the
+/// system's Reduce Motion.
+@MainActor @Observable
+final class MotionStore {
+    static let shared = MotionStore()
+    var animations = true
+
+    /// Reduce Motion, or animations off: what the AppKit side checks instead of the system setting alone.
+    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || !shared.animations }
+}
+
+/// Reduce Motion as the views read it: the system's, or Enable animations off (`MotionStore`).
+@propertyWrapper
+struct MotionReduced: DynamicProperty {
+    @Environment(\.accessibilityReduceMotion) private var system
+    @MainActor var wrappedValue: Bool { system || !MotionStore.shared.animations }
+}
+
 struct AttentionMotion: ViewModifier {
     let pending: Bool
     var cornerRadius: CGFloat = 5
     /// The accent rule along the leading edge; Large's rounded cards mark attention on their own edge instead.
     var bar = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var flash = false
     func body(content: Content) -> some View {
         content
@@ -47,7 +65,7 @@ struct AttentionMotion: ViewModifier {
 struct PaneFocusHighlight: ViewModifier {
     let workspace: Workspace
     let paneID: UUID?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var highlighted = false
 
     private var feedback: Workspace.PaneFocusFeedback? {
@@ -84,7 +102,7 @@ struct PaneShortcutBadgeShown: PreferenceKey {
 /// A split pane's ⌘N shortcut; the focused pane's key is in the accent color, on the same background as the others.
 struct PaneShortcutBadge: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var flash = false
     let number: Int
     let focused: Bool
@@ -162,7 +180,7 @@ struct MotionContent: NSViewRepresentable {
     let layout: PaneLayout
     var hostID: HostID = .local
     var selectedTabID: UUID? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     func makeNSView(context: Context) -> MotionContentView {
         MotionContentView(content: styledContent, identity: identity, spaceID: spaceID, layout: layout, hostID: hostID, selectedTabID: selectedTabID)
     }
@@ -331,7 +349,7 @@ final class HostMoveMotion {
     /// `groupedByHost`: the sidebar lists spaces under their hosts, so a space that changes host flies between groups.
     /// In one list a space keeps its row, which the list slides to its new place; only a tab becoming a space flies.
     func reconcile(from old: [Space], to new: [Space], groupedByHost: Bool = true,
-                   reduceMotion: Bool = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) {
+                   reduceMotion: Bool = MotionStore.reduced) {
         markers = markers.mapValues { $0.filter { $0.view != nil } }.filter { !$0.value.isEmpty }
         guard !markers.isEmpty else { return }
         for id in Array(tasks.keys) where !new.contains(where: { $0.id == id }) || reduceMotion {
@@ -493,5 +511,30 @@ struct HostMoveRow: ViewModifier {
                 Rectangle().scaleEffect(x: motion.hidden.contains(id) && motion.pulling.contains(id) ? 0 : 1, anchor: .leading)
             }
             .overlay { HostMoveMarker(motion: motion, item: .space(id)).allowsHitTesting(false) }
+    }
+}
+
+/// Hover feedback (docs/architecture.md, Hover): under the pointer a control shows a faint fill in its own shape, and a
+/// filled one a lighter fill (`color`); never a cursor change, and nothing while disabled. Applied before a control's
+/// own ground, the fill sits between its label and that ground.
+struct HoverFill<S: Shape>: ViewModifier {
+    let shape: S
+    var color: Color? = nil
+    /// How far the fill reaches past the label, for a row whose text starts at its edge.
+    var outset: CGFloat = 0
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background { shape.fill(hovered && enabled ? color ?? Chrome.palette.hover : .clear).padding(-outset) }
+            .onHover { hovered = $0 }
+    }
+}
+
+extension View {
+    /// A faint fill in `shape` under the pointer (`HoverFill`); `color` for a filled control's lighter fill.
+    func hoverFill<S: Shape>(_ shape: S, color: Color? = nil, outset: CGFloat = 0) -> some View {
+        modifier(HoverFill(shape: shape, color: color, outset: outset))
     }
 }

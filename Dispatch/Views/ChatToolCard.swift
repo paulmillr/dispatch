@@ -5,7 +5,7 @@ struct ChatToolCard: View {
     @Environment(\.chatSearchQuery) private var query
     let item: ChatItem
     @Binding var expanded: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let directory: String
     var requested = false
     var embedded = false
@@ -33,6 +33,7 @@ struct ChatToolCard: View {
                     .padding(.horizontal, embedded ? 0 : 12).padding(.vertical, embedded ? 3 : 7)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
+                    .hoverFill(RoundedRectangle(cornerRadius: 5), outset: embedded ? 4 : 0)
             }.buttonStyle(.plain)
                 .accessibilityIdentifier("tool-header-\(item.id)")
                 .accessibilityValue(expanded ? "Expanded" : "Collapsed")
@@ -98,6 +99,7 @@ struct ChatToolCard: View {
                         Text(tool.usesRawDetails ? "Raw details" : "Tool details")
                         Spacer(minLength: 0)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6).contentShape(Rectangle())
+                        .hoverFill(RoundedRectangle(cornerRadius: 5), outset: 4)
                 }.buttonStyle(.plain).font(theme.typography.detail).foregroundStyle(theme.muted)
                     .accessibilityLabel(tool.usesRawDetails ? "Raw details" : "Tool details")
                     .accessibilityValue(state.rawExpanded ? "Expanded" : "Collapsed")

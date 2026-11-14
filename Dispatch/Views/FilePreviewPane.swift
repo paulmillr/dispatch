@@ -584,6 +584,7 @@ struct FilePreviewButtonStyle: ButtonStyle {
                 .fixedSize()
                 .padding(.horizontal, 10)
                 .frame(height: 22)
+                .hoverFill(LiquidGlassStore.shared.active ? AnyShape(Capsule()) : AnyShape(RoundedRectangle(cornerRadius: 5)))
                 .modifier(Ground(prominent: prominent, pressed: configuration.isPressed))
                 .opacity(enabled ? 1 : 0.5)
         }
@@ -630,6 +631,7 @@ struct FilePreviewIconButtonStyle: ButtonStyle {
                 .fixedSize()
                 .padding(.horizontal, 5)
                 .frame(minWidth: 22, minHeight: 22)
+                .hoverFill(LiquidGlassStore.shared.active ? AnyShape(Capsule()) : AnyShape(RoundedRectangle(cornerRadius: 4)))
                 .background {
                     let fill = on || configuration.isPressed ? theme.ink.opacity(0.08) : Color.clear
                     if LiquidGlassStore.shared.active { Capsule().fill(fill) } else { RoundedRectangle(cornerRadius: 4).fill(fill) }

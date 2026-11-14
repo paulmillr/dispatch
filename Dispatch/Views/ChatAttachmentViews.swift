@@ -18,6 +18,7 @@ struct ChatAttachButton: View {
                 .foregroundStyle(theme.muted.opacity(enabled ? 1 : 0.45))
                 .frame(width: size, height: size)
                 .contentShape(Rectangle())
+                .hoverFill(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -57,7 +58,7 @@ struct ChatAttachButton: View {
 /// the last attach was refused.
 struct ChatComposerAttachments: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let session: ChatSession
     let coordinator: ChatCoordinator
 
@@ -116,6 +117,7 @@ struct ChatComposerAttachments: View {
                 Button { session.attachmentError = nil } label: {
                     Label(error, systemImage: "exclamationmark.triangle.fill").labelStyle(.titleAndIcon)
                         .foregroundStyle(theme.red).lineLimit(1).truncationMode(.tail)
+                        .hoverFill(RoundedRectangle(cornerRadius: 4), outset: 3)
                 }.buttonStyle(.plain).help("Dismiss")
                     .font(theme.typography.detail)
                     .accessibilityIdentifier("chat-attachment-error")
@@ -384,7 +386,7 @@ struct ChatAttachmentDrag: Equatable {
 /// take the drop.
 struct ChatComposerDropWell<Surface: View>: ViewModifier {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let drag: ChatAttachmentDrag?
     /// Where the grown composer's top stops, in `ChatFlightFrames.space`.
     let top: CGFloat

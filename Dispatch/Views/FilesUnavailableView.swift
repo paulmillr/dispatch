@@ -170,6 +170,7 @@ struct FilesButtonStyle: ButtonStyle {
                 .foregroundStyle(ink)
                 .padding(.horizontal, 10)
                 .frame(height: typography.expanded(22))
+                .hoverFill(RoundedRectangle(cornerRadius: 5), color: primary || tint != nil ? Color.white.opacity(0.14) : nil)
                 .background(RoundedRectangle(cornerRadius: 5).fill(fill))
                 .opacity(configuration.isPressed ? 0.75 : enabled ? 1 : 0.5)
                 .contentShape(Rectangle())

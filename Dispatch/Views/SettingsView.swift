@@ -195,7 +195,7 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
             Button("Reset", role: .destructive) { resetDispatch() }
         } message: {
-            Text("Dispatch quits and closes every tab, then deletes its settings, saved spaces and terminal output, drafts, reviews, saved hosts and SSH choices and its diagnostics, and removes its agent hooks and ~/.dispatch from this Mac. Your color schemes and the dictation models are kept; SSH hosts are not changed. Dispatch then opens again with the setup sheet.")
+            Text(Self.resetMessage)
         }
         .alert("Forget all SSH hosts?", isPresented: $confirmingSSHReset) {
             Button("Cancel", role: .cancel) {}
@@ -513,15 +513,15 @@ struct SettingsView: View {
     private static let blinkingCursor = "Blinking"
 
     /// Colors' row under Follow system (and Nautical): how the window and its terminals look, folded like General's
-    /// Tabs & spaces; its title opens it too. The sidebar's size, terminal opacity, colorblind mode, text contrast, host
-    /// colors, then Liquid Glass.
+    /// Tabs & spaces; its title opens it too. The sidebar's size, terminal opacity, text contrast, colorblind mode, host
+    /// colors, Liquid Glass, then animations.
     @ViewBuilder private var appearanceOptions: some View {
         // A switch that can't be changed here (no Liquid Glass on this system) isn't counted.
         let fold = Fold(title: "Appearance", changed: changed {
-            [$0.terminalOpacity, $0.showHostColors, $0.textContrast, $0.sidebarStyle, $0.colorVision]
+            [$0.terminalOpacity, $0.showHostColors, $0.textContrast, $0.sidebarStyle, $0.colorVision, $0.animations]
                 + (LiquidGlassStore.supported ? [$0.liquidGlass] : [])
         }, isExpanded: $appearanceExpanded)
-        row("Appearance", detail: "space size, opacity, colorblind mode, host colors and glass") { foldButton(fold, card: "Appearance") }
+        row("Appearance", detail: "space size, opacity, contrast, host colors, glass and animations") { foldButton(fold, card: "Appearance") }
             .contentShape(Rectangle()).onTapGesture { toggle(fold) }
         if appearanceExpanded {
             foldedOptions {
@@ -550,6 +550,13 @@ struct SettingsView: View {
                             .frame(width: sliderValueWidth, alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
+                cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
+                    dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
+                        if let contrast = TextContrast.allCases.first(where: { $0.title == title }) { draft.textContrast = contrast }
+                    }), choices: TextContrast.allCases.map(\.title))
+                        .accessibilityIdentifier("improve-text-contrast")
+                        .help("Raises faint terminal text to 4.5:1 against its background. Applies at once to open terminals.")
+                }
                 cardOption("Colorblind-friendly", detail: "lists and makes only colorblind-safe schemes", detailBelow: true) {
                     settingToggle("Colorblind-friendly", isOn: Binding(get: { draft.colorVision != .typical },
                                                                        set: { draft.colorVision = $0 ? .redGreen : .typical }))
@@ -565,13 +572,6 @@ struct SettingsView: View {
                             }), choices: [ColorVision.redGreen, .blueYellow].map(\.title))
                     }.padding(.leading, 16)
                 }
-                cardOption("Improve text contrast", detail: "brightens faint colors, keeps their hue", detailBelow: true) {
-                    dropdown("Improve text contrast", selection: Binding(get: { draft.textContrast.title }, set: { title in
-                        if let contrast = TextContrast.allCases.first(where: { $0.title == title }) { draft.textContrast = contrast }
-                    }), choices: TextContrast.allCases.map(\.title))
-                        .accessibilityIdentifier("improve-text-contrast")
-                        .help("Raises faint terminal text to 4.5:1 against its background. Applies at once to open terminals.")
-                }
                 cardOption("Color-code remote hosts", detail: "colored or gray icons, tabs and borders", detailBelow: true) {
                     settingToggle("Color-code remote hosts", isOn: $draft.showHostColors)
                         .accessibilityIdentifier("settings-host-colors")
@@ -582,6 +582,10 @@ struct SettingsView: View {
                     settingToggle("Liquid Glass", isOn: $draft.liquidGlass)
                         .disabled(!LiquidGlassStore.supported)
                         .accessibilityIdentifier("settings-liquid-glass")
+                }
+                cardOption("Enable animations", detail: "off, as Reduce Motion in System Settings › Accessibility", detailBelow: true) {
+                    settingToggle("Enable animations", isOn: $draft.animations)
+                        .accessibilityIdentifier("settings-animations")
                 }
             }
         }
@@ -756,7 +760,13 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings-files")
             // One switch for banners and the Dock badge (either one still on, an older split choice, shows it on); the
             // rest folded until asked for.
-            integrationCard("Notifications", detail: "dock badge and banner below tabs",
+            // macOS refusing banners takes the detail's place, with the way to allow them.
+            let denied = draft.attentionNotifications && attention?.notificationsDenied == true
+            integrationCard("Notifications", detail: denied ? "Notifications are off for Dispatch in System Settings." : "dock badge and banner below tabs",
+                            detailWarning: denied,
+                            detailLink: denied ? DetailLink(title: "Open Settings", identifier: "settings-notifications-open-system") {
+                                if let url = AttentionCoordinator.systemSettingsURL { NSWorkspace.shared.open(url) }
+                            } : nil,
                             enabled: Binding(get: { draft.attentionNotifications || draft.attentionDockBadge },
                                              set: { draft.attentionNotifications = $0; draft.attentionDockBadge = $0 }),
                             fold: Fold(title: "Options",
@@ -777,7 +787,11 @@ struct SettingsView: View {
                     }
                 }
             }.accessibilityIdentifier("settings-notifications")
-            if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
+            .onAppear { attention?.refreshAuthorization() }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                attention?.refreshAuthorization()
+            }
+            if let error = attention?.notificationError {
                 Text(error).font(typography, .body).foregroundStyle(Chrome.muted)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
             }
@@ -1393,6 +1407,7 @@ struct SettingsView: View {
             .init(title: "Colorblind-friendly", tab: .theme, place: "Colors › Appearance", words: "color blindness vision", open: appearance),
             .init(title: "Improve text contrast", tab: .theme, place: "Colors › Appearance", open: appearance),
             .init(title: "Color-code remote hosts", tab: .theme, place: "Colors › Appearance", words: "host colors", open: appearance),
+            .init(title: "Enable animations", tab: .theme, place: "Colors › Appearance", words: "reduce motion animation", open: appearance),
             .init(title: "Liquid Glass", tab: .theme, place: "Colors › Appearance", open: appearance),
             .init(title: "Color scheme", tab: .theme, place: "Theme", words: "theme palette surprise"),
             .init(title: "Your color schemes", tab: .theme, place: "Theme", words: "new add file custom maker"),
@@ -1444,8 +1459,10 @@ struct SettingsView: View {
         }
     }
 
+    /// Opens the setting a search found, leaving the field: the page's keys are its again, not the search's.
     private func open(_ entry: Searchable) {
         query = ""
+        if typing == .search { typing = nil }
         selectedTab = entry.tab
         entry.open?()
     }
@@ -1466,6 +1483,7 @@ struct SettingsView: View {
                         Spacer(minLength: 8)
                         Text("\(entry.tab.rawValue) › \(entry.place)").font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                     }.padding(.vertical, 7).contentShape(Rectangle())
+                        .hoverFill(RoundedRectangle(cornerRadius: 5), outset: 6)
                 }.buttonStyle(.plain)
                     .accessibilityIdentifier("settings-search-result-\(index)")
             }
@@ -1481,7 +1499,10 @@ struct SettingsView: View {
     }
 
     /// What Restore All Defaults changes, as its confirmation says it.
-    static let restoreDefaultsMessage = "Every page goes back to a fresh install’s choices: fonts, theme and color scheme choices, colorblind mode, host colors and the order of spaces, the starting folder, shell and startup command, On launch, security switches and keys. Chat mode and every agent turn on again, and their hooks are installed on this Mac again: ~/.claude/settings.json, ~/.codex/hooks.json and Pi’s extension. Automatic updates and the setup sheet stay as they are; your color schemes, saved hosts and SSH choices are kept."
+    static let restoreDefaultsMessage = "Every page goes back to a fresh install’s settings. Chat and every agent turn on again, and their hooks are installed again on this Mac.\n\nKept: your color schemes, saved hosts, SSH choices and automatic updates."
+
+    /// What Reset Dispatch on this Mac does, as its confirmation says it; `resetDispatch` does the rest it leaves unsaid.
+    static let resetMessage = "Dispatch quits, deletes its settings, saved spaces, drafts, saved hosts and SSH choices, and removes its agent hooks and ~/.dispatch from this Mac. It then opens with the setup sheet.\n\nKept: your color schemes and dictation models. SSH hosts aren’t changed."
 
     /// Restore All Defaults, once confirmed: every setting but the machine's own answers (automatic updates and whether
     /// the setup sheet was shown), then Chat mode with every agent on and their hooks installed on this Mac again.
@@ -1499,7 +1520,20 @@ struct SettingsView: View {
 
     /// A feature's card: its switch, if it has one, in the header, its options below; folded, they show once its button
     /// opens them.
-    private func integrationCard<Options: View>(_ title: String, detail: String, privacy: String? = nil, enabled: Binding<Bool>? = nil,
+    /// A link after a card's detail (Notifications' Open Settings).
+    private struct DetailLink {
+        let title: String
+        let identifier: String
+        let action: () -> Void
+    }
+
+    /// The running app's attention, never another workspace's (a test's Settings over its own workspace).
+    private var attention: AttentionCoordinator? {
+        TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention : nil
+    }
+
+    private func integrationCard<Options: View>(_ title: String, detail: String, detailWarning: Bool = false, detailLink: DetailLink? = nil,
+                                                privacy: String? = nil, enabled: Binding<Bool>? = nil,
                                                 fold: Fold? = nil, hasOptions: Bool = true,
                                                 @ViewBuilder options: () -> Options) -> some View {
         VStack(spacing: 0) {
@@ -1509,7 +1543,15 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         SettingsTitle(title: title, privacy: privacy).fontWeight(.semibold)
                             .foregroundStyle(SettingsControlStyle.selectedText)
-                        Text(detail).font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(detail).foregroundStyle(detailWarning ? Chrome.palette.warning : SettingsControlStyle.detail)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let detailLink {
+                                // A link: it goes to System Settings, so it reads as one and takes the pointing hand.
+                                Button(detailLink.title, action: detailLink.action).buttonStyle(.link)
+                                    .accessibilityIdentifier(detailLink.identifier)
+                            }
+                        }.font(typography, .body)
                     }
                     Spacer(minLength: 0)
                 }.contentShape(Rectangle()).onTapGesture { if let fold { toggle(fold) } }

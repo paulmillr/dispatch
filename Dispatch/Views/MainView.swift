@@ -7,7 +7,7 @@ struct MainView: View {
     @Bindable var settings: SettingsStore
     let controller: AppDelegate
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// The full-screen edge reveal is showing its host mark, or the mark's picker is open.
     @State private var revealShown = false
     @State private var revealPicker = false
@@ -267,7 +267,9 @@ struct MainView: View {
                                   spaceID: space.id, layout: space.layout, hostID: space.hostID, selectedTabID: space.activeWindow?.id)
                 }
                 // Split tmux windows give each group its own strip; with glass each washes below its own.
-                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) ? nil : tmuxTint(space),
+                // As a pane's (PaneView): none with the sidebar shown or two tabs or more, whose strip is tinted.
+                .hostTintBorder(!space.structured || (groupedTmux(space) && glassStrips) || sidebarVisible || space.windows.count > 1
+                                ? nil : tmuxTint(space),
                                 surfaceID: space.activeTab?.focusedSurfaceID,
                                 stripHeight: showTmuxTabs ? tmuxStripHeight : 0)
                 .modifier(PaneFocusHighlight(workspace: workspace,
@@ -331,7 +333,7 @@ struct MainView: View {
                 }
             } content: {
                 layout(node, space: space, groupHeaders: false, stripInset: glassStrips && strip ? tmuxStripHeight : 0)
-            }.hostTintBorder(glassStrips && strip ? tmuxTint(space) : nil, surfaceID: group.selected, stripHeight: strip ? tmuxStripHeight : 0)
+            }.hostTintBorder(glassStrips && strip && !sidebarVisible && group.windows.count <= 1 ? tmuxTint(space) : nil, surfaceID: group.selected, stripHeight: strip ? tmuxStripHeight : 0)
                 .id(group.id)
                 .modifier(PaneFocusHighlight(workspace: workspace, paneID: group.selected == space.activeWindow?.id ? group.id : nil)))
         }
@@ -571,7 +573,7 @@ final class FullScreenSidebarRevealView: NSView {
     }
     /// Runs changes over the sidebar's own duration (immediately with Reduce Motion or before the view shows).
     private func transition(_ changes: @escaping () -> Void) {
-        guard window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { changes(); return }
+        guard window != nil, !MotionStore.reduced else { changes(); return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = InterfaceMotion.sidebarDuration
             context.allowsImplicitAnimation = true
@@ -618,7 +620,7 @@ final class FullScreenSidebarRevealView: NSView {
     private var buttonAlpha: CGFloat { hosted ? 0 : 1 }
     private var glassAlpha: CGFloat { glass && !hosted ? 1 : 0 }
     private func fadeButton(shown: Bool) {
-        guard window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { buttonHidden = !shown; return }
+        guard window != nil, !MotionStore.reduced else { buttonHidden = !shown; return }
         if shown && buttonHidden {
             button.alphaValue = 0; glassView?.alphaValue = 0
             buttonHidden = false

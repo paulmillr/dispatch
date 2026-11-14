@@ -58,9 +58,12 @@ final class PrefixKeysTests: XCTestCase {
     /// The sheet's first rows are the everyday ones; the rest wait under More.
     func testShortcutSheetSplitsEverydayKeysFromMore() {
         let main = ShortcutRow.navigation.map(\.key), more = ShortcutRow.windowRows(KeyGroups()).map(\.key)
-        for key in ["⌘N", "⇧⌘N", "⌘T", "⌘W", "⇧⌘W", "⌘D", "⇧⌘D", "⇧⌘C", "⇧⌘F", "⌘\\", "⌃⌘S"] {
+        for key in ["⌘N", "⇧⌘N", "⌘T", "⌘W", "⌘D", "⇧⌘D", "⇧⌘C", "⇧⌘F", "⌘\\"] {
             XCTAssertTrue(main.contains(key), key); XCTAssertFalse(more.contains(key), key)
         }
+        // Left out to keep the sheet short: pane stepping, close space, the sidebar's second key, "9 the last".
+        for key in ["⌥⌘[ ]", "⇧⌘W", "⌃⌘S"] { XCTAssertFalse(main.contains(key), key) }
+        XCTAssertFalse(ShortcutRow.navigation.contains { $0.explanation.contains("the last") })
         for key in ["⌃⇥", "⌃⇧⇥", "⌘P", "⌃⌘1…5"] {
             XCTAssertTrue(more.contains(key), key); XCTAssertFalse(main.contains(key), key)
         }

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatTranscriptView: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Bindable var session: ChatSession
     let coordinator: ChatCoordinator
     var topContentInset: CGFloat = 0
@@ -122,6 +122,7 @@ struct ChatTranscriptView: View {
                     .foregroundStyle(Color(red: 26/255, green: 18/255, blue: 24/255))
                     .padding(.horizontal, 10)
                     .frame(minHeight: max(22, theme.typography.detailLineHeight + 8))
+                    .hoverFill(Capsule(), color: Color.white.opacity(0.16))
                     // Accent-tinted interactive glass; glass carries its own depth, so no drop shadow.
                     .liquidGlass(in: Capsule(), interactive: true, tint: theme.accent)
                     .background(LiquidGlassStore.shared.active ? Color.clear : theme.accent, in: Capsule())
@@ -244,6 +245,7 @@ struct ChatTranscriptView: View {
                 Rectangle().fill(theme.border).frame(height: 1)
             }.font(theme.typography.detail).foregroundStyle(theme.muted)
                 .frame(minHeight: 28).frame(maxWidth: .infinity).contentShape(Rectangle())
+                .hoverFill(RoundedRectangle(cornerRadius: 5))
         }.buttonStyle(.plain).disabled(session.loadingEarlier).id("earlier")
     }
 
@@ -529,7 +531,7 @@ private struct ChatTranscriptRowView: View {
     var openedAt: TimeInterval = .infinity
     /// The row is in the live turn (`newest`: its newest item, still streaming unless complete); nil otherwise.
     var streaming: ChatTypedMarkdown.Streaming? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     private var bubbleWidth: CGFloat {
         theme.radioLog ? ChatRadioLog.messageWidth(contentWidth, theme: theme) + 32 - (row.item?.kind == .tool ? 10 : 0)
             : min(contentWidth, theme.typography.characterWidth * 80)
@@ -736,6 +738,7 @@ private struct ChatTranscriptRowView: View {
                         Image(systemName: "chevron.right").rotationEffect(.degrees(open ? 90 : 0)).frame(width: 8)
                     }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        .hoverFill(RoundedRectangle(cornerRadius: 5), outset: 4)
                 }.buttonStyle(.plain).accessibilityLabel("Think").accessibilityValue(open ? "Expanded" : "Collapsed")
                 if open { ChatMarkdown(text: item.text, color: theme.muted).foregroundStyle(theme.muted).padding(.leading, 23).padding(.bottom, 4) }
             }
@@ -755,6 +758,7 @@ private struct ChatTranscriptRowView: View {
                         Spacer(minLength: 0)
                     }.font(theme.typography.detail).foregroundStyle(theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        .hoverFill(RoundedRectangle(cornerRadius: 5), outset: 4)
                 }.buttonStyle(.plain).accessibilityLabel("Reasoning summary")
                     .accessibilityValue(session.expanded.contains(row.id) ? "Expanded" : "Collapsed")
                 if session.expanded.contains(row.id) { ChatMarkdown(text: item.text) }
@@ -983,7 +987,7 @@ struct ChatTypedMarkdown: View {
         guard let live, let turn = row.turnID, turn == live.turn else { return nil }
         return row.item?.id == live.newest ? .newest : .live
     }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let text: String
     let rowID: String
     let reveals: ChatTypingReveals

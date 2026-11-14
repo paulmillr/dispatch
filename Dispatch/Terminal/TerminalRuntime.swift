@@ -125,6 +125,7 @@ final class TerminalRuntime {
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
+        MotionStore.shared.animations = preferences.animations
         HostColorStore.shared.vision = preferences.colorVision
         DictationStore.shared.enabled = preferences.dictationEnabled
         DictationStore.shared.key = preferences.dictationKey
@@ -204,6 +205,7 @@ final class TerminalRuntime {
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
+        MotionStore.shared.animations = preferences.animations
         DictationStore.shared.enabled = preferences.dictationEnabled
         DictationStore.shared.key = preferences.dictationKey
         DictationStore.shared.navigation = preferences.dictationNavigation

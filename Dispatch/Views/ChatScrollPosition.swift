@@ -420,7 +420,7 @@ final class ChatScrollPosition {
 
     /// The session is inserting a live row while the reader follows the bottom.
     func expectArrival() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard !MotionStore.reduced else { return }
         arrivalExpectedAt = ProcessInfo.processInfo.systemUptime
     }
 

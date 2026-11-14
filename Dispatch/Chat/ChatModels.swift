@@ -1198,7 +1198,7 @@ final class ChatSession: Identifiable {
             foldThinking(turnID)
             return
         }
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, !MotionRate.lowPower {
+        if !MotionStore.reduced, !MotionRate.lowPower {
             document.prepareThinkingFold(first: first, reply: reply, autoplay: autoplay)
         }
         foldThinking(turnID)

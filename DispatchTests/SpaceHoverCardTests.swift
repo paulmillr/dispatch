@@ -13,7 +13,7 @@ final class SpaceHoverCardTests: XCTestCase {
         window.isReleasedWhenClosed = false
         let tab = System.uuid()
         let row = ReorderTrackingView(configuration: LocalReorder(item: .tab(tab), edge: .horizontal,
-            spaceHover: .init(remote: false, route: "", backend: "terminal", directory: nil, title: "Bottom tab"),
+            spaceHover: .init(remote: false, route: "", backend: "terminal", title: "Bottom tab"),
             accepts: { _ in false }, drop: { _, _ in }))
         window.contentView = row; window.orderFront(nil)
         defer { row.hover.dismiss(); window.close(); window.contentView = nil }
@@ -28,6 +28,8 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertTrue(panel.ignoresMouseEvents)
     }
 
+    /// One line: "local · tmux · 3 tabs", "ssh build-box · tmux · 3 tabs" (the host by its name, a login without a host of
+    /// its own by its route); never a folder, the space's launch folder least of all.
     func testRouteUsesTheSpacesAccountAndNeverItsLocalSSHLaunchDirectory() {
         let runtime = TerminalRuntime()
         var space = Space(name: "nightly", directory: System.home.path + "/src/nightly")
@@ -37,65 +39,44 @@ final class SpaceHoverCardTests: XCTestCase {
         let plain = SpaceHoverDetails.make(space: space, host: host, runtime: runtime)
         XCTAssertEqual(plain.route, "ops@10.0.0.12")
         XCTAssertTrue(plain.remote)
-        XCTAssertNil(plain.directory)
-        var pane = space.panes[0].tabs[0]; pane.directory = "/home/ops/src/nightly"
-        space.structure([pane], selected: 0)
-        let remote = SpaceHoverDetails.make(space: space, host: host, runtime: runtime)
-        XCTAssertNil(remote.directory)
+        XCTAssertEqual(plain.line, "ssh homelab · terminal · 1 tab")
+        XCTAssertFalse(plain.summary.contains("nightly"))
         for remoteHost in [false, true] {
             for backend in ["tmux", "herdr"] {
                 var multiplexed = Space(name: backend, directory: "/stale/launch/path")
                 multiplexed.hostID = remoteHost ? host.id : .local
                 if remoteHost { multiplexed.panes[0].tabs[0].machine = .ssh(SSHShell(destination: "ops@10.0.0.12")) }
-                // Either multiplexer's session: a structured space of its helper backend.
                 multiplexed.structure([multiplexed.panes[0].tabs[0]], selected: 0, backend: backend == "tmux" ? 1 : 2)
-                let details = SpaceHoverDetails.make(space: multiplexed, host: remoteHost ? host : .local,
-                    runtime: runtime)
-                XCTAssertNil(details.directory, "\(remoteHost ? "SSH" : "local") \(backend) must omit cached cwd")
+                let details = SpaceHoverDetails.make(space: multiplexed, host: remoteHost ? host : .local, runtime: runtime)
                 XCTAssertFalse(details.summary.contains("/stale/launch/path"))
             }
         }
         let local = Space(name: "scratch", directory: System.home.path + "/src")
-        XCTAssertEqual(SpaceHoverDetails.make(space: local, host: .local, runtime: runtime).directory, "~/src")
-        let sibling = Space(name: "other", directory: System.home.path + "-other/src")
-        XCTAssertEqual(SpaceHoverDetails.make(space: sibling, host: .local, runtime: runtime).directory, System.home.path + "-other/src")
+        XCTAssertEqual(SpaceHoverDetails.make(space: local, host: .local, runtime: runtime).line, "local · terminal · 1 tab")
+        // A plain SSH tab in a local space: its login names it.
+        let login = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "terminal", host: .local)
+        XCTAssertEqual(login.line, "ssh ops@10.0.0.12 · terminal")
+        // A tab's line has no count; its agent goes under it, and VoiceOver hears its title first.
+        let tab = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", title: "Fix the invoice",
+                                    activity: "Claude Code · Idle", host: host)
+        XCTAssertEqual(tab.line, "ssh homelab · tmux")
+        XCTAssertEqual(tab.summary, "Fix the invoice · ssh homelab · tmux · Claude Code · Idle")
     }
 
-    /// The place line, as the phone's headers say where a tab is: the host by its name, then the folder's name, the
-    /// tab's live folder (never a space's launch folder, and not known for a plain SSH tab). VoiceOver hears it first.
-    func testThePlaceLineNamesTheHostAndTheLiveFolder() async throws {
+    func testFolderNamesAndTheLiveFolder() async throws {
         XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops/src/nightly/", home: "/home/ops"), "nightly")
         XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops", home: "/home/ops/"), "~")
         XCTAssertEqual(SpaceHoverDetails.folderName("/home/ops-other", home: "/home/ops"), "ops-other")
         XCTAssertEqual(SpaceHoverDetails.folderName("/", home: nil), "/")
         XCTAssertNil(SpaceHoverDetails.folderName(" ", home: nil))
-        let host = HostRecord(id: .authenticated("fixture"), name: "build-box", destinations: ["ops@10.0.0.12"], order: 0)
-        var details = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", directory: nil, title: "Fix the invoice",
-                                        host: host, folder: "app")
-        XCTAssertEqual(details.place, "build-box · app")
-        XCTAssertTrue(details.summary.hasPrefix("build-box · app · ssh · ops@10.0.0.12 · tmux · Fix the invoice"), details.summary)
-        details.folder = nil
-        XCTAssertEqual(details.place, "build-box")
-        // Never the folder under a name that already is it: a tab named for its folder, a space's row.
-        details.folder = "app"; details.title = "App"
-        XCTAssertEqual(details.place, "build-box")
-        details.title = nil; details.name = "app"
-        XCTAssertEqual(details.place, "build-box")
-        details.name = "billing"
-        XCTAssertEqual(details.place, "build-box · app")
-
         let runtime = TerminalRuntime(), workspace = Workspace()
         runtime.workspace = workspace
         workspace.newLocalSpace()
         let tab = try XCTUnwrap(workspace.spaces.first?.tabs.first)
         workspace.updateTab(tab.id, directory: System.home.path + "/src/ledger")
-        try await TestSupport.eventually { workspace.liveTab(tab.id)?.directory == System.home.path + "/src/ledger" }
-        let live = SpaceHoverDetails.make(tab: try XCTUnwrap(workspace.liveTab(tab.id)), host: .local, runtime: runtime)
-        XCTAssertEqual(live.folder, "ledger")
-        XCTAssertEqual(live.host?.id, .local)
-        XCTAssertEqual(SpaceHoverDetails.make(space: workspace.spaces[0], host: .local, runtime: runtime).folder, "ledger")
+        try await TestSupport.eventually { SpaceHoverDetails.liveDirectory(tab.id, runtime: runtime)?.path == System.home.path + "/src/ledger" }
         workspace.updateTab(tab.id, directory: System.home.path)
-        try await TestSupport.eventually { SpaceHoverDetails.liveFolder(tab.id, runtime: runtime) == "~" }
+        try await TestSupport.eventually { SpaceHoverDetails.liveDirectory(tab.id, runtime: runtime)?.path == System.home.path }
     }
 
     func testSpaceHoverCountsTabsTmuxWindowsAndAgentStates() {
@@ -144,7 +125,6 @@ final class SpaceHoverCardTests: XCTestCase {
         let details = SpaceHoverDetails.make(tab: tab, host: .local, runtime: runtime)
         XCTAssertEqual(details.title, "Build logs")
         XCTAssertEqual(details.backend, "tmux")
-        XCTAssertNil(details.directory)
         XCTAssertTrue(details.activity?.contains("Running tests") == true)
         let window = NSWindow(contentRect: NSRect(x: 300, y: 400, width: 280, height: 32),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -162,7 +142,8 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertLessThan(panel.frame.maxY, tabFrame.minY)
         let snapshot = try await PresentationTestSupport.capture(panel, named: "tab-hover")
         let text = try snapshot.text()
-        XCTAssertTrue(text.contains("Build logs"), text)
+        XCTAssertFalse(text.contains("Build logs"), "The tab shows its title; the card does not: \(text)")
+        XCTAssertTrue(text.contains("local"), text)
         XCTAssertTrue(text.contains("Running tests"), text)
         XCTAssertTrue(text.contains("tmux"), text)
         session.busy = false
@@ -188,9 +169,9 @@ final class SpaceHoverCardTests: XCTestCase {
         row.configuration.spaceHover = SpaceHoverDetails.make(tab: tab, host: .local, runtime: runtime)
         row.hover.refresh(from: row)
         XCTAssertLessThan(panel.frame.height, activeHeight)
-        let ended = try await rendered { $0.contains("Build logs") && !$0.contains("Idle") }
+        let ended = try await rendered { $0.contains("tmux") && !$0.contains("Idle") }
         XCTAssertFalse(ended.contains("Idle"), ended)
-        XCTAssertTrue(ended.contains("Build logs"), ended)
+        XCTAssertTrue(ended.contains("tmux"), ended)
         session.active = true; session.busy = true
         row.configuration.spaceHover = SpaceHoverDetails.make(tab: tab, host: .local, runtime: runtime)
         row.hover.refresh(from: row)
@@ -199,16 +180,15 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertTrue(working.contains("Running tests"))
         XCTAssertTrue(NSApp.keyWindow === key)
         row.configuration.spaceHover = .init(remote: true, route: "ops@example.net", backend: "herdr",
-            directory: nil, title: "Remote workspace", activity: "Disconnected")
+            title: "Remote workspace", activity: "Claude Code · Idle")
         row.configuration.hoverFontSize = 18
         row.hover.refresh(from: row)
         XCTAssertTrue(row.hover.panel === panel)
-        let changed = try await rendered { $0.contains("Remote workspace") }
-        XCTAssertTrue(changed.contains("Remote workspace"), changed)
+        let changed = try await rendered { $0.contains("herdr") }
+        XCTAssertFalse(changed.contains("Remote workspace"), changed)
         XCTAssertTrue(changed.contains("ops@example.net"), changed)
         XCTAssertTrue(changed.contains("herdr"), changed)
-        XCTAssertTrue(changed.contains("Disconnected"), changed)
-        XCTAssertFalse(changed.contains("Build logs"), changed)
+        XCTAssertTrue(changed.contains("Idle"), changed)
         XCTAssertFalse(changed.contains("Running tests"), changed)
         XCTAssertTrue(try XCTUnwrap(window.screen).visibleFrame.contains(panel.frame))
         XCTAssertTrue(NSApp.keyWindow === key)
@@ -223,7 +203,7 @@ final class SpaceHoverCardTests: XCTestCase {
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         var selections = 0
-        let details = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", directory: "~/src/nightly", tabs: 3)
+        let details = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", tabs: 3)
         let row = ReorderTrackingView(configuration: LocalReorder(item: .space(System.uuid()), edge: .vertical,
             spaceHover: details, select: { selections += 1 }, accepts: { _ in false }, drop: { _, _ in }))
         window.contentView = row
@@ -242,7 +222,7 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertGreaterThan(panel.frame.minX, window.frame.maxX)
         XCTAssertLessThan(panel.frame.height, 45)
         let snapshot = try await PresentationTestSupport.capture(panel, named: "space-hover-1p")
-        for label in ["ssh", "ops", "10.0.0.12", "tmux", "~/src/nightly", "3 tabs"] {
+        for label in ["ssh", "ops", "10.0.0.12", "tmux", "3 tabs"] {
             try PresentationTestSupport.assertText(label, in: snapshot, rendered: panel.contentView)
         }
         let down = try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: point)

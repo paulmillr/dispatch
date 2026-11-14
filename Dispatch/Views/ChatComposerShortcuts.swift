@@ -281,7 +281,7 @@ struct ChatShellList: View {
 /// Keep animation ticks in the footer, outside the transcript and native editor.
 struct ChatComposerActivity: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let session: ChatSession
     /// The footer's shared state, once bound; without it the view reads the session itself.
     var activity: ChatComposerActivityState? = nil

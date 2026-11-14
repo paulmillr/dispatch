@@ -23,11 +23,16 @@ final class SSHShellIntegrationTests: XCTestCase {
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
         window.makeKeyAndOrderFront(nil)
         defer { window.close(); window.contentView = nil; runtime.close(Array(workspace.allSurfaceIDs)); runtime.workspace = previousWorkspace }
+        // The edge marks the host only where nothing else does: the sidebar hidden, one tab (checked at the end).
+        controller.windowState.chooseSidebar(false)
         let x: CGFloat = 940
         let originalGlass = LiquidGlassStore.shared.enabled
         defer { LiquidGlassStore.shared.enabled = originalGlass }
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
+            controller.windowState.chooseSidebar(true)
+            let localSidebar = try await capture(window, "border-local-sidebar-\(glass)")
+            controller.windowState.chooseSidebar(false)
             let local = try await capture(window, "border-local-\(glass)")
             let generation = System.uuid()
             workspace.hosts.begin(tab.id, generation: generation, destination: "fixture")
@@ -60,6 +65,17 @@ final class SSHShellIntegrationTests: XCTestCase {
                 XCTAssertLessThan(try distance(local, remote, x: x, y: y), 0.015,
                                   "Content beyond the 80-point wash stays neutral")
             }
+            if !glass {
+                // The sidebar shows the host: no edge across the top then.
+                controller.windowState.chooseSidebar(true)
+                // The edge retracts as it does on returning local (`HostBorder`, 1.1 s).
+                try await Task.sleep(for: .milliseconds(1100))
+                let sidebar = try await capture(window, "border-remote-sidebar")
+                // The window's own rim may change with its key state (0.05 at most); the edge is over 0.2 (above).
+                XCTAssertLessThan(try (0...2).map { try distance(localSidebar, sidebar, x: x, y: CGFloat($0)) }.max() ?? 0, 0.1,
+                                  "With the sidebar shown, no edge")
+                controller.windowState.chooseSidebar(false)
+            }
             workspace.hosts.remove(tab.id)
             try await Task.sleep(for: .milliseconds(1100))
             let exited = try await capture(window, "border-exited-\(glass)")
@@ -75,6 +91,8 @@ final class SSHShellIntegrationTests: XCTestCase {
         // Flat chrome: remote tabs show only the border. Window captures cannot render Liquid Glass, so its tint
         // is covered by SettingsSynchronizationTests.testHostHighlightModesDrawBorderOrTintNotBoth.
         app.controller.settings.values.hideSingleSpace = false
+        // The border shows only with the sidebar hidden (the sidebar names the host otherwise).
+        app.controller.windowState.chooseSidebar(false)
         let server = try await SSHTestServer(); defer { server.stop() }
         let tab = try XCTUnwrap(app.workspace.activeTab)
         try await app.wait { app.runtime.views[tab.id].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }

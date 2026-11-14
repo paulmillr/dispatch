@@ -166,7 +166,7 @@ final class SpaceBranchTests: XCTestCase {
         }
         try await TestSupport.eventually { await hasBranch("feature/sidebar") }
         try await TestSupport.eventually {
-            tooltip()?.directory == root.path && tooltip()?.tabCount == "2 tabs"
+            tooltip()?.tabCount == "2 tabs"
         }
         _ = try await PresentationTestSupport.capture(window, named: "space-branch-inline-small")
         try write("ref: refs/heads/switched\n", to: head); TerminalRuntime.shared.files.shellPrompted(second.id) // The branch is read again at a prompt.

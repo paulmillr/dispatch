@@ -35,6 +35,7 @@ struct ChatModelControls: View {
             Button { open(.model) } label: {
                 Text(modelLabel).lineLimit(1).truncationMode(.middle).frame(maxWidth: modelWidth, alignment: .leading)
                     .footerMenuUnderline(theme.muted)
+                    .modifier(FooterMenuHover())
             }.help(blocked.map { "\(session.model) · \($0)" } ?? "\(session.model) · ⇧⌘M").accessibilityLabel("Choose model").accessibilityValue(session.model)
                 .accessibilityHint(blocked ?? "")
                 .accessibilityIdentifier("chat-model-picker")
@@ -51,6 +52,7 @@ struct ChatModelControls: View {
                         }
                     }.frame(minWidth: 24, minHeight: 20)
                         .contentShape(Rectangle())
+                        .modifier(FooterMenuHover())
                 }.help(blocked.map { "Effort: \(effortLabel) · \($0)" } ?? "Effort: \(effortLabel) · ⇧⌘E")
                     .accessibilityLabel("Choose effort").accessibilityValue(effortLabel)
                     .accessibilityHint(blocked ?? "")
@@ -377,7 +379,7 @@ private struct ChatModelTrackRow: View {
 /// A groove of equal stops, filled up to a raised thumb. Held, the thumb lifts into a lens that follows the pointer.
 private struct ChatModelTrack: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Bindable var picker: ChatModelPicker
     let row: ChatModelPicker.TrackRow
@@ -568,5 +570,18 @@ extension View {
         overlay(alignment: .bottom) {
             Rectangle().fill(color.opacity(0.4)).frame(height: 1).offset(y: 2)
         }
+    }
+}
+
+/// The footer's menu labels (model, effort) under the pointer: their text in full ink, no fill, as a link brightens.
+private struct FooterMenuHover: ViewModifier {
+    @Environment(\.chatTheme) private var theme
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(hovered && enabled ? AnyShapeStyle(theme.ink) : AnyShapeStyle(HierarchicalShapeStyle.primary))
+            .onHover { hovered = $0 }
     }
 }

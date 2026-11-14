@@ -701,7 +701,7 @@ extension ChatCoordinator {
             // The reply placeholder (ChatPendingReply), for a prompt that starts a turn (a steered message joins the
             // running one). Without motion, or in the radio log, the composer keeps the activity.
             if session.awaitingPromptAck, !session.busy, !ChatThemeStore.shared.current.radioLog,
-               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+               !MotionStore.reduced {
                 session.armPendingReply()
             }
             if let prompt = session.optimisticPrompt {

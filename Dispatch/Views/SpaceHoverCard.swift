@@ -6,36 +6,40 @@ struct SpaceHoverDetails: Equatable {
     let remote: Bool
     let route: String
     let backend: String
-    let directory: String?
     /// Spaces only; a tab's hover has neither.
     var tabs: Int? = nil
     var agents: String? = nil
+    /// A tab's title: the card does not show it (the tab does), VoiceOver hears it first.
     var title: String? = nil
+    /// A tab's agent or reporting program, under the line ("Claude Code · Idle"); nil without one.
     var activity: String? = nil
-    /// The place line, as the phone's headers say where a tab is: the host by its name, in its colour, and the folder's
-    /// name ("build-box · app"); the full path stays in the details line, where it is known.
+    /// The host the line names in its colour ("ssh build-box"); a login without a host of its own is named by its route.
     var host: HostRecord? = nil
-    var folder: String? = nil
-    /// The name the card stands beside when it has no title (a space's row): a folder of the same name goes unsaid.
-    var name: String? = nil
 
     var tabCount: String? { tabs.map { $0 == 1 ? "1 tab" : "\($0) tabs" } }
 
-    /// "build-box · app", or the host alone; the host alone too where the title (or the row's name) is the folder's.
-    var place: String? { host.map { host in ([host.name] + (shownFolder.map { [$0] } ?? [])).joined(separator: " · ") } }
+    /// The remote host's name, or its route where it has no host of its own; nil for local.
+    var hostName: String? {
+        guard remote else { return nil }
+        if let host, host.id != .local { return host.name }
+        return route.isEmpty ? nil : route.replacingOccurrences(of: "ssh://", with: "")
+    }
 
-    /// The folder's name unless the name beside it already says it: never "api" under "api".
-    var shownFolder: String? { Self.distinct(folder, from: title ?? name) }
+    /// "local · tmux · 3 tabs", "ssh build-box · tmux · 3 tabs"; a tab's adds its agent.
+    var line: String {
+        ([remote ? (["ssh"] + [hostName].compactMap { $0 }).joined(separator: " ") : "local", backend]
+            + [tabCount, agents].compactMap { $0 }).filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 
+    var summary: String {
+        ([title, line, activity].compactMap { $0 }).filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// A folder's name unless the name beside it already says it: never "api" under "api".
     static func distinct(_ folder: String?, from name: String?) -> String? {
         guard let folder, let name, folder.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespaces)) == .orderedSame
         else { return folder }
         return nil
-    }
-
-    var summary: String {
-        ([place, remote ? "ssh" : "local", route, backend] + [title, activity, directory, tabCount, agents].compactMap { $0 })
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     /// A folder's name as the phone says it: the last component, "~" for the home folder, "/" for the root.
@@ -44,12 +48,6 @@ struct SpaceHoverDetails: Equatable {
         while path.count > 1, path.hasSuffix("/") { path.removeLast() }
         if let home = home.map({ $0.count > 1 && $0.hasSuffix("/") ? String($0.dropLast()) : $0 }), !home.isEmpty, path == home { return "~" }
         return path == "/" ? "/" : (path as NSString).lastPathComponent
-    }
-
-    /// The tab's live folder's name: where its shell or pane is now (`Workspace.liveTab`, as Files reads it), never a
-    /// space's launch folder. Nil for a plain SSH tab, whose folder this Mac does not know.
-    @MainActor static func liveFolder(_ id: UUID, runtime: TerminalRuntime) -> String? {
-        liveDirectory(id, runtime: runtime).flatMap { folderName($0.path, home: $0.home) }
     }
 
     /// The tab's live folder and its host's home (for "~"); nil for a plain SSH tab or an unknown one.
@@ -74,31 +72,30 @@ struct SpaceHoverDetails: Equatable {
         let context = make(space: space, host: host, runtime: runtime)
         let owner = runtime.workspace?.spaces.first { $0.tabs.contains { $0.id == tab.id } }
         let backend = owner.flatMap { Self.multiplexer($0, runtime: runtime) } ?? "terminal"
+        return Self(remote: context.remote, route: context.route, backend: backend, title: title ?? tab.label,
+                    activity: activity(tab, runtime: runtime), host: host)
+    }
+
+    /// The tab's agent, or a program that reports its state, as it needs the user most: nil when it has neither.
+    @MainActor static func activity(_ tab: TerminalTab, runtime: TerminalRuntime) -> String? {
         let surfaces = tab.surfaceIDs
-        let reconnect = surfaces.compactMap { runtime.hosts.reconnect.state(for: $0) }
         let sessions = surfaces.compactMap { runtime.chat.sessions[$0] }.filter { $0.active }
         let programs = runtime.programs.visible(surfaces)
         let program = [ProgramStatus.State.blocked, .error, .done, .working].lazy.compactMap { state in programs.first { $0.state == state } }.first
-        let activity: String?
-        if reconnect.contains(where: { $0.reconnecting }) { activity = "Reconnecting" }
-        else if !reconnect.isEmpty { activity = "Disconnected" }
-        else if tab.isConnecting { activity = "Connecting" }
-        else if let session = sessions.first(where: { $0.approvals.contains(where: \.pending) }) {
-            activity = session.agentTitle + " · Awaiting approval"
+        if let session = sessions.first(where: { $0.approvals.contains(where: \.pending) }) {
+            return session.agentTitle + " · Awaiting approval"
         } else if let session = sessions.first(where: \.discoveryBlocked) {
-            activity = session.agentTitle + " · Integration unavailable"
+            return session.agentTitle + " · Integration unavailable"
         } else if let session = sessions.first(where: { $0.terminalAttention != nil }) {
-            activity = session.agentTitle + " · Needs attention"
+            return session.agentTitle + " · Needs attention"
         } else if let session = sessions.first(where: { $0.activityCheck != nil }) {
-            activity = session.agentTitle + " · Checking activity"
-        } else if let program, program.state != .working { activity = program.summary }
+            return session.agentTitle + " · Checking activity"
+        } else if let program, program.state != .working { return program.summary }
         else if let session = sessions.first(where: \.busy) {
-            activity = session.agentTitle + " · " + (session.nativeActivity ?? "Working")
-        } else if let program { activity = program.summary }
-        else if let session = sessions.first { activity = session.agentTitle + " · Idle" }
-        else { activity = nil }
-        return Self(remote: context.remote, route: context.route, backend: backend, directory: owner?.structured == true ? nil : context.directory,
-                    title: title ?? tab.label, activity: activity, host: host, folder: liveFolder(tab.id, runtime: runtime))
+            return session.agentTitle + " · " + (session.nativeActivity ?? "Working")
+        } else if let program { return program.summary }
+        else if let session = sessions.first { return session.agentTitle + " · Idle" }
+        return nil
     }
 
     /// Working agents, then those needing attention (an approval or unread reply), e.g. "2 agents (1 unread)".
@@ -127,21 +124,11 @@ struct SpaceHoverDetails: Equatable {
         } else if remote {
             route = host.destinations.count == 1 ? host.destinations[0] : (host.hostname ?? host.name)
         }
-        // Multiplexer directories are launch/snapshot metadata, not a live cwd
-        // for the hovered pane. Plain SSH tabs can also retain a local launch
-        // path. Omit both rather than presenting a stale or unrelated directory.
-        let multiplexer = space.structured
-        var directory = !remote && !multiplexer ? tab?.directory : nil
-        if !remote, let path = directory {
-            let home = System.home.path
-            if path == home { directory = "~" }
-            else if path.hasPrefix(home + "/") { directory = "~" + path.dropFirst(home.count) }
-        }
         // A tmux space's tabs are its windows; its terminals are their panes.
-        return Self(remote: remote, route: route, backend: backend, directory: directory,
+        return Self(remote: remote, route: route, backend: backend,
                     tabs: space.structured ? space.windows.count : space.tabs.count,
                     agents: agentSummary(space.tabs.flatMap(\.surfaceIDs).compactMap { runtime.chat.sessions[$0] }),
-                    host: host, folder: tab.flatMap { liveFolder($0.id, runtime: runtime) }, name: space.name)
+                    host: host)
     }
 }
 
@@ -185,23 +172,17 @@ struct SpaceHoverCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            if let title = details.title {
-                Text(title).foregroundStyle(Chrome.ink).lineLimit(1).truncationMode(.middle)
-                placeLine
-                if let activity = details.activity {
-                    Text(activity).foregroundStyle(secondary).lineLimit(1)
-                }
-            } else {
-                placeLine
-            }
             HStack(spacing: 8) {
-                ConnectionRouteView(remote: details.remote, route: details.route, fontSize: fontSize)
+                HStack(spacing: 5) {
+                    Text(details.remote ? "ssh" : "local")
+                        .foregroundStyle(Color(red: 126/255, green: 166/255, blue: 201/255)).fixedSize()
+                    if let name = details.hostName {
+                        Text(name).foregroundStyle(details.host.flatMap { $0.id == .local ? nil : $0.tint?.foreground } ?? Chrome.ink)
+                            .truncationMode(.middle)
+                    }
+                }
                 dot
                 Text(details.backend).foregroundStyle(Chrome.accent).fixedSize()
-                if let directory = details.directory {
-                    dot
-                    Text(directory).foregroundStyle(secondary).truncationMode(.middle)
-                }
                 if let tabCount = details.tabCount {
                     dot
                     Text(tabCount).foregroundStyle(secondary).fixedSize()
@@ -211,6 +192,9 @@ struct SpaceHoverCard: View {
                     Text(agents).foregroundStyle(secondary).fixedSize()
                 }
             }.lineLimit(1)
+            if let activity = details.activity {
+                Text(activity).foregroundStyle(secondary).lineLimit(1).truncationMode(.tail)
+            }
         }.interfaceFont(size: fontSize)
             .padding(.horizontal, 12).padding(.vertical, 9)
             .frame(minHeight: max(30, fontSize + 18))
@@ -220,16 +204,6 @@ struct SpaceHoverCard: View {
     }
 
     private var dot: some View { Text("·").foregroundStyle(muted).fixedSize() }
-
-    /// "build-box · app": the host's name in its colour, then the folder's name (`SpaceHoverDetails.place`).
-    @ViewBuilder private var placeLine: some View {
-        if let host = details.host {
-            (Text(host.name).foregroundColor(host.tint?.foreground ?? Chrome.ink)
-                + Text(details.shownFolder.map { " · " + $0 } ?? "").foregroundColor(secondary))
-                .lineLimit(1).truncationMode(.middle)
-                .accessibilityIdentifier("hover-place")
-        }
-    }
 }
 
 /// The card's ground. Flat, an opaque card with an arrow toward its row. On Liquid Glass a glass card without the

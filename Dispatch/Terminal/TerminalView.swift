@@ -466,7 +466,7 @@ extension TerminalView {
         overlay.backgroundColor = NSColor.labelColor.withAlphaComponent(0.18).cgColor
         overlay.zPosition = 1000
         layer.addSublayer(overlay)
-        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduce = MotionStore.reduced
         CATransaction.begin()
         CATransaction.setCompletionBlock { overlay.removeFromSuperlayer() }
         let fade = CABasicAnimation(keyPath: "opacity")

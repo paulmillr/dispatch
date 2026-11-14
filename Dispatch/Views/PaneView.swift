@@ -14,7 +14,7 @@ struct PaneView: View {
     private var inTitlebar: Bool { titlebar != nil }
     /// Height of an outer tmux window strip laid over this pane's top edge (Liquid Glass).
     var stripInset: CGFloat = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// This pane's strip shows its ⌘N badge, which marks focus in place of the accent border.
     @State private var shortcutBadgeShown = false
     private var hostTint: HostTint? { pane.activeTab.flatMap { TerminalRuntime.shared.ssh.tint(for: $0) } }
@@ -102,8 +102,9 @@ struct PaneView: View {
                 }.padding(.top, overlaidStrip ? 0 : stripInset)
             }
         }
-        // Vertical tabs with the sidebar shown: the sidebar marks the host, so no edge across the pane's top.
-        .hostTintBorder(!space.structured && !(workspace.verticalTabs && controller.sidebarVisible) ? hostTint : nil,
+        // The host's edge across the pane's top only where nothing else marks it: the sidebar shows the host, and with
+        // two tabs or more their strip is tinted already.
+        .hostTintBorder(!space.structured && !controller.sidebarVisible && pane.tabs.count <= 1 ? hostTint : nil,
                         surfaceID: pane.activeTab?.focusedSurfaceID,
                         stripHeight: showTabs ? tabBarHeight : 0)
         .frame(minWidth: 180, maxWidth: .infinity, minHeight: 120, maxHeight: .infinity)
@@ -166,9 +167,9 @@ struct PaneView: View {
                 Button("Rename Pane…") { controller.rename(title: "Rename pane", value: activeLabel ?? "") { workspace.updateTab(pane.selected, customTitle: $0) } }
                 Button("Move Pane to New Space") { workspace.moveTabToNewSpace(pane.selected) }
                 Divider()
-                Button("Close Pane") { controller.closeTab(pane.selected) }.help(MoveTargetsSection.closeHelp)
                 Button("Detach") { controller.detachTab(pane.selected) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminatePane(pane.selected) }
+                Button("Close Pane") { controller.closeTab(pane.selected) }.help(MoveTargetsSection.closeHelp)
             }
     }
 

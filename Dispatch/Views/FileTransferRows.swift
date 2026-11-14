@@ -5,7 +5,7 @@ import SwiftUI
 /// lines. Finished rows slide away when the engine removes them.
 struct FileTransferRows: View {
     let session: FilesSession
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -214,6 +214,7 @@ struct FileTransferButtonStyle: ButtonStyle {
             .lineLimit(1)
             .padding(.horizontal, 10)
             .frame(height: 22)
+            .hoverFill(RoundedRectangle(cornerRadius: 5))
             .background(quiet ? Color.clear : palette.ink.opacity(configuration.isPressed ? 0.12 : 0.07),
                         in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())

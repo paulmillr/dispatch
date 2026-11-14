@@ -100,7 +100,7 @@ struct ChatComposer: NSViewRepresentable {
         let placeholder = session.sendFlight?.from == .composer ? "" : TerminalRuntime.shared.chat.placeholder(session)
         // Back after the flight: it fades in rather than appearing the frame the message lands.
         if text.placeholder.isEmpty, !placeholder.isEmpty, text.string.isEmpty,
-           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+           !MotionStore.reduced {
             text.fadeInPlaceholder()
         }
         text.placeholder = placeholder

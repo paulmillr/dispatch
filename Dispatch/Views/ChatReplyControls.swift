@@ -16,6 +16,7 @@ struct ChatReplyButton: View {
     /// Why the action would be refused now: the button is disabled and its help says why.
     var blocked: String? = nil
     let action: () -> Void
+    @State private var hovered = false
     private var enabled: Bool { canSubmit && blocked == nil }
 
     private var title: String {
@@ -54,10 +55,12 @@ struct ChatReplyButton: View {
             }.padding(.horizontal, 10)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
                 .foregroundStyle(enabled ? theme.ink : theme.muted)
-                .background(Chrome.palette.control, in: RoundedRectangle(cornerRadius: 6))
+                .background(hovered && enabled ? Chrome.palette.controlBorder : Chrome.palette.control, in: RoundedRectangle(cornerRadius: 6))
                 .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(enabled ? theme.accent.opacity(0.5) : Chrome.palette.controlBorder) }
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }.buttonStyle(.plain).disabled(!enabled).fixedSize()
+            .onHover { hovered = $0 }
+            .help(blocked.map { "\(title): \($0)" } ?? "\(title) · \(key)")
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(label)
     }
@@ -79,8 +82,9 @@ struct ChatReplyButton: View {
             }.padding(.horizontal, 9)
                 .frame(height: max(24, theme.typography.detailLineHeight + 10))
                 .foregroundStyle(enabled ? theme.terminal : theme.muted)
-                .modifier(ReplyButtonSurface(enabled: enabled))
+                .modifier(ReplyButtonSurface(enabled: enabled, hovered: hovered))
         }.font(theme.typography.detail).buttonStyle(.plain).disabled(!enabled).fixedSize()
+            .onHover { hovered = $0 }
             .help(blocked.map { "\(title): \($0)" } ?? "\(title) · \(key)")
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(label)
@@ -92,13 +96,19 @@ struct ChatReplyButton: View {
 private struct ReplyButtonSurface: ViewModifier {
     @Environment(\.chatTheme) private var theme
     let enabled: Bool
+    /// Under the pointer while it can act: a lighter fill says a click sends.
+    var hovered = false
+    private var lift: Color { Color.white.opacity(enabled && hovered ? 0.16 : 0) }
 
     func body(content: Content) -> some View {
         if LiquidGlassStore.shared.active {
-            content.liquidGlass(in: Capsule(), interactive: enabled, tint: enabled ? theme.accent : nil)
+            // The lift sits between the label and its ground.
+            content.background(lift, in: Capsule())
+                .liquidGlass(in: Capsule(), interactive: enabled, tint: enabled ? theme.accent : nil)
                 .contentShape(Capsule())
         } else {
-            content.background(enabled ? theme.accent : theme.ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            content.background(lift, in: RoundedRectangle(cornerRadius: 6))
+                .background(enabled ? theme.accent : theme.ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }
