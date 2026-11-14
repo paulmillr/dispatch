@@ -92,6 +92,8 @@ final class MobileChatSession: Identifiable {
     private(set) var currentStep: String?
     /// The same step by its kind only ("Running shell command…"), for Agents' rows (`WatchSnapshotBuilder.gist`).
     private(set) var currentStepGist: String?
+    /// What the agent last said in the open turn, its first line (`TabsStatus.note`); nil before it has written in it.
+    private(set) var currentNote: String?
     private(set) var openTurnStarted: Date?
     private(set) var loadingHistory = false {
         didSet {
@@ -303,6 +305,9 @@ final class MobileChatSession: Identifiable {
         let gist = current.map(WatchSnapshotBuilder.gist)
         if currentStepGist != gist { currentStepGist = gist }
         let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
+        let note = turn.flatMap { $0.items.last { $0.kind == .assistant && !$0.text.isEmpty } }
+            .flatMap { TabsNote.line($0.text) }
+        if currentNote != note { currentNote = note }
         if openTurnStarted != started { openTurnStarted = started }
     }
 

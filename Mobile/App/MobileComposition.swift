@@ -620,19 +620,22 @@ final class MobileComposition {
     /// `waitingText`); once done, its last message. The model stays in the chat; the agent is the row's mark. Reads
     /// the session's cached step (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row.
     /// `detail` false (Agents and Spaces): the step by its kind only ("Running shell command…"), never the command or
-    /// file; the watch keeps the step's words.
+    /// file (the watch's tab rows too; its agent rows keep the step's words). While working, `note` is what the agent last said in the turn: the open
+    /// thread's, else the host's list's newest message when it is newer than the turn's start (`ChatConversation`).
     static func status(_ row: ChatConversation, session: MobileChatSession?, detail: Bool = true) -> TabsStatus? {
         if let session, session.phase == .verified {
             if session.waitingForUser { return TabsStatus(text: WatchSnapshotBuilder.waiting(session) ?? "needs you") }
             if session.working {
                 let step = !detail ? session.currentStepGist ?? "working" : session.currentStep
                     ?? session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "working"
-                return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince)
+                return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince,
+                                  note: session.currentNote)
             }
         }
         if row.summary.waiting { return TabsStatus(text: row.summary.attention ?? "needs you") }
         if let attention = row.summary.attention { return TabsStatus(text: attention) }
-        if row.summary.busy { return TabsStatus(text: "working") }
+        // No thread open: what the host's list says it wrote since the turn began.
+        if row.summary.busy { return TabsStatus(text: "working", since: row.workingSince, note: row.workingNote) }
         return row.summary.preview.map { TabsStatus(text: $0) }
     }
 

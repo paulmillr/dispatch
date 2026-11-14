@@ -554,7 +554,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   tab) and the time; then a line from `MobileComposition.status` with `detail` off, in two lines, beside the host's
   name (in its colour) under the time (no host when grouped by host; the section's host name takes the colour): while
   working the step's kind only and the elapsed time ("Running shell command… · 48s", "Reading file…", never the
-  command or file; Spaces' tab lines too, while the watch keeps the step's words), the question or approval in the primary colour while
+  command or file; Spaces' tab lines and the watch's tab rows too, while the watch's agent rows keep the step's words), over it what the agent last said in the turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is newer than the row's newest record when the list first saw it busy, a mark in the host's clock; one-line rows show the note in the step's place, the time after it, which counts from that mark only when the list saw the turn begin), the question or approval in the primary colour while
   it waits, else the last message. A row whose data is not live (the cache's, the
   previous connection's until the first `chat.list` over the new one answers, or a read the helper could not complete)
   dims whole, dot included. Chips: All, Needs you (live rows, with the count), Unread (needs you or a result not

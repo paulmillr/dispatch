@@ -43,6 +43,10 @@ struct TabsStatus: Equatable, Sendable {
     var text: String
     /// The running turn's start, while the agent works; nil otherwise.
     var since: Date? = nil
+    /// While the agent works: what it last said in this turn ("Tests pass, now updating the docs"), its progress in
+    /// its own words, which `text` (the step's kind) does not carry. Two-line rows show it over the step, one-line
+    /// rows instead of the step.
+    var note: String? = nil
 }
 
 /// How much a tab wants attention, from Chat's per-conversation state (`PaneUrgency`'s precedence: waiting, then
@@ -127,5 +131,18 @@ enum TabsTime {
             return date.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.abbreviated))
         }
         return date.formatted(Date.FormatStyle(date: .numeric, time: .omitted, locale: locale, calendar: calendar, timeZone: calendar.timeZone))
+    }
+}
+
+/// A progress note's text (`TabsStatus.note`): an agent message's first line of words, Markdown's marks left out.
+enum TabsNote {
+    static func line(_ text: String) -> String? {
+        let head = text.count > 600 ? String(text.prefix(600)) : text
+        let first = head.split(whereSeparator: \.isNewline).lazy
+            .map { ChatMarkdownBlock.plainText(String($0)).trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+        guard let first else { return nil }
+        let line = first.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return line.count > 160 ? String(line.prefix(160)) + "…" : line
     }
 }
