@@ -956,7 +956,15 @@ struct ChatThreadView: View {
             let session = session
             DispatchQueue.main.async { session.firstFrameShown() }
         }
-        updateFollow { $0.attached() }
+        // Opening at its end, the thread keeps following through its first layouts; putting a place back, it does not.
+        let settling = restoring == nil
+        updateFollow { $0.attached(settling: settling) }
+        // The first layouts (rows' real heights, the bars' insets, what the helper sent meanwhile) come within a few frames;
+        // after that a move toward older rows is the user's again, a drag's or not (VoiceOver, the status bar, keys).
+        Task { @MainActor in
+            try? await Task.sleep(for: ChatFollow.settlingTime)
+            updateFollow { $0.openingSettled() }
+        }
         guard let scroll = follower.scrollView, scroll.contentSize.height > 0 else { return }
         if follower.restoring != nil { return applyReading() }
         guard shownFollow.following else { return }

@@ -24,7 +24,8 @@ final class ChatThreadWindowTests: XCTestCase {
         }
     }
 
-    private func thread(sentences: Int = 5, queue: [[String: Any]] = []) async throws -> (MobileChatSession, ScriptedHelper, UIWindow) {
+    private func thread(sentences: Int = 5, queue: [[String: Any]] = [], busy: Bool = false) async throws
+        -> (MobileChatSession, ScriptedHelper, UIWindow) {
         let earlier = Self.records(turns: 0..<3, prefix: "e", word: "Earlier ")
         let helper = ScriptedHelper()
         helper.script { request in
@@ -38,7 +39,7 @@ final class ChatThreadWindowTests: XCTestCase {
         let chat = MobileChatSession.scripted(helper)
         try await TestSupport.eventually { helper.subscription("chat.open") != nil }
         let id = try XCTUnwrap(helper.subscription("chat.open"))
-        helper.notify(id, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: false), pending: true))
+        helper.notify(id, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: busy), pending: true))
         helper.notify(id, "chat.history", ChatFixture.history(records: Self.records(turns: 0..<40, sentences: sentences), earlier: "cursor-1"))
         try await TestSupport.eventually { chat.phase == .verified && !chat.loadingHistory }
         XCTAssertEqual(chat.transcript.rows.count, 80)
@@ -108,7 +109,9 @@ final class ChatThreadWindowTests: XCTestCase {
         XCTAssertTrue(helper.requests("chat.page").isEmpty, "opening asks for no earlier page")
 
         // A screen from the top, nothing more draws; dragged on to the top, older rows draw above, and the rows in view
-        // move by the drag alone.
+        // move by the drag alone. The drag here sets the offset with no touch, which the thread takes for its own layout
+        // until it has settled into its window (`ChatFollow.settlingTime`; a real drag ends that at once).
+        try await Task.sleep(for: ChatFollow.settlingTime + .milliseconds(200))
         let scroll = try XCTUnwrap(scrollView(window))
         let below = scroll.bounds.height - scroll.adjustedContentInset.top
         drag(scroll, to: below)
@@ -171,7 +174,17 @@ final class ChatThreadWindowTests: XCTestCase {
     }
 
     func testOpeningAgainShowsTheEnd() async throws {
-        let (chat, _, window) = try await thread()
+        try await openingAgainShowsTheEnd(busy: false)
+    }
+
+    /// The same while the agent works: the working row under the last message is the end, every time.
+    func testOpeningAgainWhileTheAgentWorksShowsTheWorkingRow() async throws {
+        try await openingAgainShowsTheEnd(busy: true)
+    }
+
+    private func openingAgainShowsTheEnd(busy: Bool) async throws {
+        let (chat, _, window) = try await thread(busy: busy)
+        if busy { try await TestSupport.eventually { chat.working } }
         defer { window.isHidden = true }
         // The space's screen and the tab's chat pushed over it, as Spaces does: each push is a new thread view, laid out
         // before the navigation bar's inset arrives.
@@ -184,6 +197,12 @@ final class ChatThreadWindowTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(800))
             let scroll = try XCTUnwrap(scrollView(window))
             XCTAssertTrue(atEnd(scroll), "open \(open): offset \(scroll.contentOffset.y) + \(scroll.bounds.height) − \(scroll.adjustedContentInset.bottom) of \(scroll.contentSize.height)")
+            if busy {
+                let row = AccessibilityLabelTests.elements(in: window).first { $0.accessibilityLabel?.contains(" is thinking") == true }
+                let frame = try XCTUnwrap(row?.accessibilityFrame, "open \(open): the working row")
+                XCTAssertLessThanOrEqual(frame.maxY, window.bounds.height - scroll.adjustedContentInset.bottom + 2,
+                                         "open \(open): the working row in view: \(frame)")
+            }
             pushed.open = false
             try await TestSupport.eventually { drawn(window).isEmpty }
             try await Task.sleep(for: .milliseconds(500))

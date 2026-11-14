@@ -647,7 +647,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   stops following as it starts, and VoiceOver's scroll, the status bar's tap or Page Up leave it too; rows, the keyboard
   and the composer changing height never do (the thread goes back to the end, exactly: following, the scroll view sits
   at its last row whatever the rows' real heights turn out to be, `pinToEnd`), a drag that only took the keyboard down
-  keeps following, and a send or "Jump to latest" returns to the end. "Jump to latest" (`ChatJumpButton`, C7) is a
+  keeps following, and a send or "Jump to latest" returns to the end. A thread opening at its end keeps following through its first 0.6 s in the window (`ChatFollow.settlingTime`), whatever its layout does then (rows' real heights replacing estimates, the bars' insets, what the helper sent meanwhile); a drag ends that at once. Without it a layout's move up while opening read as the user's, and a thread left at its end opened short of it, the working row and last message under the composer. "Jump to latest" (`ChatJumpButton`, C7) is a
   glass arrow at the thread's trailing edge just above the composer, shown whenever the thread does not follow and its
   end is out of view (with nothing new too), never at the end; the rows that came meanwhile badge it with their count. A tap
   while a fling still runs stops it first, and a thread that follows its end but comes to rest away from it (a fling's

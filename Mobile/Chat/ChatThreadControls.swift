@@ -415,7 +415,9 @@ struct ChatFollow: Equatable {
             return false
         }
         guard following, !dragging, !scrollingToEnd else { return false }
-        if let previous, offset < previous - 0.5, !resized {
+        // While the thread settles into its window (`settling`), nothing but a drag is the user's: rows' estimates
+        // resolving, the bars' insets, the working row and the queue arriving move the offset as layout.
+        if let previous, offset < previous - 0.5, !resized, !settling {
             // Toward older rows, and not the app: the user's (VoiceOver, the status bar, keys).
             following = false
             return false
@@ -423,11 +425,27 @@ struct ChatFollow: Equatable {
         return true
     }
 
-    /// The thread came into its window: an offset sampled before is no scroll of anyone's to compare with.
-    mutating func attached() { offset = nil }
+    /// The thread came into its window: an offset sampled before is no scroll of anyone's to compare with, and until it
+    /// settles (`openingSettled`, `settlingTime` later, or the user's first drag) a following thread keeps following
+    /// whatever its layout does, so a thread left at its end opens at its end.
+    /// `settling` false: the thread is putting a place back (`ChatFollower.restoring`), not opening at its end.
+    mutating func attached(settling: Bool = true) {
+        offset = nil
+        self.settling = settling
+    }
+
+    /// How long a thread opening at its end keeps following through its layouts (`attached`).
+    static let settlingTime: Duration = .milliseconds(600)
+
+    /// The first layouts after `attached` are over.
+    mutating func openingSettled() { settling = false }
+
+    /// The thread is settling into its window (`attached`): an offset toward older rows is the layout's.
+    private(set) var settling = false
 
     /// The user's drag began: the thread stops following at once.
     mutating func dragBegan() {
+        settling = false
         if !dragging { followedBeforeDrag = following }
         dragging = true
         dismissedKeyboard = false
