@@ -31,11 +31,13 @@ struct AgentActivity: Equatable {
         blocked = approval || blockedProgram != nil
         blockedKind = blockedProgram?.kind
         working = sessions.contains { $0.active && $0.busy } || programs.contains { $0.state == .working }
-        // Unseen output also piles up while an agent works, so only an idle tab counts as finished.
-        // A finished tab outranks a working one: it needs you, the working one doesn't yet.
+        // Unseen output also piles up while an agent works, so only an idle tab counts as finished, or one whose turn
+        // ended unseen before the queue started the next (`finishedUnseen`). A finished tab outranks a working one: it
+        // needs you, the working one doesn't yet.
         failed = programs.contains { $0.state == .error }
         bell = tabIDs.contains { TerminalRuntime.shared.programs.rang.contains($0) }
-        let unread = sessions.contains { $0.hasNewMessages && !($0.active && $0.busy) } || programs.contains { $0.state == .done }
+        let unread = sessions.contains { $0.hasNewMessages && (!($0.active && $0.busy) || $0.finishedUnseen) }
+            || programs.contains { $0.state == .done }
         finished = unread || failed || bell
         bellOnly = bell && !unread && !failed
         let controller = TerminalRuntime.shared.hosts.reconnect

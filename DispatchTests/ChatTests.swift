@@ -428,6 +428,40 @@ final class ChatTests: XCTestCase {
         XCTAssertNil(session.submissionFailure)
     }
 
+    /// A turn that ends unseen keeps its unread mark when the queue sends the next message at once: the tab shows the
+    /// finished mark (it outranks working) until its output is seen, then the working one. Output arriving while the
+    /// agent works, with no turn ended unseen, stays the working mark.
+    func testATurnEndedUnseenKeepsItsMarkWhileTheQueueRunsTheNext() {
+        let restore = TestSupport.preserveRuntime()
+        defer { restore() }
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        TerminalRuntime.shared.chat = chat
+        let id = System.uuid(), session = chat.session(for: id)
+        session.active = true; session.showChat = true; session.sessionID = "fixture"
+        func state(busy: Bool) -> HelperChat.Event {
+            .state(.init(busy: busy, activity: busy ? "working" : nil, model: nil, model_label: nil, effort: nil, usage: nil,
+                         goal: nil, draft: nil, attention: nil, title: nil, compacting: false, service_tier: nil))
+        }
+        func activity() -> AgentActivity { AgentActivity(tabIDs: [id]) }
+        chat.receiveHelper(state(busy: true), session: session)
+        session.insert(ChatItem(id: "progress", kind: .assistant, text: "Halfway there"), turnID: "first")
+        XCTAssertTrue(session.hasNewMessages)
+        XCTAssertFalse(activity().finished, "output while working is not a finished turn")
+        XCTAssertTrue(activity().working)
+        // The turn ends out of sight; the queue's next message starts another at once.
+        session.insert(ChatItem(id: "done", kind: .assistant, text: "Done"), turnID: "first")
+        chat.receiveHelper(state(busy: false), session: session)
+        XCTAssertTrue(session.finishedUnseen)
+        chat.receiveHelper(state(busy: true), session: session)
+        XCTAssertTrue(activity().finished, "the unseen finished turn keeps its mark while the next one runs")
+        // Seen: the working mark.
+        session.setPresented(true, by: System.uuid())
+        XCTAssertFalse(session.hasNewMessages)
+        XCTAssertFalse(session.finishedUnseen)
+        XCTAssertFalse(activity().finished)
+        XCTAssertTrue(activity().working)
+    }
+
     func testUnreadOutputTracksPresentationAcrossTerminalAndChatModes() {
         let session = ChatSession(id: System.uuid()), view = System.uuid()
         session.showChat = true

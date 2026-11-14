@@ -200,6 +200,30 @@ final class VerticalTabsTests: XCTestCase {
         }
     }
 
+    /// The banner's × hides it for what the agent waits on now (here a refusal Codex reported as the agent's attention,
+    /// which nothing in the terminal answers); a new wait of the same tab shows it again.
+    func testAttentionBannerDismissesUntilTheAgentWaitsAgain() throws {
+        let restore = TestSupport.preserveRuntime()
+        defer { restore() }
+        let runtime = TerminalRuntime.shared
+        let controller = AppDelegate(), workspace = controller.workspace
+        runtime.workspace = workspace
+        workspace.newLocalSpace()
+        let waiting = try XCTUnwrap(workspace.activeSurfaceID)
+        workspace.newTab()
+        let session = runtime.chat.session(for: waiting)
+        defer { runtime.chat.close(waiting) }
+        session.agentAttention = "This response cannot be shown as this session was not authenticated with a hardware key."
+        XCTAssertEqual(controller.attention.banner?.id, waiting)
+        controller.attention.dismissBanner(waiting)
+        XCTAssertNil(controller.attention.banner, "dismissed")
+        session.agentAttention = "Allow the command?"
+        XCTAssertEqual(controller.attention.banner?.id, waiting, "a new wait shows again")
+        controller.attention.dismissBanner(waiting)
+        session.approvals = [PendingApproval(key: "approval", operation: "Run tests?") { _ in }]
+        XCTAssertEqual(controller.attention.banner?.id, waiting, "an approval is a new wait too")
+    }
+
     /// The banner under the strip (an agent waiting in another tab) shows that tab on a click and goes, with strips
     /// and with vertical tabs, the waiting tab behind the shown one or in another pane of a split.
     func testAttentionBannerGoesOnceClicked() async throws {

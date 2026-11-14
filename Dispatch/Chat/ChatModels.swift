@@ -775,7 +775,11 @@ final class ChatSession: Identifiable {
     var earlierError: String?
     var historyGeneration: UUID?
     var historyRevision = 0
-    var hasNewMessages = false
+    var hasNewMessages = false { didSet { if !hasNewMessages, finishedUnseen { finishedUnseen = false } } }
+    /// A turn ended while its output was not in sight, and nobody has looked since: the tab keeps its unread mark even
+    /// when the queue already sent the next message and the agent works again (`AgentActivity`). Seeing the output
+    /// (`hasNewMessages` cleared) clears it.
+    var finishedUnseen = false
     /// The composer's ⌘/ sheet; here so the Help menu can open it.
     var shortcutsPresented = false
     /// Chat shows a transcript and composer rather than the setup placeholder.
@@ -1287,7 +1291,7 @@ final class ChatSession: Identifiable {
     // Removing the old presentation must not hide the new one.
     private var presentations: Set<UUID> = []
     var isPresented: Bool { !presentations.isEmpty }
-    private var latestOutputIsVisible: Bool { isPresented && (!showChat || atBottom) }
+    var latestOutputIsVisible: Bool { isPresented && (!showChat || atBottom) }
     // Presentation outlives agent processes, transcript readers and connections.
     struct ViewTransition {
         let date: Date
@@ -1580,7 +1584,9 @@ final class ChatSession: Identifiable {
     }
 
     private func acknowledgeVisibleOutput() {
-        if hasNewMessages, latestOutputIsVisible { hasNewMessages = false }
+        guard latestOutputIsVisible else { return }
+        if hasNewMessages { hasNewMessages = false }
+        if finishedUnseen { finishedUnseen = false }
     }
 
     func revealLatestMessages() {

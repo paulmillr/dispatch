@@ -124,8 +124,28 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     }
     /// ⌘J and ⇧⌘J have somewhere to go (`navigate`): an approval or question waiting, or a reply ready.
     var navigable: Bool { entries.contains { $0.urgency == .waiting || ($0.urgency == .unread && eventKey($0) != nil) } }
+    /// The first agent waiting outside the active terminal, unless its banner was dismissed for this very wait.
     var banner: AttentionEntry? {
-        entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID }
+        entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID && dismissed[$0.id] != waitKey($0.id) }
+    }
+
+    /// Waits whose banner the user dismissed (its ×), by terminal: what each waited on (`waitKey`). A new wait of the same
+    /// terminal shows again; the terminal's own marks (sidebar, ⌘J) are unaffected.
+    private(set) var dismissed: [UUID: String] = [:]
+
+    /// What a waiting terminal waits on: its pending approval, else the agent's own words (`ChatSession.agentAttention`,
+    /// e.g. a failed turn's error), else the program's blocked report.
+    func waitKey(_ id: UUID) -> String {
+        let session = TerminalRuntime.shared.chat.sessions[id]
+        if let approval = session?.approvals.first(where: \.pending) { return "approval-" + approval.id.uuidString }
+        if let attention = session?.agentAttention { return "attention-" + attention }
+        let blocked = TerminalRuntime.shared.programs.visible(id).first { $0.state == .blocked }
+        return "program-" + (blocked.map { $0.id + ":" + ($0.message ?? "") } ?? "")
+    }
+
+    /// The banner's ×: hides it for what this terminal waits on now.
+    func dismissBanner(_ id: UUID) {
+        dismissed[id] = waitKey(id)
     }
 
     /// With previews hidden (System Settings › Notifications › Show previews), a banner shows only the placeholder: no

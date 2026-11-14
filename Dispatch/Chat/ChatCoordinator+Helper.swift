@@ -235,7 +235,11 @@ extension ChatCoordinator {
             if session.shells != shells { session.shells = shells }
             let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
             if session.busy != busy {
-                if session.busy, !busy { ChatAnnouncement.post("\(session.agentTitle) finished", for: session) }
+                if session.busy, !busy {
+                    ChatAnnouncement.post("\(session.agentTitle) finished", for: session)
+                    // Unseen, the finished turn keeps its mark through a queued message that starts the next one.
+                    if !session.latestOutputIsVisible { session.finishedUnseen = true }
+                }
                 session.busy = busy
             }
             if session.starting { session.starting = false }
