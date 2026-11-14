@@ -9,7 +9,7 @@ import SwiftUI
 /// Claude Code's windows as the Mac shows them, and the session's counts.
 private enum UsageSample {
     static let tokens = "182.4K in · 12.3K out"
-    static let resets = "Resets Thu 9:40am"
+    static let resets = "resets thu 9:40am"
     /// The week's and the 5-hour window's shares: past the 80% warning, or both under it (`low`).
     static func used(low: Bool) -> Int { low ? 46 : 83 }
     static func hourUsed(low: Bool) -> Int { low ? 23 : 42 }
@@ -42,7 +42,7 @@ struct UsageLimitsScreen: View {
             }
             .defaultScrollAnchor(.bottom)
         } bottom: {
-            Composer(placeholder: "Queue a message…")
+            Composer(placeholder: "Message")
         } overlay: {
             EmptyView()
         }
@@ -105,11 +105,11 @@ private struct Limits: View {
         let used = UsageSample.used(low: low), hour = UsageSample.hourUsed(low: low)
         HStack(spacing: 5) {
             Ring(used: used)
-            Text(named ? "Weekly \(used)%" : "\(used)%").foregroundStyle(usageTone(used))
+            Text(named ? "\(used)% weekly" : "\(used)%").foregroundStyle(usageTone(used))
             if fiveHour {
                 Text("·").foregroundStyle(.tertiary)
                 Ring(used: hour)
-                Text("5-hour \(hour)%").foregroundStyle(usageTone(hour))
+                Text("\(hour)% 5-hour").foregroundStyle(usageTone(hour))
             } else {
                 Text((named ? "· " : "") + UsageSample.resets).foregroundStyle(.tertiary)
             }

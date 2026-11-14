@@ -446,7 +446,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   `check` asks the helper, and verified idle work is closed through `prompt`, while busy work, or a check the
   multiplexer cannot answer, asks first ("Close “name”?" naming the agent and its state or the program; Terminate).
   A phone's Detach only hides the tab on that connection (the helper's per-connection selection; the Mac keeps it,
-  and it is back after a reconnect), so the swipe offers Close alone and Detach stays in the tab's menu. A space
+  and it is back after a reconnect), so the swipe offers Close alone and Detach stays in the row's menu (not the tab's
+  header's: the tab shown would leave). A space
   offers Detach and Terminate… and never ends by itself. Tab names, space names
   (`usesDirectoryName`, kept on the server) and the Activity sort follow the Mac. New tab sends no folder, so the
   multiplexer opens it in its focused pane's directory. New chat, beside New tab at the foot of a space's screen
@@ -457,8 +458,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A space
   lists its tabs by activity (their times, below): most recent first, tabs with no time yet last, ties in server order;
   or, by its header's sort menu (By time, Manual; `MobileTabs.tabSort`, this device's for every space; the switcher's
-  rows follow it), in server order; the iPad strip keeps server order. A tab row's long press offers Move to, the host's
-  other spaces while it is connected: `memberships.move` with that space as parent and no `before` (after its last
+  rows follow it), in server order; the iPad strip keeps server order. A tab row's long press is the tab's menu
+  (`TabsTabMenu`) with the space's Edit in Rename…'s place: Edit, Move to, then Detach and Close Tab. Move to (also
+  under Rename… in the tab's header and Agents' rows) offers the host's other spaces while it is connected: `memberships.move` with that space as parent and no `before` (after its last
   tab), as a tab dragged into another space on the Mac; a refusal (tmux across sessions) shows as other failures do. A
   space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close, its rows in server
   order. Reorders go to the server (`memberships.move`) and the rows
@@ -466,10 +468,17 @@ The policies below are the ones a change must keep; the screens themselves are d
   (B7): Back's circle, then one glass capsule with the host's disc, the name with its branch and `host · folder`, whose
   tap is the space's menu without New tab (Edit, then Detach and Terminate…; a Shell space: Close all shells), and the
   sort menu trailing. In the Spaces list a space's long press is
-  its menu, as a tab's is (`SpaceMenuItems`): New tab, Rename…, Edit Spaces, then Detach and
+  its menu, as a tab's is (`SpaceMenuItems`): New tab, Edit (the list's, in Rename…'s place), then Detach and
   Terminate… (a Shell space: Close all shells); dragged from there, without Edit, a space dropped on another of its
-  host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The spaces' order is this device's, as Edit's
-  handles keep it. Paths shorten to `~` by
+  host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The list's Edit renames a multiplexer's spaces
+  in place (`entities.rename`, while the host is connected and live), and each space has a red minus before its name
+  that asks as Terminate… does (a Shell space: Close all shells; dimmed while not connected): its own button, as a
+  host's is, since a list's delete takes the row away before the question is answered. The spaces' order is this
+  device's, as Edit's handles keep it. Edit is one list (`SpacesEditRow`): each host's header a row, its spaces on a
+  card under it, so a space dropped outside its host (past its last space, the next host's rows) goes to that host's
+  nearer end rather than back, and a header's handle moves the host with its spaces (a list moves rows only within
+  one `ForEach`, and refuses a drop onto a row that cannot move). A host's header folds or unfolds its spaces from anywhere on it but its
+  glyph disc, which opens its stats. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
 - **A tab's header** (phone stack, B7), as Messages heads a conversation. Back is its own glass circle at the leading
@@ -479,7 +488,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   reads all of it); a tap opens the tab's one menu (`TabMenuItems`, the landscape rail's and iPad's disc opens the
   same): on Chat Search, the host's Stats, Side Conversation (read-only; one with changes is the composer's `/side`)
   or the open one, and Manage goal; elsewhere Stats first; the pane picker when the segment can show more than one pane
-  (on Chat only the panes running an agent, the shown one checked); the tab's row menu (Rename…, Detach, Close Tab). The
+  (on Chat only the panes running an agent, the shown one checked); the tab's (Rename…, Move to, Close Tab; Detach is
+  the rows'). Its first line names the tab and its host in full (`name · host`), which the capsule may cut. The
   folder in `host · folder` is its last component;
   Terminal adds `· shell`. The same `host · folder` (the
   folder's name, never its path) heads a space's screen, the switcher's space and the iPad's header beside its sidebar,
@@ -557,9 +567,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   command or file; Spaces' tab lines and the watch's tab rows too, while the watch's agent rows keep the step's words), over it what the agent last said in the turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is newer than the row's newest record when the list first saw it busy, a mark in the host's clock; one-line rows show the note in the step's place, the time after it, which counts from that mark only when the list saw the turn begin), the question or approval in the primary colour while
   it waits, else the last message. A row whose data is not live (the cache's, the
   previous connection's until the first `chat.list` over the new one answers, or a read the helper could not complete)
-  dims whole, dot included. Chips: All, Needs you (live rows, with the count), Unread (needs you or a result not
+  dims whole, dot included. Chips, Spaces' own (All's symbol one bubble, as Spaces' Agents): All, Needs you (live rows, with the count), Unread (needs you or a result not
   seen), kept as `agents.filter`. The tab item shows the needs-you count. A row's menu: Open Chat, Open Terminal (both
-  on the row's own pane in a split tab), Mark as Read, Mute, and the tab's Rename, Detach and Close; swipes: Read
+  on the row's own pane in a split tab), Mark as Read, Mute, and the tab's Rename, Move to, Detach and Close; swipes: Read
   (leading), Close and Mute (trailing; no Close on an offline host). The empty state says why: no host (Add host),
   connecting, no host reached (each problem, Try Again), Chat off or plain SSH, or no agent running (New chat).
   Rows not open as a thread come from `chat.list`: on every new connection or binding change, the helper's activity
@@ -618,8 +628,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   row as a click on the Mac's Thinking opens its activity: a line counting the steps and how many lie above and below,
   with the session's tokens in and out and Pi's cost after them (`ChatUsageText`, as `ChatSessionStats`; nothing with
   the agent's token counter off), and the plan's limits at its end (`ChatLimitsLine`, N4a): the week (the longest
-  window still running) as a ring with its share and "Resets Thu 9:40am", or, for an account that still reports the
-  5-hour window, that window's ring in the reset's place; the week's name goes where the line is too narrow. Rings
+  window still running) as a ring with its share, its name and its reset ("64% weekly · resets mon 11pm", all lowercase), or, for an
+  account that still reports the 5-hour window, that window's ring and share ("42% 5-hour") in the reset's place; the
+  week's name goes where the line is too narrow. Rings
   and shares stay as dim as the line until a window passes 80% (`LimitCaution`, an orange in light), then 95% (red).
   The limits are read through `chat.limits` as the row unfolds (`ChatLimitsReader`): Claude Code and Codex only,
   after Show Limits there (its alert says what reading does; kept on the device, per agent; Not Now until the next
@@ -632,9 +643,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   summary says it, changed files' diffs, the output (a read's source at its own line numbers) with Copy, and Tool
   details with the raw input and output. Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
   Messages' Send Later (`ChatQueuedBubbles`; while the link is down the same bubbles, held): under the last, "3 queued ·
-  sends after this turn" (with Resume after Stop), under one that waits for the user its status. A tap or long press
-  on one is its menu, each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
-  agent works), Edit, Move Up and Move Down, Delete. Edit loads it into the composer (`beginQueueEdit`): the draft
+  sends after this turn" (with Resume after Stop), under one that waits for the user its status. A long press on one
+  is its menu (a tap in passing opens nothing; VoiceOver has the items as actions), each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
+  agent works), Edit, Move Up and Move Down, Delete; the hold is felt, as Send's (`menuHoldHaptic`). The
+  composer says Message whether a send goes out or queues (the queued bubbles say what waits), "Edit the queued
+  message…" while editing one and "Steer the current turn…" when Send steers. Edit loads it into the composer (`beginQueueEdit`): the draft
   there is set aside among the saved drafts, a bar says "Editing queued message" with Cancel, and send is ✓, which
   saves the text in its place (`queue.update` by revision) and brings the draft back; a message that went out
   meanwhile keeps the edit as the draft, with a note. Leaving the conversation cancels the edit. An agent this phone starts (New chat, New

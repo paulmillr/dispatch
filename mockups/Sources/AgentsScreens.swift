@@ -226,7 +226,7 @@ struct AgentRowMock: View {
 /// `AgentsFilterRow`: All, Needs you with its count, Unread; the selected chip filled pink, every chip on glass.
 struct AgentsChips: View {
     var selected = 0
-    let items = [("All", "bubble.left.and.bubble.right"), ("Needs you", "exclamationmark.bubble"), ("Unread", "envelope.badge")]
+    let items = [("All", "text.bubble"), ("Needs you", "exclamationmark.bubble"), ("Unread", "envelope.badge")]
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {

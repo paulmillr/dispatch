@@ -24,12 +24,17 @@ struct ChatQueuedBubbles: View {
                                     read: { [session] in try await session.attachmentBytes($0) }, faded: true)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                         .contentShape(Rectangle())
+                } primaryAction: {
+                    // Held only: a tap in passing (scrolling, reaching for the composer) opens nothing.
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuOrder(.fixed)
+                // The hold that opens it is felt, as Send's.
+                .menuHoldHaptic()
                 .accessibilityLabel("Queued: " + Self.accessibilityLabel(row))
-                .accessibilityHint("Shows what you can do with it")
+                .accessibilityHint("Touch and hold for what you can do with it")
+                .accessibilityActions { items(row, index: index, count: rows.count, held: held) }
                 .accessibilityIdentifier("chat-queued-\(row.id)")
                 if session.queueEdit?.row == row.id {
                     ChatCaption(text: "Editing in the composer", trailing: true)

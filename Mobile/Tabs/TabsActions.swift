@@ -52,6 +52,21 @@ final class TabsActions {
         }
     }
 
+    /// Move to's spaces for a tab: its host's other multiplexer spaces while connected (`MobileWorkspace.moveTargets`).
+    func moveTargets(_ ref: TabRef) -> [MobileSpace] {
+        guard let workspace = model.workspace(ref.host), let tab = workspace.tab(ref.key),
+              let space = workspace.space(of: tab) else { return [] }
+        return workspace.moveTargets(from: space)
+    }
+
+    /// Move to: the tab goes to `target` on the server (`MobileWorkspace.move(tab:to:)`); the topology brings it there,
+    /// and a refusal shows as other failures do.
+    func move(_ ref: TabRef, to target: MobileSpace) {
+        perform(.tab(ref)) { workspace in
+            if let tab = workspace.tab(ref.key) { try await workspace.move(tab: tab, to: target) }
+        }
+    }
+
     /// Terminate asks first, with the Mac's words; Detach acts at once. Close of a tab ends it at once when nothing would
     /// be lost (`closeTab`), else asks; Close of a space detaches it. A shell tab closes at once whichever way (nothing
     /// keeps a plain shell); a Shell space asks first while one of its shells is live.
@@ -216,11 +231,16 @@ enum TabsShellCopy {
     static let closeConfirm = "Close Shells"
 }
 
-/// A tab's menu (long press on a row, the tab's ⋯): Rename, Close Tab (which asks while work runs) and Detach (hidden
-/// on this connection, still running); a shell tab's is Close Tab alone.
+/// A tab's menu (long press on a row, the tab's header): Rename… (a space's rows: its Edit in that place, which renames
+/// there), Move to the host's other spaces under it, then Detach (hidden on this connection, still running; not from the
+/// tab's own header) and Close Tab (which asks while work runs); a shell tab's is Close Tab alone.
 struct TabsTabMenu: View {
     let actions: TabsActions
     let tab: TabRef
+    /// The space's Edit, in Rename…'s place (a space's rows).
+    var edit: (() -> Void)? = nil
+    /// Detach; the tab's header leaves it to the rows.
+    var detach = true
 
     var body: some View {
         if TabsTabMenu.isShell(tab) {
@@ -233,9 +253,17 @@ struct TabsTabMenu: View {
     static func isShell(_ tab: TabRef) -> Bool { ShellSessions.isKey(tab.key) }
 
     @ViewBuilder private var multiplexerItems: some View {
-        Button("Rename…", systemImage: "pencil") { actions.rename(.tab(tab)) }
-        Divider()
-        Button("Detach", systemImage: "eject") { actions.close(.tab(tab), .detach) }
+        if let edit {
+            Button("Edit", systemImage: "pencil", action: edit)
+        } else {
+            Button("Rename…", systemImage: "pencil") { actions.rename(.tab(tab)) }
+        }
+        SpaceMoveMenu(targets: actions.moveTargets(tab)) { actions.move(tab, to: $0) }
+        // How it ends, set apart where Detach is offered; the header's Close Tab follows Move to directly.
+        if detach {
+            Divider()
+            Button("Detach", systemImage: "eject") { actions.close(.tab(tab), .detach) }
+        }
         Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }
     }
 }

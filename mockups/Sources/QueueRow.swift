@@ -41,7 +41,7 @@ struct QueueRowScreen: View {
                         Composer(text: queued[0], saving: true)
                     }
                 } else {
-                    Composer(placeholder: "Queue another…")
+                    Composer(placeholder: "Message")
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -243,7 +243,7 @@ struct QueuePausedScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.canvas)
             .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .safeAreaBar(edge: .bottom) { Composer(placeholder: "Queue another…") }
+            .safeAreaBar(edge: .bottom) { Composer(placeholder: "Message") }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { CapsuleTabHeader(title: "Billing webhook retries", subtitle: AnyView(TabSubtitle(folder: "app")), state: state) }
         }

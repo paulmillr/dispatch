@@ -173,8 +173,13 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertNil(ChatLimitsLine.windows([], now: now))
         let codex = ChatLimitWindow(name: "window_10080", used: 10, resets_at: now.timeIntervalSince1970 + 86_400 * 2)
         XCTAssertEqual(codex.minutes, 10080)
-        XCTAssertEqual(ChatLimitsLine.resets(hours, now: now), "Resets in 2h 18m")
-        XCTAssertTrue(ChatLimitsLine.resets(week, now: now).hasPrefix("Resets "), ChatLimitsLine.resets(week, now: now))
+        XCTAssertEqual(ChatLimitsLine.resets(hours, now: now), "resets in 2h 18m")
+        XCTAssertTrue(ChatLimitsLine.resets(week, now: now).hasPrefix("resets "), ChatLimitsLine.resets(week, now: now))
+        // "64% weekly · resets mon 11pm": the share, then the window's name, all lowercase.
+        XCTAssertEqual(ChatLimitsLine.resets(week, now: now), ChatLimitsLine.resets(week, now: now).lowercased())
+        XCTAssertEqual(ChatLimitsLine.share(week), "\(week.used)% weekly")
+        XCTAssertEqual(ChatLimitsLine.share(hours), "42% 5-hour")
+        XCTAssertEqual(ChatLimitsLine.share(week, named: false), "\(week.used)%")
         XCTAssertEqual(ChatLimitsLine.spoken([hours, week], now: now).components(separatedBy: ". ").count, 2)
         XCTAssertEqual(ChatUsageText.text(nil, cost: false), nil)
         let counted = ChatUsage(["info": ["total_token_usage": ["input_tokens": 182_400, "output_tokens": 12_350],

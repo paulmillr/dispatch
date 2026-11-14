@@ -372,7 +372,8 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
         switch self { case .all: "All"; case .needsYou: "Needs you"; case .unread: "Unread" }
     }
     var symbol: String {
-        switch self { case .all: "bubble.left.and.bubble.right"; case .needsYou: "exclamationmark.bubble"; case .unread: "envelope.badge" }
+        // One bubble, as Spaces' Agents chip.
+        switch self { case .all: "text.bubble"; case .needsYou: "exclamationmark.bubble"; case .unread: "envelope.badge" }
     }
     func keeps(_ row: ChatConversation) -> Bool {
         switch self {

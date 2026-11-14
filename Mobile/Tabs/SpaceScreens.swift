@@ -135,13 +135,8 @@ struct SpaceTabsScreen: View {
                     }
                     .accessibilityIdentifier("space-tab")
                     .contextMenu {
-                        TabsTabMenu(actions: actions, tab: entry.id)
-                        if !shells {
-                            Button("Edit", systemImage: "pencil") { editing = true }
-                        }
-                        SpaceMoveMenu(targets: workspace.moveTargets(from: space)) { target in
-                            move(entry.id, to: target, in: workspace)
-                        }
+                        // Edit in Rename…'s place: it renames the space's tabs in place, beside reorder and close.
+                        TabsTabMenu(actions: actions, tab: entry.id, edit: shells ? nil : { editing = true })
                     }
                     // Close alone, also by a full swipe: it ends the tab, asking first while work runs (Detach, which
                     // only hides it on this connection, is in the tab's menu).
@@ -204,16 +199,6 @@ struct SpaceTabsScreen: View {
         }
     }
 
-    /// Move to: the tab goes to `target` on the server; the topology takes its row away from here.
-    private func move(_ ref: TabRef, to target: MobileSpace, in workspace: MobileWorkspace) {
-        guard let tab = workspace.tab(ref.key) else { return }
-        Task {
-            do { try await workspace.move(tab: tab, to: target) } catch {
-                actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-    }
-
     private struct GitWatch: Hashable {
         let key: SpaceGitFacts.Key
         let directory: String
@@ -269,8 +254,8 @@ struct SpaceSortMenu: View {
     }
 }
 
-/// A tab row's Move to (in its long press, P2): the host's other spaces; picking one moves the tab there
-/// (`MobileWorkspace.move(tab:to:)`). Nothing without another space or a connection.
+/// A tab's Move to (`TabsTabMenu`: a row's long press, P2, and the tab's header): the host's other spaces; picking one
+/// moves the tab there (`TabsActions.move`). Nothing without another space or a connection.
 struct SpaceMoveMenu: View {
     let targets: [MobileSpace]
     let move: (MobileSpace) -> Void
@@ -289,8 +274,8 @@ struct SpaceMoveMenu: View {
 }
 
 /// A space's menu items, the header's capsule and a space row's long press alike: New tab (the row's only: the space's
-/// screen has its capsule), then the way to change it (the header's Edit, for the space and its tabs; the list's
-/// Rename… and Edit Spaces, which reorders them), then Detach and Terminate… (a Shell space: Close all shells). As a
+/// screen has its capsule), then the way to change it (the header's Edit, for the space and its tabs; the list's Edit,
+/// which renames, reorders and deletes its spaces), then Detach and Terminate… (a Shell space: Close all shells). As a
 /// tab's menu: what it is called, then how it ends.
 struct SpaceMenuItems: View {
     let navigator: SpacesNavigator
@@ -299,7 +284,7 @@ struct SpaceMenuItems: View {
     var newTab = true
     /// The header's Edit: a title and what it does.
     var edit: (title: String, action: () -> Void)? = nil
-    /// The list's: Rename… and Edit Spaces.
+    /// The list's Edit (`SpacesNavigator.editing`).
     var list = false
 
     var body: some View {
@@ -313,12 +298,9 @@ struct SpaceMenuItems: View {
             if let edit {
                 Button(edit.title, systemImage: "pencil", action: edit.action).disabled(!connected)
             }
-            if list {
-                Button("Rename…", systemImage: "pencil") { navigator.actions.rename(.space(space.ref)) }.disabled(!connected)
-            }
         }
         if list {
-            Button("Edit Spaces", systemImage: "arrow.up.arrow.down") { navigator.editing = true }
+            Button("Edit", systemImage: "pencil") { navigator.editing = true }
         }
         Divider()
         if shells {

@@ -605,10 +605,14 @@ struct ChatLimitsLine: View {
         return (main, running.dropFirst().last)
     }
 
-    /// "Resets Thu 9:40am", "Resets in 2h 18m".
+    /// "resets thu 9:40am", "resets in 2h 18m": after the share, all lowercase (the Mac's popover keeps "Thu").
     static func resets(_ window: ChatLimitWindow, now: Date) -> String {
-        let text = window.resetText(now: now)
-        return text.prefix(1).uppercased() + text.dropFirst()
+        window.resetText(now: now).lowercased()
+    }
+
+    /// "64% weekly", "42% 5-hour": the share first, the window's name after it ("64%" where the line is narrow).
+    static func share(_ window: ChatLimitWindow, named: Bool = true) -> String {
+        named ? "\(window.used)% \(window.title.lowercased())" : "\(window.used)%"
     }
 
     static func tone(_ used: Int) -> AnyShapeStyle {
@@ -643,11 +647,11 @@ struct ChatLimitsLine: View {
             if let (main, short) = Self.windows(all, now: now) {
                 HStack(spacing: 5) {
                     ChatLimitRing(used: main.used)
-                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(tone(main.used))
+                    Text(Self.share(main, named: named)).foregroundStyle(tone(main.used))
                     if let short {
                         Text("·")
                         ChatLimitRing(used: short.used)
-                        Text("\(short.title) \(short.used)%").foregroundStyle(tone(short.used))
+                        Text(Self.share(short)).foregroundStyle(tone(short.used))
                     } else {
                         Text((named ? "· " : "") + Self.resets(main, now: now))
                     }

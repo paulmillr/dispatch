@@ -251,7 +251,7 @@ final class ChatThreadUITests: XCTestCase {
     func testALongPressOnSendOffersSendNowAndQueueWhileTheAgentWorks() {
         let app = launch(echo: 30)
         send("Check the retry path", in: app)
-        type("Also cover invoice.paid", in: app, placeholder: "Queue a message…")
+        type("Also cover invoice.paid", in: app)
         app.buttons["Send"].press(forDuration: 1.2)
         XCTAssertTrue(item(app, "Queue").waitForExistence(timeout: 5))
         XCTAssertTrue(item(app, "Send now").exists)
@@ -260,6 +260,14 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertEqual(app.textViews.firstMatch.value as? String, "Also cover invoice.paid", "the long press sent nothing")
         item(app, "Queue").tap()
         XCTAssertTrue(eventually { (app.textViews.firstMatch.value as? String) != "Also cover invoice.paid" }, "queued: the draft left")
+        // The queued bubble's menu opens on a hold only: a tap in passing opens nothing.
+        let queued = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Queued:'")).firstMatch
+        XCTAssertTrue(queued.waitForExistence(timeout: 5), "the queued bubble")
+        queued.tap()
+        XCTAssertFalse(item(app, "Delete").waitForExistence(timeout: 1.5), "a tap opens no menu")
+        queued.press(forDuration: 1.2)
+        XCTAssertTrue(item(app, "Delete").waitForExistence(timeout: 5), "the hold's menu")
+        shot("queued-menu")
     }
 
     /// With the slash list up, the tap completes the lit command into the draft: the long press says so and sends

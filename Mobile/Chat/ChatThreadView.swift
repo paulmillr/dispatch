@@ -613,13 +613,14 @@ struct ChatThreadView: View {
         focused = true
     }
 
-    /// The composer's hint (M4a, M4c, M5a, M5c).
+    /// The composer's hint (M4a, M4c, M5a, M5c): Message, queued or not (the queue's card says what waits), but editing
+    /// a queued message or steering the turn.
     private var placeholder: String {
         if session.queueEdit != nil { return "Edit the queued message…" }
-        if session.route(steer: false) == .outbox { return "Queue a message…" }
-        if sendWhileWorking == .steer, session.route(steer: true) == .steer { return "Steer the current turn…" }
-        if !session.queueRows.isEmpty { return "Queue another…" }
-        return session.working ? "Queue a message…" : "Message"
+        if session.route(steer: false) != .outbox, sendWhileWorking == .steer, session.route(steer: true) == .steer {
+            return "Steer the current turn…"
+        }
+        return "Message"
     }
 
     /// The shown search match, when the search is open.

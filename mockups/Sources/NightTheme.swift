@@ -145,7 +145,7 @@ struct NightThemeScreen: View {
             }
             chrome(Capsule()) {
                 HStack {
-                    Text("Queue a message…").foregroundStyle(palette.tertiary)
+                    Text("Message").foregroundStyle(palette.tertiary)
                     Spacer()
                     Image(systemName: "mic").foregroundStyle(palette.secondary)
                 }

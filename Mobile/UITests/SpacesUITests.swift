@@ -27,6 +27,18 @@ final class SpacesUITests: XCTestCase {
         return app
     }
 
+    /// A screenshot attached to the result, and written to `DISPATCH_UI_SHOTS` when set (for review).
+    private func shot(_ name: String) {
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        add(attachment)
+        if let folder = ProcessInfo.processInfo.environment["DISPATCH_UI_SHOTS"] {
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: folder).appendingPathComponent(name + ".png"))
+        }
+    }
+
     private func wait(_ element: XCUIElement, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element.waitForExistence(timeout: 5), "\(message) \(element)", file: file, line: line)
     }
@@ -96,6 +108,92 @@ final class SpacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Restore all"].exists)
     }
 
+    /// Agents' filter chips as Spaces': All with one bubble, as tall and about as wide as Spaces' All.
+    func testAgentsChipsMatchSpaces() {
+        // The demo hosts: Spaces and Agents both filled.
+        let app = XCUIApplication()
+        app.launchEnvironment = ["DISPATCH_MOBILE_DEMO": "1"]
+        app.launchArguments = ["-appearance", "dark"]
+        app.launch()
+        let spaces = app.descendants(matching: .any)["spaces-filter"].buttons["All"]
+        XCTAssertTrue(spaces.waitForExistence(timeout: 15), "Spaces' chips")
+        let size = spaces.frame.size
+        shot("spaces-chips")
+        app.tabBars.buttons["Agents"].tap()
+        let agents = app.descendants(matching: .any)["agents-filter"].buttons["All"]
+        XCTAssertTrue(agents.waitForExistence(timeout: 15), "Agents' chips")
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("agents-chips")
+        XCTAssertEqual(agents.frame.height, size.height, accuracy: 0.5, "as tall")
+        XCTAssertEqual(agents.frame.width, size.width, accuracy: 3, "as wide")
+    }
+
+    /// M1e: a host's header folds from anywhere but its disc; a space row's long press offers Edit (no Rename…), whose
+    /// spaces' names are fields, each with a delete that asks first, and a drag's order stays after Done.
+    func testSpacesEdit() {
+        let app = launch(Self.sample)
+        let first = Self.row(app, "space-row", "app"), second = Self.row(app, "space-row", "e2e")
+        wait(first)
+        XCTAssertLessThan(first.frame.minY, second.frame.minY, "the sample's order")
+        // The host's header folds from the room between its name and its disc, not only from the name.
+        let header = app.buttons["mba2"].firstMatch
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(first.waitForNonExistence(timeout: 3), "folded")
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        wait(first, "unfolded")
+        first.press(forDuration: 1.2)
+        wait(app.buttons["Edit"], "the row's Edit")
+        XCTAssertFalse(app.buttons["Rename…"].exists, "renaming is Edit's")
+        XCTAssertFalse(app.buttons["Edit Spaces"].exists)
+        shot("spaces-row-menu")
+        // The menu's Edit, below the row (the title's Edit is above it).
+        let edits = app.buttons.matching(NSPredicate(format: "label == 'Edit'")).allElementsBoundByIndex
+        edits.max { $0.frame.minY < $1.frame.minY }?.tap()
+        wait(app.textFields["Rename app"], "the space's name field")
+        shot("spaces-edit")
+        // The delete control (the red minus before the name) asks as Terminate… does; Cancel leaves every row.
+        app.buttons["Delete app"].tap()
+        let terminate = app.alerts.firstMatch
+        wait(terminate, "Terminate's question")
+        XCTAssertTrue(terminate.label.contains("app"), terminate.label)
+        terminate.buttons["Cancel"].tap()
+        XCTAssertTrue(terminate.waitForNonExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 0.5)
+        shot("spaces-edit-cancelled")
+        XCTAssertTrue(app.textFields["Rename e2e"].exists, "Cancel leaves every row")
+        let handle = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'app'")).firstMatch
+        let below = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'e2e'")).firstMatch
+        wait(handle, "app's handle")
+        handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.6, thenDragTo: below.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.6)),
+                     withVelocity: .slow, thenHoldForDuration: 0.6)
+        Thread.sleep(forTimeInterval: 1)
+        shot("spaces-edit-dragged")
+        // Dropped past the host's last space, in the gap before the next host's: it goes last, not back.
+        XCTAssertGreaterThan(app.textFields["Rename app"].frame.minY, app.textFields["Rename e2e"].frame.minY, "moved in Edit")
+        // A host's header is a handle too: mba2 dropped under studio's spaces goes after studio, its spaces with it.
+        let host = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'mba2'")).firstMatch
+        let billing = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'billing'")).firstMatch
+        wait(host, "mba2's handle")
+        host.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.6,
+            thenDragTo: billing.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)), withVelocity: .slow, thenHoldForDuration: 0.6)
+        Thread.sleep(forTimeInterval: 1)
+        shot("spaces-edit-host-dragged")
+        XCTAssertGreaterThan(app.buttons["mba2 details"].frame.minY, app.buttons["studio details"].frame.minY, "mba2 after studio")
+        XCTAssertGreaterThan(app.textFields["Rename e2e"].frame.minY, app.buttons["mba2 details"].frame.minY, "its spaces with it")
+        // Back, so the rest of the test finds mba2 first.
+        let back = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'mba2'")).firstMatch
+        let studio = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reorder' AND label CONTAINS 'studio'")).firstMatch
+        back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.6,
+            thenDragTo: studio.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)), withVelocity: .slow, thenHoldForDuration: 0.6)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertLessThan(app.buttons["mba2 details"].frame.minY, app.buttons["studio details"].frame.minY, "mba2 first again")
+        app.buttons["Done"].tap()
+        wait(first)
+        Thread.sleep(forTimeInterval: 1)
+        shot("spaces-edit-done")
+        XCTAssertGreaterThan(first.frame.minY, second.frame.minY, "the order stays after Done")
+    }
+
     /// P2: the space's menu behind its title capsule (P2c), the sort menu, a row's swipe (P2b) and Move to, New tab held
     /// (P2e), New chat, and Edit (P2d) with its name fields.
     func testSpaceScreen() {
@@ -114,6 +212,12 @@ final class SpacesUITests: XCTestCase {
         app.buttons["By time"].tap()
         zsh.press(forDuration: 1.2)
         wait(app.buttons["Move to"], "the row's Move to")
+        // Edit in Rename…'s place, Move to under it, then Detach and Close Tab.
+        XCTAssertFalse(app.buttons["Rename…"].exists, "renaming is Edit's")
+        XCTAssertLessThan(app.buttons["Edit"].frame.minY, app.buttons["Move to"].frame.minY)
+        XCTAssertLessThan(app.buttons["Move to"].frame.minY, app.buttons["Detach"].frame.minY)
+        XCTAssertLessThan(app.buttons["Detach"].frame.minY, app.buttons["Close Tab"].frame.minY)
+        shot("space-row-menu")
         app.buttons["Move to"].tap()
         wait(app.buttons["e2e"], "the host's other spaces")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
@@ -152,14 +256,14 @@ final class SpacesUITests: XCTestCase {
         wait(app.buttons["Search"], "the conversation's items")
         XCTAssertTrue(app.buttons["Side Conversation"].exists)
         XCTAssertFalse(app.buttons["Side Conversation with Changes"].exists, "a side conversation with changes is /side's")
-        // Search, then Stats, then the side conversation; Detach before Close Tab.
+        shot("tab-header-menu")
+        // Search, then Stats, then the side conversation; Rename…, Move to, then Close Tab; Detach is the rows'.
         XCTAssertLessThan(app.buttons["Search"].frame.minY, app.buttons["Stats"].frame.minY)
         XCTAssertLessThan(app.buttons["Stats"].frame.minY, app.buttons["Side Conversation"].frame.minY)
-        XCTAssertLessThan(app.buttons["Detach"].frame.minY, app.buttons["Close Tab"].frame.minY)
+        XCTAssertLessThan(app.buttons["Rename…"].frame.minY, app.buttons["Move to"].frame.minY)
+        XCTAssertLessThan(app.buttons["Move to"].frame.minY, app.buttons["Close Tab"].frame.minY)
         XCTAssertFalse(app.buttons["Conversation Mode"].exists, "conversation mode is the composer's")
-        XCTAssertTrue(app.buttons["Rename…"].exists)
-        XCTAssertTrue(app.buttons["Close Tab"].exists)
-        XCTAssertTrue(app.buttons["Detach"].exists)
+        XCTAssertFalse(app.buttons["Detach"].exists, "Detach is the rows'")
         XCTAssertFalse(app.buttons["Terminate…"].exists, "Close Tab asks while work runs")
         XCTAssertTrue(app.buttons["Stats"].exists)
         app.buttons["Rename…"].tap()
