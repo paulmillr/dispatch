@@ -339,6 +339,28 @@ pub fn page<'a>(
                         if let Some(seconds) = payload.get("completed_at").and_then(Value::signed) {
                             record.time_ms = Some(seconds * 1000);
                         }
+                        // A turn that failed (a refusal, a model or connection error) says why in the
+                        // transcript, before its end: a notice, never the agent's attention, which only
+                        // a prompt the terminal answers raises. One id live (this rollout followed) and
+                        // reloaded.
+                        if let Some(message) = payload
+                            .get("error")
+                            .and_then(|error| string(error, "message"))
+                            .filter(|message| !message.trim().is_empty())
+                        {
+                            if page.records.len() == 400 {
+                                page.records.remove(0);
+                                page.earlier = Some(start.to_string());
+                            }
+                            page.records.push(Record {
+                                id: format!("turn-error:{turn}"),
+                                turn: Some(turn.clone()),
+                                kind: RecordKind::Notice,
+                                text: message.into(),
+                                time_ms: record.time_ms,
+                                ..Record::default()
+                            });
+                        }
                     }
                     "user_message" | "agent_message" => {
                         record.text = string(payload, "message").unwrap_or("").into();
@@ -666,3 +688,7 @@ pub fn lines(bytes: &[u8], offset: u64) -> impl Iterator<Item = (u64, &[u8])> {
             (at, &line[..line.len() - 1])
         })
 }
+
+#[cfg(test)]
+#[path = "history.test.rs"]
+mod tests;

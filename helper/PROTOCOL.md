@@ -266,6 +266,7 @@ Field contracts from the API:
 - `Snapshot.session`: Native session id and harness version from the transcript header.
 - `State.model_label`: Display label for `model` from the producer's verified catalog or menu; None shows the model id. c1654cc ChatModelPicker.swift:74-115.
 - `State.usage`: c1654cc ChatUsage JSON: {info:{total_token_usage:{input_tokens,output_tokens},last_token_usage:{total_tokens},model_context_window,total_cost_usd,subscription}}; missing counters remain absent. Pi: the session's totals as its footer adds them up (input and output without cache reads and writes), `subscription` true when the model is used through one (the cost is then what the tokens would cost).
+- `State.attention`: A prompt only Terminal can answer (an agent's menu over its input, an approval its TUI asks itself), or a connection to the agent that broke; cleared when it closes or the turn ends. A turn that ends in an error does not raise it: Codex's error is a `Notice` record before the turn's end (id `turn-error:<turn>`, live from the followed rollout and on reload).
 - `State.leaf`: Selected native transcript entry; c1654cc ChatCoordinator.swift:846.
 - `State.dialog`: Native dialog kind when Terminal is waiting; c1654cc PiBridge.swift:49-60.
 - `State.title`: Native session title; c1654cc ChatCoordinator.swift:888 (session.title = state.name).
