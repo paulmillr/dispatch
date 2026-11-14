@@ -86,6 +86,11 @@ enum Screens {
         case "N4c-usage-steps-ring-5h": UsageLimitsScreen(fiveHour: true)
         case "N4d-usage-steps-ring-low": UsageLimitsScreen(low: true)
         case "N4e-usage-steps-ring-5h-low": UsageLimitsScreen(fiveHour: true, low: true)
+        // A night theme ("dispatch-off"): today's for reference, then outline, dim fills, red night.
+        case "Z0-night-today": NightThemeScreen(palette: .today)
+        case "Z1-night-outline": NightThemeScreen(palette: .outline)
+        case "Z2-night-dim": NightThemeScreen(palette: .dim)
+        case "Z3-night-red": NightThemeScreen(palette: .red)
         // Message details.
         case "M1-message-info": MessageInfoScreen()
         case "M1b-message-info-unfolded": MessageInfoScreen(variant: .unfolded)

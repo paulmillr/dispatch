@@ -236,7 +236,8 @@ final class SettingsStyleTests: XCTestCase {
 
     func testSchemesAreDispatchsThenGhosttysWithSwatches() throws {
         let schemes = TerminalSchemes.all()
-        XCTAssertEqual(schemes.prefix(2).map(\.title), ["Dispatch", "Dispatch Gray"])
+        XCTAssertEqual(schemes.prefix(3).map(\.title), ["Dispatch", "Dispatch Night", "Dispatch Darkroom"])
+        XCTAssertFalse(schemes.contains { $0.file == "dispatch" }, "Dispatch Gray is the Mac's only")
         XCTAssertGreaterThan(schemes.count, 80, "Ghostty's bundled themes")
         let nord = try XCTUnwrap(schemes.first { $0.file == "Nord" })
         XCTAssertTrue(nord.isDark)
@@ -249,6 +250,40 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(parsed.background, .init(16, 32, 48))
         XCTAssertEqual(parsed.accents, [.init(255, 0, 0)], "red to cyan: 1 to 6 only")
         XCTAssertEqual(parsed.title, "Test")
+    }
+
+    /// A phone that chose Dispatch Gray shows Dispatch; a scheme the app does not have is no choice either.
+    func testARetiredOrMissingSchemeIsDispatch() {
+        XCTAssertNil(TerminalSchemes.stored("dispatch"))
+        XCTAssertNil(TerminalSchemes.stored("No Such Scheme"))
+        XCTAssertEqual(TerminalSchemes.stored("dispatch-night"), "dispatch-night")
+        let store = defaults()
+        store.set("dispatch", forKey: MobileSettings.terminalSchemeKey)
+        XCTAssertEqual(TerminalStyle(store).scheme, TerminalConfiguration.defaultScheme)
+    }
+
+    /// Chat follows the scheme (`ChatPalette`): Dispatch keeps the app's own colours; another scheme on the app's side
+    /// gives its background, text and accent; one on the other side keeps the app's; the night schemes are outlined.
+    @MainActor func testChatFollowsTheSchemeOnItsSide() throws {
+        XCTAssertEqual(ChatPalette.current(file: "dispatch-black", dark: true), .standard)
+        XCTAssertEqual(ChatPalette.current(file: nil, dark: true), .standard)
+        XCTAssertEqual(ChatPalette.current(file: "dispatch", dark: true), .standard, "retired: Dispatch's")
+        let nord = ChatPalette.current(file: "Nord", dark: true)
+        XCTAssertTrue(nord.themed)
+        XCTAssertNotNil(nord.agentFill)
+        XCTAssertTrue(nord.glass)
+        XCTAssertEqual(ChatPalette.current(file: "Nord", dark: false), .standard, "a dark scheme in light mode")
+        for night in ["dispatch-night", "dispatch-darkroom"] {
+            let palette = ChatPalette.current(file: night, dark: true)
+            XCTAssertTrue(palette.themed, night)
+            XCTAssertNil(palette.agentFill, night)
+            XCTAssertNil(palette.userFill, night)
+            XCTAssertNotNil(palette.agentBorder, night)
+            XCTAssertFalse(palette.glass, night)
+        }
+        let derived = try XCTUnwrap(ChatPalette.derived(file: "Test", text: "background = #000000\nforeground = #c0c0c0\npalette = 5=#ff00ff\n"))
+        XCTAssertTrue(derived.dark)
+        XCTAssertEqual(derived.palette.syntax.id, "Test")
     }
 
     // MARK: Appearance

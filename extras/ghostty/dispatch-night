@@ -1,0 +1,28 @@
+# dispatch-night — dispatch-black dimmed for the dark: the same hues at about 60%, on true black (iPhone only).
+
+background = #000000
+foreground = #9c9ca2
+cursor-color = #9c9ca2
+cursor-text = #000000
+selection-background = #1e1e22
+selection-foreground = #b8b8be
+
+# ANSI 0–7: black, red, green, yellow, blue, magenta, cyan, white.
+palette = 0=#121214
+palette = 1=#864a4a
+palette = 2=#4c7f61
+palette = 3=#826b40
+palette = 4=#4c6479
+palette = 5=#864a86
+palette = 6=#436b66
+palette = 7=#79797c
+
+# ANSI 8–15: bright variants.
+palette = 8=#37373c
+palette = 9=#8e5d5d
+palette = 10=#628871
+palette = 11=#8b7a56
+palette = 12=#627686
+palette = 13=#6b618a
+palette = 14=#5c7d79
+palette = 15=#8e8e90

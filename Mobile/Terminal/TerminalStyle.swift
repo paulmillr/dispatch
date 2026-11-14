@@ -69,7 +69,7 @@ struct TerminalStyle: Equatable, Sendable {
 
     init(_ defaults: UserDefaults) {
         font = TerminalFont.named(defaults.string(forKey: MobileSettings.terminalFontKey))
-        scheme = defaults.string(forKey: MobileSettings.terminalSchemeKey).flatMap { TerminalSchemes.url($0) == nil ? nil : $0 }
+        scheme = TerminalSchemes.stored(defaults.string(forKey: MobileSettings.terminalSchemeKey))
             ?? TerminalConfiguration.defaultScheme
         textContrast = defaults.string(forKey: MobileSettings.textContrastKey).flatMap(TextContrast.init(rawValue:))
             ?? .lightThemes

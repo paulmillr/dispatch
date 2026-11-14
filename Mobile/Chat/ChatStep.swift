@@ -27,6 +27,8 @@ struct ChatStepBadge: View {
     /// Every badge's word: the widest sets the width, laid out but not drawn.
     private static let words: [ChatStep.Kind] = [.read, .patch, .run, .search, .think, .web, .tool]
     @ScaledMetric(relativeTo: .caption2) private var icon: CGFloat = 12
+    @Environment(\.chatPalette) private var palette
+    private var tint: Color { palette.monochrome ?? kind.tint }
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: kind.symbol)
@@ -38,11 +40,11 @@ struct ChatStepBadge: View {
                 Self.word(kind)
             }
         }
-        .foregroundStyle(kind.tint)
+        .foregroundStyle(tint)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .frame(minHeight: 20)
-        .background(kind.tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(kind.label)

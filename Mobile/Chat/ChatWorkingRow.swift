@@ -301,7 +301,7 @@ struct ChatWorkingRow: View {
                     // Beside the clock, quiet as the chevron. Held 3 s it stops; a touch brings up the capsule that
                     // says so, which fills while it is held.
                     ChatWorkingDisc(size: disclosure) {
-                        RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(0.85)).frame(width: 9, height: 9)
+                        RoundedRectangle(cornerRadius: 2).fill(stopInk.opacity(0.85)).frame(width: 9, height: 9)
                     }
                     .opacity(session.stopping ? 0.5 : 1)
                     .scaleEffect(pressing ? 0.92 : 1)
@@ -441,6 +441,9 @@ struct ChatWorkingRow: View {
 
     @ScaledMetric(relativeTo: .subheadline) private var glyph: CGFloat = 16
     @ScaledMetric(relativeTo: .subheadline) private var disclosure: CGFloat = 28
+    @Environment(\.chatPalette) private var palette
+    /// Stop's square: the thread's ink (`ChatPalette`).
+    private var stopInk: Color { palette.monochrome ?? palette.ink }
 }
 
 /// What holding Stop does, over the working row: a glass capsule saying "Hold to stop" that fills as Stop is held
@@ -570,6 +573,7 @@ struct ChatLimitsLine: View {
 
     let state: Shown
     let action: () -> Void
+    @Environment(\.chatPalette) private var palette
     var named = true
     var now = Date()
 
@@ -604,14 +608,14 @@ struct ChatLimitsLine: View {
         case .ask:
             Button("Show limits", action: action)
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.dispatchPink)
+                .foregroundStyle(palette.accent)
                 .accessibilityIdentifier("chat-limits-ask")
         case .reading:
             ProgressView().controlSize(.mini).accessibilityLabel("Reading limits")
         case .failed(let reason):
             Button("Retry limits", action: action)
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.dispatchPink)
+                .foregroundStyle(palette.accent)
                 .accessibilityHint("Couldn't read limits: \(reason)")
                 .accessibilityIdentifier("chat-limits-retry")
         case .windows(let all):
@@ -810,6 +814,7 @@ struct ChatWorkingAccessibility: ViewModifier {
 struct ChatStepLogRow: View {
     let step: ChatStep?
     var live = false
+    @Environment(\.chatPalette) private var palette
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -844,7 +849,7 @@ struct ChatStepLogRow: View {
             let symbol = step.failed ? "exclamationmark.circle" : step.running ? "circle.dotted" : "checkmark.circle"
             Image(systemName: symbol)
                 .font(.footnote)
-                .foregroundStyle(step.failed ? Color.caution : step.running ? Color.secondary : Color.added)
+                .foregroundStyle(palette.monochrome ?? (step.failed ? Color.caution : step.running ? Color.secondary : Color.added))
                 .accessibilityLabel(step.failed ? "Failed" : step.running ? "Running" : "Completed")
         }
     }

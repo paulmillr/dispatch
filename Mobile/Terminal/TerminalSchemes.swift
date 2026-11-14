@@ -1,8 +1,9 @@
 import Foundation
 
-/// The terminal's color schemes (Settings, Terminal, Color scheme): Dispatch's two (the app's `ghostty` folder,
-/// `extras/ghostty`) and Ghostty's bundled themes (the app's `themes` folder, `Vendor/Term/Resources/ghostty/themes`),
-/// the files the Mac's scheme picker lists.
+/// The terminal's color schemes (Settings, Terminal, Color scheme): Dispatch's (the app's `ghostty` folder,
+/// `extras/ghostty`: Dispatch, and the phone's own Dispatch Night and Dispatch Darkroom) and Ghostty's bundled themes
+/// (the app's `themes` folder, `Vendor/Term/Resources/ghostty/themes`), the files the Mac's scheme picker lists. Chat
+/// takes its colours from the scheme too (`ChatPalette`).
 enum TerminalSchemes {
     /// One scheme: its file name, the name shown, and what its swatch draws.
     struct Scheme: Identifiable, Equatable, Sendable {
@@ -40,10 +41,17 @@ enum TerminalSchemes {
         }
     }
 
-    /// Dispatch's own, first in the list, by their titles (SchemeGroup.titles).
-    static let dispatch = Dictionary(uniqueKeysWithValues: ["dispatch-black", "dispatch"].map {
-        ($0, SchemeGroup.title($0))
-    })
+    /// Dispatch's own, first in the list in this order, by their titles (SchemeGroup.titles).
+    static let own = ["dispatch-black", "dispatch-night", "dispatch-darkroom"]
+    static let dispatch = Dictionary(uniqueKeysWithValues: own.map { ($0, SchemeGroup.title($0)) })
+    /// Dispatch Gray (`dispatch`): the Mac's, no longer the phone's. A phone that chose it shows Dispatch.
+    static let retired = ["dispatch"]
+
+    /// The scheme a stored choice stands for: nil for none, a retired scheme's or one the app does not have.
+    static func stored(_ file: String?) -> String? {
+        guard let file, !retired.contains(file), url(file) != nil else { return nil }
+        return file
+    }
 
     static var dispatchFolder: URL { Bundle.main.bundleURL.appendingPathComponent("ghostty") }
     static var ghosttyFolder: URL { Bundle.main.bundleURL.appendingPathComponent("themes") }
@@ -57,7 +65,7 @@ enum TerminalSchemes {
     /// The name the row shows (SchemeGroup.title): a few by title, the rest by file name.
     static func title(_ file: String) -> String { SchemeGroup.title(file) }
 
-    /// Every scheme the app has: Dispatch and Dispatch Gray, then Ghostty's by name.
+    /// Every scheme the app lists: Dispatch's own, then Ghostty's by name (a retired one of Dispatch's left out).
     static func all(folders: [URL] = [dispatchFolder, ghosttyFolder]) -> [Scheme] {
         var files: [URL] = []
         for folder in folders {
@@ -68,8 +76,8 @@ enum TerminalSchemes {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
             return parse(text, file: url.lastPathComponent)
         }
-        let own = ["dispatch-black", "dispatch"].compactMap { file in schemes.first { $0.file == file } }
-        let rest = schemes.filter { dispatch[$0.file] == nil }
+        let own = Self.own.compactMap { file in schemes.first { $0.file == file } }
+        let rest = schemes.filter { dispatch[$0.file] == nil && !retired.contains($0.file) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         return own + rest
     }

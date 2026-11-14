@@ -53,6 +53,7 @@ struct MobileChatMarkdownView: View {
     @Environment(\.chatSearchMarks) private var marks
     @Environment(\.chatSearchCurrent) private var current
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.chatPalette) private var palette
 
     /// One block's runs of text, as drawn.
     enum Content {
@@ -65,14 +66,14 @@ struct MobileChatMarkdownView: View {
     /// The blocks' runs of text in drawing order, each passed through `marker` (which counts and highlights matches);
     /// `code` is inline code's font and `emphasis` emphasized text's in the chat font (`MobileChatMarkdown.text`); tables
     /// and the first two heading levels draw in system styles, which italicize themselves.
-    static func contents(_ text: String, code: Font? = nil, emphasis: Font? = nil,
+    static func contents(_ text: String, code: Font? = nil, emphasis: Font? = nil, syntax: CodeSyntax.Colors = .standard,
                          marker: inout ChatSearchMarker) -> (blocks: [Content], truncated: Bool) {
         let rendered = TextRendering.rich(text)
         let blocks = ChatMarkdownBlock.parse(rendered.text).map { block -> Content in
             switch block.kind {
             case .code(let language):
                 let preview = TextRendering.prefix(block.text, scalars: 32_768)
-                return .code(lines: CodeSyntax.lines(preview.text, language: language).map { marker.mark($0) },
+                return .code(lines: CodeSyntax.lines(preview.text, language: language, colors: syntax).map { marker.mark($0) },
                              truncated: preview.truncated)
             case .rule:
                 return .rule
@@ -90,11 +91,12 @@ struct MobileChatMarkdownView: View {
 
     /// `contents` with nothing marked, kept by text and fonts: a thread draws every bubble when it opens and again as
     /// the rows around it change, and parsing, the link checks and highlighting were most of what a bubble cost.
-    static func contents(_ text: String, code: Font?, emphasis: Font?) -> (blocks: [Content], truncated: Bool) {
-        let key = Parsed(text: text, code: code, emphasis: emphasis)
+    static func contents(_ text: String, code: Font?, emphasis: Font?, syntax: CodeSyntax.Colors = .standard)
+        -> (blocks: [Content], truncated: Bool) {
+        let key = Parsed(text: text, code: code, emphasis: emphasis, syntax: syntax.id)
         if let parsed = parsed[key] { return parsed }
         var none = ChatSearchMarker(query: "", current: nil)
-        let contents = contents(text, code: code, emphasis: emphasis, marker: &none)
+        let contents = contents(text, code: code, emphasis: emphasis, syntax: syntax, marker: &none)
         // A streamed message leaves a parse per update behind: the cache starts over rather than tracking use.
         parsed.insert(contents, for: key, source: text)
         return contents
@@ -104,6 +106,8 @@ struct MobileChatMarkdownView: View {
         let text: String
         let code: Font?
         let emphasis: Font?
+        /// The code's colours (`CodeSyntax.Colors.id`): they are baked into the lines.
+        let syntax: String
     }
     private static var parsed = ChatTextCache<Parsed, (blocks: [Content], truncated: Bool)>(
         limit: .init(count: ChatMarkdownCacheBounds.document.count, bytes: ChatMarkdownCacheBounds.document.bytes))
@@ -112,9 +116,10 @@ struct MobileChatMarkdownView: View {
     private var shownContents: (blocks: [Content], truncated: Bool) {
         let text = typing?.layout.source ?? text
         guard var marker = ChatSearchMarker(marks, current: current) else {
-            return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis)
+            return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, syntax: palette.syntax)
         }
-        return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, marker: &marker)
+        return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, syntax: palette.syntax,
+                             marker: &marker)
     }
 
     var body: some View {
@@ -160,7 +165,7 @@ struct MobileChatMarkdownView: View {
                 }
             }
         }
-        .foregroundStyle(muted ? Color.secondary : Color.primary)
+        .foregroundStyle(muted ? palette.muted : palette.ink)
         .overlay(alignment: .bottomTrailing) {
             if inline, let corner {
                 // 12 points in from the bubble's edge and 7 up (its padding is 14 and 9).
@@ -246,7 +251,7 @@ struct MobileChatMarkdownView: View {
             .padding(.leading, CGFloat(depth) * 12)
         case .text(.quote, let text):
             HStack(spacing: 8) {
-                Rectangle().fill(Color.secondary.opacity(0.5)).frame(width: 2)
+                Rectangle().fill(palette.muted.opacity(0.5)).frame(width: 2)
                 runs(text, room: room, typing: typing).foregroundStyle(.secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -263,9 +268,13 @@ struct MobileChatMarkdownView: View {
                 .font(typography.code)
                 .padding(10)
             }
-            .background(Color.faintFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+                if let fill = palette.codeFill { shape.fill(fill) }
+                if let border = palette.codeBorder { shape.strokeBorder(border, lineWidth: 1) }
+            }
         case .rule:
-            Rectangle().fill(Color.hairline).frame(height: 1)
+            Rectangle().fill(palette.hairline).frame(height: 1)
         case .table(let rows):
             ScrollView(.horizontal, showsIndicators: false) {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
@@ -275,7 +284,7 @@ struct MobileChatMarkdownView: View {
                                 Text(cell).fontWeight(index == 0 ? .semibold : nil).fixedSize()
                             }
                         }
-                        if index == 0 { Rectangle().fill(Color.hairline).frame(height: 1).gridCellUnsizedAxes(.horizontal) }
+                        if index == 0 { Rectangle().fill(palette.hairline).frame(height: 1).gridCellUnsizedAxes(.horizontal) }
                     }
                 }
                 .font(.footnote)

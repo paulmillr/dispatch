@@ -1,0 +1,28 @@
+# dispatch-darkroom — a red safelight: every colour a shade of dim red on true black, for night vision (iPhone only).
+
+background = #000000
+foreground = #b0403c
+cursor-color = #c24a44
+cursor-text = #000000
+selection-background = #2a0c0b
+selection-foreground = #d45a52
+
+# ANSI 0–7: black, red, green, yellow, blue, magenta, cyan, white (all red, apart in brightness).
+palette = 0=#120404
+palette = 1=#b0403c
+palette = 2=#8e3632
+palette = 3=#c24a44
+palette = 4=#7a2a28
+palette = 5=#d0584f
+palette = 6=#9a3a36
+palette = 7=#a83e3a
+
+# ANSI 8–15: bright variants.
+palette = 8=#4e1a19
+palette = 9=#c84c46
+palette = 10=#a0403b
+palette = 11=#d45a52
+palette = 12=#8e3632
+palette = 13=#c4504a
+palette = 14=#a8443f
+palette = 15=#c4504a

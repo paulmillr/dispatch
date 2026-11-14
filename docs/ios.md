@@ -792,10 +792,20 @@ The policies below are the ones a change must keep; the screens themselves are d
   pastes sit under Hosts. Terminal
   font (`TerminalFont.all`: the Mac's list in its order, Source Code Pro, Menlo, then every font the Mac bundles, in
   `TermFonts`), Ligatures (on, the Mac's `fontLigatures`: off writes `font-feature = -calt, -liga, -dlig`), colour scheme (Ghostty's bundled
-  themes and Dispatch's two, by side and `SchemeGroup`: Dispatch, true black, leads Dark · OLED, Dispatch Gray leads
-  Dark · Graphite; `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
+  themes and Dispatch's own, by side and `SchemeGroup`: Dispatch (true black), Dispatch Night (`dispatch-night`, its
+  colours at about 60%) and Dispatch Darkroom (`dispatch-darkroom`, every colour a dim red) lead Dark · OLED; the
+  phone's own, the Mac does not list the night two; Dispatch Gray is the Mac's only, and a phone that chose it shows
+  Dispatch, `TerminalSchemes.stored`; `dispatch-black` by default and kept in light mode), contrast (`TextContrast`, shared) and line spacing
   (`LineSpacing`, shared, one key for terminal and chat); each change posts `TerminalStyle.changed` and every open
-  presence restyles at once, keeping its own size. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
+  presence restyles at once, keeping its own size. Chat follows the scheme as the Mac's does (`ChatPalette`, from the
+  Mac's `ChatTheme` rule): the thread and the tab under its header on the scheme's background, text in its foreground
+  (secondary and tertiary text blended toward the background), the agent's bubble a tenth of the way to the
+  foreground, the user's in its ANSI magenta with the background as its text, code blocks and Markdown code in its
+  colours (the highlighted lines' cache keys on the scheme). Dispatch keeps the app's own colours, and so does a scheme
+  on the other side from the appearance (a dark scheme in light mode). Night and Darkroom are outlined: no fills,
+  hairline bubbles and code blocks, the composer flat with a hairline instead of glass; Darkroom also turns the fixed
+  marks (step badges, status marks, the composer's +, Show limits) its red. The tab's header capsule stays the app's.
+  The palette is worked out once per scheme and side, so a scrolling thread reads values only. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
   at the standard text size and drawn scaled as body text scales (`TerminalAdaptation.fontSize`, capped at XXXL's
   ×1.32); a text-size change moves every open terminal by the change; every font at Source Code Pro's apparent size
   (`TerminalFontScale`, shared). Chat font and text size (`ChatTypography`, following Dynamic Type). Times on swipe

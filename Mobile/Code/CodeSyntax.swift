@@ -23,6 +23,15 @@ enum CodeSyntax {
         private static let colors: [Role: Color] = Dictionary(uniqueKeysWithValues: allCases.map { ($0, Color(uiColor: $0.uiColor)) })
     }
 
+    /// The colour of each role: the app's (`standard`), or a scheme's (`ChatPalette`); `id` keys caches of coloured text.
+    struct Colors: Equatable {
+        let id: String
+        let colors: [Role: Color]
+        subscript(role: Role) -> Color { colors[role] ?? role.color }
+        static let standard = Colors(id: "app", colors: [:])
+        static func == (a: Self, b: Self) -> Bool { a.id == b.id }
+    }
+
     struct Token: Equatable, Sendable {
         let range: NSRange
         let role: Role
@@ -56,7 +65,7 @@ enum CodeSyntax {
 
     /// `code` cut into lines, each as attributed text in the palette (SwiftUI colours): one pass over the whole text, so
     /// a string or comment that spans lines keeps its colour on every line.
-    static func lines(_ code: String, language: String) -> [AttributedString] {
+    static func lines(_ code: String, language: String, colors: Colors = .standard) -> [AttributedString] {
         let code = TextRendering.visible(code)
         let source = code as NSString
         var lines: [AttributedString] = []
@@ -67,7 +76,7 @@ enum CodeSyntax {
             let next = source.range(of: "\n", range: NSRange(location: start, length: source.length - start))
             let end = next.location == NSNotFound ? source.length : next.location
             var line = AttributedString(source.substring(with: NSRange(location: start, length: end - start)))
-            line.foregroundColor = Role.plain.color
+            line.foregroundColor = colors[.plain]
             lines.append(line)
             guard next.location != NSNotFound else { break }
             start = end + 1
@@ -83,7 +92,7 @@ enum CodeSyntax {
                 let lower = max(token.range.location, lineStart) - lineStart
                 let upper = min(NSMaxRange(token.range), lineStart + lineLength) - lineStart
                 if upper > lower {
-                    if let range = Self.range(lower..<upper, in: lines[line]) { lines[line][range].foregroundColor = token.role.color }
+                    if let range = Self.range(lower..<upper, in: lines[line]) { lines[line][range].foregroundColor = colors[token.role] }
                 }
                 line += 1
             }

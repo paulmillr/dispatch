@@ -80,6 +80,11 @@ struct ChatThreadView: View {
     @Namespace private var attachmentZoom
     @ScaledMetric(relativeTo: .caption2) private var revealWidth = ChatRevealDetail.width
     @ReduceMotion private var reduceMotion
+    /// Settings › Terminal's colour scheme, which chat's colours follow (`ChatPalette`).
+    @AppStorage(MobileSettings.terminalSchemeKey) private var schemeFile: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: ChatPalette { ChatPalette.current(file: schemeFile, dark: colorScheme == .dark) }
 
     /// Whether the composer takes focus when the thread appears: when asked (a new chat, M3b), or when the tab opens in
     /// the split's detail column while a hardware keyboard is attached, so typing goes straight to the agent as on the
@@ -116,7 +121,7 @@ struct ChatThreadView: View {
         }
         .environment(\.chatOpenAttachment, { previewing = $0 })
         .environment(\.chatAttachmentZoom, zoomSpace)
-        .background(Color.canvas)
+        .modifier(ChatPaletteScope(palette: palette))
         // A floating keyboard sits over the thread, as the terminal's capsule leaves it: SwiftUI's inset for it lifted
         // the composer part of the way, under the keyboard. The user moves the keyboard; a docked one still raises it.
         .ignoresSafeArea(.keyboard, edges: floatingKeyboard ? .bottom : [])
@@ -1203,4 +1208,21 @@ struct ChatScrollSample: Equatable {
     var height: CGFloat
     /// The content's height: rows drawn, grown or gone, which a following thread keeps its end through (`pinToEnd`).
     var content: CGFloat = 0
+}
+
+/// The thread in its scheme's colours (`ChatPalette`): the canvas, and for a scheme's palette text's primary, secondary
+/// and tertiary styles, so every `.secondary` in the thread is the scheme's muted ink.
+private struct ChatPaletteScope: ViewModifier {
+    let palette: ChatPalette
+
+    func body(content: Content) -> some View {
+        if palette.themed {
+            content
+                .foregroundStyle(palette.ink, palette.muted, palette.faint)
+                .environment(\.chatPalette, palette)
+                .background(palette.canvas.ignoresSafeArea())
+        } else {
+            content.environment(\.chatPalette, palette).background(palette.canvas)
+        }
+    }
 }
