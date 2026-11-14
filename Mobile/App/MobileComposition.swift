@@ -165,7 +165,8 @@ final class MobileComposition {
         }
         tabs.status = { host, terminal in
             guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key) else { return nil }
-            return Self.status(row, session: conversations.sessions[key])
+            // As Agents' rows: the step's kind, never the command or file.
+            return Self.status(row, session: conversations.sessions[key], detail: false)
         }
         let presences = presences
         tabs.paneTitle = { host, key in presences.presence(.init(host: host, node: key))?.title }
@@ -618,7 +619,8 @@ final class MobileComposition {
     /// `workingSince`); while it waits, the approval or question ("Allow cargo test --workspace?", as the watch's
     /// `waitingText`); once done, its last message. The model stays in the chat; the agent is the row's mark. Reads
     /// the session's cached step (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row.
-    /// `detail` false (Agents): the step by its kind only ("Running shell command…"), never the command or file.
+    /// `detail` false (Agents and Spaces): the step by its kind only ("Running shell command…"), never the command or
+    /// file; the watch keeps the step's words.
     static func status(_ row: ChatConversation, session: MobileChatSession?, detail: Bool = true) -> TabsStatus? {
         if let session, session.phase == .verified {
             if session.waitingForUser { return TabsStatus(text: WatchSnapshotBuilder.waiting(session) ?? "needs you") }
