@@ -802,9 +802,10 @@ The policies below are the ones a change must keep; the screens themselves are d
   (secondary and tertiary text blended toward the background), the agent's bubble a tenth of the way to the
   foreground, the user's in its ANSI magenta with the background as its text, code blocks and Markdown code in its
   colours (the highlighted lines' cache keys on the scheme). Dispatch keeps the app's own colours, and so does a scheme
-  on the other side from the appearance (a dark scheme in light mode). Night and Darkroom are outlined: no fills,
+  on the other side from the appearance (a dark scheme in light mode). Night (`dispatch-night`, dispatch-black at about 75%, its secondary and tertiary text nearer the foreground so the steps line and the plan's limits stay legible) and Darkroom are outlined: no fills (Night's own bubbles excepted: filled as Dispatch's, in its dimmed accent with black text),
   hairline bubbles and code blocks, the composer flat with a hairline instead of glass; Darkroom also turns the fixed
-  marks (step badges, status marks, the composer's +, Show limits) its red. The tab's header capsule stays the app's.
+  marks (step badges, status marks, change counts, a limit past 80 %, the composer's +, Show limits) its red. A limit ring's filled
+  part is one step brighter than the line's text under 80 %, over a faint track. The tab's header capsule stays the app's.
   The palette is worked out once per scheme and side, so a scrolling thread reads values only. Terminal font size: 12 on iPhone, 14.5 on iPad, kept as the size
   at the standard text size and drawn scaled as body text scales (`TerminalAdaptation.fontSize`, capped at XXXL's
   ×1.32); a text-size change moves every open terminal by the change; every font at Source Code Pro's apparent size

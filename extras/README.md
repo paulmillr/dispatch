@@ -10,7 +10,7 @@ the syntax palette in `design/Syntax highlight.dc.html`.
 ## Ghostty
 
 `ghostty/dispatch` and `ghostty/dispatch-black`. Copy either to `~/.config/ghostty/themes/` and set
-`theme = dispatch` or `theme = dispatch-black`. `ghostty/dispatch-night` (dispatch-black at about 60%) and
+`theme = dispatch` or `theme = dispatch-black`. `ghostty/dispatch-night` (dispatch-black at about 75%) and
 `ghostty/dispatch-darkroom` (dim red only) are the iPhone's night schemes, which the Mac does not bundle; they work in
 Ghostty the same way.
 

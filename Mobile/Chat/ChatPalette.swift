@@ -79,7 +79,11 @@ struct ChatPalette: Equatable {
             userText: background.color, codeFill: blend(0.05), codeBorder: nil, hairline: foreground.color.opacity(0.15),
             accent: accent, syntax: syntax, glass: true, chromeBorder: nil, themed: true)
         if outlined.contains(file) {
-            // Z1: hairlines on black, nothing filled; the user's bubble outlined in the accent, its text the accent.
+            // Z1: hairlines on black, nothing filled; the user's bubble outlined in the accent, its text the accent. The
+            // dim schemes' secondary and tertiary text sit nearer the foreground, or the faintest (the steps line, the
+            // plan's limits) would be all but black.
+            palette.muted = blend(0.78)
+            palette.faint = blend(0.6)
             palette.agentFill = nil
             palette.agentBorder = blend(0.18)
             palette.userFill = nil
@@ -91,6 +95,12 @@ struct ChatPalette: Equatable {
             palette.glass = false
             palette.chromeBorder = blend(0.18)
             if file == "dispatch-darkroom" { palette.monochrome = accent }
+            if file == "dispatch-night" {
+                // The user's bubble filled, as Dispatch's: the dimmed accent with black text, the agent's still outlined.
+                palette.userFill = accent
+                palette.userBorder = nil
+                palette.userText = background.color
+            }
         }
         return (palette, dark)
     }

@@ -277,7 +277,12 @@ final class SettingsStyleTests: XCTestCase {
             let palette = ChatPalette.current(file: night, dark: true)
             XCTAssertTrue(palette.themed, night)
             XCTAssertNil(palette.agentFill, night)
-            XCTAssertNil(palette.userFill, night)
+            if night == "dispatch-night" {
+                XCTAssertNotNil(palette.userFill, "Night fills the user's bubbles, as Dispatch")
+                XCTAssertNil(palette.userBorder)
+            } else {
+                XCTAssertNil(palette.userFill, night)
+            }
             XCTAssertNotNil(palette.agentBorder, night)
             XCTAssertFalse(palette.glass, night)
         }

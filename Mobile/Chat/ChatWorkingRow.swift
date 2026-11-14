@@ -626,11 +626,11 @@ struct ChatLimitsLine: View {
             if let (main, short) = Self.windows(all, now: now) {
                 HStack(spacing: 5) {
                     ChatLimitRing(used: main.used)
-                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(Self.tone(main.used))
+                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(tone(main.used))
                     if let short {
                         Text("·")
                         ChatLimitRing(used: short.used)
-                        Text("\(short.title) \(short.used)%").foregroundStyle(Self.tone(short.used))
+                        Text("\(short.title) \(short.used)%").foregroundStyle(tone(short.used))
                     } else {
                         Text((named ? "· " : "") + Self.resets(main, now: now))
                     }
@@ -641,6 +641,12 @@ struct ChatLimitsLine: View {
                 .accessibilityIdentifier("chat-limits")
             }
         }
+    }
+
+    /// `Self.tone`, in Darkroom's one hue (`ChatPalette.monochrome`) past the warning thresholds.
+    private func tone(_ used: Int) -> AnyShapeStyle {
+        guard used >= 80, let mark = palette.monochrome else { return Self.tone(used) }
+        return AnyShapeStyle(mark)
     }
 
     func named(_ named: Bool) -> Self {
@@ -654,12 +660,19 @@ struct ChatLimitsLine: View {
 struct ChatLimitRing: View {
     let used: Int
     @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 12
+    @Environment(\.chatPalette) private var palette
+
+    /// The filled part: one step brighter than the line's text under 80% (secondary over its tertiary), so it stands
+    /// apart from the track; the warning tones from there.
+    private var fill: AnyShapeStyle {
+        used >= 80 ? palette.monochrome.map { AnyShapeStyle($0) } ?? ChatLimitsLine.tone(used) : AnyShapeStyle(.secondary)
+    }
 
     var body: some View {
         ZStack {
-            Circle().stroke(Color.hairline, lineWidth: 2.5)
+            Circle().stroke(palette.themed ? palette.faint.opacity(0.35) : Color.hairline, lineWidth: 2.5)
             Circle().trim(from: 0, to: CGFloat(min(100, max(0, used))) / 100)
-                .stroke(ChatLimitsLine.tone(used), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .stroke(fill, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: size, height: size)
@@ -929,10 +942,10 @@ struct ChatStepLogRow: View {
         guard let step else { return nil }
         switch step.kind {
         case .patch where step.additions + step.deletions > 0:
-            return Text("+\(step.additions)").foregroundStyle(ChatStep.added) + Text(" ")
-                + Text("−\(step.deletions)").foregroundStyle(ChatStep.removed)
+            return Text("+\(step.additions)").foregroundStyle(palette.monochrome ?? ChatStep.added) + Text(" ")
+                + Text("−\(step.deletions)").foregroundStyle(palette.monochrome ?? ChatStep.removed)
         case .run where step.failed:
-            return Text(step.detail ?? "failed").foregroundStyle(ChatStep.removed)
+            return Text(step.detail ?? "failed").foregroundStyle(palette.monochrome ?? ChatStep.removed)
         default:
             return step.detail.map { Text($0) }
         }
