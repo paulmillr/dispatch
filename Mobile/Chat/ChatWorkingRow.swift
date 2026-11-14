@@ -460,11 +460,28 @@ struct ChatStopHold: View {
     static let idle: Duration = .seconds(4)
 
     var body: some View {
+        ChatHoldCapsule(title: "Hold to stop", symbol: "stop.fill", tint: .destructive, pressing: pressing,
+                        progress: progress, identifier: "chat-stop-hold")
+    }
+}
+
+/// What a hold does, over the control being held (Stop's, the mic's): a glass capsule with its symbol and "Hold to …",
+/// "Keep holding…" while held, filling as the hold goes (`progress`, 0 to 1) and emptying if let go early. It only
+/// says; the control itself is held, so the thumb never moves.
+struct ChatHoldCapsule: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    let pressing: Bool
+    let progress: Double
+    let identifier: String
+
+    var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "stop.fill")
+            Image(systemName: symbol)
                 .font(.footnote)
-                .foregroundStyle(Color.destructive)
-            Text(pressing ? "Keep holding…" : "Hold to stop")
+                .foregroundStyle(tint)
+            Text(pressing ? "Keep holding…" : title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .contentTransition(.opacity)
@@ -474,7 +491,7 @@ struct ChatStopHold: View {
         .background(alignment: .leading) {
             GeometryReader { proxy in
                 Rectangle()
-                    .fill(Color.destructive.opacity(0.28))
+                    .fill(tint.opacity(0.28))
                     .frame(width: proxy.size.width * progress)
             }
         }
@@ -482,7 +499,7 @@ struct ChatStopHold: View {
         .glassEffect(.regular, in: Capsule())
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat-stop-hold")
+        .accessibilityIdentifier(identifier)
     }
 }
 

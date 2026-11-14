@@ -692,7 +692,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   The thread runs on under the header and the composer (a bottom `safeAreaBar`), with the soft scroll edge at both,
   as the side conversation's: left to the system, an iPhone drew the header's edge as the hard one (an opaque band
   ending in a line) where the simulator drew the soft one.
-  Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
+  The composer's mic starts dictation only once held a second, as Stop asks for its hold: a touch raises "Hold to
+  dictate" over it, filling while held, gone after 4 s untouched (VoiceOver activates it directly); a tap stops it.
+  Conversation mode starts from "+" (Conversation Mode), or the mic's VoiceOver action
   (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Read Aloud, in a
   message's long press and in message details' ⋯, reads that one message in the system's voice
   (`MobileMessageReader`): all of it, Markdown's marks gone, each code block and table said in a few words instead of

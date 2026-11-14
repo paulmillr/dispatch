@@ -8,8 +8,9 @@ import UniformTypeIdentifiers
 /// actions): "+" for attachments, conversation mode and the code keys, the field, and the slot (mic while the draft is empty,
 /// else the pink send; a tap sends as the draft goes now, a long press only offers the ways it can go, `sendOptions`:
 /// Send, or Send now and Queue while the agent works). Stop is on the working row (`ChatWorkingRow`). The mic dictates with
-/// Settings' engine (`Dictation`): what it hears fills the draft as it comes, and tapped again it stops; while it listens a
-/// capsule above the field says so, and after a failure, why. The field is a
+/// Settings' engine (`Dictation`) once held for a second, as Stop asks for its hold (a touch shows "Hold to dictate" over
+/// it, filling while held), so a stray tap beside the field starts nothing: what it hears fills the draft as it comes,
+/// and a tap stops it; while it listens a capsule above the field says so, and after a failure, why. The field is a
 /// `UITextView` that grows with the draft up to a bound and renders its Markdown as you type (`CodeTextView`). With a
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. With "Show code keys" picked
 /// under "+" (off by default, kept app-wide: `MobileSettings.composerCodeKeysKey`), while the field is focused a glass key row above the field
@@ -88,7 +89,7 @@ struct CodeComposer: View {
     var dictationOwner: AnyHashable = "composer"
     /// The draft's editor mode (`ChatDraft.multiline`): Return inserts a newline from a hardware keyboard.
     var multiline: Binding<Bool> = .constant(false)
-    /// A long press on the mic starts conversation mode (C5); nil: the mic only dictates.
+    /// Conversation mode (C5), the mic's VoiceOver action ("+" offers it too); nil: the mic only dictates.
     var converse: (() -> Void)? = nil
 
     @State private var editor = CodeEditorModel()
@@ -105,6 +106,17 @@ struct CodeComposer: View {
     /// The first Esc only arms the stop; another within a second stops the turn.
     @State private var stopArmed: Date?
     @ReduceMotion private var reduceMotion
+    /// The mic's hold to dictate (`dictationHold`): the hint is up, the mic is held, how far, whether it started.
+    @State private var micHint = false
+    @State private var micPressing = false
+    @State private var micProgress: Double = 0
+    @State private var micStarted = false
+    /// Changes as a press on the mic starts or ends: the hint's idle wait starts again.
+    @State private var micTouches = 0
+    @State private var micHintHeight: CGFloat = 44
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    /// How long the mic is held before dictation starts.
+    static let dictationHold: TimeInterval = 1
 
     /// The trailing slot: send for text or attachments, else the mic.
     static func slot(text: String, dictating: Bool = false, attached: Bool = false) -> Slot {
@@ -356,23 +368,64 @@ struct CodeComposer: View {
 
     /// The mic: a tap dictates (again: stops); with `converse`, a long press starts conversation mode instead.
     @ViewBuilder private func micSlot(dictating: Bool) -> some View {
-        let label = dictating ? (dictation.phase == .listening ? "Stop dictation" : "Cancel dictation") : "Dictate"
-        if let converse, !dictating {
-            // As the send slot's steer: a tap dictates, a long press starts conversation mode.
-            micGlyph(dictating: dictating)
-                .onTapGesture(perform: dictate)
-                .onLongPressGesture(minimumDuration: 0.5, perform: converse)
-                .accessibilityElement()
-                .accessibilityLabel(label)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction(.default, dictate)
-                .accessibilityAction(named: "Conversation mode", converse)
-                .padding(-8)
-        } else {
+        if dictating {
+            // Stopping is a tap: it ends nothing the user wanted.
             Button(action: dictate) { micGlyph(dictating: dictating) }
                 .buttonStyle(.plain)
                 .padding(-8)
-                .accessibilityLabel(label)
+                .accessibilityLabel(dictation.phase == .listening ? "Stop dictation" : "Cancel dictation")
+        } else {
+            // Starting takes a second's hold on the mic itself, as Stop's three: a touch shows what the hold does.
+            micGlyph(dictating: false)
+                .onLongPressGesture(minimumDuration: Self.dictationHold, maximumDistance: 40) {
+                    micStarted = true
+                    micHint = false
+                    micPressing = false
+                    micProgress = 0
+                    dictate()
+                } onPressingChanged: { press in
+                    micPressing = press
+                    micTouches += 1
+                    if press {
+                        micStarted = false
+                        micHint = true
+                        withAnimation(.linear(duration: Self.dictationHold)) { micProgress = 1 }
+                    } else if !micStarted {
+                        withAnimation(.easeOut(duration: 0.2)) { micProgress = 0 }
+                    }
+                }
+                .sensoryFeedback(.impact(weight: .light), trigger: micPressing) { old, new in !old && new }
+                .sensoryFeedback(.impact(weight: .medium), trigger: micStarted) { old, new in !old && new }
+                .overlay(alignment: .topTrailing) {
+                    if micHint {
+                        ChatHoldCapsule(title: "Hold to dictate", symbol: "mic.fill", tint: .dispatchPink,
+                                        pressing: micPressing, progress: micProgress, identifier: "composer-dictation-hold")
+                            .fixedSize()
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { micHintHeight = $0 }
+                            // Its foot just above the field.
+                            .offset(y: -micHintHeight - 6)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .bottomTrailing)))
+                    }
+                }
+                .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: micHint)
+                .task(id: micTouches) {
+                    // Untouched a while, the hint goes.
+                    guard micHint, !micPressing else { return }
+                    do { try await Task.sleep(for: ChatStopHold.idle) } catch { return }
+                    if !micPressing { micHint = false }
+                }
+                // VoiceOver: a double tap dictates (activating is already the second step); conversation mode as an
+                // action, as "+" offers it.
+                .accessibilityElement()
+                .accessibilityLabel("Dictate")
+                .accessibilityHint("Touch and hold for a second")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, dictate)
+                .accessibilityActions {
+                    if let converse { Button("Conversation mode", action: converse) }
+                }
+                .accessibilityIdentifier("composer-dictate")
+                .padding(-8)
         }
     }
 

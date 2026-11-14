@@ -223,6 +223,25 @@ final class TransitionUITests: XCTestCase {
         XCTAssertTrue(hold.waitForNonExistence(timeout: 3), "Held three seconds, it stops")
     }
 
+    /// The mic dictates only once held a second: a tap shows "Hold to dictate" and starts nothing, left alone it goes,
+    /// held a second dictation starts (or the system asks for the microphone first).
+    func testDictationNeedsAHold() {
+        let app = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M4a"])
+        rest()
+        let mic = app.descendants(matching: .any)["composer-dictate"]
+        let hint = app.descendants(matching: .any)["composer-dictation-hold"]
+        tap(mic)
+        XCTAssertTrue(hint.waitForExistence(timeout: 2), "a tap shows the hold")
+        XCTAssertTrue(mic.exists, "and starts nothing")
+        XCTAssertFalse(app.buttons["Stop dictation"].exists || app.buttons["Cancel dictation"].exists)
+        XCTAssertTrue(hint.waitForNonExistence(timeout: 7), "left alone, it goes")
+        mic.press(forDuration: 1.6)
+        let started = app.buttons["Stop dictation"].waitForExistence(timeout: 3) || app.buttons["Cancel dictation"].exists
+            || app.alerts.firstMatch.exists || XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch.exists
+            || app.descendants(matching: .any)["composer-dictation-status"].exists
+        XCTAssertTrue(started, "held a second, dictation starts")
+    }
+
     /// M5c's queue card collapses with Done and opens again from its caption.
     func testQueueCard() {
         let app = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5c"])
