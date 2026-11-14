@@ -38,6 +38,14 @@ final class SyntaxScannerTests: XCTestCase {
         XCTAssertEqual(SyntaxScanner.language("src/swift", profile: .desktop), "text")
         XCTAssertEqual(SyntaxScanner.language("guide.mdx", profile: .desktop), "markdown")
         XCTAssertEqual(SyntaxScanner.language("guide.mdx", profile: .mobile), "text")
+        // A language passed on is asked again (the file preview maps the name, then its text): each answer is itself.
+        for profile in SyntaxScanner.Profile.allCases {
+            for hint in ["a.sh", "a.js", "a.ts", "a.py", "a.swift", "a.json", "a.yml", "a.rs", "a.go", "a.c", "a.m", "a.css",
+                         "a.html", "a.sql", "a.diff", "a.md", "a.txt"] {
+                let language = SyntaxScanner.language(hint, profile: profile)
+                XCTAssertEqual(SyntaxScanner.language(language, profile: profile), language, "\(hint) \(profile)")
+            }
+        }
     }
 
     func testProfilesRetainTheirKeywordTypeConstantAndReceiverRoles() {

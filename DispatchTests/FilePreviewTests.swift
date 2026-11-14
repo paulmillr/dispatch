@@ -366,6 +366,14 @@ final class FilePreviewTests: XCTestCase {
 
     // MARK: Languages and formatting
 
+    /// A Rust (or C, Go, Java) file's preview is coloured: the loader's language ("code") is a language again.
+    func testARustFilePreviewIsHighlighted() {
+        let lines = FileTextLines()
+        let language = SyntaxHighlight.language("main.rs")
+        lines.prepare(.init(owner: ObjectIdentifier(lines), count: 1, language: language, theme: .standard)) { "fn main() {\n    let x = 1;\n}\n" }
+        XCTAssertNotNil(lines.highlighted, "a \(language) file is highlighted")
+    }
+
     func testLanguageDetectionByExtension() {
         let languages = ["billing.ts": "typescript", "App.TSX": "typescript", "index.mjs": "javascript", "build.sh": "shell",
                          "main.py": "python", "View.swift": "swift", "package.json": "json", "ci.yml": "yaml",

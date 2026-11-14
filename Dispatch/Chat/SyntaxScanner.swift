@@ -33,7 +33,8 @@ enum SyntaxScanner {
         case "swift": return "swift"
         case "json", "jsonl": return "json"
         case "yml", "yaml": return "yaml"
-        case "c", "h", "cpp", "hpp", "cc", "rust", "rs", "go", "java", "kotlin", "kt", "cs": return "code"
+        // "code" itself too: every answer maps to itself, so a language passed on (the file preview's) stays one.
+        case "code", "c", "h", "cpp", "hpp", "cc", "rust", "rs", "go", "java", "kotlin", "kt", "cs": return "code"
         case "m", "mm": return profile == .mobile ? "code" : "text"
         case "css", "scss": return "css"
         case "html", "xml", "svg": return "html"

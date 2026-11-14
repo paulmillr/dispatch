@@ -721,6 +721,7 @@
     "DispatchTests/FilePreviewTests/testImageHandoffComesOnlyFromTheReplacedPreview": "fast",
     "DispatchTests/FilePreviewTests/testImageZoomStepsThroughStopsAndFitsAtTheFitScale": "fast",
     "DispatchTests/FilePreviewTests/testImagesDecodeBoundedToThePane": "fast",
+    "DispatchTests/FilePreviewTests/testARustFilePreviewIsHighlighted": "fast",
     "DispatchTests/FilePreviewTests/testLanguageDetectionByExtension": "fast",
     "DispatchTests/FilePreviewTests/testLoadedStateIsNotReloadedWhenThePaneReturns": "fast",
     "DispatchTests/FilePreviewTests/testProtectedPlacesAWalkWouldRead": "fast",
