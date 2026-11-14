@@ -24,20 +24,22 @@ extension ChatStep {
 /// ("SEARCH") at any text size, so what follows it starts at one place in every row.
 struct ChatStepBadge: View {
     let kind: ChatStep.Kind
+    /// Another mark in a badge's place, as wide as every badge (the running agents' count): its symbol, word and tint.
+    var custom: (symbol: String, word: String, tint: Color)? = nil
     /// Every badge's word: the widest sets the width, laid out but not drawn.
     private static let words: [ChatStep.Kind] = [.read, .patch, .run, .search, .think, .web, .tool]
     @ScaledMetric(relativeTo: .caption2) private var icon: CGFloat = 12
     @Environment(\.chatPalette) private var palette
-    private var tint: Color { palette.monochrome ?? kind.tint }
+    private var tint: Color { palette.monochrome ?? custom?.tint ?? kind.tint }
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: kind.symbol)
+            Image(systemName: custom?.symbol ?? kind.symbol)
                 .font(.caption2.weight(.semibold))
                 .imageScale(.small)
                 .frame(width: icon)
             ZStack(alignment: .leading) {
                 ForEach(Self.words, id: \.label) { Self.word($0).hidden() }
-                Self.word(kind)
+                if let custom { Self.word(custom.word) } else { Self.word(kind) }
             }
         }
         .foregroundStyle(tint)
@@ -47,11 +49,13 @@ struct ChatStepBadge: View {
         .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(kind.label)
+        .accessibilityLabel(custom?.word ?? kind.label)
     }
 
-    private static func word(_ kind: ChatStep.Kind) -> some View {
-        Text(kind.label.uppercased())
+    private static func word(_ kind: ChatStep.Kind) -> some View { word(kind.label) }
+
+    private static func word(_ text: String) -> some View {
+        Text(text.uppercased())
             .font(.caption2.weight(.bold).monospaced())
             .tracking(0.44)
             .lineLimit(1)

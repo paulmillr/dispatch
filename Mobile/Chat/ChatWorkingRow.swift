@@ -332,6 +332,10 @@ struct ChatWorkingRow: View {
                     .accessibilityIdentifier("chat-stop")
                 }
                 Spacer(minLength: 8)
+                if !expanded, !session.subagents.isEmpty {
+                    // The running subagents, as the Mac's footer badge: unfolded, their row over the steps line.
+                    ChatAgentsBadge(count: session.subagents.count)
+                }
                 if !expanded, !tools.isEmpty {
                     // Folded, the count; open, the log's own line counts (`ChatStepWindow`).
                     Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
@@ -363,7 +367,7 @@ struct ChatWorkingRow: View {
             .padding(.horizontal, 16)
             if expanded {
                 ChatStepWindow(steps: steps, usage: ChatUsageText.text(session.usage, cost: session.agentKey == "pi"),
-                               limits: limitsLine, openStep: openStep)
+                               limits: limitsLine, agents: session.subagents, openStep: openStep)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
             }
@@ -672,16 +676,24 @@ struct ChatStepWindow: View {
     var usage: String? = nil
     /// The plan's limits at the line's end.
     var limits: ChatLimitsLine? = nil
+    /// The running subagents: their row over the steps line, in the place of one step, so the window keeps its height.
+    var agents: [ChatSubagent] = []
     var openStep: (ChatStep) -> Void
     static let visible = 4
+    /// Steps the window shows: one fewer under the agents' row.
+    private var shown: Int { agents.isEmpty ? Self.visible : Self.visible - 1 }
     /// The window's scroll offset and one step's height with its rule: what lies above.
     @State private var offset: CGFloat = 0
     @State private var pitch: CGFloat = 0
     @State private var following = true
 
     var body: some View {
-        let hidden = Self.hidden(count: steps.count, offset: offset, pitch: pitch)
+        let hidden = Self.hidden(count: steps.count, offset: offset, pitch: pitch, visible: shown)
         VStack(spacing: 0) {
+            if !agents.isEmpty {
+                ChatAgentsLogRow(agents: agents)
+                Rectangle().fill(Color.hairline.opacity(0.6)).frame(height: Self.rule)
+            }
             let caption = [Self.caption(steps, above: hidden.above, below: hidden.below), usage].compactMap { $0 }
                 .joined(separator: " · ")
             // The limits keep their place; their name goes first, then the line's own end is cut.
@@ -694,8 +706,8 @@ struct ChatStepWindow: View {
             .foregroundStyle(.tertiary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
-            // Four empty rows set the window's height; the steps scroll over them.
-            rows(Array(repeating: nil, count: Self.visible))
+            // Four empty rows (three under the agents' row) set the window's height; the steps scroll over them.
+            rows(Array(repeating: nil, count: shown))
                 .hidden()
                 .accessibilityHidden(true)
                 .overlay {
@@ -747,7 +759,7 @@ struct ChatStepWindow: View {
     static let rule: CGFloat = 0.5
 
     /// How many steps lie wholly or mostly above the window and below it, scrolled `offset` with rows `pitch` apart.
-    static func hidden(count: Int, offset: CGFloat, pitch: CGFloat) -> (above: Int, below: Int) {
+    static func hidden(count: Int, offset: CGFloat, pitch: CGFloat, visible: Int = visible) -> (above: Int, below: Int) {
         guard count > visible, pitch > 0 else { return (0, 0) }
         let above = min(count - visible, max(0, Int((offset / pitch).rounded())))
         return (above, count - visible - above)
@@ -763,6 +775,65 @@ struct ChatStepWindow: View {
         if above > 0 { parts.append("\(above) above") }
         if below > 0 { parts.append("\(below) below") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The running subagents' badge on the folded thinking line (the Mac's footer badge): the agents' symbol and count.
+struct ChatAgentsBadge: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2").imageScale(.small)
+            Text("\(count)").monospacedDigit()
+        }
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ChatAgentsLogRow.title(count))
+        .accessibilityIdentifier("chat-agents")
+    }
+}
+
+/// The running subagents in the unfolded log, a step's row in height (two lines): a badge with their count, "2 agents
+/// running", their tasks (else types) oldest first, and their tokens together.
+struct ChatAgentsLogRow: View {
+    let agents: [ChatSubagent]
+
+    /// "1 agent running", "2 agents running" (the Mac's `ChatComposerAgents.title`).
+    static func title(_ count: Int) -> String { count == 1 ? "1 agent running" : "\(count) agents running" }
+    /// "Find the timer · explorer": each agent's task, else its type.
+    static func detail(_ agents: [ChatSubagent]) -> String { agents.map { $0.name ?? $0.kind }.joined(separator: " · ") }
+    /// "24.6K tokens" for every agent that counts them; nil when none does.
+    static func tokens(_ agents: [ChatSubagent]) -> String? {
+        let counted = agents.compactMap(\.tokens)
+        guard !counted.isEmpty else { return nil }
+        return ChatUsage.count(Int(clamping: counted.reduce(0, +))) + " tokens"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ChatStepBadge(kind: .tool, custom: (symbol: "person.2", word: "\(agents.count)", tint: Color("StepTool")))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.title(agents.count))
+                    .scaledFont(13.5, relativeTo: .footnote)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(Self.detail(agents))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+            if let tokens = Self.tokens(agents) {
+                Text(tokens).font(.caption).monospacedDigit().foregroundStyle(.secondary).lineLimit(1).fixedSize()
+            }
+        }
+        .padding(.vertical, 9)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-agents-row")
     }
 }
 
