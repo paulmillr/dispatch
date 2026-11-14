@@ -198,6 +198,24 @@ final class FilePreviewPresentationTests: XCTestCase {
         try await TestSupport.eventually { session.pinnedRoot == base + "/src" }
     }
 
+    /// Selecting a folder macOS guards (Documents) counts nothing: its first read would raise the consent prompt. The
+    /// preview offers Count size, which counts it.
+    func testAProtectedFolderCountsItsSizeOnlyOnRequest() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        source.file(home + "/Documents/report.txt", "quarterly")
+        let (window, session) = try host(source, preview: home + "/Documents")
+        let count = try await frame("file-preview-folder-count", in: window)
+        XCTAssertTrue(session.preview?.countOnRequest == true)
+        XCTAssertFalse(source.calls.contains { $0.hasPrefix("summary") }, "nothing read: \(source.calls)")
+        _ = try await PresentationTestSupport.capture(window, named: "file-preview-folder-protected", in: "files-audit")
+        try PresentationTestSupport.click(window, at: NSPoint(x: count.midX, y: count.midY))
+        try await TestSupport.eventually(diagnostic: "calls: \(source.calls)") {
+            if case .folder(.some(let summary)) = session.preview?.kind { return summary.files == 1 }
+            return false
+        }
+        XCTAssertTrue(source.calls.contains { $0.hasPrefix("summary") })
+    }
+
     func testLargeTextOffersItsFirst64KB() async throws {
         let source = FakeFilesSource.mockupAPI()
         let path = base + "/bench-2026-10-17.json"

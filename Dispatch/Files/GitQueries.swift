@@ -146,11 +146,29 @@ struct GitQueries: Sendable {
     // MARK: Changes
 
     func status() async throws(GitError) -> GitPorcelain {
-        let output = try await output(["status", "--porcelain=v2", "--branch", "-z", "--ignored", "--untracked-files=normal"],
+        let unscanned = unscanned
+        // An excluded path keeps git out of the folder altogether, `--ignored` too (an ignore rule would not).
+        let paths = unscanned.isEmpty ? [] : ["--", "."] + unscanned.map { ":(exclude)" + $0 }
+        let output = try await output(["status", "--porcelain=v2", "--branch", "-z", "--ignored", "--untracked-files=normal"] + paths,
                                       limit: Self.statusLimit)
         var porcelain = GitParsers.porcelain(output.output)
         porcelain.truncated = output.truncated
+        porcelain.unscanned = unscanned
         return porcelain
+    }
+
+    /// The folders macOS guards with a consent prompt inside this Mac's repository (a home folder that is one), relative
+    /// to its top: the status's search for untracked files would read them and raise the prompt each time it runs, so
+    /// it leaves them out (`ProtectedFolders`). A repository inside one of them was opened by the user: none then.
+    var unscanned: [String] {
+        guard source.endpoint.isLocal, let home = source.home else { return [] }
+        let top = ProtectedFolders.normalized(root)
+        let prefix = top == "/" ? "/" : top + "/"
+        return ProtectedFolders.places(walking: top, home: home).compactMap { place in
+            let folder: String
+            switch place { case .folder(let path), .eachChild(let path): folder = path }
+            return folder.hasPrefix(prefix) ? String(folder.dropFirst(prefix.count)) : nil
+        }.sorted()
     }
 
     /// Per-file counts: the work tree against the index, or (`cached`) the index against HEAD.

@@ -30,6 +30,9 @@ import Foundation
     var revision: FileRevision?
     /// Text read in another encoding than UTF-8 ("UTF-16", "Latin-1"), named in the header; nil for UTF-8.
     var encoding: String?
+    /// A folder whose size is counted only on request (`FilesSession.countNeedsConsent`): the walk would raise a macOS
+    /// consent prompt, so the preview offers Count size instead.
+    var countOnRequest = false
     /// A read of the file as it changed on disk is under way (`FilePreviewLoader.refresh`).
     @ObservationIgnored var refreshing = false
     /// Where each of its views was scrolled (`FilePreviewScrollKeeper.Key`): the file comes back where it was left when

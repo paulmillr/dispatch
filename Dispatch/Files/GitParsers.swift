@@ -17,6 +17,8 @@ struct GitPorcelain: Hashable, Sendable {
     var ignored: [String] = []
     /// The output was cut at the helper's bound (`GitQueries.status` sets it): the entries are the first ones only.
     var truncated = false
+    /// Folders left out of the status (`GitQueries.unscanned`): their untracked files are not in `changes`.
+    var unscanned: [String] = []
 }
 
 /// One line of `--numstat -z`; nil counts for a binary file.

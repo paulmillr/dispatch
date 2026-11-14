@@ -14,7 +14,7 @@ fn a_summary_totals_the_tree_below_without_following_symlinks() {
     for mut files in both() {
         let totals = summary(&mut files, &tree.root, 0).unwrap();
         // Symlinks count as files without bytes; a folder that cannot be read counts, its
-        // contents do not (as root they do).
+        // contents do not (as root they do), and the totals say they are short.
         let (files_below, bytes) = if locked { (5, 10) } else { (6, 60) };
         assert_eq!(
             totals,
@@ -22,7 +22,7 @@ fn a_summary_totals_the_tree_below_without_following_symlinks() {
                 files: files_below,
                 folders: 3,
                 bytes,
-                truncated: false
+                truncated: locked
             }
         );
         let bounded = summary(&mut files, &tree.root, 2).unwrap();

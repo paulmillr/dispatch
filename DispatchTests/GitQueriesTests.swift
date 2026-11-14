@@ -138,6 +138,27 @@ final class GitQueriesTests: XCTestCase {
         }
     }
 
+    /// A home folder that is a repository: the status leaves out the folders macOS guards, which its search for
+    /// untracked files would read (raising the consent prompt each time), and says which. Elsewhere, and on a remote
+    /// host (which cannot prompt), it is the plain command.
+    func testStatusLeavesOutGuardedFoldersOfAHomeRepository() async throws {
+        let home = "/Users/ivan"
+        let source = FakeFilesSource.mockupAPI(home: home)
+        let plain = "status --porcelain=v2 --branch -z --ignored --untracked-files=normal"
+        let excluded = ["Desktop", "Documents", "Downloads", "Library/CloudStorage", "Library/Containers",
+                        "Library/Group Containers", "Library/Mobile Documents", "Pictures/Photos Library.photoslibrary"]
+        source.gitAnswers[plain + " -- . " + excluded.map { ":(exclude)" + $0 }.joined(separator: " ")] = ok(Recorded.status)
+        let status = try await GitQueries(source: source, root: home).status()
+        XCTAssertEqual(status.unscanned, excluded)
+        XCTAssertEqual(status.branch, "main", "the excluding command was the one sent")
+        XCTAssertEqual(GitQueries(source: source, root: home + "/Library").unscanned,
+                       ["CloudStorage", "Containers", "Group Containers", "Mobile Documents"])
+        XCTAssertEqual(GitQueries(source: source, root: api).unscanned, [], "a project folder")
+        XCTAssertEqual(GitQueries(source: source, root: home + "/Documents/notes").unscanned, [], "opened inside Documents")
+        let remote = FakeFilesSource(endpoint: .remote(SSHConnectionID()), home: home, hostLabel: "build-box")
+        XCTAssertEqual(GitQueries(source: remote, root: home).unscanned, [], "over SSH nothing can prompt")
+    }
+
     func testDiffsOfStagedUnstagedRenamedAndBinaryChanges() async throws {
         let source = FakeFilesSource.mockupAPI()
         source.gitAnswers["diff --cached -U3 -- src/routes/billing.ts"] = ok(Recorded.stagedDiff)

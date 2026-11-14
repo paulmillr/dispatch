@@ -197,6 +197,14 @@ private struct GitChangesList: View {
                     .help("The status was cut at the helper’s bound; the shell has the rest")
                     .accessibilityIdentifier("git-changes-truncated")
             }
+            if !status.unscanned.isEmpty {
+                // A home that is a repository: macOS would ask before git read these, on every status.
+                Text(verbatim: "\(status.unscanned.count == 1 ? status.unscanned[0] : "\(status.unscanned.count) folders") not scanned")
+                    .foregroundStyle(palette.detail)
+                    .help("Untracked files in " + status.unscanned.joined(separator: ", ")
+                          + " aren’t listed: macOS asks before Dispatch reads these folders, so the status leaves them out")
+                    .accessibilityIdentifier("git-changes-unscanned")
+            }
             Spacer(minLength: 0)
         }
         .lineLimit(1)

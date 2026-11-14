@@ -374,6 +374,8 @@ struct FilesListingView: View {
         case .permissionDenied:
             FilesStateView(symbol: "lock", title: "No permission",
                            message: "\(browser.host) does not let this account read \(browser.folder.map(FilesPath.name) ?? "this folder").")
+        case .privacyBlocked:
+            FilesStateView(symbol: "lock", title: "Blocked by \(browser.host)", message: error.message)
         default:
             FilesStateView(symbol: "exclamationmark.triangle", title: "The folder could not be read", message: error.message,
                            action: ("Try again", { Task { await browser.load(force: true) } }))

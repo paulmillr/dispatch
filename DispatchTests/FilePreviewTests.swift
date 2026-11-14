@@ -12,6 +12,69 @@ final class FilePreviewTests: XCTestCase {
 
     // MARK: Loader
 
+    /// The places whose first read raises a macOS consent prompt, and which of them a walk of a folder would read:
+    /// the one it lies in, or every one below it.
+    func testProtectedPlacesAWalkWouldRead() {
+        let home = "/Users/ivan"
+        func places(_ path: String) -> [ProtectedFolders.Place] { ProtectedFolders.places(walking: path, home: home) }
+        XCTAssertEqual(places("/Users/ivan/Documents"), [.folder("/Users/ivan/Documents")])
+        XCTAssertEqual(places("/Users/ivan/Downloads/old/zip"), [.folder("/Users/ivan/Downloads")])
+        XCTAssertEqual(places("/System/Volumes/Data/Users/ivan/Desktop"), [.folder("/Users/ivan/Desktop")], "the data volume's path")
+        XCTAssertEqual(places("/Users/ivan/Library/CloudStorage/Sync-ivan/a"), [.folder("/Users/ivan/Library/CloudStorage/Sync-ivan")])
+        XCTAssertEqual(places("/Users/ivan/Library/Containers/com.example.notes"), [.folder("/Users/ivan/Library/Containers/com.example.notes")])
+        XCTAssertEqual(places("/Volumes/Backup/photos"), [.folder("/Volumes/Backup")])
+        // An ancestor reads every place below it.
+        let folders: [ProtectedFolders.Place] = ProtectedFolders.homeFolders.map { .folder(home + "/" + $0) }
+        let parents: [ProtectedFolders.Place] = ProtectedFolders.homeParents.map { .eachChild(home + "/" + $0) }
+        XCTAssertEqual(Set(places("/Users/ivan")), Set(folders + parents))
+        let library: [ProtectedFolders.Place] = [.folder(home + "/Library/Mobile Documents")] + parents
+        XCTAssertEqual(Set(places("/Users/ivan/Library")), Set(library))
+        XCTAssertTrue(places("/").contains(.eachChild("/Volumes")))
+        XCTAssertTrue(places("/System").contains(.folder(home + "/Documents")), "/System holds the data volume")
+        XCTAssertTrue(places("/Users").contains(.folder(home + "/Desktop")))
+        // The Photos library asks too (checked on macOS 27.2.1): counting ~/Pictures would read it.
+        XCTAssertEqual(places("/Users/ivan/Pictures"), [.folder(home + "/Pictures/Photos Library.photoslibrary")])
+        // Elsewhere, none.
+        for path in ["/Users/ivan/src/api", "/Users/ivan/DesktopNotes", "/Users/ivan/Library/Preferences", "/usr/local", "/tmp"] {
+            XCTAssertEqual(places(path), [], path)
+        }
+    }
+
+    /// Counting a folder's size waits for Count size on this Mac until the session has listed inside the place it
+    /// reads; a child-by-child place (a container) never counts as allowed, and a remote host never asks.
+    func testCountingWaitsForConsentUntilThePlaceWasListed() {
+        let session = FilesSession(id: System.uuid())
+        session.availability = .available(FakeFilesSource())
+        session.home = "/Users/ivan"
+        XCTAssertTrue(session.countNeedsConsent("/Users/ivan/Documents"))
+        XCTAssertTrue(session.countNeedsConsent("/Users/ivan/Documents/q3"))
+        XCTAssertFalse(session.countNeedsConsent("/Users/ivan/src"))
+        // A failed listing proves nothing; a listed one, that macOS allowed it.
+        session.listings["/Users/ivan/Documents"] = FileListingState(listing: nil, error: .privacyBlocked("/Users/ivan/Documents", host: nil))
+        XCTAssertTrue(session.countNeedsConsent("/Users/ivan/Documents/q3"))
+        session.listings["/Users/ivan/Documents/q3"] = FileListingState(listing: FileListing(path: "/Users/ivan/Documents/q3", entries: [], truncated: false))
+        XCTAssertFalse(session.countNeedsConsent("/Users/ivan/Documents"))
+        XCTAssertFalse(session.countNeedsConsent("/Users/ivan/Documents/q3/drafts"))
+        XCTAssertTrue(session.countNeedsConsent("/Users/ivan"), "the home also reads Desktop, Downloads, the containers…")
+        session.listings["/Users/ivan/Library/Containers"] = FileListingState(listing: FileListing(path: "/Users/ivan/Library/Containers", entries: [], truncated: false))
+        XCTAssertTrue(session.countNeedsConsent("/Users/ivan/Library/Containers"), "each container asks on its own")
+        session.availability = .available(FakeFilesSource(endpoint: .remote(SSHConnectionID()), hostLabel: "build-box"))
+        XCTAssertFalse(session.countNeedsConsent("/Users/ivan/Desktop"), "over SSH nothing can ask")
+    }
+
+    /// The helper passes the system's words on: "Operation not permitted" (EPERM) is the system refusing, which a Mac
+    /// does for the places it guards; "Permission denied" (EACCES) is the file's own modes.
+    func testTheSystemRefusingIsToldApartFromTheFilesModes() {
+        let blocked = FilesSourceFailure(code: "permission_denied", message: "Operation not permitted (os error 1)")
+        let modes = FilesSourceFailure(code: "permission_denied", message: "Permission denied (os error 13)")
+        let path = "/Users/ivan/Documents"
+        XCTAssertEqual(blocked.error(path: path, context: .desktop(host: nil)), .privacyBlocked(path, host: nil))
+        XCTAssertEqual(blocked.error(path: path, context: .desktop(host: "build-box")), .privacyBlocked(path, host: "build-box"))
+        XCTAssertEqual(modes.error(path: path, context: .desktop(host: "build-box")), .permissionDenied(path))
+        XCTAssertTrue(FilesSourceError.privacyBlocked(path, host: "build-box").message.contains("Allow full disk access for remote users"))
+        XCTAssertTrue(FilesSourceError.privacyBlocked(path, host: nil).message.contains("Privacy & Security"))
+    }
+
     func testLoaderClassifiesEachKindFromItsNameSizeAndFirstWindow() async throws {
         let source = FakeFilesSource.mockupAPI()
         source.file(base + "/assets/logo@2x.png", try Self.png(width: 4, height: 3))

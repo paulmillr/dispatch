@@ -482,7 +482,7 @@ import Observation
                 guard let revision = try await answer({ try await run.target.read(path, offset: 0, length: 0, revision: nil).revision })
                 else { return nil }
                 return FileIdentity(device: revision.device, inode: revision.inode) == identity
-            case .permissionDenied, .unsupported, .changed: return nil
+            case .permissionDenied, .privacyBlocked, .unsupported, .changed: return nil
             default: throw error
             }
         }
@@ -492,7 +492,7 @@ import Observation
     private func answer<T>(_ body: () async throws -> T) async throws -> T? {
         do { return try await body() } catch let error as FilesSourceError {
             switch error {
-            case .notFound, .notDirectory, .permissionDenied, .unsupported, .changed: return nil
+            case .notFound, .notDirectory, .permissionDenied, .privacyBlocked, .unsupported, .changed: return nil
             default: throw error
             }
         }
@@ -833,6 +833,8 @@ import Observation
             // and asks no more: the setting is the only way back.
             message = "No permission for \(name(path)). Allow Dispatch in System Settings › Privacy & Security › Files and Folders"
         case .permissionDenied(let path): message = "No permission for \(name(path))"
+        case .privacyBlocked(let path, nil): message = "No permission for \(name(path)). Allow Dispatch in System Settings › Privacy & Security › Files and Folders"
+        case .privacyBlocked(let path, let host?): message = "\(host) refuses \(name(path)) over SSH (Operation not permitted)"
         case .notDirectory: message = "\(run.primary.targetLabel) is not a folder"
         case .changed(let path): message = run.stage == .sending && path.hasSuffix(".tar.zst")
             ? "The archive changed while sending" : "\(name(path)) changed while copying"

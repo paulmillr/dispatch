@@ -44,7 +44,7 @@ struct FilePreviewPane: View {
         .task(id: LoadKey(preview: session.preview.map(ObjectIdentifier.init), source: source.map { ObjectIdentifier($0) },
                           previews: FilesSession.previews)) {
             guard let preview = session.preview, let source else { return }
-            await FilePreviewLoader.load(preview, from: source)
+            await FilePreviewLoader.load(preview, from: source, countsFolder: !session.countNeedsConsent(preview.path))
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("file-preview")
@@ -424,6 +424,8 @@ private struct FilePreviewDetail: View {
                              drew: { session.drawnImage = FileImageHandoff(owner: owner, image: $0, pixelSize: pixels) })
         case .folder(let summary):
             FileFolderPreview(path: preview.path, entry: preview.entry, summary: summary,
+                              countOnRequest: preview.countOnRequest,
+                              count: { if let source = session.source { Task { await FilePreviewLoader.countFolder(preview, from: source) } } },
                               openFolder: { session.pin(preview.path) },
                               changeDirectory: { files.changeDirectory(session.id, to: preview.path) },
                               copyPath: copyPath, focused: focused)

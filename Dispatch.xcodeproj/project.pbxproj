@@ -95,6 +95,7 @@
 		15ABFCA301D09511FDD5BB34 /* zstd_ldm.c in Sources */ = {isa = PBXBuildFile; fileRef = 73AB5CC6B82A485BD99DA18E /* zstd_ldm.c */; };
 		16553833ABD8B0DA09458BB4 /* PiChatIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB797D2A3E46F37FF80082C6 /* PiChatIntegrationTests.swift */; };
 		16732B2D717999FF1E35EE14 /* DictationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EEE5D19F8FF25E3A1DF5EC /* DictationModels.swift */; };
+		16C83E41D45D7B2549CCCA25 /* ProtectedFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF7FD03B4940CC78C0901DF /* ProtectedFolders.swift */; };
 		17066A29FABDF0AAB884341F /* WorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF48F3F3CF8F1E1D140EBD65 /* WorkspaceTests.swift */; };
 		1722C42662153B4A797CE402 /* ClaudeModelMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449F154F1A7D7898DECFBD37 /* ClaudeModelMenu.swift */; };
 		185081E2AB98A2EE69E220BF /* TerminalFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FB4D7ADB1E47AEFCD84E327 /* TerminalFontCatalog.swift */; };
@@ -1449,6 +1450,7 @@
 		BA9B968CF62AEF5C53A76F89 /* HostStatsWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStatsWire.swift; sourceTree = "<group>"; };
 		BAAC83474B6DE9AEC6E90B1B /* Workspace+Containers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Workspace+Containers.swift"; sourceTree = "<group>"; };
 		BAE80D23809BF1CA15A50EC5 /* FilePreviewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePreviewContent.swift; sourceTree = "<group>"; };
+		BAF7FD03B4940CC78C0901DF /* ProtectedFolders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtectedFolders.swift; sourceTree = "<group>"; };
 		BBB7F2E56A67337A8C181BB3 /* mem.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = mem.h; sourceTree = "<group>"; };
 		BBB98835CF26CD8A579E1E21 /* SSHPiIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHPiIntegrationTests.swift; sourceTree = "<group>"; };
 		BBD6B26350F634E09EB00300 /* ClaudeModelMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeModelMenuTests.swift; sourceTree = "<group>"; };
@@ -2260,6 +2262,7 @@
 				CD752AF7D21467D55BA0E0FE /* GitReadCore.swift */,
 				BA3B01EB643234765529D759 /* GitSignatureExplanation.swift */,
 				AF9E31B689C8DEFBEC43FCBD /* HelperFilesSource.swift */,
+				BAF7FD03B4940CC78C0901DF /* ProtectedFolders.swift */,
 				1ED98F020651D77DC7388B12 /* Review.swift */,
 				9CDD78B2EED7E79B2A681182 /* ReviewRefresh.swift */,
 				2C2C877340FDB5F071FDBD7C /* ReviewRepository.swift */,
@@ -3213,6 +3216,7 @@
 				EC3BAD24419F7ADDA4B63095 /* PaneView.swift in Sources */,
 				D300F67864A879FFE5D065C0 /* PrefixKeys.swift in Sources */,
 				E285399B5A3193B4532DB15F /* ProgramStatusStore.swift in Sources */,
+				16C83E41D45D7B2549CCCA25 /* ProtectedFolders.swift in Sources */,
 				0ACF1D833619DB64998F315C /* Review.swift in Sources */,
 				073127D312A4F4B41962391A /* ReviewRefresh.swift in Sources */,
 				94BBC49153CC7744F622E69D /* ReviewRepository.swift in Sources */,

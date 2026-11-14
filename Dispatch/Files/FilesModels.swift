@@ -106,6 +106,9 @@ enum FilesEndpoint: Hashable, Sendable {
 enum FilesSourceError: Error, Hashable, Sendable {
     case notFound(String)
     case permissionDenied(String)
+    /// The system refused the read (`EPERM`, "Operation not permitted"), not the file's permissions: on a Mac, a place
+    /// macOS guards (Files and Folders, Full Disk Access). `host` is the remote host's name; nil for this Mac.
+    case privacyBlocked(String, host: String?)
     case notDirectory(String)
     /// The path is a folder where a file was asked for (the helper's `is_directory`): it is listed instead.
     case isDirectory(String)
@@ -122,6 +125,13 @@ enum FilesSourceError: Error, Hashable, Sendable {
         switch self {
         case .notFound(let path): "\(path) does not exist"
         case .permissionDenied(let path): "No permission to read \(path)"
+        case .privacyBlocked(let path, let host?):
+            // Over SSH a Mac cannot ask: one switch on that Mac allows it, and changing it needs its screen.
+            "\(host) refuses to read \(FilesPath.name(path)) (Operation not permitted). If it is a Mac, allow it there: "
+                + "System Settings › General › Sharing › Remote Login ⓘ › Allow full disk access for remote users"
+        case .privacyBlocked(let path, nil):
+            "macOS refuses to let Dispatch read \(FilesPath.name(path)). Allow it in System Settings › Privacy & Security › "
+                + "Files and Folders, or Full Disk Access"
         case .notDirectory(let path): "\(path) is not a folder"
         case .isDirectory(let path): "\(path) is a folder"
         case .changed(let path): "\(path) changed while reading"
