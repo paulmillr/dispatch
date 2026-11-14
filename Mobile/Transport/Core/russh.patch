@@ -1,17 +1,273 @@
-diff --git a/src/client/mod.rs b/src/client/mod.rs
-index 59989448..50b7ef77 100644
---- a/src/client/mod.rs
-+++ b/src/client/mod.rs
+diff --git a/src/client/encrypted.rs b/src/client/encrypted.rs
+index bd00b128..ffd0c9a1 100644
+--- a/src/client/encrypted.rs
++++ b/src/client/encrypted.rs
 @@ -12,6 +12,8 @@
  // See the License for the specific language governing permissions and
  // limitations under the License.
  //
-+// Modified for Dispatch (Mobile/Transport/Core/russh.patch): `check_server_key` at every rekey.
++// Modified for Dispatch (Mobile/Transport/Core/russh.patch): direct public key requests (`Direct`).
++//
+ use std::convert::TryInto;
+ use std::ops::Deref;
+ use std::str::FromStr;
+@@ -97,7 +99,10 @@ impl Session {
+                             if map_err!(Bytes::decode(&mut r))?.as_ref() == b"ssh-userauth" {
+                                 map_err!(ensure_end(&r))?;
+                                 *accepted = true;
+-                                if let Some(ref meth) = self.common.auth_method {
++                                // Dispatch: a direct request did not wait for this accept (`Direct`).
++                                if let Some(request) = self.direct.accepted() {
++                                    enc.state = EncryptedState::WaitingAuthRequest(request);
++                                } else if let Some(ref meth) = self.common.auth_method {
+                                     let auth_request = AuthRequest::new(meth);
+                                     if enc.write_auth_request(&self.common.auth_user, meth)? {
+                                         debug!("enc: auth request written");
+@@ -1621,3 +1626,165 @@ impl Encrypted {
+         Ok(())
+     }
+ }
++
++/// Dispatch: a direct public key request (`Handle::next_publickey_direct`). Its signed
++/// `USERAUTH_REQUEST` goes without the query (`PK_OK` is never waited for) and, as the
++/// connection's first request, right behind `SERVICE_REQUEST` without waiting for the accept,
++/// which (with any `EXT_INFO`) then arrives while the request is pending.
++#[derive(Debug, Default)]
++pub(crate) enum Direct {
++    #[default]
++    Off,
++    /// The next public key `Authenticate` goes direct.
++    Next,
++    /// The external signer has the bytes to sign (`Reply::SignRequest`, raised as the request is
++    /// written, since they hold the session id): `Msg::Signed` writes the request from `offset`,
++    /// `Msg::SignFailed` drops it unwritten, so the next request starts over.
++    Signing {
++        offset: usize,
++        length: usize,
++        request: AuthRequest,
++    },
++    /// Written before the server accepted the userauth service: its accept moves on to waiting
++    /// for the answer.
++    Written(AuthRequest),
++}
++
++impl Direct {
++    /// The userauth service was accepted: a request written before waits for its answer now.
++    pub(crate) fn accepted(&mut self) -> Option<AuthRequest> {
++        match std::mem::take(self) {
++            Direct::Written(request) => Some(request),
++            other => {
++                *self = other;
++                None
++            }
++        }
++    }
++}
++
++impl Session {
++    /// Dispatch: writes `method` as a direct request when `Msg::DirectPublicKey` asked for one and
++    /// it is a public key; anything else comes back for `write_auth_request_if_needed`.
++    pub(crate) fn write_direct_auth_request(
++        &mut self,
++        user: &str,
++        method: auth::Method,
++    ) -> Result<Option<auth::Method>, crate::Error> {
++        let next = matches!(self.direct, Direct::Next);
++        if next {
++            self.direct = Direct::Off;
++        }
++        let public_key = matches!(
++            method,
++            auth::Method::PublicKey { .. } | auth::Method::FuturePublicKey { .. }
++        );
++        let Some(enc) = self.common.encrypted.as_mut().filter(|_| next && public_key) else {
++            return Ok(Some(method));
++        };
++        let accepted = match enc.state {
++            EncryptedState::WaitingAuthServiceRequest {
++                accepted,
++                ref mut sent,
++            } => {
++                if !*sent {
++                    self.common.packet_writer.write_packet(|w| {
++                        msg::SERVICE_REQUEST.encode(w)?;
++                        "ssh-userauth".encode(w)?;
++                        Ok(())
++                    })?;
++                    *sent = true
++                }
++                accepted
++            }
++            EncryptedState::WaitingAuthRequest(_) => true,
++            EncryptedState::InitCompression | EncryptedState::Authenticated => {
++                return Ok(Some(method));
++            }
++        };
++        debug!("direct public key request, service accepted: {accepted:?}");
++        self.common.auth_user.clear();
++        self.common.auth_user.push_str(user);
++        // Nothing is left to send for it: an accept or a PK_OK arriving meanwhile writes nothing.
++        self.common.auth_method = None;
++        let request = AuthRequest::new(&method);
++        match &method {
++            auth::Method::FuturePublicKey { key, hash_alg } => {
++                let mut data = Vec::new();
++                let offset = enc.client_make_to_sign(
++                    user,
++                    &PublicKeyOrCertificate::PublicKey {
++                        key: key.clone(),
++                        hash_alg: *hash_alg,
++                    },
++                    None,
++                    &mut data,
++                )?;
++                let length = data.len();
++                self.sender
++                    .send(Reply::SignRequest {
++                        key: key.clone(),
++                        data,
++                    })
++                    .map_err(|_| crate::Error::SendError)?;
++                self.direct = Direct::Signing {
++                    offset,
++                    length,
++                    request,
++                };
++            }
++            _ => {
++                self.common.buffer.clear();
++                enc.client_send_signature(user, &method, &mut self.common.buffer)?;
++                if accepted {
++                    enc.state = EncryptedState::WaitingAuthRequest(request);
++                } else {
++                    self.direct = Direct::Written(request);
++                }
++            }
++        }
++        Ok(None)
++    }
++
++    /// Dispatch: the external signer's answer to a direct request (`Direct::Signing`); `None`
++    /// when it declined. Ignored otherwise, as before.
++    pub(crate) fn direct_signed(&mut self, data: Option<Vec<u8>>) -> Result<(), crate::Error> {
++        if !matches!(self.direct, Direct::Signing { .. }) {
++            return Ok(());
++        }
++        let Direct::Signing {
++            offset,
++            length,
++            request,
++        } = std::mem::take(&mut self.direct)
++        else {
++            return Ok(());
++        };
++        let Some(data) = data else {
++            debug!("signer failed, the direct request is not written");
++            return Ok(());
++        };
++        let Some(enc) = self.common.encrypted.as_mut() else {
++            return Ok(());
++        };
++        let accepted = match enc.state {
++            EncryptedState::WaitingAuthServiceRequest { accepted, .. } => accepted,
++            EncryptedState::WaitingAuthRequest(_) => true,
++            EncryptedState::InitCompression | EncryptedState::Authenticated => return Ok(()),
++        };
++        // The signer appends the signature to the bytes it was given; anything else would leave
++        // the caller waiting for an answer that never comes.
++        let Some(signed) = data.get(offset..).filter(|_| data.len() > length) else {
++            return Err(crate::Error::Inconsistent);
++        };
++        push_packet!(enc.write, {
++            enc.write.extend_from_slice(signed);
++        });
++        if accepted {
++            enc.state = EncryptedState::WaitingAuthRequest(request);
++        } else {
++            self.direct = Direct::Written(request);
++        }
++        Ok(())
++    }
++}
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index 59989448..787110bb 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -12,6 +12,9 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ //
++// Modified for Dispatch (Mobile/Transport/Core/russh.patch): `check_server_key` at every rekey, and
++// direct public key requests (`Handle::next_publickey_direct`).
 +//
  
  //! # Implementing clients
  //!
-@@ -2041,6 +2043,19 @@ async fn reply<H: Handler>(
+@@ -103,6 +106,8 @@ pub struct Session {
+     server_sig_algs: Option<Vec<Algorithm>>,
+     /// Number of EXT_INFO messages received (RFC 8308 allows at most two).
+     ext_info_count: u8,
++    /// Dispatch: a direct public key request (`Handle::next_publickey_direct`).
++    direct: encrypted::Direct,
+ }
+ 
+ impl Drop for Session {
+@@ -175,6 +180,8 @@ pub enum Msg {
+     /// abandons that attempt and goes back to its main loop, so the next
+     /// authentication request gets through.
+     SignFailed,
++    /// Dispatch: the next public key `Authenticate` goes direct (`Handle::next_publickey_direct`).
++    DirectPublicKey,
+     ChannelOpenSession {
+         channel_ref: ChannelRef,
+     },
+@@ -506,6 +513,20 @@ impl<H: Handler> Handle<H> {
+         self.wait_recv_reply().await
+     }
+ 
++    /// Dispatch: the next public key authentication ([`Handle::authenticate_publickey`] or
++    /// [`Handle::authenticate_publickey_with`]) sends its signed request at once, without asking
++    /// first whether the server takes the key (RFC 4252 §7 makes that query optional), and, as
++    /// the connection's first authentication request, right behind the service request instead
++    /// of after the server's accept: one round trip where the query takes two, or three. An
++    /// external signer is asked to sign when the request is written. A refusal is an ordinary
++    /// failure; any other method ignores this and clears it.
++    pub async fn next_publickey_direct(&self) -> Result<(), crate::Error> {
++        self.sender
++            .send(Msg::DirectPublicKey)
++            .await
++            .map_err(|_| crate::Error::SendError)
++    }
++
+     /// Perform public OpenSSH Certificate-based SSH authentication
+     pub async fn authenticate_openssh_cert<U: Into<String>>(
+         &mut self,
+@@ -1335,6 +1356,7 @@ impl Session {
+             open_global_requests: VecDeque::new(),
+             server_sig_algs: None,
+             ext_info_count: 0,
++            direct: encrypted::Direct::default(),
+         }
+     }
+ 
+@@ -1623,9 +1645,14 @@ impl Session {
+     fn handle_msg(&mut self, msg: Msg) -> Result<(), crate::Error> {
+         match msg {
+             Msg::Authenticate { user, method } => {
+-                self.write_auth_request_if_needed(&user, method)?;
++                // Dispatch: a public key after `Msg::DirectPublicKey` goes direct (encrypted.rs).
++                if let Some(method) = self.write_direct_auth_request(&user, method)? {
++                    self.write_auth_request_if_needed(&user, method)?;
++                }
+             }
+-            Msg::Signed { .. } | Msg::SignFailed => {}
++            Msg::DirectPublicKey => self.direct = encrypted::Direct::Next,
++            Msg::Signed { data } => self.direct_signed(Some(data))?,
++            Msg::SignFailed => self.direct_signed(None)?,
+             Msg::AuthInfoResponse { .. } => {}
+             Msg::AuthGssapiToken { token } => {
+                 if let Some(ref mut enc) = self.common.encrypted {
+@@ -2041,6 +2068,19 @@ async fn reply<H: Handler>(
  
                      if session.common.encrypted.is_some() {
                          // This is a rekey
@@ -31,7 +287,7 @@ index 59989448..50b7ef77 100644
                          {
                              let common = &mut session.common;
                              common.newkeys(newkeys);
-@@ -2802,6 +2817,10 @@ pub trait Handler: Sized + Send {
+@@ -2802,6 +2842,10 @@ pub trait Handler: Sized + Send {
      /// The library verifies the key exchange signature before this call,
      /// but it's up to the implementation to decide whether the key or certificate
      /// is trusted.

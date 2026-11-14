@@ -258,7 +258,7 @@ extension MobileComposition {
     }
 
     /// Settings' Remove all data: every host (its session ends, its password goes), every key and Keychain secret, the
-    /// trusted host keys, the seen markers and mutes, the cache, drafts and the outbox, the transcripts kept in memory,
+    /// trusted host keys, which keys logged in where (`key-logins.json`), the seen markers and mutes, the cache, drafts and the outbox, the transcripts kept in memory,
     /// the review comments
     /// (`reviews.json`), the remembered agents and models (`chat-models.json`) and Spaces' per-host values (recent space, collapsed hosts, space order: `spaces.json`, and
     /// any left in UserDefaults by an older build); background refresh turns off and its notifications and the badge
@@ -270,6 +270,7 @@ extension MobileComposition {
         refresh?.notifier.removeAll()
         for record in hosts.store.hosts { hosts.remove(record.id) }
         hosts.knownHosts.removeAll()
+        hosts.keyLogins.removeAll()
         if keepingKeys {
             // A key's `moving:` copy too: after a move out of Face ID cut short it can be the key's only copy.
             let kept = Set(hosts.keys.keys.flatMap { [KeyStore.privateAccount($0.id), KeyStore.passphraseAccount($0.id),

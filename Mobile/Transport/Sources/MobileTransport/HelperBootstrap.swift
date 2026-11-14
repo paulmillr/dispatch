@@ -165,7 +165,8 @@ public enum HelperBootstrap: Sendable {
     } catch {
       // The script exits early on a check failure; its status explains more than the write error.
       _ = try? await output
-      throw error
+      // A refused exec request ends the channel under the first writes: the refusal is the failure.
+      throw exec.refusal ?? error
     }
     let stderr = try await output
     let status = try await exec.exitStatus()
@@ -186,6 +187,85 @@ public enum HelperBootstrap: Sendable {
         + " || { printf 'dispatch-setup: %s\\n' 'installed helper does not verify' >&2; exit 1; }\n"
         + "exec ./dispatch-helper --remote --capabilities " + shellQuote(capabilities) + " --stdio 1>&3 3>&-",
       environment: environment)
+  }
+
+  /// The helper's stdio command when it is probably cached already (a reconnect): `SSHBootstrapScript.cachedLaunch`
+  /// for the bundled `candidates`, with `launchCommand`'s arguments and `environment`, so one exec channel probes the
+  /// platform, checks the cache under `~/.dispatch` (or the runtime folder, for a home that cannot run programs) and
+  /// starts the helper. What it started, if anything, is in its stderr (`launched`).
+  public static func cachedLaunchCommand(_ candidates: [Bundled], capabilities: String = "",
+                                         environment: [String: String] = [:]) -> String {
+    posixShell(
+      SSHBootstrapScript.cachedLaunch(candidates.map(\.candidate),
+                                      arguments: "--remote --capabilities " + shellQuote(capabilities) + " --stdio"),
+      environment: environment)
+  }
+
+  /// What a `cachedLaunchCommand` said on stderr before it started the helper: what runs and from where
+  /// (`uploaded` false, the runtime folder as its probe saw it), and the rest of stderr, the helper's own (the script's
+  /// report lines left out, anything else kept, as `launchCommand`'s stderr would hold it). nil when the stderr holds no
+  /// launch line, or one the phone cannot place (another platform's line, a root it does not know): the script
+  /// started no helper, and the full bootstrap decides.
+  public static func launched(_ stderr: String, candidates: [Bundled]) -> (installed: Installed, stderr: String)? {
+    let lines = stderr.split(separator: "\n", omittingEmptySubsequences: false)
+    guard let at = lines.firstIndex(where: { $0.hasPrefix(SSHBootstrapScript.launchedLine) }) else { return nil }
+    let root: Root
+    switch lines[at].dropFirst(SSHBootstrapScript.launchedLine.count) {
+    case "home": root = .home
+    case "runtime": root = .runtimeDirectory
+    default: return nil
+    }
+    let report = lines[..<at]
+    let probed = report.joined(separator: "\n") + "\n"
+    guard case .helper(let name) = SSHBootstrapScript.platform(probed),
+          let helper = candidates.first(where: { $0.name == name }) else { return nil }
+    let own = report.filter {
+      !$0.hasPrefix("DISPATCH_PLATFORM=") && !$0.hasPrefix("DISPATCH_RUNTIME=") && $0 != "DISPATCH_NOEXEC"
+    }
+    let installed = Installed(platform: name, digest: helper.digest, size: helper.size, root: root, uploaded: false,
+                              runtimeDirectory: SSHBootstrapScript.runtimeDirectory(probed))
+    return (installed, (own + lines[(at + 1)...]).joined(separator: "\n"))
+  }
+
+  /// A helper the app bundles (`<binaries>/<name>[.gz]`), by the size and SHA-256 of the expanded file.
+  public struct Bundled: Sendable, Equatable {
+    public let name: String
+    public let size: Int
+    public let digest: String
+
+    var candidate: SSHBootstrapScript.Candidate { .init(name: name, size: size, digest: digest) }
+  }
+
+  /// Every helper bundled in `binaries` (`darwin-arm64`, `linux-aarch64`, `linux-x86_64`), for `cachedLaunchCommand`. Each
+  /// file is expanded and hashed once per run, again only when its stamp (device, inode, size, modification time)
+  /// changes; one that is missing, unreadable or too large is left out (a host of its platform then gets no launch from
+  /// the cache, and the full bootstrap says what is wrong).
+  public static func bundled(in binaries: URL) -> [Bundled] {
+    ["darwin-arm64", "linux-aarch64", "linux-x86_64"].compactMap { name in
+      let archive = binaries.appendingPathComponent(name + ".gz")
+      let file = FileManager.default.fileExists(atPath: archive.path) ? archive : binaries.appendingPathComponent(name)
+      var status = stat()
+      guard stat(file.path, &status) == 0 else { return nil }
+      let stamp = "\(status.st_dev):\(status.st_ino):\(status.st_size):\(status.st_mtimespec.tv_sec).\(status.st_mtimespec.tv_nsec)"
+      if let known = identities.known(file.path), known.stamp == stamp { return known.helper }
+      let helper = (try? helper(name, in: binaries)).flatMap { binary -> Bundled? in
+        guard !binary.isEmpty, binary.count <= SSHBootstrapScript.maximumSize else { return nil }
+        return Bundled(name: name, size: binary.count, digest: SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined())
+      }
+      identities.keep(file.path, stamp: stamp, helper: helper)
+      return helper
+    }
+  }
+
+  private static let identities = Identities()
+
+  /// `bundled`'s results by file path, with the stamp each was computed for.
+  private final class Identities: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: (stamp: String, helper: Bundled?)] = [:]
+
+    func known(_ path: String) -> (stamp: String, helper: Bundled?)? { lock.withLock { values[path] } }
+    func keep(_ path: String, stamp: String, helper: Bundled?) { lock.withLock { values[path] = (stamp, helper) } }
   }
 
   /// Text for a helper that exited before greeting, from its exit status (nil: a signal or a lost channel) and stderr:

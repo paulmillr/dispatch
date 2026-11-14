@@ -115,7 +115,7 @@ impl SessionEvents for FfiSessionEvents {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn dms_version() -> *const c_char {
-    concat!("dispatch-mobile-ssh ", env!("CARGO_PKG_VERSION"), " (russh 0.64.1)\0").as_ptr().cast()
+    concat!("dispatch-mobile-ssh ", env!("CARGO_PKG_VERSION"), " (russh 0.65.0)\0").as_ptr().cast()
 }
 
 #[unsafe(no_mangle)]
@@ -218,8 +218,16 @@ pub unsafe extern "C" fn dms_auth_password(
     });
 }
 
+/// `direct`: the signed request at once, without the query (`Session::auth_key_direct`).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dms_auth_key(handle: *mut DmsSession, user: *const c_char, key: *const DmsKey, context: *mut c_void, done: Option<AuthFn>) {
+pub unsafe extern "C" fn dms_auth_key(
+    handle: *mut DmsSession,
+    user: *const c_char,
+    key: *const DmsKey,
+    direct: bool,
+    context: *mut c_void,
+    done: Option<AuthFn>,
+) {
     let context = Context(context);
     let Some(done) = done else { return };
     let (Some(session), Some(user), Some(key)) = (unsafe { session(handle) }, unsafe { text(user) }, unsafe { key.as_ref() }) else {
@@ -228,7 +236,8 @@ pub unsafe extern "C" fn dms_auth_key(handle: *mut DmsSession, user: *const c_ch
     let key = key.key.key.clone();
     runtime().spawn(async move {
         let context = context;
-        report(done, context, session.auth_key(&user, key).await)
+        let outcome = if direct { session.auth_key_direct(&user, key).await } else { session.auth_key(&user, key).await };
+        report(done, context, outcome)
     });
 }
 
@@ -265,12 +274,14 @@ pub unsafe extern "C" fn dms_auth_keyboard_interactive(
     });
 }
 
+/// `direct`: the signed request at once, `sign` asked before the server answers (`Session::auth_signer_direct`).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dms_auth_signer(
     handle: *mut DmsSession,
     user: *const c_char,
     public_key: *const u8,
     length: usize,
+    direct: bool,
     context: *mut c_void,
     sign: Option<SignFn>,
     done: Option<AuthFn>,
@@ -300,7 +311,8 @@ pub unsafe extern "C" fn dms_auth_signer(
                 }
             })
         });
-        report(done, context, session.auth_signer(&user, public, ask).await)
+        let outcome = if direct { session.auth_signer_direct(&user, public, ask).await } else { session.auth_signer(&user, public, ask).await };
+        report(done, context, outcome)
     });
 }
 
@@ -375,6 +387,7 @@ impl ExecEvents for FfiExecEvents {
             Exit::Status(status) => (0, status, String::new()),
             Exit::Signal(signal) => (1, 0, signal),
             Exit::Lost => (2, 0, String::new()),
+            Exit::Refused(message) => (3, 0, message),
         };
         let signal = c_string(&signal);
         unsafe { callback(self.context.get(), kind, status, signal.as_ptr()) };

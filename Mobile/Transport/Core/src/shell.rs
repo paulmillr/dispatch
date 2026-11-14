@@ -87,6 +87,6 @@ pub async fn shell(session: &Session, term: &str, cols: u32, rows: u32, events: 
         return Err(failure);
     }
     let write = Arc::new(write);
-    let fd = pump(read, write.clone(), early, events, InputEnd::Close)?;
+    let fd = pump(read, write.clone(), early, events, InputEnd::Close, None)?;
     Ok((fd, Shell { write }))
 }

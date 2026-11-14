@@ -58,6 +58,8 @@ final class HostSessions {
     let keys: KeyStore
     let knownHosts: KnownHostStore
     @ObservationIgnored let driver: any HostSessionDriver
+    /// Which keys logged in where (the driver's, when it is the SSH driver): kept to the saved hosts' endpoints.
+    @ObservationIgnored let keyLogins: KeyLogins
     /// Steps every session runs after each connection is ready, in order. The transport integration adds Pi's
     /// `installation.install {launch, enabled: true}` here (the helper keeps that state per connection).
     @ObservationIgnored var postConnect: [HostPostConnectStep] = [] {
@@ -115,12 +117,17 @@ final class HostSessions {
     private struct Weak { weak var session: HostSession? }
 
     /// `active` connects every host at once, so the first frame already shows them connecting.
-    init(store: HostStore, keys: KeyStore, knownHosts: KnownHostStore, driver: any HostSessionDriver, active: Bool = false) {
+    init(store: HostStore, keys: KeyStore, knownHosts: KnownHostStore, driver: any HostSessionDriver,
+         keyLogins: KeyLogins = KeyLogins(), active: Bool = false) {
         self.store = store
         self.keys = keys
         self.knownHosts = knownHosts
         self.driver = driver
+        self.keyLogins = keyLogins
         self.active = active
+        // What a launch finds of hosts no longer saved (one tried in Add host and never added, a login that finished
+        // after its host was removed).
+        keyLogins.keep(store.hosts)
         sync()
     }
 
@@ -433,6 +440,7 @@ final class HostSessions {
         var record = record
         record.parked = previous.parked
         store.update(record)
+        keyLogins.keep(store.hosts)
         guard let saved = store.record(record.id), let session = sessions[record.id] else { return }
         if previous.sameConnection(as: saved) {
             session.update(saved)
@@ -457,8 +465,8 @@ final class HostSessions {
         changed?()
     }
 
-    /// Forgets the host, its password, and its host key unless another host uses the same address and port. Nothing
-    /// changes on the host.
+    /// Forgets the host, its password, its host key unless another host uses the same address and port, and which key
+    /// logged in there (`KeyLogins`) unless another host has the same address, port and user. Nothing changes on the host.
     func remove(_ id: UUID) {
         guard let record = store.record(id) else { return }
         sessions[id]?.disconnect()
@@ -466,6 +474,7 @@ final class HostSessions {
         quietRefusals[id] = nil
         withdrawQuestions(of: id, mismatches: true)
         store.remove(id)
+        keyLogins.keep(store.hosts)
         keys.removePassword(for: id)
         if !store.hosts.contains(where: { $0.address.lowercased() == record.address.lowercased() && $0.port == record.port }) {
             knownHosts.forget(host: record.address, port: record.port)

@@ -1,4 +1,5 @@
 @testable import MobileTransport
+import CryptoKit
 import Synchronization
 import XCTest
 @testable import DispatchMobile
@@ -473,7 +474,8 @@ extension SSHDriverTests {
         XCTAssertFalse(second.isClosed)
         XCTAssertTrue(second.command.contains(#"cd -P "$XDG_RUNTIME_DIR""#), "the runtime folder's launch: \(second.command)")
         XCTAssertFalse(first.command.contains("XDG_RUNTIME_DIR"), first.command)
-        XCTAssertTrue(second.installed.path.hasPrefix("/run/user/1000/dispatch/bin/versions/"), second.installed.path)
+        let moved = try XCTUnwrap(second.installed)
+        XCTAssertTrue(moved.path.hasPrefix("/run/user/1000/dispatch/bin/versions/"), moved.path)
         XCTAssertTrue(login.isOpen)
     }
 
@@ -629,17 +631,211 @@ extension SSHDriverTests {
     }
 }
 
-/// A scripted SSH login (`HostLogin`): no network. `bootstrap` answers each `bootstrapHelper` (by root) with a helper or
-/// an error; it records the roots asked, and shells come from `opener`.
+/// The first attempt starts the helper straight from the host's cache (`fromCache`), its `hello` sent at once; a launch
+/// that started none leads into the full bootstrap and a second `hello`, never into plain SSH or a reconnect, and the
+/// runtime folder's retry and the fallback texts stay as they were.
+extension SSHDriverTests {
+    private func cacheHost() -> HostRecord {
+        HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .password)
+    }
+
+    /// Runs `host` through a driver whose logins are `login`'s; what it yielded.
+    private func drive(_ login: ScriptedLogin) -> (events: Recorder<Seen>, task: Task<Void, Never>) {
+        var driver = SSHHostSessionDriver(pingInterval: .seconds(3600))
+        driver.firstTopology = .milliseconds(50)
+        driver.exitWait = .seconds(1)
+        driver.login = login.step
+        let events = Recorder<Seen>()
+        let stream = driver.run(cacheHost(), context: HostSessionContext(
+            verifyHostKey: { _ in true }, key: { nil }, password: { "correct horse" }, retries: AsyncStream { _ in }))
+        let task = Task.detached {
+            for await event in stream {
+                switch event {
+                case .link(let link): events.append(.link(link))
+                case .ready: events.append(.ready)
+                case .plain(let reason, _): events.append(.plain(reason))
+                default: events.append(.other)
+                }
+            }
+        }
+        return (events, task)
+    }
+
+    private func reconnected(_ events: Recorder<Seen>) -> Bool {
+        events.values.contains { if case .link(.reconnecting) = $0 { true } else { false } }
+    }
+
+    private func plainReason(_ events: Recorder<Seen>) -> String?? {
+        for case .plain(let reason) in events.values { return .some(reason) }
+        return nil
+    }
+
+    /// A helper the cache holds: one attempt, from the cache, greeted.
+    func testACachedHelperStartsInOneAttempt() async throws {
+        let processes = Recorder<ScriptedHelperProcess>()
+        let login = ScriptedLogin { root, _ in
+            let made = ScriptedHelperProcess(root: root, hello: ScriptedHelperProcess.hello())
+            processes.append(made)
+            return made
+        }
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { events.values.contains(.ready) }
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true)])
+        XCTAssertEqual(processes.values.first?.requests("hello").count, 1)
+        XCTAssertNil(plainReason(events))
+    }
+
+    /// The launch from the cache started no helper (its `hello` went unanswered with the channel): the full bootstrap on
+    /// the same connection, which greets. No plain SSH, no reconnect, nothing closed but the first channel.
+    func testACacheMissInstallsAndGreetsAgain() async throws {
+        let processes = Recorder<ScriptedHelperProcess>()
+        let login = ScriptedLogin(launch: { root, fromCache, _ in
+            let made = fromCache
+                ? ScriptedHelperProcess(root: root, exit: 3, stderr: "DISPATCH_PLATFORM=Linux:aarch64\n", missed: true)
+                : ScriptedHelperProcess(root: root, hello: ScriptedHelperProcess.hello())
+            processes.append(made)
+            return made
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { events.values.contains(.ready) }
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true), .init(root: .home, fromCache: false)])
+        let first = try XCTUnwrap(processes.values.first), second = try XCTUnwrap(processes.values.last)
+        XCTAssertTrue(first.isClosed)
+        XCTAssertEqual(second.requests("hello").count, 1, "a second hello to the installed helper")
+        XCTAssertFalse(second.isClosed)
+        XCTAssertNil(plainReason(events))
+        XCTAssertFalse(reconnected(events))
+        XCTAssertTrue(login.isOpen)
+    }
+
+    /// A miss whose full bootstrap then fails (here the platform): plain SSH with the bootstrap's own text, as before.
+    func testACacheMissThenABootstrapFailureIsPlainWithItsText() async throws {
+        let reason = "SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon."
+        let login = ScriptedLogin(launch: { root, fromCache, _ in
+            guard fromCache else { throw SSHTransportError.bootstrap(reason) }
+            return ScriptedHelperProcess(root: root, exit: 3, stderr: "DISPATCH_PLATFORM=FreeBSD:amd64\n", missed: true)
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { plainReason(events) != nil }
+        XCTAssertEqual(plainReason(events), .some(reason))
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true), .init(root: .home, fromCache: false)])
+        XCTAssertFalse(reconnected(events))
+    }
+
+    /// Two misses never loop: the second attempt is the full bootstrap, and its helper's end is the failure.
+    func testAMissIsFollowedByOneFullBootstrapOnly() async throws {
+        let login = ScriptedLogin(launch: { root, fromCache, _ in
+            fromCache ? ScriptedHelperProcess(root: root, exit: 3, missed: true)
+                : ScriptedHelperProcess(root: root, exit: 1, stderr: "dispatch-setup: installed helper does not verify\n")
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "\(events.values)") { plainReason(events) != nil }
+        XCTAssertEqual(plainReason(events), .some("Could not start the helper: installed helper does not verify."))
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true), .init(root: .home, fromCache: false)])
+    }
+
+    /// A miss on a connection that went meanwhile is a loss: it reconnects, with no full bootstrap on the dead one.
+    func testAMissOnALostConnectionReconnects() async throws {
+        let first = Recorder<ScriptedLogin>()
+        let step: HostLoginStep = { _, _, _, _, _, phase in
+            await phase(.authenticating)
+            let login = ScriptedLogin(launch: { root, _, login in
+                login.drop()
+                return ScriptedHelperProcess(root: root, exit: 3, missed: true)
+            })
+            first.append(login)
+            return login
+        }
+        var driver = SSHHostSessionDriver(pingInterval: .seconds(3600))
+        driver.exitWait = .seconds(1)
+        driver.login = step
+        let events = Recorder<Seen>()
+        let stream = driver.run(cacheHost(), context: HostSessionContext(
+            verifyHostKey: { _ in true }, key: { nil }, password: { "correct horse" }, retries: AsyncStream { _ in }))
+        let task = Task.detached {
+            for await event in stream {
+                if case .link(let link) = event { events.append(.link(link)) }
+                if case .plain(let reason, _) = event { events.append(.plain(reason)) }
+            }
+        }
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { reconnected(events) }
+        XCTAssertNil(plainReason(events))
+        XCTAssertEqual(try XCTUnwrap(first.values.first).attempts, [.init(root: .home, fromCache: true)])
+    }
+
+    /// The helper the cache held exits 126 (a home that cannot run programs, found only at the exec): the runtime folder
+    /// next, through the full bootstrap, as before.
+    func testAHelperFromTheCacheThatExits126MovesToTheRuntimeFolder() async throws {
+        let login = ScriptedLogin(launch: { root, _, _ in
+            root == .home
+                ? ScriptedHelperProcess(root: root, runtime: "/run/user/1000", exit: 126, stderr: "sh: ./dispatch-helper: Permission denied\n")
+                : ScriptedHelperProcess(root: root, runtime: "/run/user/1000", hello: ScriptedHelperProcess.hello())
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { events.values.contains(.ready) }
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true), .init(root: .runtimeDirectory, fromCache: false)])
+        XCTAssertNil(plainReason(events))
+    }
+
+    /// The helper the cache held started and exited before greeting: its text, with no full bootstrap after it.
+    func testAHelperFromTheCacheThatExitsIsPlainWithItsStderr() async throws {
+        let login = ScriptedLogin(launch: { root, _, _ in
+            ScriptedHelperProcess(root: root, exit: 2, stderr: "dispatch-helper: cannot open the socket folder\n")
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "\(events.values)") { plainReason(events) != nil }
+        XCTAssertEqual(plainReason(events), .some("The helper stopped before it answered: dispatch-helper: cannot open the socket folder"))
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true)])
+    }
+
+    /// The server refuses the exec request (now reported as the channel's end, after the hello left): plain SSH with the
+    /// text a refused exec always gave.
+    func testARefusedLaunchIsPlainWithTheRefusalsText() async throws {
+        let login = ScriptedLogin(launch: { root, _, _ in
+            ScriptedHelperProcess(root: root, refusal: .commandFailed(status: -1, stderr: "the server refused the exec request"))
+        })
+        let (events, task) = drive(login)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { plainReason(events) != nil }
+        XCTAssertEqual(plainReason(events), .some("The host refused to run the helper: the server refused the exec request"))
+        XCTAssertEqual(login.attempts, [.init(root: .home, fromCache: true)])
+        XCTAssertTrue(login.isOpen)
+        XCTAssertFalse(reconnected(events))
+    }
+}
+
+/// A scripted SSH login (`HostLogin`): no network. `bootstrap` answers each `bootstrapHelper` (by root, and whether it is
+/// the launch from the cache) with a helper or an error; it records the roots and launches asked, and shells come from
+/// `opener`.
 final class ScriptedLogin: HostLogin, @unchecked Sendable {
     static let hostKey = HostKeyInfo(host: "studio.local", port: 22, algorithm: "ssh-ed25519", fingerprint: "SHA256:fixture",
                                      openSSH: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB")
     let opener = ScriptedShellOpener()
-    private let bootstrap: @Sendable (HelperBootstrap.Root, ScriptedLogin) throws -> ScriptedHelperProcess
-    private let state = Mutex<(roots: [HelperBootstrap.Root], open: Bool, waiters: [CheckedContinuation<Void, Never>])>(([], true, []))
+    private let bootstrap: @Sendable (HelperBootstrap.Root, Bool, ScriptedLogin) throws -> ScriptedHelperProcess
+    private let state = Mutex<(attempts: [Attempt], open: Bool, waiters: [CheckedContinuation<Void, Never>])>(([], true, []))
 
-    init(bootstrap: @escaping @Sendable (HelperBootstrap.Root, ScriptedLogin) throws -> ScriptedHelperProcess) {
-        self.bootstrap = bootstrap
+    /// One `bootstrapHelper` asked: its root, and whether from the cache.
+    struct Attempt: Equatable, Sendable, CustomStringConvertible {
+        let root: HelperBootstrap.Root
+        let fromCache: Bool
+        var description: String { "\(root)\(fromCache ? " from the cache" : "")" }
+    }
+
+    /// `bootstrap` answers every attempt alike, from the cache or not (a helper the cache held).
+    convenience init(bootstrap: @escaping @Sendable (HelperBootstrap.Root, ScriptedLogin) throws -> ScriptedHelperProcess) {
+        self.init(launch: { root, _, login in try bootstrap(root, login) })
+    }
+
+    /// `launch` answers by root and whether the attempt is the launch from the cache.
+    init(launch: @escaping @Sendable (HelperBootstrap.Root, Bool, ScriptedLogin) throws -> ScriptedHelperProcess) {
+        bootstrap = launch
     }
 
     /// The driver's login step: this login, after reporting authenticating.
@@ -652,7 +848,8 @@ final class ScriptedLogin: HostLogin, @unchecked Sendable {
 
     private let probing = Mutex<(result: Result<Void, any Error>, count: Int)>((.success(()), 0))
 
-    var roots: [HelperBootstrap.Root] { state.withLock { $0.roots } }
+    var roots: [HelperBootstrap.Root] { attempts.map(\.root) }
+    var attempts: [Attempt] { state.withLock { $0.attempts } }
     /// What the liveness probe's command gets (classified as the real login does, `SSHLogin.answered`), and how often it
     /// was asked.
     var probe: Result<Void, any Error> {
@@ -695,17 +892,20 @@ final class ScriptedLogin: HostLogin, @unchecked Sendable {
     func close() async { drop() }
 
     func bootstrapHelper(binaries: URL, capabilities: String, environment: [String: String], root: HelperBootstrap.Root,
-                         phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> any HelperProcess {
+                         fromCache: Bool, phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws
+        -> any HelperProcess {
         await phase(.bootstrapping)
-        state.withLock { $0.roots.append(root) }
-        return try bootstrap(root, self)
+        state.withLock { $0.attempts.append(Attempt(root: root, fromCache: fromCache)) }
+        return try bootstrap(root, fromCache, self)
     }
 }
 
 /// A started helper (`HelperProcess`): a `ScriptedHelper` answering `hello` (and the multiplexer requests), or one that
-/// exits with `exit` and `stderr` before answering.
+/// exits with `exit` and `stderr` before answering. `missed`: a launch from the cache that started no helper (no
+/// `installed`); `refusal`: the server refused its exec request.
 final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
-    let installed: HelperBootstrap.Installed
+    let installed: HelperBootstrap.Installed?
+    private let refusal: SSHTransportError?
     /// The launch command the real bootstrap runs for `installed`.
     let command: String
     private let helper: ScriptedHelper
@@ -719,8 +919,10 @@ final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
 
     /// `lost`: the channel ends with no exit status before answering (a signal, or the connection going).
     init(root: HelperBootstrap.Root, runtime: String? = nil, hello: [String: Any]? = nil, exit: Int32? = nil, lost: Bool = false,
-         stderr: String = "") {
-        installed = Self.installed(root: root, runtime: runtime)
+         stderr: String = "", missed: Bool = false, refusal: SSHTransportError? = nil) {
+        let installed = Self.installed(root: root, runtime: runtime)
+        self.installed = missed ? nil : installed
+        self.refusal = refusal
         command = HelperBootstrap.launchCommand(installed)
         said = stderr
         nonisolated(unsafe) let hello = hello
@@ -732,7 +934,7 @@ final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
             default: nil
             }
         }
-        if exit != nil || lost {
+        if exit != nil || lost || refusal != nil {
             // The helper ends before answering: its status first, then its channel closes under the request.
             end(exit)
             helper.close()
@@ -749,8 +951,8 @@ final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
         for waiter in waiters { waiter.resume(returning: status) }
     }
 
-    func exitStatus() async -> Int32? {
-        await withCheckedContinuation { (waiter: CheckedContinuation<Int32?, Never>) in
+    func exitStatus() async throws -> Int32? {
+        let status = await withCheckedContinuation { (waiter: CheckedContinuation<Int32?, Never>) in
             let status = state.withLock { state -> Int32?? in
                 if let status = state.status { return status }
                 state.waiters.append(waiter)
@@ -758,6 +960,8 @@ final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
             }
             if let status { waiter.resume(returning: status) }
         }
+        if let refusal { throw refusal }
+        return status
     }
 
     func stderr() async -> String { said }
@@ -803,4 +1007,266 @@ extension ScriptedHelperProcess {
         HelperBootstrap.Installed(platform: "linux-aarch64", digest: String(repeating: "ab", count: 32), size: 4_096, root: root,
                                   uploaded: false, runtimeDirectory: runtime)
     }
+}
+
+// MARK: - Key logins (direct public key attempts)
+
+extension SSHDriverTests {
+    /// What each credential is, for comparing lists.
+    nonisolated private static func kinds(_ credentials: [SSHCredential]) -> [String] {
+        credentials.map {
+            switch $0 {
+            case .key: "key"
+            case .directKey: "direct"
+            case .password: "password"
+            case .keyboardInteractive: "keyboard-interactive"
+            }
+        }
+    }
+
+    /// Reports how the plan's direct attempt (its first credential) ended, as `SSHConnection` does.
+    nonisolated private static func answer(_ credentials: [SSHCredential], _ answer: DirectKeyAnswer) {
+        guard case .directKey(_, let answered)? = credentials.first else { return XCTFail("no direct attempt") }
+        answered(answer)
+    }
+
+    /// `KeyLogins` without a file: a key that logged in at an endpoint goes direct first there next time, and only
+    /// there; a refused direct attempt forgets it, a withdrawn one changes nothing; one refused direct but accepted
+    /// asked, or one left unanswered, is not sent direct there again; nothing outlives the memory (another one asks
+    /// first).
+    func testKeyLoginsRememberAKeyForTheRunOnly() {
+        let logins = KeyLogins()
+        let key = SSHKey(ed25519: Curve25519.Signing.PrivateKey()), other = SSHKey(ed25519: Curve25519.Signing.PrivateKey())
+        let studio = SSHEndpoint(host: "studio.local", port: 22, username: "alex")
+        let kinds = { (key: SSHKey, endpoint: SSHEndpoint) in Self.kinds(logins.plan(key, at: endpoint).credentials) }
+
+        XCTAssertEqual(kinds(key, studio), ["key"], "the first connection asks first")
+        _ = logins.plan(key, at: studio) // a connect that failed before the login: nothing learnt
+        XCTAssertEqual(kinds(key, studio), ["key"])
+        logins.loggedIn(logins.plan(key, at: studio), credential: 1)
+        XCTAssertEqual(kinds(key, studio), ["key"], "another credential (keyboard-interactive) logged in")
+        logins.loggedIn(logins.plan(key, at: studio), credential: nil)
+        XCTAssertEqual(kinds(key, studio), ["key"], "not known which logged in")
+
+        logins.loggedIn(logins.plan(key, at: studio), credential: 0)
+        XCTAssertEqual(kinds(key, studio), ["direct", "key"])
+        for (key, endpoint) in [(other, studio), (key, SSHEndpoint(host: "studio.local", port: 2222, username: "alex")),
+                                (key, SSHEndpoint(host: "studio.local", port: 22, username: "sam")),
+                                (key, SSHEndpoint(host: "192.0.2.1", port: 22, username: "alex"))] {
+            XCTAssertEqual(kinds(key, endpoint), ["key"], "\(endpoint) \(key.fingerprint)")
+        }
+
+        // Logged in direct: kept. A connect failing before the login, or cancelled: kept.
+        var plan = logins.plan(key, at: studio)
+        Self.answer(plan.credentials, .loggedIn)
+        logins.loggedIn(plan, credential: 0)
+        _ = logins.plan(key, at: studio)
+        XCTAssertEqual(kinds(key, studio), ["direct", "key"])
+
+        // The signer declined, or the login was cancelled: nothing learnt about the server, kept.
+        Self.answer(logins.plan(key, at: studio).credentials, .withdrawn)
+        XCTAssertEqual(kinds(key, studio), ["direct", "key"])
+
+        // Refused direct and the login failed: forgotten, asked again.
+        plan = logins.plan(key, at: studio)
+        Self.answer(plan.credentials, .refused)
+        XCTAssertEqual(kinds(key, studio), ["key"])
+        logins.loggedIn(logins.plan(key, at: studio), credential: 0)
+        XCTAssertEqual(kinds(key, studio), ["direct", "key"], "logged in asked: direct again")
+
+        // Refused direct, then accepted asked on the same connection: never direct there again this run.
+        plan = logins.plan(key, at: studio)
+        Self.answer(plan.credentials, .refused)
+        logins.loggedIn(plan, credential: 1)
+        XCTAssertEqual(kinds(key, studio), ["key"])
+        logins.loggedIn(logins.plan(key, at: studio), credential: 0)
+        XCTAssertEqual(kinds(key, studio), ["key"], "a server that takes only queried keys")
+
+        // Unanswered (the connection ended first, or no answer in time): the next connection asks first, logs in, and
+        // the key is still never sent direct there again this run. Another endpoint is not affected.
+        let mini = SSHEndpoint(host: "mini.local", port: 22, username: "alex")
+        logins.loggedIn(logins.plan(key, at: mini), credential: 0)
+        XCTAssertEqual(kinds(key, mini), ["direct", "key"])
+        Self.answer(logins.plan(key, at: mini).credentials, .unanswered)
+        XCTAssertEqual(kinds(key, mini), ["key"])
+        logins.loggedIn(logins.plan(key, at: mini), credential: 0)
+        XCTAssertEqual(kinds(key, mini), ["key"], "a server that cannot take a request before its accept")
+        let nas = SSHEndpoint(host: "nas.local", port: 22, username: "alex")
+        logins.loggedIn(logins.plan(key, at: nas), credential: 0)
+        XCTAssertEqual(kinds(key, nas), ["direct", "key"])
+
+        XCTAssertEqual(Self.kinds(KeyLogins().plan(key, at: nas).credentials), ["key"], "another memory")
+    }
+
+    /// `KeyLogins` with a file (the app's): what is remembered outlives the run, so the first connection after a launch
+    /// goes direct; what a run forgot is forgotten in the next too; what a run barred is not barred in the next. One
+    /// key per endpoint, the file as docs/security.md lists it; a damaged or missing file is an empty memory.
+    func testSavedKeyLoginsOutliveTheRun() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("key-logins-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("key-logins.json")
+        let key = SSHKey(ed25519: Curve25519.Signing.PrivateKey()), other = SSHKey(ed25519: Curve25519.Signing.PrivateKey())
+        let studio = SSHEndpoint(host: "studio.local", port: 22, username: "alex")
+        let mini = SSHEndpoint(host: "mini.local", port: 2222, username: "sam")
+        let launched = { (key: SSHKey, endpoint: SSHEndpoint) in Self.kinds(KeyLogins(url: url).plan(key, at: endpoint).credentials) }
+        struct Saved: Decodable, Equatable {
+            struct Login: Decodable, Equatable { let host: String, port: Int, user: String, key: String }
+            let version: Int
+            let logins: [Login]
+        }
+        let saved = { try JSONDecoder().decode(Saved.self, from: Data(contentsOf: url)).logins }
+
+        var logins = KeyLogins(url: url)
+        XCTAssertEqual(Self.kinds(logins.plan(key, at: studio).credentials), ["key"], "no file yet")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "nothing learnt, nothing written")
+        logins.loggedIn(logins.plan(key, at: studio), credential: 0)
+        logins.loggedIn(logins.plan(other, at: mini), credential: 0)
+        XCTAssertEqual(try saved(), [.init(host: "mini.local", port: 2222, user: "sam", key: other.fingerprint),
+                                     .init(host: "studio.local", port: 22, user: "alex", key: key.fingerprint)])
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int, 0o600)
+        XCTAssertEqual(launched(key, studio), ["direct", "key"], "the first connection after a launch")
+        XCTAssertEqual(launched(other, mini), ["direct", "key"])
+        XCTAssertEqual(launched(other, studio), ["key"], "another key")
+        XCTAssertEqual(launched(key, SSHEndpoint(host: "studio.local", port: 22, username: "sam")), ["key"], "another user")
+
+        // A direct login, a withdrawn one: the file is as it was. A refused one: forgotten in the next run too.
+        logins = KeyLogins(url: url)
+        Self.answer(logins.plan(key, at: studio).credentials, .loggedIn)
+        Self.answer(logins.plan(key, at: studio).credentials, .withdrawn)
+        XCTAssertEqual(launched(key, studio), ["direct", "key"])
+        Self.answer(logins.plan(key, at: studio).credentials, .refused)
+        XCTAssertEqual(launched(key, studio), ["key"])
+        XCTAssertEqual(try saved().map(\.host), ["mini.local"])
+
+        // Unanswered: forgotten, and barred for that run only. The next run asks first, logs in and goes direct again.
+        Self.answer(logins.plan(other, at: mini).credentials, .unanswered)
+        logins.loggedIn(logins.plan(other, at: mini), credential: 0)
+        XCTAssertEqual(Self.kinds(logins.plan(other, at: mini).credentials), ["key"], "barred this run")
+        XCTAssertEqual(try saved(), [])
+        logins = KeyLogins(url: url)
+        XCTAssertEqual(Self.kinds(logins.plan(other, at: mini).credentials), ["key"])
+        logins.loggedIn(logins.plan(other, at: mini), credential: 0)
+        XCTAssertEqual(launched(other, mini), ["direct", "key"], "not barred in the next run")
+
+        // Another key logs in at the endpoint: it takes the first one's place.
+        logins.loggedIn(logins.plan(key, at: mini), credential: 0)
+        XCTAssertEqual(try saved(), [.init(host: "mini.local", port: 2222, user: "sam", key: key.fingerprint)])
+        XCTAssertEqual(launched(other, mini), ["key"])
+
+        // A damaged file is an empty memory, left where it is until the next login writes over it.
+        try Data("not json".utf8).write(to: url)
+        logins = KeyLogins(url: url)
+        XCTAssertEqual(Self.kinds(logins.plan(key, at: mini).credentials), ["key"])
+        XCTAssertEqual(try Data(contentsOf: url), Data("not json".utf8))
+        logins.loggedIn(logins.plan(key, at: studio), credential: 0)
+        XCTAssertEqual(try saved().map(\.host), ["studio.local"])
+
+        // Remove all data: the memory and the file.
+        logins.removeAll()
+        XCTAssertEqual(Self.kinds(logins.plan(key, at: studio).credentials), ["key"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /// The app's sessions keep the saved logins to the saved hosts: a launch drops an endpoint no host names, removing
+    /// a host drops its endpoint unless another host has the same address, port and user, and so does an edit of the
+    /// address, port or user.
+    func testKeyLoginsFollowTheSavedHosts() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("key-logins-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("key-logins.json")
+        let key = SSHKey(ed25519: Curve25519.Signing.PrivateKey())
+        let host = { (name: String) in HostRecord(name: name, address: name + ".local", user: "alex", auth: .key(UUID()), helper: false) }
+        var studio = host("studio")
+        let mini = host("mini"), twin = host("mini"), nas = host("nas")
+        let before = KeyLogins(url: url)
+        for record in [studio, mini, nas] { before.loggedIn(before.plan(key, at: record.endpoint), credential: 0) }
+        let kinds = { (logins: KeyLogins, record: HostRecord) in Self.kinds(logins.plan(key, at: record.endpoint).credentials) }
+
+        let logins = KeyLogins(url: url)
+        let sessions = HostSessions(store: HostStore(url: nil, hosts: [studio, mini, twin]),
+                                    keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false),
+                                    knownHosts: KnownHostStore(url: nil), driver: ScriptedHostSessionDriver(), keyLogins: logins)
+        XCTAssertEqual(kinds(logins, nas), ["key"], "no saved host: dropped at launch")
+        XCTAssertEqual(kinds(KeyLogins(url: url), nas), ["key"], "in the file too")
+        XCTAssertEqual(kinds(logins, studio), ["direct", "key"])
+
+        sessions.remove(mini.id)
+        XCTAssertEqual(kinds(logins, mini), ["direct", "key"], "another host has that address, port and user")
+        sessions.remove(twin.id)
+        XCTAssertEqual(kinds(logins, mini), ["key"])
+
+        var renamed = studio
+        renamed.name = "desk"
+        sessions.update(renamed)
+        XCTAssertEqual(kinds(logins, studio), ["direct", "key"], "not an edit of where it connects")
+        let old = studio
+        studio.port = 2222
+        sessions.update(studio)
+        XCTAssertEqual(kinds(logins, old), ["key"], "the port changed")
+        XCTAssertEqual(kinds(KeyLogins(url: url), old), ["key"])
+    }
+
+    /// The driver's connections of a key host: the first asks first (with keyboard-interactive, interactive); after it
+    /// logged in, the reconnect sends the key direct first; a direct attempt refused while the key asked logs in keeps
+    /// the following connections asking first.
+    func testAKeyHostsReconnectSendsTheKeyDirect() async throws {
+        let seen = Recorder<[String]>(), logins = Recorder<ScriptedLogin>()
+        // Per connection: how its direct attempt ends (nil: none expected) and which credential logs in.
+        let script: [(direct: DirectKeyAnswer?, credential: Int)] = [(nil, 0), (.loggedIn, 0), (.refused, 1), (nil, 0), (nil, 0)]
+        var driver = SSHHostSessionDriver(pingInterval: .seconds(3600))
+        driver.clock = ImmediateClock()
+        driver.keyLogins = KeyLogins()
+        driver.login = { endpoint, credentials, _, _, _, phase in
+            XCTAssertEqual(endpoint, SSHEndpoint(host: "studio.local", port: 22, username: "alex"))
+            let step = script[min(seen.values.count, script.count - 1)]
+            seen.append(Self.kinds(credentials))
+            if let direct = step.direct { Self.answer(credentials, direct) }
+            await phase(.authenticating)
+            let login = ScriptedLogin { _, _ in throw CancellationError() }
+            logins.append(login)
+            return IndexedLogin(login, credential: step.credential)
+        }
+        let host = HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .key(UUID()), helper: false)
+        let context = HostSessionContext(verifyHostKey: { _ in true }, key: { .ed25519(Curve25519.Signing.PrivateKey()) },
+                                         password: { nil }, retries: AsyncStream { _ in })
+        let stream = driver.run(host, context: context)
+        let task = Task.detached { for await _ in stream {} }
+        defer { task.cancel() }
+        for connection in 1..<script.count {
+            try await TestSupport.eventually(diagnostic: "\(seen.values)") { logins.values.count == connection }
+            logins.values[connection - 1].drop()
+        }
+        try await TestSupport.eventually(diagnostic: "\(seen.values)") { seen.values.count == script.count }
+        XCTAssertEqual(seen.values, [["key", "keyboard-interactive"], ["direct", "key"], ["direct", "key"], ["key"], ["key"]])
+    }
+}
+
+/// A scripted login that says which credential logged in.
+private final class IndexedLogin: HostLogin {
+    let base: ScriptedLogin
+    let credential: Int?
+
+    init(_ base: ScriptedLogin, credential: Int?) {
+        self.base = base
+        self.credential = credential
+    }
+
+    var isOpen: Bool { base.isOpen }
+    var lossReason: String? { base.lossReason }
+    var shells: any ShellOpener { base.shells }
+    func closed() async { await base.closed() }
+    func close() async { await base.close() }
+    func alive(timeout: Duration) async -> Bool { await base.alive(timeout: timeout) }
+    func bootstrapHelper(binaries: URL, capabilities: String, environment: [String: String], root: HelperBootstrap.Root,
+                         fromCache: Bool, phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws
+        -> any HelperProcess {
+        try await base.bootstrapHelper(binaries: binaries, capabilities: capabilities, environment: environment, root: root,
+                                       fromCache: fromCache, phase: phase)
+    }
+}
+
+/// Reconnects at once: the driver's backoff waits a few milliseconds.
+private struct ImmediateClock: ReconnectClock {
+    var now: Date { Date() }
+    func sleep(for duration: Duration) async throws { try await Task.sleep(for: .milliseconds(5)) }
 }

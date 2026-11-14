@@ -1,7 +1,7 @@
 //! Engine tests against an in-process russh server: keyboard-interactive and password (a user-owned
 //! OpenSSH sshd cannot do PAM, and cannot check passwords), the external signer, key files of every type
-//! (made with ssh-keygen), and exec and shell (PTY) channels through the socketpair. The Swift tests cover
-//! OpenSSH 10.3.
+//! (made with ssh-keygen), direct key logins (signed before any answer, through a proxy that holds the server's), and
+//! exec and shell (PTY) channels through the socketpair. The Swift tests cover OpenSSH 10.3.
 
 use dispatch_mobile_ssh::{AuthOutcome, Code, ConnectOptions, ExecEvents, Exit, HostKey, LoadedKey, Prompt, Session, SessionEvents, Resizer, exec, runtime, shell};
 use russh::keys::{PrivateKey, PublicKey};
@@ -111,7 +111,22 @@ impl server::Handler for Server {
     }
 
     /// `echo` replies "hello" on stdout and "warn" on stderr, then exits 7; `cat` echoes stdin until EOF.
+    /// `refuse` is refused. `noreply` never answers the request but echoes stdin until EOF (exit 0), so whatever
+    /// the client reads there it wrote and got back before any reply; `early` writes "early" before its success,
+    /// then exits 5.
     async fn exec_request(&mut self, channel: ChannelId, data: &[u8], session: &mut server::Session) -> Result<(), Self::Error> {
+        match data {
+            b"refuse" => return session.channel_failure(channel),
+            b"noreply" => return Ok(()),
+            b"early" => {
+                session.data(channel, &b"early"[..])?;
+                session.channel_success(channel)?;
+                session.exit_status_request(channel, 5)?;
+                session.eof(channel)?;
+                return session.close(channel);
+            }
+            _ => {}
+        }
         session.channel_success(channel)?;
         if data == b"echo" {
             session.data(channel, &b"hello"[..])?;
@@ -206,16 +221,22 @@ fn start_server() -> Running {
 
 /// A server that rekeys after `limits` (russh's own rekeys: the same host key every time).
 fn start_server_with(limits: russh::Limits) -> Running {
+    start_server_configured(|config| config.limits = limits)
+}
+
+/// A server with `configure`'s changes to the tests' configuration.
+fn start_server_configured(configure: impl FnOnce(&mut server::Config)) -> Running {
     let host = LoadedKey::parse(&key_file("host"), None).unwrap();
     let host_key = host.key.public_key().clone();
-    let config = Arc::new(server::Config {
+    let mut config = server::Config {
         keys: vec![(*host.key).clone()],
         auth_rejection_time: Duration::from_millis(1),
         auth_rejection_time_initial: Some(Duration::ZERO),
         methods: MethodSet::from(&[MethodKind::Password, MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]),
-        limits,
         ..Default::default()
-    });
+    };
+    configure(&mut config);
+    let config = Arc::new(config);
     let handler = Server { authorized: Arc::default(), rounds: Arc::default(), terminal: Arc::default(), shells: Arc::default(), signatures: Arc::default() };
     let listener = runtime().block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -840,6 +861,44 @@ mod abi {
         assert!(exited_rx.recv_timeout(Duration::from_millis(100)).is_err(), "exited runs once");
         unsafe { dms_session_free(session) };
     }
+
+    /// `direct` through the C ABI: a refused direct key is DMS_AUTH_FAILED with the methods left, and the same
+    /// connection logs in with the right key sent direct.
+    #[test]
+    fn a_direct_key_through_the_c_abi() {
+        let server = start_server();
+        let parse = |name: &str| {
+            let file = key_file(name);
+            let mut code = 0;
+            let key = unsafe { dms_key_parse(file.as_ptr(), file.len(), std::ptr::null(), &mut code, std::ptr::null_mut()) };
+            assert!(!key.is_null() && code == 0, "{name}: {code}");
+            key
+        };
+        let (right, stranger) = (parse("ed25519"), parse("ecdsa256"));
+        server.handler.authorized.lock().unwrap().push(LoadedKey::parse(&key_file("ed25519"), None).unwrap().key.public_key().clone());
+        let session = connect(server.port);
+        let user = CString::new("phone").unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let auth = Box::new(Auth { done: sender, prompts: Mutex::default() });
+        let context = (&*auth as *const Auth).cast_mut().cast();
+        unsafe { dms_auth_key(session, user.as_ptr(), stranger, true, context, Some(done)) };
+        let (code, remaining) = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!((code, remaining & 7), (1, 7), "refused, with password, publickey and keyboard-interactive left");
+        unsafe { dms_auth_key(session, user.as_ptr(), right, true, context, Some(done)) };
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap().0, 0);
+        unsafe { dms_session_free(session) };
+        unsafe { dms_key_free(right) };
+        unsafe { dms_key_free(stranger) };
+    }
+
+    /// The version names the russh that scripts/vendor-russh.py stages.
+    #[test]
+    fn the_version_names_the_staged_russh() {
+        let script = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../scripts/vendor-russh.py")).unwrap();
+        let staged = script.lines().find_map(|line| line.strip_prefix("VERSION = \"")?.strip_suffix('"')).unwrap();
+        let version = unsafe { CStr::from_ptr(dms_version()) }.to_str().unwrap();
+        assert!(version.ends_with(&format!("(russh {staged})")), "{version}, staged {staged}");
+    }
 }
 
 // MARK: - Rekeys and RSA signatures with russh's server
@@ -884,4 +943,344 @@ fn rsa_keys_sign_with_sha2_512() {
     let outcome = runtime().block_on(session.auth_key("phone", key.key.clone()));
     assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
     assert_eq!(*server.handler.signatures.lock().unwrap(), ["rsa-sha2-512"]);
+}
+
+// MARK: - Direct public key logins
+
+/// A proxy to `port` whose answers can be held: while held, what the server sends waits in the proxy, and the client's
+/// bytes still pass. What reaches the server meanwhile is what the client sent without hearing anything back.
+struct Gate {
+    port: u16,
+    open: tokio::sync::watch::Sender<bool>,
+}
+
+impl Gate {
+    fn new(port: u16) -> Gate {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = runtime().block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
+        let proxy = listener.local_addr().unwrap().port();
+        let (open, mut watching) = tokio::sync::watch::channel(true);
+        runtime().spawn(async move {
+            let Ok((client, _)) = listener.accept().await else { return };
+            let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else { return };
+            let (mut client_read, mut client_write) = client.into_split();
+            let (mut server_read, mut server_write) = server.into_split();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy(&mut client_read, &mut server_write).await;
+            });
+            let mut buffer = vec![0u8; 64 * 1024];
+            loop {
+                let count = match server_read.read(&mut buffer).await {
+                    Ok(count) if count > 0 => count,
+                    _ => return,
+                };
+                // Checked after the read: an answer read while held waits here.
+                if watching.wait_for(|open| *open).await.is_err() || client_write.write_all(&buffer[..count]).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Gate { port: proxy, open }
+    }
+
+    fn hold(&self) {
+        self.open.send_replace(false);
+    }
+
+    fn release(&self) {
+        self.open.send_replace(true);
+    }
+
+    /// Connects to `server` through the proxy.
+    fn connect(&self, server: &Running) -> Arc<Session> {
+        connect(&Running { port: self.port, host_key: server.host_key.clone(), handler: server.handler.clone() }).0
+    }
+}
+
+fn signatures(server: &Running) -> Vec<String> {
+    server.handler.signatures.lock().unwrap().clone()
+}
+
+/// The signed request leaves without an answer from the server (neither the service accept nor a PK_OK): with every
+/// answer held, the server verifies the signature, and the login succeeds once they pass. RSA signs rsa-sha2-512.
+/// russh's server checks an unprobed signed key through `auth_publickey_offered` too, so the hook cannot tell a direct
+/// request from a queried one; tests/hostile.rs reads the request's has-signature byte itself.
+#[test]
+fn a_direct_key_login_is_signed_before_any_answer() {
+    for (name, algorithm) in [("ed25519", "ssh-ed25519"), ("ecdsa256", "ecdsa-sha2-nistp256"), ("rsa", "rsa-sha2-512")] {
+        let server = start_server();
+        let key = LoadedKey::parse(&key_file(name), None).unwrap();
+        server.handler.authorized.lock().unwrap().push(key.key.public_key().clone());
+        let gate = Gate::new(server.port);
+        let session = gate.connect(&server);
+        // An RSA key's hash waits for EXT_INFO: let it through before holding (it follows the server's NEWKEYS).
+        std::thread::sleep(Duration::from_millis(100));
+        gate.hold();
+        let attempt = {
+            let (session, key) = (session.clone(), key.key.clone());
+            runtime().spawn(async move { session.auth_key_direct("phone", key).await })
+        };
+        eventually("the server verifying the signed request", || signatures(&server).len() == 1);
+        assert!(!attempt.is_finished(), "{name}: answered while the answers were held");
+        gate.release();
+        let outcome = runtime().block_on(attempt).unwrap();
+        assert!(matches!(outcome, AuthOutcome::Success), "{name}: {outcome:?}");
+        assert_eq!(signatures(&server), [algorithm], "{name}");
+    }
+}
+
+/// Without `direct` nothing reaches the server's key checks while its answers are held: the query waits for the
+/// service accept, the signature for the PK_OK.
+#[test]
+fn a_queried_key_login_waits_for_the_server() {
+    let server = start_server();
+    let key = LoadedKey::parse(&key_file("ed25519"), None).unwrap();
+    server.handler.authorized.lock().unwrap().push(key.key.public_key().clone());
+    let gate = Gate::new(server.port);
+    let session = gate.connect(&server);
+    gate.hold();
+    let attempt = {
+        let (session, key) = (session.clone(), key.key.clone());
+        runtime().spawn(async move { session.auth_key("phone", key).await })
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(signatures(&server).is_empty());
+    gate.release();
+    assert!(matches!(runtime().block_on(attempt).unwrap(), AuthOutcome::Success));
+    assert_eq!(signatures(&server), ["ssh-ed25519"]);
+}
+
+/// The external signer is asked as the request is written (the bytes hold the session id), before the server said
+/// anything about the key; the request goes once it signed.
+#[test]
+fn a_direct_signer_login_signs_before_any_answer() {
+    for name in ["ed25519", "ecdsa256"] {
+        let server = start_server();
+        let key: PrivateKey = (*LoadedKey::parse(&key_file(name), None).unwrap().key).clone();
+        server.handler.authorized.lock().unwrap().push(key.public_key().clone());
+        let gate = Gate::new(server.port);
+        let session = gate.connect(&server);
+        gate.hold();
+        let asked = Arc::new(Mutex::new(0));
+        let attempt = {
+            let (session, public, asked) = (session.clone(), key.public_key().clone(), asked.clone());
+            runtime().spawn(async move {
+                session
+                    .auth_signer_direct("phone", public, Box::new(move |data| {
+                        *asked.lock().unwrap() += 1;
+                        let raw = raw_signature(&key, &data);
+                        Box::pin(async move { Some(raw) })
+                    }))
+                    .await
+            })
+        };
+        eventually("the server verifying the signed request", || signatures(&server).len() == 1);
+        assert_eq!(*asked.lock().unwrap(), 1, "{name}");
+        gate.release();
+        let outcome = runtime().block_on(attempt).unwrap();
+        assert!(matches!(outcome, AuthOutcome::Success), "{name}: {outcome:?}");
+    }
+}
+
+/// A direct key the server refuses is an ordinary failure (the methods left, no partial success), and the same
+/// connection goes on to the next credential: a queried key, another direct one, a password.
+#[test]
+fn a_refused_direct_key_falls_through_to_the_next_credential() {
+    let server = start_server();
+    let right = LoadedKey::parse(&key_file("ed25519"), None).unwrap();
+    let stranger = LoadedKey::parse(&key_file("ecdsa256"), None).unwrap();
+    let signer: PrivateKey = (*LoadedKey::parse(&key_file("ecdsa384"), None).unwrap().key).clone();
+    server.handler.authorized.lock().unwrap().push(right.key.public_key().clone());
+    let refused = |outcome: AuthOutcome| matches!(outcome, AuthOutcome::Failure { remaining: 7, partial: false });
+
+    let (session, _) = connect(&server);
+    assert!(refused(runtime().block_on(session.auth_key_direct("phone", stranger.key.clone()))));
+    let outcome = runtime().block_on(session.auth_key("phone", right.key.clone()));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+
+    let (session, _) = connect(&server);
+    let unknown = signer.public_key().clone();
+    let outcome = runtime().block_on(session.auth_signer_direct("phone", unknown, Box::new(move |data| {
+        let raw = raw_signature(&signer, &data);
+        Box::pin(async move { Some(raw) })
+    })));
+    assert!(refused(outcome));
+    assert!(refused(runtime().block_on(session.auth_key_direct("phone", stranger.key.clone()))));
+    let outcome = runtime().block_on(session.auth_key_direct("phone", right.key.clone()));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+
+    let (session, _) = connect(&server);
+    assert!(refused(runtime().block_on(session.auth_key_direct("phone", stranger.key.clone()))));
+    assert!(matches!(runtime().block_on(session.auth_password("phone", "s3cret")), AuthOutcome::Success));
+}
+
+/// A signer that declines (Face ID dismissed) before the server heard anything: the attempt is cancelled at once,
+/// nothing more goes for it, and the connection logs in with the next credential, as the first request or later.
+#[test]
+fn a_declined_direct_signature_leaves_the_connection_usable() {
+    let server = start_server();
+    let key = LoadedKey::parse(&key_file("ed25519"), None).unwrap();
+    server.handler.authorized.lock().unwrap().push(key.key.public_key().clone());
+    for first in [true, false] {
+        let (session, _) = connect(&server);
+        if !first {
+            assert!(!matches!(runtime().block_on(session.auth_password("phone", "wrong")), AuthOutcome::Success));
+        }
+        let public = key.key.public_key().clone();
+        let outcome = runtime().block_on(session.auth_signer_direct("phone", public, Box::new(|_| Box::pin(async { None }))));
+        assert!(matches!(outcome, AuthOutcome::Error(ref failure) if failure.code == Code::Cancelled), "{outcome:?}");
+        let outcome = runtime().block_on(session.auth_key("phone", key.key.clone()));
+        assert!(matches!(outcome, AuthOutcome::Success), "first {first}: {outcome:?}");
+    }
+    assert_eq!(signatures(&server).len(), 2, "only the logins' signatures reached the server");
+}
+
+/// The server lists only rsa-sha2-256 in `server-sig-algs`: a direct RSA request signs with it, as a queried one does.
+#[test]
+fn a_direct_rsa_key_signs_what_the_server_lists() {
+    let server = start_server_configured(|config| {
+        config.preferred.key = vec![russh::keys::Algorithm::Ed25519, russh::keys::Algorithm::Rsa { hash: Some(russh::keys::HashAlg::Sha256) }].into();
+    });
+    let key = LoadedKey::parse(&key_file("rsa"), None).unwrap();
+    server.handler.authorized.lock().unwrap().push(key.key.public_key().clone());
+    let (session, _) = connect(&server);
+    let outcome = runtime().block_on(session.auth_key_direct("phone", key.key.clone()));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+    assert_eq!(signatures(&server), ["rsa-sha2-256"]);
+}
+
+// MARK: - Exec before its reply
+
+/// `exec` within a deadline: the engine hands the socket over as the request leaves, so a server that never answers
+/// it (`noreply`) cannot hold the caller.
+fn exec_now(session: &Arc<Session>, command: &str, log: Arc<ExecLog>) -> std::os::unix::net::UnixStream {
+    let started = runtime().block_on(async { tokio::time::timeout(Duration::from_secs(5), exec(session, command, log)).await });
+    let fd = started.expect("the socket waits for no reply").expect("exec");
+    let socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    socket
+}
+
+/// The server never answers the exec request: what the caller writes at once reaches the command (it echoes it), and
+/// the output, all of it before any reply, reaches the caller; EOF ends it as usual.
+#[test]
+fn bytes_written_before_the_exec_reply_reach_the_command() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let mut socket = exec_now(&session, "noreply", log.clone());
+    socket.write_all(b"ping").unwrap();
+    assert_eq!(read_until(&mut socket, b"ping"), b"ping");
+    socket.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut rest = Vec::new();
+    socket.read_to_end(&mut rest).unwrap();
+    assert!(rest.is_empty(), "{rest:?}");
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Status(0)));
+}
+
+/// Output the server sends before its success is kept, in order, ahead of the exit.
+#[test]
+fn output_before_the_exec_reply_is_kept() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let mut socket = exec_now(&session, "early", log.clone());
+    let mut output = Vec::new();
+    socket.read_to_end(&mut output).unwrap();
+    assert_eq!(output, b"early");
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Status(5)));
+}
+
+/// A refused exec request still hands the socket over (it left before the refusal came), which then reads end of file;
+/// the channel ends as `Refused` with the engine's message, and the connection serves the next exec.
+#[test]
+fn a_refused_exec_ends_as_refused() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let mut socket = exec_now(&session, "refuse", log.clone());
+    let _ = socket.write_all(b"hello"); // sent behind the request: dropped with the channel
+    let mut output = Vec::new();
+    socket.read_to_end(&mut output).unwrap();
+    assert!(output.is_empty(), "{output:?}");
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Refused("the server refused the exec request".into())));
+    assert!(log.stderr.lock().unwrap().is_empty());
+
+    let log = exec_log();
+    let mut socket = exec_now(&session, "echo", log.clone());
+    let mut output = String::new();
+    socket.read_to_string(&mut output).unwrap();
+    assert_eq!(output, "hello", "the connection stays up");
+}
+
+/// The C ABI: a refused exec starts (DMS_OK with a descriptor), then exits once as DMS_EXIT_REFUSED (3) with the
+/// engine's message.
+mod exec_abi {
+    use super::*;
+    use dispatch_mobile_ssh::ffi::*;
+    use std::ffi::{CStr, CString, c_char, c_void};
+    use std::sync::mpsc;
+
+    struct Run {
+        started: mpsc::Sender<(i32, i32)>,
+        exited: mpsc::Sender<(i32, u32, String)>,
+    }
+
+    unsafe extern "C" fn trust(_: *mut c_void, _: *const DmsHostKey, reply: *mut DmsReply) {
+        unsafe { dms_reply_bool(reply, true) };
+    }
+
+    unsafe extern "C" fn connected(context: *mut c_void, session: *mut DmsSession, code: i32, _: *const c_char) {
+        let sender = unsafe { Box::from_raw(context.cast::<mpsc::Sender<(usize, i32)>>()) };
+        sender.send((session as usize, code)).unwrap();
+    }
+
+    unsafe extern "C" fn authenticated(context: *mut c_void, code: i32, _: u32, _: bool, _: *const c_char) {
+        let sender = unsafe { Box::from_raw(context.cast::<mpsc::Sender<i32>>()) };
+        sender.send(code).unwrap();
+    }
+
+    unsafe extern "C" fn started(context: *mut c_void, fd: i32, code: i32, _: *const c_char) {
+        let run = unsafe { &*context.cast::<Run>() };
+        run.started.send((fd, code)).unwrap();
+    }
+
+    unsafe extern "C" fn exited(context: *mut c_void, kind: i32, status: u32, signal: *const c_char) {
+        let run = unsafe { &*context.cast::<Run>() };
+        let signal = unsafe { CStr::from_ptr(signal) }.to_str().unwrap().to_owned();
+        run.exited.send((kind, status, signal)).unwrap();
+    }
+
+    #[test]
+    fn a_refused_exec_through_the_c_abi() {
+        let server = start_server();
+        let host = CString::new("127.0.0.1").unwrap();
+        let options = DmsConnectOptions { host: host.as_ptr(), port: server.port, timeout_ms: 10_000, keepalive_interval_ms: 15_000, keepalive_max: 3 };
+        let callbacks = DmsSessionCallbacks { context: std::ptr::null_mut(), host_key: Some(trust), disconnected: None };
+        let (sender, receiver) = mpsc::channel::<(usize, i32)>();
+        unsafe { dms_connect(&options, callbacks, Box::into_raw(Box::new(sender)).cast(), Some(connected)) };
+        let (session, code) = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(code, 0);
+        let session = session as *mut DmsSession;
+        let (user, password) = (CString::new("phone").unwrap(), CString::new("s3cret").unwrap());
+        let (sender, receiver) = mpsc::channel::<i32>();
+        unsafe { dms_auth_password(session, user.as_ptr(), password.as_ptr(), Box::into_raw(Box::new(sender)).cast(), Some(authenticated)) };
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap(), 0);
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (exited_tx, exited_rx) = mpsc::channel();
+        let run = Box::new(Run { started: started_tx, exited: exited_tx });
+        let command = CString::new("refuse").unwrap();
+        unsafe { dms_exec(session, command.as_ptr(), (&*run as *const Run).cast_mut().cast(), Some(started), None, Some(exited)) };
+        let (fd, code) = started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(code, 0);
+        assert!(fd >= 0);
+        drop(unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) });
+        assert_eq!(exited_rx.recv_timeout(Duration::from_secs(10)).unwrap(), (3, 0, "the server refused the exec request".to_owned()));
+        assert!(exited_rx.recv_timeout(Duration::from_millis(100)).is_err(), "exited runs once");
+        unsafe { dms_session_free(session) };
+    }
 }

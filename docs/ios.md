@@ -167,8 +167,9 @@ Mac views built on the Mac chat stack are ported, not shared.
 
 ### Transport
 
-The engine is Rust `russh` 0.65.0 (`ring`, `rsa`) with one patch (`Mobile/Transport/Core/russh.patch`: every rekey's
-host key goes through `check_server_key`, [security](security.md#dispatch-for-iphone)), behind a hand-written C ABI (`Mobile/Transport/Core`, crate
+The engine is Rust `russh` 0.65.0 (`ring`, `rsa`) with a patch (`Mobile/Transport/Core/russh.patch`: every rekey's
+host key goes through `check_server_key`, [security](security.md#dispatch-for-iphone), and direct public key requests,
+below), behind a hand-written C ABI (`Mobile/Transport/Core`, crate
 `dispatch-mobile-ssh`), built into an XCFramework by `scripts/build-mobile-ssh.py` in a minimal environment so Xcode's
 settings cannot leak into ring's C build. The engine's `Cargo.toml` names russh by path, `build/mobile-ssh/russh`:
 `scripts/vendor-russh.py` stages the published crate there (SHA-256 checked, kept in `build/downloads`) with the patch
@@ -179,23 +180,54 @@ no cmake. Third-party Rust enters only here; `helper/` stays dependency-free.
 
 - Private keys sign in Swift (CryptoKit, Secure Enclave) through the external-signer callback and never cross the
   FFI. File keys are parsed in Rust. RSA signs `rsa-sha2-512/256`, never `ssh-rsa`.
+- **Key logins.** A key goes as SSH clients send it: `SERVICE_REQUEST`, then once the server accepted the userauth
+  service a query (is this key acceptable?), then after its `PK_OK` the signed request: three round trips on a new
+  connection. A direct attempt (`SSHCredential.directKey`, `dms_auth_key`/`dms_auth_signer` with `direct`;
+  `Handle::next_publickey_direct` in the patch) sends the signed request without the query (RFC 4252 §7 makes it
+  optional) and, as the connection's first request, right behind `SERVICE_REQUEST`: one round trip. The accept and any
+  `EXT_INFO` then arrive while it is pending. An external signer is asked as the request is written (the bytes hold the
+  session id), before the server said anything about the key; declining sends nothing more for it. RSA's hash still
+  comes from `server-sig-algs`, which the server sends right behind its first `NEWKEYS`, so it costs no round trip. A
+  refused direct attempt is an ordinary failure and the next credential goes on the same connection. One the server
+  never answers is the connection's end and never a failed login, which would be final: `channelClosed` when the
+  connection ended first (russh reports that as a failure with no method left), `timedOut` when no answer came within
+  10 s of the request, a signer's own time not counted, after which the engine closes the connection. Without
+  `direct` the bytes on the wire are those of published russh. Which keys go direct: [Connection](#connection).
 - The host-key callback is answered later (`dms_reply_bool`), so the trust sheet can wait; the handshake deadline
   pauses meanwhile. Rekeys never ask: each must present the first exchange's key and algorithm, or the connection
   ends (`disconnected` with `DMS_HOST_KEY_CHANGED`, `SSHTransportError.hostKeyChangedAtRekey`: final, like a
   mismatch, so the host waits for Connect, whose connection checks the key as usual). `disconnected` fires exactly once.
 - An exec channel is a socketpair fd pumped by Rust with backpressure both ways; `HelperTransport` reads it unchanged.
+  It is handed over as the exec request leaves, without waiting for the server's reply; a refused request is the
+  channel's end (`DMS_EXIT_REFUSED`: `exitStatus()` throws `commandFailed(status: -1, …)`, as the refused start did
+  before). The first bytes written (the `hello`) follow the request as far as the channel's window allows, which with
+  OpenSSH saves nothing: its sshd opens a session channel with a window of zero and grants it only once the command
+  started, so the `hello` leaves a round trip after the request either way.
   A shell channel (plain SSH) is a session channel with a PTY; the package README specifies it.
 - Limits: host certificates refused, user certificates not wired; no x86_64 simulator or Intel Mac slice;
   `panic = "abort"`; release-built even in Debug.
 
 ### Connection
 
-`SSHHostSessionDriver` connects (host key through `KnownHostStore`), logs in, uploads the helper for the host's `uname`
+`SSHHostSessionDriver` connects (host key through `KnownHostStore`), logs in (a key that logged in on the host before
+direct first, below), uploads the helper for the host's `uname`
 to `~/.dispatch/bin/versions/<sha256>/` (or the runtime folder, [Helper contract](#helper-contract)), starts it, greets
 it, reads `multiplexers.list` and `backends.list`, waits up to 2 s for the first topology, then is ready. It pings
 with `echo` at once, then on the ticks of the shared 15 s clock that no stats sample covers (Traffic, below). A host
 with its Helper switch off stops after the login, and a helper that cannot be installed, started or used leaves the
 connection up without it: both are [plain SSH](#plain-ssh).
+
+- **Start from the cache.** The first attempt is one command (`HelperBootstrap.cachedLaunchCommand`, [Helper
+  contract](#helper-contract)) that probes, checks the cache and starts the helper, with the `hello` written as soon as
+  the channel is handed over: after the login a cached helper has answered the `hello` 3 round trips later (the
+  channel's open, the exec request, then the `hello` once sshd granted the channel's window), where the probe, the
+  cache check and the launch on channels of their own took 7. With a direct key login a reconnect takes 7 round trips
+  from the TCP handshake to that answer instead of 13: through a relay that delays the link, 0.8 s instead of 1.6 s at
+  a 100 ms round trip and 2.9 s instead of 5.5 s at 400 ms (`LatencyTests`, `swift test` in `Mobile/Transport`). A
+  command that started no helper (`CacheMiss`: the cache lacks it or failed a check, a platform
+  without a helper) leads into that old path on the same connection, then a second `hello`; never into plain SSH or a
+  reconnect by itself, and the old path's results and texts are what they were. The runtime folder's retry after a 126
+  and the fallback reasons are unchanged; a miss on a connection that went meanwhile is a loss.
 
 - **Traffic.** Everything the phone sends a host on a timer waits for the same clock (`HostTraffic`): 15 s ticks of
   the wall clock, the stats chart's bars. The stats' samples (`HostStatistics`, 30 s ticks under Low Power Mode), the
@@ -224,6 +256,23 @@ connection up without it: both are [plain SSH](#plain-ssh).
   while connecting or reconnecting, where it stops the retries) leaves the host alone until a
   Connect or Reconnect the user asks for (`connectByUser`); nothing else (network changes, pull to refresh, background
   refresh, watch requests, a relaunch) lifts it. It is saved with the host (`HostRecord.parked` in `hosts.json`).
+- **Direct key logins.** The driver remembers per address, port and user which key (its fingerprint) logged in there
+  (`KeyLogins`; one key per endpoint, the last that logged in asked first). The next connection there offers that key
+  first as a direct attempt ([Transport](#transport): one round trip instead of three), then as usual (asked first);
+  so a reconnect logs in in one round trip. The app's memory is saved (`key-logins.json`,
+  [security](security.md#dispatch-for-iphone)), so the first connection after a launch goes direct too; `HostSessions`
+  keeps it to the saved hosts' endpoints (at launch, when a host is removed, when its address, port or user is
+  edited), and Remove all data deletes it. The file only saves round trips: missing or unreadable it is an empty
+  memory, and a failed save is not reported. A refused direct attempt forgets the mark, and the next connection asks
+  first again; one whose signer declined, or that was cancelled, changes nothing. A key is not sent direct to that
+  endpoint again that run once a direct attempt there went unanswered (the connection ended before the answer, or
+  none came within 10 s: how a server that cannot take a request sent before its accept would show; the connection
+  ends as a loss, so the host connects again and asks first), or was refused while the same key, asked first, then
+  logged in on that connection. That bar is never saved: a connection lost during one login must not cost every
+  later launch its direct login, so each run finds out again. A refused direct attempt still
+  costs a signature: a Secure Enclave key's Face ID prompt, and one failed attempt against the server's
+  `MaxAuthTries`. Password, keyboard-interactive and a key that only partially logs in (`AuthenticationMethods`
+  asking for more) never go direct.
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs. Automatic prefers running herdr, otherwise tmux; an explicit herdr preference waits
   for its server without opening it. Discovery and failed follows retry every 2 s. A preference change switches
@@ -238,6 +287,26 @@ The phone runs, on an exec channel with no PTY and no `env` requests:
 ```sh
 exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabilities <HelperGrant> --stdio
 ```
+
+**From the cache.** Each connection first sends `HelperBootstrap.cachedLaunchCommand` (`SSHBootstrapScript.cachedLaunch`):
+one `/bin/sh` script carrying every bundled helper's size and SHA-256 (`HelperBootstrap.bundled`, expanded and hashed
+once per run) that runs `runtimeProbe`, picks the helper for `uname`, makes the cache check at `~/.dispatch` (and, when
+that copy is `blocked`, at the runtime folder) and `exec`s it with the command above's arguments and environment. Until
+the `exec` its stdin is `/dev/null` (the `hello` waits there) and its stdout goes to stderr, where it reports, in order:
+
+```
+DISPATCH_PLATFORM=<uname -s>:<uname -m>
+DISPATCH_RUNTIME=<$XDG_RUNTIME_DIR>   when the runtime folder is usable
+DISPATCH_NOEXEC                       when the home copy is right but cannot run
+DISPATCH_LAUNCH=home|runtime          only right before the exec
+<the helper's own stderr>
+```
+
+A `DISPATCH_LAUNCH=` line means a helper was started: `HelperBootstrap.launched` reads the `Installed` from these lines
+(the platform's bundled size and digest, the root, the runtime folder, `uploaded` false) and gives `launchFailure` the
+rest of stderr without them. Without it nothing ran (status 3, or 1 after a `dispatch-setup:` reason) and the driver
+runs the install below; anything the phone cannot place counts as that. Lines the login prints first stay in the
+helper's stderr, as with the launch command.
 
 **Install root** (`HelperBootstrap.Root`). A home folder mounted `noexec` takes the upload but cannot run it: `test -x`
 refuses it on hosts whose `/bin/sh` asks the kernel, elsewhere the helper exits 126 before greeting. Either way the
@@ -904,8 +973,10 @@ Found while building the thread and its animations; each cost a debugging sessio
 - **Helper over stdio.** `python3 test/helper-stdio.py --live [--lima NAME | --remote user@host:port --identity KEY]
   [-k case] [--keep]` runs the helper exactly as the phone does, in a private root. Not in `test/suites.json`.
 - **Transport.** `cargo test` in `Mobile/Transport/Core` (an in-process russh server, and a scripted hostile server
-  for the pre-authentication flaws and rekeys, `tests/hostile.rs`) and `swift test` in
-  `Mobile/Transport` (the login shell under the fixture sshd; `HelperRootTests` pin the bootstrap scripts).
+  for the pre-authentication flaws, rekeys and direct key logins, `tests/hostile.rs`) and `swift test` in
+  `Mobile/Transport` (the login shell and direct logins under the fixture sshd; `HelperRootTests` pin the bootstrap
+  scripts). `SSHDriverTests` cover which keys go direct (`KeyLogins`), what of that is saved and how it follows the saved hosts,
+  without a network.
 - **Dictation.** `swift test` in `Packages/Dictation`, on the Mac; engine cases skip without their models.
 - **Same turn.** That a request leaves in the turn that asked for it (not from a later `Task`) shows by blocking the
   main thread right after the call, without `await`, and polling the `ScriptedHelper`'s requests: its transport reads

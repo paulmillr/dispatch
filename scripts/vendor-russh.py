@@ -6,7 +6,10 @@ dev-dependencies, and src/.
 
 The patch makes every key exchange after the first (a rekey) call `Handler::check_server_key` with the server's host
 key before the exchange's keys are used, failing with `Error::UnknownKey` on false; the published crate checks the
-first exchange only (docs/security.md, Dispatch for iPhone, host keys).
+first exchange only (docs/security.md, Dispatch for iPhone, host keys). It also adds direct public key requests
+(`Handle::next_publickey_direct`): the next public key authentication sends its signed request without the query and,
+as the connection's first request, without waiting for the service accept, an external signer being asked as the
+request is written (docs/ios.md, Transport). Without that call the client sends what the published crate sends.
 
     python3 scripts/vendor-russh.py            # stage it (downloads the crate once into build/downloads)
     python3 scripts/vendor-russh.py --offline  # stage it from the cached crate only

@@ -23,7 +23,8 @@ extension HostSessions {
             return sessions
         }
         #endif
-        let sessions = HostSessions(store: HostStore(), knownHosts: KnownHostStore(), keys: KeyStore(keyProtection: Self.keyProtection))
+        let sessions = HostSessions(store: HostStore(), knownHosts: KnownHostStore(), keys: KeyStore(keyProtection: Self.keyProtection),
+                                    keyLogins: KeyLogins(url: MobileFiles.keyLogins))
         sessions.lingerLength = appLinger
         sessions.backgroundTime = { expired in WatchBridge.applicationBackgroundTask("Hosts linger", expired: expired) }
         #if DEBUG
@@ -58,8 +59,11 @@ extension HostSessions {
 
     /// The app's sessions over SSH, connecting in the foreground. A launch in the background (the app refresh task)
     /// connects nothing until the app comes to the foreground: the refresh has its own sessions.
-    convenience init(store: HostStore, knownHosts: KnownHostStore, keys: KeyStore) {
-        self.init(store: store, keys: keys, knownHosts: knownHosts, driver: SSHHostSessionDriver(),
+    /// `keyLogins`: the driver's memory of which keys logged in where; the default is for the run only.
+    convenience init(store: HostStore, knownHosts: KnownHostStore, keys: KeyStore, keyLogins: KeyLogins = KeyLogins()) {
+        var driver = SSHHostSessionDriver()
+        driver.keyLogins = keyLogins
+        self.init(store: store, keys: keys, knownHosts: knownHosts, driver: driver, keyLogins: keyLogins,
                   active: UIApplication.shared.applicationState != .background)
     }
 

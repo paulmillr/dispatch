@@ -216,7 +216,12 @@ pub struct Session {
     handle: tokio::sync::Mutex<Handle<Client>>,
     link: Arc<Link>,
     rekeys: Arc<std::sync::atomic::AtomicUsize>,
+    /// `set_direct_answer`, in milliseconds.
+    direct_answer: std::sync::atomic::AtomicU64,
 }
+
+/// How long a direct request waits for the server's answer (`Session::set_direct_answer`).
+const DIRECT_ANSWER: Duration = Duration::from_secs(10);
 
 impl Session {
     pub async fn connect(options: ConnectOptions, events: Arc<dyn SessionEvents>) -> Result<Arc<Session>, Failure> {
@@ -288,7 +293,8 @@ impl Session {
                 });
             }
         };
-        let session = Arc::new(Session { handle: tokio::sync::Mutex::new(handle), link, rekeys });
+        let direct_answer = std::sync::atomic::AtomicU64::new(DIRECT_ANSWER.as_millis() as u64);
+        let session = Arc::new(Session { handle: tokio::sync::Mutex::new(handle), link, rekeys, direct_answer });
         session.link.arm();
         Ok(session)
     }
@@ -305,7 +311,21 @@ impl Session {
 
     /// RSA keys sign rsa-sha2-512 (or rsa-sha2-256 when that is all the server lists), never ssh-rsa.
     pub async fn auth_key(&self, user: &str, key: Arc<PrivateKey>) -> AuthOutcome {
+        self.key_login(user, key, false).await
+    }
+
+    /// `auth_key` without asking first whether the server takes the key: the signed request goes at once (russh.patch,
+    /// `Handle::next_publickey_direct`), as the connection's first request without waiting for the service accept
+    /// either. One round trip; a refusal is an ordinary `Failure`, and later attempts on the connection work as usual.
+    /// A request the server never answers is the connection's end (`direct_outcome`), never a refusal.
+    pub async fn auth_key_direct(&self, user: &str, key: Arc<PrivateKey>) -> AuthOutcome {
+        self.key_login(user, key, true).await
+    }
+
+    async fn key_login(&self, user: &str, key: Arc<PrivateKey>, direct: bool) -> AuthOutcome {
         let mut handle = self.handle.lock().await;
+        // The hash comes from the server's `server-sig-algs`, in the `EXT_INFO` that follows its first NEWKEYS: no
+        // round trip of its own, so a direct request waits for it as a queried one does.
         let hash = if key.algorithm().is_rsa() {
             let advertised = tokio::time::timeout(Duration::from_secs(3), handle.best_supported_rsa_hash()).await;
             match advertised {
@@ -315,7 +335,43 @@ impl Session {
         } else {
             None
         };
-        outcome(handle.authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, hash)).await.map_err(Failure::from))
+        if direct && let Err(error) = handle.next_publickey_direct().await {
+            return AuthOutcome::Error(error.into());
+        }
+        let login = handle.authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, hash));
+        if !direct {
+            return outcome(login.await.map_err(Failure::from));
+        }
+        let answer = tokio::time::timeout(self.direct_answer(), login).await.ok();
+        Self::direct_outcome(&handle, answer.map(|result| result.map_err(Failure::from))).await
+    }
+
+    /// How long a direct request may stay unanswered before the connection is given up (10 s; the tests shorten it). For
+    /// an external signer the time starts once it signed.
+    pub fn set_direct_answer(&self, limit: Duration) {
+        self.direct_answer.store(limit.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn direct_answer(&self) -> Duration {
+        Duration::from_millis(self.direct_answer.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// A direct attempt's outcome, `answer` None when none came in time. A request the server never answered is the
+    /// connection's end, an error, and never a refusal (which would be final for the host): a server that cannot take
+    /// a request sent before its service accept may drop it and say nothing (the connection is then closed here: an
+    /// answer could still come for an attempt nobody waits for), or end the connection, which russh reports as a
+    /// failure with no method left, like a login the server refused for good. The caller connects again and asks first.
+    async fn direct_outcome(handle: &Handle<Client>, answer: Option<Result<russh::client::AuthResult, Failure>>) -> AuthOutcome {
+        match answer {
+            None => {
+                let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
+                AuthOutcome::Error(Failure::new(Code::Timeout, "the login"))
+            }
+            Some(Ok(russh::client::AuthResult::Failure { remaining_methods, .. })) if remaining_methods.iter().next().is_none() => {
+                AuthOutcome::Error(Failure::new(Code::Closed, "the connection closed before the login was answered"))
+            }
+            Some(result) => outcome(result),
+        }
     }
 
     pub async fn auth_keyboard_interactive<F>(&self, user: &str, mut prompt: F) -> AuthOutcome
@@ -354,12 +410,46 @@ impl Session {
     /// Public key auth where Swift signs (Secure Enclave, Keychain CryptoKit keys): `sign` gets the bytes
     /// to sign and returns the raw signature (Ed25519: 64 bytes; ECDSA: r‖s).
     pub async fn auth_signer(&self, user: &str, public: PublicKey, sign: SignCallback) -> AuthOutcome {
+        self.signer_login(user, public, sign, false).await
+    }
+
+    /// `auth_signer` sent at once, as `auth_key_direct`: `sign` is asked as the request is written (the bytes hold the
+    /// session id), before the server has said anything about the key. Declining sends nothing more for it.
+    pub async fn auth_signer_direct(&self, user: &str, public: PublicKey, sign: SignCallback) -> AuthOutcome {
+        self.signer_login(user, public, sign, true).await
+    }
+
+    async fn signer_login(&self, user: &str, public: PublicKey, sign: SignCallback, direct: bool) -> AuthOutcome {
         let mut handle = self.handle.lock().await;
-        let mut signer = ExternalSigner { sign: Arc::new(Mutex::new(sign)), algorithm: public.algorithm() };
-        match handle.authenticate_publickey_with(user, public, None, &mut signer).await {
-            Ok(result) => outcome(Ok(result)),
-            Err(SignError::Send) => AuthOutcome::Error(Failure::new(Code::Closed, "connection closed")),
-            Err(SignError::Failed(failure)) => AuthOutcome::Error(failure),
+        if direct && let Err(error) = handle.next_publickey_direct().await {
+            return AuthOutcome::Error(error.into());
+        }
+        let signed = Arc::new(tokio::sync::Notify::new());
+        let mut signer = ExternalSigner { sign: Arc::new(Mutex::new(sign)), algorithm: public.algorithm(), signed: signed.clone() };
+        let login = handle.authenticate_publickey_with(user, public, None, &mut signer);
+        let answer = if direct {
+            // The time the signer takes (Face ID) does not count.
+            let limit = self.direct_answer();
+            let unanswered = async {
+                signed.notified().await;
+                tokio::time::sleep(limit).await;
+            };
+            tokio::select! {
+                result = login => Some(result),
+                () = unanswered => None,
+            }
+        } else {
+            Some(login.await)
+        };
+        let answer = match answer {
+            Some(Err(SignError::Send)) => return AuthOutcome::Error(Failure::new(Code::Closed, "connection closed")),
+            Some(Err(SignError::Failed(failure))) => return AuthOutcome::Error(failure),
+            Some(Ok(result)) => Some(Ok(result)),
+            None => None,
+        };
+        match answer {
+            Some(result) if !direct => outcome(result),
+            answer => Self::direct_outcome(&handle, answer).await,
         }
     }
 
@@ -446,6 +536,8 @@ pub type SignCallback = Box<dyn FnMut(Vec<u8>) -> BoxFuture<Option<Vec<u8>>> + S
 struct ExternalSigner {
     sign: Arc<Mutex<SignCallback>>,
     algorithm: russh::keys::Algorithm,
+    /// Notified once a signature was made (a direct request's answer is awaited from then on).
+    signed: Arc<tokio::sync::Notify>,
 }
 
 impl russh::Signer for ExternalSigner {
@@ -459,8 +551,10 @@ impl russh::Signer for ExternalSigner {
     ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + Send {
         let request = (self.sign.lock().unwrap())(to_sign.clone());
         let algorithm = self.algorithm.clone();
+        let signed = self.signed.clone();
         async move {
             let raw = request.await.ok_or_else(|| SignError::Failed(Failure::new(Code::Cancelled, "signing cancelled")))?;
+            signed.notify_one();
             let (name, signature) = signature_blob(&algorithm, &raw).map_err(SignError::Failed)?;
             // As the agent client does: the signature blob is appended, length-prefixed, to the signed data.
             let mut blob = Vec::new();

@@ -16,6 +16,8 @@ public final class SSHConnection: Sendable {
   public let endpoint: SSHEndpoint
   public let hostKey: HostKeyInfo
   public let timings: Timings
+  /// Which credential logged in: its index in the `credentials` given to `connect`.
+  public let credential: Int
   let session: SessionHandle
   let link: SessionLink
 
@@ -64,8 +66,9 @@ public final class SSHConnection: Sendable {
       throw link.explain(error)
     }
     let connected = clock.now
+    let credential: Int
     do {
-      try await withTaskCancellationHandler {
+      credential = try await withTaskCancellationHandler {
         try await authenticate(session, link: link, user: endpoint.username, credentials: credentials)
       } onCancel: { link.withdraw() }
       try Task.checkCancellation()
@@ -75,15 +78,17 @@ public final class SSHConnection: Sendable {
     }
     guard let (info, _) = link.decision else { throw SSHTransportError.channelClosed }
     return SSHConnection(
-      endpoint: endpoint, hostKey: info, session: session, link: link,
+      endpoint: endpoint, hostKey: info, session: session, link: link, credential: credential,
       timings: Timings(handshake: connected - start - link.deciding, authentication: clock.now - connected))
   }
 
-  private init(endpoint: SSHEndpoint, hostKey: HostKeyInfo, session: SessionHandle, link: SessionLink, timings: Timings) {
+  private init(endpoint: SSHEndpoint, hostKey: HostKeyInfo, session: SessionHandle, link: SessionLink, credential: Int,
+               timings: Timings) {
     self.endpoint = endpoint
     self.hostKey = hostKey
     self.session = session
     self.link = link
+    self.credential = credential
     self.timings = timings
   }
 
@@ -138,14 +143,27 @@ public final class SSHConnection: Sendable {
     case failure(remaining: UInt32)
   }
 
-  private static func authenticate(_ session: SessionHandle, link: SessionLink, user: String, credentials: [SSHCredential]) async throws {
+  /// The index of the credential that logged in.
+  private static func authenticate(_ session: SessionHandle, link: SessionLink, user: String, credentials: [SSHCredential]) async throws -> Int {
     var remaining: UInt32?
-    for credential in credentials {
+    for (index, credential) in credentials.enumerated() {
       try Task.checkCancellation()
       if let remaining, remaining & credential.method == 0 { continue }
-      switch try await attempt(credential, session: session, link: link, user: user) {
-      case .success: return
-      case .failure(let methods): remaining = methods
+      let answered: (@Sendable (DirectKeyAnswer) -> Void)? = if case .directKey(_, let answered) = credential { answered } else { nil }
+      let outcome: Outcome
+      do {
+        outcome = try await attempt(credential, session: session, link: link, user: user)
+      } catch {
+        if case SSHTransportError.cancelled = error { answered?(.withdrawn) } else { answered?(.unanswered) }
+        throw error
+      }
+      switch outcome {
+      case .success:
+        answered?(.loggedIn)
+        return index
+      case .failure(let methods):
+        answered?(.refused)
+        remaining = methods
       }
     }
     throw SSHTransportError.authenticationFailed(methods: Engine.methods(remaining ?? 0))
@@ -167,16 +185,17 @@ public final class SSHConnection: Sendable {
     case .password(let password):
       let box = AuthBox(completion, link: link)
       withCStrings(user, password) { dms_auth_password(session.pointer, $0, $1, Engine.retain(box), done) }
-    case .key(let key):
+    case .key(let key), .directKey(let key, _):
+      let direct = if case .directKey = credential { true } else { false }
       switch key.backing {
       case .engine(let handle):
         let box = AuthBox(completion, link: link, keep: handle)
-        user.withCString { dms_auth_key(session.pointer, $0, handle.pointer, Engine.retain(box), done) }
+        user.withCString { dms_auth_key(session.pointer, $0, handle.pointer, direct, Engine.retain(box), done) }
       case .signer(let blob, let sign):
         let box = AuthBox(completion, link: link, sign: sign)
         blob.withUnsafeBytes { bytes in
           user.withCString {
-            dms_auth_signer(session.pointer, $0, bytes.bindMemory(to: UInt8.self).baseAddress, blob.count, Engine.retain(box), { context, data, length, reply in
+            dms_auth_signer(session.pointer, $0, bytes.bindMemory(to: UInt8.self).baseAddress, blob.count, direct, Engine.retain(box), { context, data, length, reply in
               let box = Engine.borrow(context, as: AuthBox.self)
               box.sign(Data(bytes: data!, count: length), reply: EngineReply(pointer: reply))
             }, done)

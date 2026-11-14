@@ -51,6 +51,7 @@ extern "C" {
 #define DMS_EXIT_STATUS 0
 #define DMS_EXIT_SIGNAL 1
 #define DMS_EXIT_LOST 2
+#define DMS_EXIT_REFUSED 3          /* the server refused the exec request; `signal` holds the engine's message */
 
 typedef struct dms_session dms_session;
 typedef struct dms_key dms_key;
@@ -101,7 +102,8 @@ typedef void (*dms_sign_fn)(void *context, const uint8_t *data, size_t length, d
 /* fd is the caller's end of a socketpair (stdin writes, stdout reads), or -1 with an error code. */
 typedef void (*dms_exec_started_fn)(void *context, int32_t fd, int32_t code, const char *message);
 typedef void (*dms_stderr_fn)(void *context, const uint8_t *bytes, size_t length);
-/* The last call for an exec context. status is meaningful for DMS_EXIT_STATUS, signal for DMS_EXIT_SIGNAL. */
+/* The last call for an exec context. status is meaningful for DMS_EXIT_STATUS, signal for DMS_EXIT_SIGNAL (and the
+ * refusal's message for DMS_EXIT_REFUSED). */
 typedef void (*dms_exited_fn)(void *context, int32_t kind, uint32_t status, const char *signal);
 
 const char *dms_version(void);
@@ -118,14 +120,25 @@ void dms_session_close(dms_session *session);
 /* Releases the handle (closing the connection if it is still open). */
 void dms_session_free(dms_session *session);
 
-/* Each runs `done` exactly once, as the last call for `context`. */
+/*
+ * Each runs `done` exactly once, as the last call for `context`.
+ *
+ * `direct` (public keys): the signed request goes at once, without first asking whether the server takes the key
+ * (RFC 4252 section 7), and, as the connection's first authentication request, without waiting for the server to
+ * accept the userauth service: one round trip instead of two, or three. A refusal is an ordinary DMS_AUTH_FAILED and
+ * later attempts work as usual. With a signer, `sign` is asked before the server has said anything about the key.
+ * A direct request the server never answers is the connection's end, never DMS_AUTH_FAILED: DMS_CLOSED when the
+ * connection ended first, DMS_TIMEOUT when no answer came within 10 s of the request (the engine then closes the
+ * connection).
+ */
 void dms_auth_password(dms_session *session, const char *user, const char *password, void *context, dms_auth_fn done);
-void dms_auth_key(dms_session *session, const char *user, const dms_key *key, void *context, dms_auth_fn done);
+void dms_auth_key(dms_session *session, const char *user, const dms_key *key, bool direct, void *context,
+                  dms_auth_fn done);
 void dms_auth_keyboard_interactive(dms_session *session, const char *user, void *context, dms_prompt_fn prompt,
                                    dms_auth_fn done);
 /* Public key auth where the caller signs (Secure Enclave, Keychain keys): public_key is the SSH key blob. */
-void dms_auth_signer(dms_session *session, const char *user, const uint8_t *public_key, size_t length, void *context,
-                     dms_sign_fn sign, dms_auth_fn done);
+void dms_auth_signer(dms_session *session, const char *user, const uint8_t *public_key, size_t length, bool direct,
+                     void *context, dms_sign_fn sign, dms_auth_fn done);
 
 /*
  * OpenSSH private key file (ED25519, ECDSA P-256/384/521, RSA; passphrase optional) or PEM/PKCS#8.
@@ -143,6 +156,11 @@ void dms_key_free(dms_key *key);
  * Runs `command` on a new session channel. `started` runs once; on failure it is the last call. Otherwise
  * stderr chunks may follow, then `exited` exactly once. The fd belongs to the caller: shutdown(SHUT_WR) sends
  * EOF, the remote's EOF reads as end of file, close() abandons the command.
+ * `started` runs as soon as the exec request is sent, before the server's reply: bytes written at once follow the
+ * request on the channel (the command reads them) as far as its window allows (OpenSSH's sshd grants a session
+ * channel's window only once the command started), and output that arrives before the reply reads as usual. A
+ * refused request is not a failed start: the engine closes the channel, the fd reads end of file, and `exited`
+ * reports DMS_EXIT_REFUSED. A channel that closes before any reply reports DMS_EXIT_LOST.
  */
 void dms_exec(dms_session *session, const char *command, void *context, dms_exec_started_fn started,
               dms_stderr_fn stderr_chunk, dms_exited_fn exited);

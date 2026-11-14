@@ -36,7 +36,8 @@ final class SSHFixture: @unchecked Sendable {
   /// keeps its own names.
   static let run = String(UInt32.random(in: 0..<0xFFFF), radix: 16)
 
-  init(extraConfiguration: [String] = []) throws {
+  /// `logLevel`: sshd's, for its log (`log`); VERBOSE notes each publickey query as "Postponed publickey".
+  init(extraConfiguration: [String] = [], logLevel: String = "ERROR") throws {
     root = URL(fileURLWithPath: "/tmp/st-\(getpid())-\(Self.run)-\(Self.counter.next())")
     if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -69,7 +70,7 @@ final class SSHFixture: @unchecked Sendable {
       "SetEnv HOME=\(home.path) DISPATCH_TEST_ROOT=\(root.path)/dt TMUX_TMPDIR=\(root.path) HERDR_SOCKET_PATH=\(root.path)/herdr.sock "
         + "XDG_CONFIG_HOME=\(home.path)/.config XDG_DATA_HOME=\(home.path)/.local/share XDG_STATE_HOME=\(home.path)/.local/state "
         + "PATH=/usr/bin:/bin:/usr/sbin:/sbin TZ=UTC",
-      "LogLevel ERROR",
+      "LogLevel \(logLevel)",
     ] + extraConfiguration).joined(separator: "\n").appending("\n").write(to: config, atomically: true, encoding: .utf8)
     daemon = Process()
     daemon.executableURL = URL(fileURLWithPath: "/usr/sbin/sshd")
@@ -91,6 +92,9 @@ final class SSHFixture: @unchecked Sendable {
   }
 
   deinit { stop() }
+
+  /// What sshd logged so far (its stderr).
+  var log: String { (try? String(contentsOf: root.appendingPathComponent("sshd.log"), encoding: .utf8)) ?? "" }
 
   /// Adds a public key line to authorized_keys (sshd rereads it on every attempt).
   func authorize(_ line: String) throws {
@@ -277,6 +281,49 @@ final class TestKeys: @unchecked Sendable {
     finish(process)
     return String(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: " ")[1])
   }
+}
+
+/// What a fixture's sshd ran, command by command: its `ForceCommand` is a wrapper that appends each command it is
+/// given (`SSH_ORIGINAL_COMMAND`) to a log, then runs it with `/bin/sh -c`, reading and writing nothing else. Counts
+/// remote commands exactly, without timing.
+final class CommandLog: @unchecked Sendable {
+  private static let delimiter = "--- dispatch-test command end ---"
+  let folder: URL
+  private let file: URL
+
+  /// A fixture of its own, logging every command; `stop()` both when done.
+  static func fixture() throws -> (SSHFixture, CommandLog) {
+    let log = try CommandLog()
+    do { return (try SSHFixture(extraConfiguration: ["ForceCommand " + log.folder.appendingPathComponent("run").path]), log) } catch {
+      log.stop()
+      throw error
+    }
+  }
+
+  private init() throws {
+    folder = URL(fileURLWithPath: "/tmp/cl-\(getpid())-\(UUID().uuidString.prefix(6))")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    file = folder.appendingPathComponent("commands")
+    FileManager.default.createFile(atPath: file.path, contents: nil)
+    let wrapper = folder.appendingPathComponent("run")
+    try """
+      #!/bin/sh
+      { printf '%s\\n' "$SSH_ORIGINAL_COMMAND"; printf '%s\\n' '\(Self.delimiter)'; } >> '\(file.path)'
+      exec /bin/sh -c "$SSH_ORIGINAL_COMMAND"
+
+      """.write(to: wrapper, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: wrapper.path)
+  }
+
+  /// Every command run since the last `clear()`, in order.
+  var commands: [String] {
+    let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+    return text.components(separatedBy: Self.delimiter + "\n").dropLast().map { String($0.dropLast()) }
+  }
+
+  func clear() { try? Data().write(to: file) }
+
+  func stop() { try? FileManager.default.removeItem(at: folder) }
 }
 
 /// Waits for a child without `waitUntilExit`, which runs the calling thread's run loop and can hang

@@ -14,6 +14,8 @@ pub enum Exit {
     Signal(String),
     /// The channel or connection went away without a status.
     Lost,
+    /// The server refused the exec request (the engine's message): nothing ran, and the engine closed the channel.
+    Refused(String),
 }
 
 pub trait ExecEvents: Send + Sync + 'static {
@@ -32,14 +34,23 @@ const SOCKET_BUFFER: libc::c_int = 1 << 20;
 /// Half-closing the socket (`shutdown(SHUT_WR)`) or closing it sends EOF; the remote's EOF half-closes the
 /// socket. Closing the socket entirely also closes the channel once the remote writes again (then `exited` reports
 /// what arrived before, usually `Lost`).
+///
+/// The socket is handed over once the exec request is sent, without waiting for the server's reply: what the caller
+/// writes at once leaves right behind the request (in order on the channel, so the command reads it) as far as the
+/// channel's window allows, which with OpenSSH is not at all: its sshd opens a session channel with a window of zero
+/// and grants it only once the command started, so there the first bytes go a round trip later, as before; and output
+/// that arrives before the reply is delivered like any other. A refused request ends the channel instead: the
+/// engine closes it, the socket reads end of file, and `exited` reports `Refused` (the request's refusal is no
+/// longer an error of this call). A channel that closes before any reply reports `Lost`.
 pub async fn exec(session: &Session, command: &str, events: Arc<dyn ExecEvents>) -> Result<RawFd, Failure> {
     let channel = session.open_session().await?;
     channel.exec(true, command).await.map_err(Failure::from)?;
-    let (mut read, write) = channel.split();
-    let mut early = Vec::new();
-    confirm(&mut read, &mut early, "the server refused the exec request", "the channel closed before the command started").await?;
-    pump(read, Arc::new(write), early, events, InputEnd::Eof)
+    let (read, write) = channel.split();
+    pump(read, Arc::new(write), Vec::new(), events, InputEnd::Eof, Some(REFUSED_EXEC))
 }
+
+/// The engine's message for a refused exec request (`Exit::Refused`).
+const REFUSED_EXEC: &str = "the server refused the exec request";
 
 /// What the engine sends when the caller's end of the socket stops giving input (`shutdown(SHUT_WR)` or `close`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,12 +77,15 @@ pub(crate) async fn confirm(read: &mut ChannelReadHalf, early: &mut Vec<ChannelM
 /// Connects a started channel to a new socketpair and returns the caller's end. Two tasks pump it: the uplink
 /// copies the socket into the channel (as fast as the SSH window allows), the downlink copies channel data into
 /// the socket (as fast as the caller reads), reports stderr, and calls `events.exited` once the channel closed.
+/// `unconfirmed`: a request sent with `want_reply` whose reply has not come yet (an exec's), with the message for
+/// its refusal. Its success changes nothing; its failure closes the channel and reports `Exit::Refused`.
 pub(crate) fn pump(
     mut read: ChannelReadHalf,
     write: Arc<ChannelWriteHalf<client::Msg>>,
     early: Vec<ChannelMsg>,
     events: Arc<dyn ExecEvents>,
     input_end: InputEnd,
+    unconfirmed: Option<&'static str>,
 ) -> Result<RawFd, Failure> {
     // Both ends stay owned until the caller gets theirs: an error below closes them.
     let (ours, theirs) = socketpair()?;
@@ -110,6 +124,8 @@ pub(crate) fn pump(
     tokio::spawn(async move {
         let mut status = None;
         let mut signal = None;
+        let mut unconfirmed = unconfirmed;
+        let mut refused = None;
         let mut messages = early.into_iter();
         loop {
             let message = match messages.next() {
@@ -136,15 +152,23 @@ pub(crate) fn pump(
                 Some(ChannelMsg::ExitStatus { exit_status }) => status = Some(exit_status),
                 Some(ChannelMsg::ExitSignal { signal_name, .. }) => signal = Some(format!("{signal_name:?}")),
                 Some(ChannelMsg::Close) | None => break,
+                Some(ChannelMsg::Success) => unconfirmed = None,
+                Some(ChannelMsg::Failure) if unconfirmed.is_some() => {
+                    // Nothing runs on the channel: close it (the server keeps a refused one open) rather than leak it.
+                    refused = unconfirmed.take();
+                    let _ = write.close().await;
+                    break;
+                }
                 Some(_) => {}
             }
         }
         uplink.abort();
         drop(wr);
-        events.exited(match (status, signal) {
-            (Some(status), _) => Exit::Status(status),
-            (None, Some(signal)) => Exit::Signal(signal),
-            (None, None) => Exit::Lost,
+        events.exited(match (refused, status, signal) {
+            (Some(message), _, _) => Exit::Refused(message.to_owned()),
+            (None, Some(status), _) => Exit::Status(status),
+            (None, None, Some(signal)) => Exit::Signal(signal),
+            (None, None, None) => Exit::Lost,
         });
     });
     Ok(theirs.into_raw_fd())

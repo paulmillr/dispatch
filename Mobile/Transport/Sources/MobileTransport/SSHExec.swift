@@ -6,7 +6,10 @@ import Foundation
 /// socket only as fast as the SSH window allows, and the channel only as fast as the socket drains).
 /// Iterate the exec for output (each `next()` is one read: a slow reader stops the remote writer),
 /// `write` stdin, `finishInput` for EOF, then `exitStatus()`. Or take the descriptor itself
-/// (`takeFileDescriptor`) and hand it to `HelperConnection`.
+/// (`takeFileDescriptor`) and hand it to `HelperConnection`. The exec starts once its request is sent, before the
+/// server's reply, so what is written at once leaves with it where the channel's window allows (not with OpenSSH,
+/// which grants the window once the command started); a refused request ends the exec instead (`exitStatus()`
+/// throws `commandFailed(status: -1, …)`, the socket reads end of file).
 public final class SSHExec: AsyncSequence, Sendable {
   public enum Output: Sendable, Equatable {
     case stdout(Data)
@@ -39,7 +42,7 @@ public final class SSHExec: AsyncSequence, Sendable {
     return SSHExec(state: state, fd: fd)
   }
 
-  private init(state: ExecState, fd: Int32) {
+  init(state: ExecState, fd: Int32) {
     self.state = state
     descriptor = Descriptor(fd)
   }
@@ -54,13 +57,21 @@ public final class SSHExec: AsyncSequence, Sendable {
     descriptor.finishWriting()
   }
 
-  /// The exit status once the command ended (a signal reports 128).
+  /// The exit status once the command ended (a signal reports 128). Throws `commandFailed(status: -1, …)` when the
+  /// server refused the exec request, `channelClosed` when the channel or connection ended without a status.
   public func exitStatus() async throws -> Int32 {
     switch await state.exit {
     case .status(let status): return Int32(bitPattern: status)
     case .signal: return 128
     case .lost: throw SSHTransportError.channelClosed
+    case .refused(let message): throw SSHTransportError.commandFailed(status: -1, stderr: message)
     }
+  }
+
+  /// The server's refusal of the exec request (`commandFailed(status: -1, …)`), once the exec ended so; nil otherwise.
+  public var refusal: SSHTransportError? {
+    if case .refused(let message)? = state.finished { return .commandFailed(status: -1, stderr: message) }
+    return nil
   }
 
   /// The first 64 KiB of stderr.
@@ -100,7 +111,7 @@ public final class SSHExec: AsyncSequence, Sendable {
 
 /// The exec's context for the engine's callbacks; released by `exited` (or a failed start).
 final class ExecState: @unchecked Sendable {
-  enum Exit: Sendable { case status(UInt32), signal(String), lost }
+  enum Exit: Sendable { case status(UInt32), signal(String), lost, refused(String) }
 
   let started = Completion<Int32>()
   private let lock = NSLock()
@@ -139,7 +150,13 @@ final class ExecState: @unchecked Sendable {
   }
 
   func exited(kind: Int32, status: UInt32, signal: String) {
-    let exit: Exit = kind == DMS_EXIT_STATUS ? .status(status) : kind == DMS_EXIT_SIGNAL ? .signal(signal) : .lost
+    let exit: Exit = switch kind {
+    case DMS_EXIT_STATUS: .status(status)
+    case DMS_EXIT_SIGNAL: .signal(signal)
+    // The message travels in `signal`.
+    case DMS_EXIT_REFUSED: .refused(signal)
+    default: .lost
+    }
     let waiters = lock.withLock { () -> [CheckedContinuation<Exit, Never>] in
       ending = exit
       defer { self.waiters = [] }

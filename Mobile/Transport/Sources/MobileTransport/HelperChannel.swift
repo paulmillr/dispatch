@@ -15,7 +15,10 @@ public final class HelperChannel: Sendable {
   /// socket opened (another host's channel), which a shutdown by number would cut.
   private let control: Descriptor?
 
-  /// Starts `command` (see `HelperBootstrap.launchCommand`) on a new session channel of `connection`.
+  /// Starts `command` (see `HelperBootstrap.launchCommand`) on a new session channel of `connection`. Returns once the
+  /// exec request is sent, before the server's reply: what is written to `write` at once (the `hello`) leaves as soon
+  /// as the channel's window allows, which with OpenSSH is once the command started. A refused request ends the
+  /// channel (`refusal`).
   public static func open(on connection: SSHConnection, command: String) async throws -> HelperChannel {
     let exec = try await connection.exec(command)
     guard let fd = exec.takeFileDescriptor() else { throw SSHTransportError.channelClosed }
@@ -29,13 +32,21 @@ public final class HelperChannel: Sendable {
     read = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
   }
 
-  /// The helper's exit status, once its channel closed (nil if it ended by a signal or the connection dropped).
+  /// The helper's exit status, once its channel closed (nil if it ended by a signal or the connection dropped, or the
+  /// server refused the exec request: `refusal`).
   public func exitStatus() async -> Int32? {
     try? await exec.exitStatus()
   }
 
+  /// The server's refusal of the exec request (`commandFailed(status: -1, …)`), once the channel ended so (by the
+  /// time `exitStatus()` returned); nil otherwise.
+  public var refusal: SSHTransportError? { exec.refusal }
+
   /// The first 64 KiB the helper wrote to stderr.
   public func stderr() async -> String { exec.stderr }
+
+  /// `stderr()` as it stands now.
+  var stderrSoFar: String { exec.stderr }
 
   /// Ends the session: shuts the socket down both ways (EOF to the helper; the transport reads end of
   /// file). The handle's descriptor stays with its owner. Calling it again does nothing.

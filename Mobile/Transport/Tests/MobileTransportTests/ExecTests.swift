@@ -1,6 +1,7 @@
 #if os(macOS)
 // The loopback sshd fixture spawns processes: macOS only (SimulatorTests covers the iPhone build).
 import Foundation
+import DispatchMobileSSHCore
 @testable import MobileTransport
 import XCTest
 
@@ -67,6 +68,50 @@ final class ExecTests: XCTestCase {
     XCTAssertEqual(String(decoding: received, as: UTF8.self), "one\ntwo\nthree\n")
     let status = try await exec.exitStatus()
     XCTAssertEqual(status, 0)
+  }
+
+  // MARK: Before the exec reply
+
+  /// The exec is handed over as its request leaves: stdin written at once, before any reply could have come back, reaches
+  /// the command, and EOF right behind it ends it as usual.
+  func testInputWrittenAtOnceReachesTheCommand() async throws {
+    let connection = try await SSHFixture.shared.connect()
+    defer { Task { await connection.close() } }
+    let exec = try await connection.exec("cat; printf done >&2")
+    try await exec.write(Data("at once\n".utf8))
+    try await exec.finishInput()
+    var stdout = Data(), stderr = Data()
+    for try await chunk in exec {
+      switch chunk {
+      case .stdout(let data): stdout.append(data)
+      case .stderr(let data): stderr.append(data)
+      }
+    }
+    XCTAssertEqual(String(decoding: stdout, as: UTF8.self), "at once\n")
+    XCTAssertEqual(String(decoding: stderr, as: UTF8.self), "done")
+    let status = try await exec.exitStatus()
+    XCTAssertEqual(status, 0)
+    XCTAssertNil(exec.refusal)
+  }
+
+  /// A refused exec request (the engine's `DMS_EXIT_REFUSED`) is the exec's end: `exitStatus()` throws what a refused
+  /// start threw before, `commandFailed(status: -1, …)` with the engine's message, and `refusal` says so. OpenSSH's sshd
+  /// cannot be made to refuse an exec, so the engine's report is fed in directly (the engine tests cover the server side).
+  func testARefusedExecEndsWithTheRefusal() async throws {
+    var pair: [Int32] = [-1, -1]
+    XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+    defer { Darwin.close(pair[1]) }
+    let state = ExecState()
+    let exec = SSHExec(state: state, fd: pair[0])
+    XCTAssertNil(exec.refusal)
+    state.exited(kind: DMS_EXIT_REFUSED, status: 0, signal: "the server refused the exec request")
+    XCTAssertEqual(exec.refusal, .commandFailed(status: -1, stderr: "the server refused the exec request"))
+    do {
+      _ = try await exec.exitStatus()
+      XCTFail("a status after a refusal")
+    } catch let error as SSHTransportError {
+      XCTAssertEqual(error, .commandFailed(status: -1, stderr: "the server refused the exec request"))
+    }
   }
 
   static var machine: String {
