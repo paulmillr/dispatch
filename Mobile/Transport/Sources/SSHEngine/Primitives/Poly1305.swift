@@ -61,20 +61,6 @@ struct Poly1305: Sendable {
     key.withUnsafeBytes { key in message.withUnsafeBytes { authenticate($0, key: key) } }
   }
 
-  /// Whether two tags are equal, in time that depends on their lengths only: every byte is compared, and the
-  /// difference is folded to a bit without a branch on the bytes. Unequal lengths are unequal (lengths are public).
-  static func tagsEqual(_ a: some ContiguousBytes, _ b: some ContiguousBytes) -> Bool {
-    a.withUnsafeBytes { a in
-      b.withUnsafeBytes { b in
-        guard a.count == b.count else { return false }
-        var difference: UInt8 = 0
-        for index in 0..<a.count { difference |= a[index] ^ b[index] }
-        // 0 → 1, 1...255 → 0: (d - 1) >> 8 has bit 0 set only when d was 0.
-        return (UInt32(difference) &- 1) &>> 8 & 1 == 1
-      }
-    }
-  }
-
   /// Absorbs `message`; any split of a message gives the same tag as the whole.
   mutating func update(_ message: UnsafeRawBufferPointer) {
     guard var source = message.baseAddress, message.count > 0 else { return }

@@ -1,6 +1,6 @@
 import CryptoKit
-import SSHEngine
 import XCTest
+@testable import SSHEngine
 
 /// A user key whose private half the test holds (CryptoKit), so the signature the core asked for is made by hand and
 /// verified with CryptoKit. Fictional keys from fixed seeds. The core never calls `sign` (the driver would): tests
@@ -147,6 +147,14 @@ final class AuthHarness {
     auth = UserauthCore(link: link, directAnswer: directAnswer)
   }
 
+  /// A harness whose attempt with `credential` started and whose SERVICE_ACCEPT came.
+  static func accepted(_ credential: Credential) -> AuthHarness {
+    let harness = AuthHarness()
+    harness.start(credential)
+    harness.server(ServerAuth.accept)
+    return harness
+  }
+
   var phase: MessagePolicy.ServicePhase { auth.servicePhase }
   var sent: [[UInt8]] { link.sent }
 
@@ -178,6 +186,13 @@ final class AuthHarness {
 
   func drain() {
     while let event = auth.poll() { events.append(event) }
+  }
+
+  /// Ends the connection with `error`, as the transport would.
+  func endConnection(_ error: SSHError) {
+    link.end(error)
+    auth.connectionEnded(error)
+    drain()
   }
 
   /// The events since the last `take`.
@@ -215,17 +230,11 @@ final class AuthHarness {
     drain()
   }
 
-  /// The transport's EXT_INFO handling, simplified: the values replace earlier ones.
+  /// The transport's EXT_INFO handling: its decoder, the values replacing earlier ones.
   private func absorbExtInfo(_ payload: [UInt8]) {
-    guard let values = try? WireReader.decode(payload, { (reader: inout WireReader) throws(WireError) in
-      _ = try reader.readByte()
-      let count = try reader.readCount(limit: Limits.extInfoExtensions, elementBytes: 8)
-      var values: [String: [UInt8]] = [:]
-      for _ in 0..<count { values[try reader.readName()] = try reader.readString(limit: Limits.extensionValueBytes) }
-      return values
-    }) else { return }
+    guard let entries = try? InboundMessage(payload: payload)?.decode(ClientTransport.extInfoEntries) else { return }
     var extensions = link.serverExtensions ?? ServerExtensions()
-    extensions.values.merge(values) { $1 }
+    for (name, value) in entries { extensions.values[name] = value }
     link.serverExtensions = extensions
   }
 }

@@ -220,10 +220,8 @@ final class SSHDInteropTests: XCTestCase {
     guard Self.full else { throw XCTSkip("set SSHENGINE_SSHD_FULL=1 for every combination") }
     for kex in KeyExchangeAlgorithm.allCases {
       for hostKey in SignatureAlgorithm.allCases {
-        for cipher in CipherAlgorithm.allCases {
-          for mac in cipher.isAEAD ? [nil] : MACAlgorithm.allCases.map(Optional.some) {
-            try run(kex: kex, cipher: cipher, mac: mac, hostKey: hostKey)
-          }
+        for (cipher, mac) in PacketProtectionTests.families {
+          try run(kex: kex, cipher: cipher, mac: mac, hostKey: hostKey)
         }
       }
     }

@@ -64,6 +64,15 @@ struct PrimitiveRandom: RandomNumberGenerator {
   }
 }
 
+extension ChaCha20 {
+  /// Keystream block `counter` (64 bytes) as an array, through `block(counter:into:)`.
+  func block(counter: UInt64) -> [UInt8] {
+    var block = [UInt8](repeating: 0, count: Self.blockSize)
+    block.withUnsafeMutableBytes { self.block(counter: counter, into: $0) }
+    return block
+  }
+}
+
 /// RFC 8439 §2.8's AEAD_CHACHA20_POLY1305 assembled from the two primitives, for the differential tests: Poly1305 key
 /// from block 0, ciphertext from block 1, tag over aad | pad16 | ciphertext | pad16 | le64(aad) | le64(ciphertext).
 ///
@@ -84,7 +93,7 @@ enum AssembledAEAD {
   static func open(key: [UInt8], nonce: [UInt8], aad: [UInt8], ciphertext: [UInt8], tag received: [UInt8]) throws -> [UInt8]? {
     guard nonce.count == nonceSize else { throw ChaCha20.Error.nonceSize(nonce.count) }
     let cipher = try ChaCha20(key: key, nonce: nonce)
-    guard Poly1305.tagsEqual(tag(cipher, aad: aad, ciphertext: ciphertext), received) else { return nil }
+    guard ConstantTime.equal(tag(cipher, aad: aad, ciphertext: ciphertext), received) else { return nil }
     var plaintext = ciphertext
     cipher.xor(&plaintext, counter: 1)
     return plaintext

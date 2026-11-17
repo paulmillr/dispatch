@@ -33,6 +33,8 @@ struct ChatThreadView: View {
     @State private var previewing: ChatAttachment?
     @State private var column: CGFloat = 370
     @FocusState private var focused: Bool
+    /// The iPad pane it is in is the focused one (`PadPanes`): only that composer takes a hardware keyboard's keys.
+    @Environment(\.padPaneFocused) private var paneFocused
     @FocusState private var searchFocused: Bool
     /// The thread shows its end (C6): new rows keep it there; scrolled up, they count into the jump button.
     /// Whether the thread follows its end and what came while it did not (C6, `ChatFollow`), kept outside SwiftUI's
@@ -138,7 +140,7 @@ struct ChatThreadView: View {
             }
             lastRow = rows.last?.id
             pinFirstShown(self.entries(rows))
-            if Self.focusesOnAppear(requested: focusOnAppear, splitDetail: splitDetail,
+            if Self.focusesOnAppear(requested: focusOnAppear, splitDetail: splitDetail && paneFocused,
                                     hardwareKeyboard: HardwareKeyboard.shared.attached) { focused = true }
             if expandSteps { workingExpanded = true }
             seen()
@@ -152,6 +154,16 @@ struct ChatThreadView: View {
         }
         .onChange(of: focused) { _, focused in
             if !focused, session.drafts.current.text.isEmpty { replying = false }
+        }
+        // Its pane takes the focus (a tap, Next Pane): the composer takes the keys as a pane's terminal does; another
+        // pane taking it, they go there.
+        .onChange(of: paneFocused) { _, paneFocused in
+            if !paneFocused {
+                focused = false
+            } else if Self.focusesOnAppear(requested: false, splitDetail: splitDetail,
+                                           hardwareKeyboard: HardwareKeyboard.shared.attached) {
+                focused = true
+            }
         }
         .onAppear { rail?.reply = { replying = true } }
         .onDisappear {
@@ -343,6 +355,12 @@ struct ChatThreadView: View {
                     .padding(.trailing, 16)
                     .padding(.bottom, 12)
                     .transition(jumpTransition)
+                } else if inactivePane, composerFolded, !session.working, !session.waitingForUser {
+                    // While the agent works its row says so in place, as the Mac's unfocused pane shows no Reply then;
+                    // a permission or a question waiting has its own buttons where Reply would sit.
+                    ChatPaneReplyButton { replying = true }
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 12)
                 }
             }
             .onChange(of: rows.first?.id) { previous, first in
@@ -546,13 +564,22 @@ struct ChatThreadView: View {
         }
     }
 
-    /// The composer is the rail's Reply (a phone on its side): empty, nothing attached or uploading, not focused, not
-    /// unfolded by Reply.
+    /// The composer is the rail's Reply (a phone on its side), or in an iPad pane that is not the focused one a Reply
+    /// button (`ChatPaneReplyButton`), as the Mac's unfocused panes fold theirs: empty, nothing attached or uploading,
+    /// not focused, not unfolded by Reply.
     private var composerFolded: Bool {
-        guard rail != nil, !replying, !focused, session.replyQuote == nil else { return false }
         let draft = session.drafts.current
-        return draft.text.isEmpty && draft.attachments.isEmpty && session.draftUploads.isEmpty
+        return Self.folds(rail: rail != nil, inactivePane: inactivePane, replying: replying, focused: focused,
+                          quoting: session.replyQuote != nil,
+                          empty: draft.text.isEmpty && draft.attachments.isEmpty && session.draftUploads.isEmpty)
     }
+
+    static func folds(rail: Bool, inactivePane: Bool, replying: Bool, focused: Bool, quoting: Bool, empty: Bool) -> Bool {
+        (rail || inactivePane) && !replying && !focused && !quoting && empty
+    }
+
+    /// An iPad pane other than the focused one (`PadPanes`): its empty composer folds, so the thread has the pane.
+    private var inactivePane: Bool { splitDetail && !paneFocused }
 
     /// The slash list's rows for the draft (C2).
     private var slashCommands: [ChatSlashCommand] { session.slashCommands }
@@ -1266,5 +1293,28 @@ private struct ChatPaletteScope: ViewModifier {
         } else {
             content.environment(\.chatPalette, palette).background(palette.canvas)
         }
+    }
+}
+
+/// An unfocused iPad pane's folded composer (`ChatThreadView.composerFolded`), as the Mac's unfocused pane shows it on
+/// glass: a glass Reply circle at the thread's bottom trailing corner. A tap focuses the pane (its own tap) and the
+/// composer unfolds with the keyboard.
+struct ChatPaneReplyButton: View {
+    let reply: () -> Void
+
+    var body: some View {
+        Button(action: reply) {
+            Image(systemName: "arrowshape.turn.up.left")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .accessibilityLabel("Reply in this pane")
+        .accessibilityIdentifier("chat-pane-reply")
     }
 }

@@ -338,14 +338,6 @@ final class TestClock: ReconnectClock, @unchecked Sendable {
   }
 }
 
-private func until(timeout: Duration = .seconds(5), _ condition: @escaping @Sendable () -> Bool) async throws {
-  let deadline = ContinuousClock.now + timeout
-  while !condition() {
-    guard ContinuousClock.now < deadline else { throw SSHTransportError.timedOut("condition") }
-    try await Task.sleep(for: .milliseconds(2))
-  }
-}
-
 private func collect(_ states: AsyncStream<HostConnectionState>, skipping: Int = 0,
                      until done: @escaping @Sendable (HostConnectionState) -> Bool,
                      timeout: Duration = .seconds(5)) async throws -> [HostConnectionState] {

@@ -28,31 +28,34 @@ final class NegotiationTests: XCTestCase {
     XCTAssertThrows(SSHError.protocolViolation(.malformed(.kexInit, .truncated))) { () throws(SSHError) in
       try KexInit(decoding: Array(valid.prefix(10)))
     }
+    /// A KEXINIT with `list` as its key exchange list and "none" as every other.
+    func kexInit(_ list: String) -> [UInt8] {
+      [20] + [UInt8](repeating: 0, count: 16) + Raw.string(list) + (0..<9).flatMap { _ in Raw.string("none") } + [0]
+        + Raw.u32(0)
+    }
     // 129 names in one list.
     let many = (0...Limits.nameListCount).map { "a\($0)" }.joined(separator: ",")
-    var payload: [UInt8] = [20] + [UInt8](repeating: 0, count: 16) + Raw.string(many)
-    for _ in 0..<9 { payload += Raw.string("none") }
-    payload += [0] + Raw.u32(0)
     XCTAssertThrows(SSHError.protocolViolation(.malformed(.kexInit, .tooMany(limit: Limits.nameListCount)))) { () throws(SSHError) in
-      try KexInit(decoding: payload)
+      try KexInit(decoding: kexInit(many))
     }
     // An empty element, a non-printable name, a boolean of 2.
     for list in ["a,,b", "a\u{7F}"] {
-      var bad: [UInt8] = [20] + [UInt8](repeating: 0, count: 16) + Raw.string(list)
-      for _ in 0..<9 { bad += Raw.string("none") }
-      bad += [0] + Raw.u32(0)
-      XCTAssertThrows(SSHError.protocolViolation(.malformed(.kexInit, .invalidName))) { () throws(SSHError) in try KexInit(decoding: bad) }
+      XCTAssertThrows(SSHError.protocolViolation(.malformed(.kexInit, .invalidName))) { () throws(SSHError) in
+        try KexInit(decoding: kexInit(list))
+      }
     }
     XCTAssertThrows(SSHError.protocolViolation(.malformed(.kexInit, .invalidBoolean))) { () throws(SSHError) in
       try KexInit(decoding: Array(valid.dropLast(5)) + [2] + Raw.u32(0))
     }
   }
 
+  /// A server's KEXINIT (also `TransportHostileTests.serverKexInit`'s).
   static func server(kex: [String] = ["curve25519-sha256"], hostKey: [String] = ["ssh-ed25519"],
-                     ciphers: [String] = ["aes256-gcm@openssh.com"], macs: [String] = ["hmac-sha2-256"]) -> KexInit {
+                     ciphers: [String] = ["aes256-gcm@openssh.com"], macs: [String] = ["hmac-sha2-256"],
+                     compression: [String] = ["zlib", "none"]) -> KexInit {
     KexInit(cookie: [UInt8](repeating: 0, count: 16), keyExchange: kex, hostKey: hostKey, cipherClientToServer: ciphers,
             cipherServerToClient: ciphers, macClientToServer: macs, macServerToClient: macs,
-            compressionClientToServer: ["zlib", "none"], compressionServerToClient: ["none"], languageClientToServer: [],
+            compressionClientToServer: compression, compressionServerToClient: compression, languageClientToServer: [],
             languageServerToClient: [], firstKexPacketFollows: false, reserved: 0)
   }
 

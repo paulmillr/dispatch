@@ -80,13 +80,7 @@ public struct ServerExtensions: Sendable, Hashable {
   public var serverSignatureAlgorithms: [String]? {
     guard let value = values[Self.serverSignatureAlgorithmsName] else { return nil }
     // The value is the list's bytes, without a length prefix of its own (as OpenSSH sends it).
-    if value.isEmpty { return [] }
-    var names: [String] = []
-    for element in value.split(separator: UInt8(ascii: ","), omittingEmptySubsequences: false) {
-      guard names.count < Limits.nameListCount, let name = WireReader.name(element) else { return nil }
-      names.append(name)
-    }
-    return names
+    return try? WireReader.names(value)
   }
 
   /// The algorithm an RSA user key signs with: rsa-sha2-256 when `server-sig-algs` lists it and not rsa-sha2-512,

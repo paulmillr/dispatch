@@ -224,7 +224,8 @@ public enum ProtocolViolation: Sendable, Equatable, CustomStringConvertible {
     case invalidPadding
     /// The MAC or AEAD tag did not verify.
     case integrity
-    /// A sequence number would wrap (`Limits.rekeyPackets` makes this unreachable when rekeys work).
+    /// A sequence number would wrap: under strict key exchange `Limits.rekeyPackets` makes this unreachable while
+    /// rekeys work; without it, after 2^32 packets one way.
     case sequenceExhausted
     /// Bytes past one packet beyond `Limits.inboundBufferBytes` were buffered.
     case bufferOverflow

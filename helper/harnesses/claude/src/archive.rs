@@ -233,6 +233,13 @@ impl Claude {
                             earlier: page.earlier.clone(),
                         },
                     );
+                    // Background agents the transcript names that no SubagentStart reached this helper for are
+                    // followed as the hooks' are, for their tokens (subagents.rs `adopt`).
+                    if let Some(binding) = &request.binding {
+                        let launched = self.cache.get(&source).map(|c| c.parser.launched.clone()).unwrap_or_default();
+                        let since = self.sessions.get(&key(binding)).and_then(|r| r.started_ms);
+                        self.adopt(io, &binding.session, &launched, since);
+                    }
                     if let Some(binding) = &request.binding
                         && ui.terminal(binding).is_some()
                     {

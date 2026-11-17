@@ -121,21 +121,10 @@ enum DERWriter {
     return [0x80 | UInt8(bytes.count)] + bytes
   }
 
-  /// Size of an INTEGER holding the big-endian magnitude `bytes` (leading zeros dropped, a sign byte added).
-  static func integerSize(_ bytes: UnsafeRawBufferPointer) -> Int {
-    let contents = integerContentsSize(bytes)
-    return 1 + length(contents).count + contents
-  }
-
-  private static func integerContentsSize(_ bytes: UnsafeRawBufferPointer) -> Int {
-    let trimmed = bytes.drop { $0 == 0 }
-    guard let first = trimmed.first else { return 1 }
-    return trimmed.count + (first & 0x80 != 0 ? 1 : 0)
-  }
-
   /// SEQUENCE { INTEGER ... } of big-endian magnitudes, written straight into wiped memory (the values may be secret).
   static func sequenceOfIntegers(_ values: [any ContiguousBytes]) -> SecretBytes {
-    let contents = values.reduce(0) { total, value in total + value.withUnsafeBytes { integerSize($0) } }
+    let sizes = values.map { $0.withUnsafeBytes { integerContentsSize($0) } }
+    let contents = sizes.reduce(0) { $0 + 1 + length($1).count + $1 }
     let header = [DERReader.sequence] + length(contents)
     return SecretBytes(count: header.count + contents) { (output: UnsafeMutableRawBufferPointer) in
       var at = 0
@@ -146,18 +135,22 @@ enum DERWriter {
         }
       }
       put(header)
-      for value in values {
+      for (value, size) in zip(values, sizes) {
         value.withUnsafeBytes { magnitude in
           let trimmed = magnitude.drop { $0 == 0 }
-          put([DERReader.integer] + length(integerContentsSize(magnitude)))
-          if trimmed.isEmpty {
-            put([0])
-          } else {
-            if let first = trimmed.first, first & 0x80 != 0 { put([0]) }
-            put(trimmed)
-          }
+          put([DERReader.integer] + length(size))
+          if size > trimmed.count { put([0]) }
+          put(trimmed)
         }
       }
     }
+  }
+
+  /// The size of an INTEGER's contents for the big-endian magnitude `bytes`: leading zeros dropped, and a zero byte
+  /// first for the value 0 or where the first byte's high bit would read as a sign.
+  private static func integerContentsSize(_ bytes: UnsafeRawBufferPointer) -> Int {
+    let trimmed = bytes.drop { $0 == 0 }
+    guard let first = trimmed.first else { return 1 }
+    return trimmed.count + (first & 0x80 != 0 ? 1 : 0)
   }
 }

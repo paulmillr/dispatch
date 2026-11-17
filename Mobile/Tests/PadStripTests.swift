@@ -269,16 +269,16 @@ final class PadStripTests: XCTestCase {
         XCTAssertEqual(second.model.filesModes[shown], .review)
     }
 
-    /// A pill keeps its own width up to 200 points, the selected one up to 260 with its ×, the title truncating past
-    /// it; the switch of five is a fixed 5 × 40 points and its padding.
-    func testPillsShrinkBeforeTheyOverflow() {
-        // Fitting: their own widths. Too wide: the widest give way first, none under its minimum.
-        XCTAssertEqual(PadPillsLayout.shrink(ideal: [100, 200, 90], minimum: [120, 150, 120], room: 400), [100, 200, 90])
-        let shrunk = PadPillsLayout.shrink(ideal: [200, 260, 200], minimum: [120, 150, 120], room: 540)
-        XCTAssertLessThanOrEqual(shrunk.reduce(0, +), 540)
-        XCTAssertEqual(shrunk[0], shrunk[2])
-        XCTAssertGreaterThanOrEqual(shrunk.min() ?? 0, 120)
-        XCTAssertLessThanOrEqual(PadPillsLayout.shrink(ideal: [200, 200], minimum: [120, 150], room: 200).reduce(0, +), 200,
+    /// The pills share the track equally, as the Mac's strip's tabs (`StripTab.width`), none under its minimum; the
+    /// overflow pill keeps its width.
+    func testPillsShareTheTrack() {
+        XCTAssertEqual(PadPillsLayout.share(minimum: [120, 150, 120], fixed: [nil, nil, nil], room: 900), [300, 300, 300])
+        XCTAssertEqual(PadPillsLayout.share(minimum: [120, 150], fixed: [nil, nil], room: 301), [151, 150],
+                       "The rounding's point goes to the first, so the track ends on the room's edge")
+        XCTAssertEqual(PadPillsLayout.share(minimum: [120, 150, 120], fixed: [nil, nil, nil], room: 400), [125, 150, 125],
+                       "The selected one at its minimum, the others sharing what it leaves")
+        XCTAssertEqual(PadPillsLayout.share(minimum: [150, 0], fixed: [nil, 64], room: 400), [336, 64])
+        XCTAssertLessThanOrEqual(PadPillsLayout.share(minimum: [120, 150], fixed: [nil, nil], room: 200).reduce(0, +), 200,
                                  "Under the minimums: in proportion, never wider than the room")
         // The track keeps what fits at the minimums, the selected one always; the rest go to the overflow menu.
         let refs = (1...5).map { tab(mba2, "herdr:app:\($0)") }
@@ -290,7 +290,9 @@ final class PadStripTests: XCTestCase {
         XCTAssertEqual(PadPills.visible(refs, selected: refs[2], room: 10).shown, [refs[2]], "The selected one at least")
     }
 
-    func testPillsCapTheirWidth() throws {
+    /// Rendered: the track spans the room it is offered and its pills split it; the mode button is its glyph alone in
+    /// an upright 11-inch's column, its title too on its side.
+    func testPillsFillTheTrack() throws {
         let scene = try XCTUnwrap(TestSupport.windowScene())
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1200, height: 200)
@@ -301,12 +303,18 @@ final class PadStripTests: XCTestCase {
         }
         let long = "Rate limiter for the API with a much longer title than fits"
         let row = VStack(alignment: .leading) {
-            measured(PadTabPill(title: long, urgency: .needsYou, agent: "codex", shell: false, selected: false, select: {}, close: {})
-                .fixedSize(), "long")
-            measured(PadTabPill(title: long, urgency: nil, agent: "claude", shell: false, selected: true, select: {}, close: {})
-                .fixedSize(), "selected")
-            measured(PadTabPill(title: "zsh", urgency: nil, agent: nil, shell: false, selected: false, select: {}, close: {})
-                .fixedSize(), "short")
+            PadPillsLayout(spacing: 2) {
+                measured(PadTabPill(title: long, urgency: .needsYou, agent: "codex", shell: false, selected: false, select: {}, close: {}),
+                         "long")
+                    .layoutValue(key: PadPillMinimum.self, value: PadPills.minimum)
+                measured(PadTabPill(title: "zsh", urgency: nil, agent: nil, shell: false, selected: true, select: {}, close: {}),
+                         "selected")
+                    .layoutValue(key: PadPillMinimum.self, value: PadPills.selectedMinimum)
+                measured(PadTabPill(title: "zsh", urgency: nil, agent: nil, shell: false, selected: false, select: {}, close: {}),
+                         "short")
+                    .layoutValue(key: PadPillMinimum.self, value: PadPills.minimum)
+            }
+            .frame(width: 604)
             measured(PadModeButton(modes: PadMode.allCases, selected: .review, review: 3) { _ in }
                 .environment(\.tabsColumnWidth, 514), "glyph")
             measured(PadModeButton(modes: PadMode.allCases, selected: .review, review: 3) { _ in }
@@ -316,14 +324,18 @@ final class PadStripTests: XCTestCase {
         window.isHidden = false
         defer { window.isHidden = true }
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        // A truncated title ends at a glyph: the pill comes to its cap or a few points short of it.
-        let capped = frames.values["long"]?.width ?? 0, selected = frames.values["selected"]?.width ?? 0
-        XCTAssertTrue((PadPills.width - 16...PadPills.width + 0.5).contains(capped), "\(capped)")
-        XCTAssertTrue((PadPills.selectedWidth - 16...PadPills.selectedWidth + 0.5).contains(selected), "\(selected)")
-        XCTAssertLessThan(frames.values["short"]?.width ?? .infinity, 120, "A short title keeps a short pill")
-        // The mode button: its glyph alone in an upright 11-inch's column, its title too on its side.
+        // A long title and a short one take the same width: 600 points less two gaps, in three.
+        for name in ["long", "selected", "short"] {
+            XCTAssertEqual(frames.values[name]?.width ?? 0, 200, accuracy: 0.5, name)
+        }
+        XCTAssertEqual((frames.values["short"]?.maxX ?? 0) - (frames.values["long"]?.minX ?? 0), 604, accuracy: 0.5,
+                       "The pills end on the track's edge")
         XCTAssertEqual(frames.values["glyph"]?.width ?? 0, 44, accuracy: 0.5)
         XCTAssertGreaterThan(frames.values["titled"]?.width ?? 0, 80, "Review's glyph and title")
+        XCTAssertTrue(PadPills.divider(after: tab(mba2, "herdr:app:1"), in: [1, 2, 3].map { tab(mba2, "herdr:app:\($0)") },
+                                       selected: tab(mba2, "herdr:app:3")), "A hairline between two unselected pills")
+        XCTAssertFalse(PadPills.divider(after: tab(mba2, "herdr:app:2"), in: [1, 2, 3].map { tab(mba2, "herdr:app:\($0)") },
+                                        selected: tab(mba2, "herdr:app:3")), "None beside the selected one")
     }
 
     /// The sidebar's filter is Spaces' query (All, Needs you, Agents); its title gives way beside window controls.

@@ -37,39 +37,42 @@ public struct SSHKey: Sendable {
   /// a PEM/PKCS#8 file. Parsed and decrypted by the engine `SSHTransportEngine.preferred` names, whose connections
   /// alone can log in with it.
   public static func openSSH(_ file: Data, passphrase: String? = nil) throws -> SSHKey {
-    guard let passphrase else { return try openSSH(file, terminated: nil) }
-    var copy = Array(passphrase.utf8CString)
-    defer { copy.withUnsafeMutableBytes { Engine.wipe($0.baseAddress, count: $0.count) } }
-    return try copy.withUnsafeBufferPointer { try openSSH(file, terminated: $0.baseAddress) }
+    try openSSH(file, bytes: passphrase?.utf8)
   }
 
-  /// The same with the passphrase as bytes (from the Keychain, never a `String`): its NUL-terminated copy is wiped
-  /// once the engine has its own (which it wipes too). The caller owns `file` and `passphrase` and wipes them.
+  /// The same with the passphrase as bytes (from the Keychain, never a `String`). The caller owns `file` and
+  /// `passphrase` and wipes them.
   public static func openSSH(_ file: Data, passphrase: Data?) throws -> SSHKey {
-    guard let passphrase else { return try openSSH(file, terminated: nil) }
+    try openSSH(file, bytes: passphrase)
+  }
+
+  /// The passphrase's NUL-terminated copy is wiped once the engine has its own (which it wipes too).
+  private static func openSSH(_ file: Data, bytes passphrase: (some Collection<UInt8>)?) throws -> SSHKey {
+    guard let passphrase else { return try parse(file, nil) }
     var copy = [CChar](repeating: 0, count: passphrase.count + 1)
     defer { copy.withUnsafeMutableBytes { Engine.wipe($0.baseAddress, count: $0.count) } }
-    copy.withUnsafeMutableBytes { target in passphrase.withUnsafeBytes { target.copyMemory(from: $0) } }
-    return try copy.withUnsafeBufferPointer { try openSSH(file, terminated: $0.baseAddress) }
+    copy.withUnsafeMutableBytes { $0.copyBytes(from: passphrase) }
+    return try copy.withUnsafeBufferPointer { try parse(file, $0.baseAddress) }
   }
 
-  private static func openSSH(_ file: Data, terminated passphrase: UnsafePointer<CChar>?) throws -> SSHKey {
+  private static func parse(_ file: Data, _ passphrase: UnsafePointer<CChar>?) throws -> SSHKey {
     let key = try SSHTransportEngine.preferred.backend.parseKey(file, passphrase: passphrase)
     let algorithm = key.algorithm
     guard let kind = Kind(rawValue: algorithm) else { throw SSHTransportError.unsupportedAuthentication(algorithm) }
-    return SSHKey(kind: kind, publicKey: key.publicKey, fingerprint: key.fingerprint, hardwareBacked: false, backing: .engine(key))
+    return SSHKey(kind: kind, publicKey: key.publicKey, fingerprint: key.fingerprint, hardwareBacked: false,
+                  backing: .engine(key))
   }
 
   public init(ed25519 key: Curve25519.Signing.PrivateKey) {
     var blob = Data()
     blob.appendSSHString(Data(Kind.ed25519.rawValue.utf8))
     blob.appendSSHString(key.publicKey.rawRepresentation)
-    self.init(kind: .ed25519, blob: blob, hardwareBacked: false) { try key.signature(for: $0) }
+    self.init(kind: .ed25519, publicKeyBlob: blob, hardwareBacked: false) { try key.signature(for: $0) }
   }
 
   /// A software P-256 key presented as `ecdsa-sha2-nistp256`.
   public init(p256 key: P256.Signing.PrivateKey) {
-    self.init(kind: .ecdsaP256, blob: Self.p256Blob(key.publicKey), hardwareBacked: false) {
+    self.init(kind: .ecdsaP256, publicKeyBlob: Self.p256Blob(key.publicKey), hardwareBacked: false) {
       try key.signature(for: $0).rawRepresentation
     }
   }
@@ -77,7 +80,7 @@ public struct SSHKey: Sendable {
   #if canImport(Darwin)
   /// A Secure Enclave P-256 key: the enclave signs (with its access control, such as Face ID).
   public init(secureEnclave key: SecureEnclave.P256.Signing.PrivateKey) {
-    self.init(kind: .ecdsaP256, blob: Self.p256Blob(key.publicKey), hardwareBacked: true) {
+    self.init(kind: .ecdsaP256, publicKeyBlob: Self.p256Blob(key.publicKey), hardwareBacked: true) {
       try key.signature(for: $0).rawRepresentation
     }
   }
@@ -85,16 +88,9 @@ public struct SSHKey: Sendable {
 
   /// Any other external signer (a Keychain-held key): its SSH public key blob and a raw signer.
   public init(kind: Kind, publicKeyBlob blob: Data, hardwareBacked: Bool, sign: @escaping Signer) {
-    let line = kind.rawValue + " " + blob.base64EncodedString()
-    self.kind = kind
-    publicKey = line
-    fingerprint = SSHFingerprint.sha256(blob: blob)
-    self.hardwareBacked = hardwareBacked
-    backing = .signer(blob: blob, sign: sign)
-  }
-
-  private init(kind: Kind, blob: Data, hardwareBacked: Bool, sign: @escaping Signer) {
-    self.init(kind: kind, publicKeyBlob: blob, hardwareBacked: hardwareBacked, sign: sign)
+    self.init(kind: kind, publicKey: kind.rawValue + " " + blob.base64EncodedString(),
+              fingerprint: SSHFingerprint.sha256(blob: blob), hardwareBacked: hardwareBacked,
+              backing: .signer(blob: blob, sign: sign))
   }
 
   private init(kind: Kind, publicKey: String, fingerprint: String, hardwareBacked: Bool, backing: Backing) {

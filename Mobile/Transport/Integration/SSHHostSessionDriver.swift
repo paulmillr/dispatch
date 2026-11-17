@@ -75,7 +75,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         let driver = self
         // Once connected, the automatic reconnects ask the user nothing, as the Mac's (BatchMode): a host that needs a
         // keyboard-interactive answer (a one-time code) fails them, and Connect asks again.
-        let connectedOnce = ConnectedOnce()
+        let connectedOnce = Once()
         let connection = HostConnection<DriverLink>(clock: clock, refused: Self.refused) { phase in
             try await driver.establish(host, context: context, keys: keys, interactive: !connectedOnce.isSet, phase: phase)
         }
@@ -85,8 +85,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         // change of network can leave dead until the keepalive gives up (60 s after the server's last packet).
         let retrying = Task {
             for await _ in context.retries {
-                var session: DriverLink?
-                if await connection.state == .connected { session = await connection.session }
+                let session = await connection.state == .connected ? connection.session : nil
                 if case .plain(let link)? = session {
                     // No helper to ask: a round trip on the SSH connection itself (no latency: it is not the helper's).
                     if await !link.login.alive(timeout: probeTimeout) { await link.close() }
@@ -109,8 +108,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         }
         await connection.start()
         var live: Task<Void, Never>?
-        var finished = false
-        for await state in states {
+        states: for await state in states {
             switch state {
             case .disconnected:
                 continue
@@ -119,20 +117,24 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 connectedOnce.set()
                 live?.cancel()
                 live = nil
-                guard case .helper(let link) = session else {
-                    if case .plain(let plain) = session { events.yield(.plain(reason: plain.reason, shells: plain.login.shells)) }
-                    break
-                }
-                let gate = ReadyGate()
-                live = Task { await driver.serve(link, preference: preference, gate: gate, pulse: context.pulse, events: events) }
-                let first = await gate.first(timeout: firstTopology)
-                guard !Task.isCancelled else { break }
-                events.yield(.ready(client: link.client, hello: link.hello, multiplexers: link.multiplexers,
-                                    versions: link.versions, topology: first))
-                switch gate.open() {
-                case .topology(let later): events.yield(.topology(later))
-                case .noBackend: events.yield(.noBackend)
-                case nil: break
+                switch session {
+                case .plain(let plain):
+                    events.yield(.plain(reason: plain.reason, shells: plain.login.shells))
+                case .helper(let link):
+                    let gate = ReadyGate()
+                    live = Task {
+                        await driver.serve(link, preference: preference, gate: gate, pulse: context.pulse, events: events)
+                    }
+                    let first = await gate.first(timeout: firstTopology)
+                    guard !Task.isCancelled else { break }
+                    events.yield(.ready(client: link.client, hello: link.hello,
+                                        multiplexers: HelperLink.installed(link.rows),
+                                        versions: HelperLink.versions(link.rows), topology: first))
+                    switch gate.open() {
+                    case .topology(let later): events.yield(.topology(later))
+                    case .noBackend: events.yield(.noBackend)
+                    case nil: break
+                    }
                 }
             case .reconnecting, .connecting, .authenticating, .bootstrapping:
                 if case .reconnecting = state { live?.cancel(); live = nil }
@@ -141,9 +143,9 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 live?.cancel()
                 live = nil
                 events.yield(.link(HostLink(state)))
-                finished = true
+                break states
             }
-            if finished || Task.isCancelled { break }
+            if Task.isCancelled { break }
         }
         live?.cancel()
         retrying.cancel()
@@ -154,7 +156,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
 
     /// SSH, then the helper and its greeting unless the host goes without (`HostRecord.helper`) or the helper cannot
     /// start (`fallback`): the session `HostConnection` keeps until it is lost.
-    private func establish(_ host: HostRecord, context: HostSessionContext, keys: KeyCache, interactive: Bool = true,
+    private func establish(_ host: HostRecord, context: HostSessionContext, keys: KeyCache, interactive: Bool,
                            phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> DriverLink {
         let endpoint = host.endpoint
         var credentials: [SSHCredential] = []
@@ -185,14 +187,21 @@ struct SSHHostSessionDriver: HostSessionDriver {
         do {
             return .helper(try await helper(on: login, host: host, context: context, phase: phase))
         } catch {
+            // Cancelled (a disconnect): nothing more runs on the host for a connection nobody wants.
+            guard !Task.isCancelled else {
+                await login.close()
+                throw error
+            }
             var open = login.isOpen
             // A channel that ended without a word may be the connection going: its disconnect can arrive after the
             // channel's end, so ask the connection itself before calling it a helper failure.
             if open, Self.ambiguous(error) { open = await login.alive(timeout: probeTimeout) }
             if let reason = Self.fallback(error, open: open) { return .plain(PlainLink(login: login, reason: reason)) }
             await login.close()
-            // The connection dropped meanwhile: whatever the step reported, this is a loss to reconnect from.
+            // The connection dropped meanwhile: whatever the step reported, this is a loss to reconnect from, unless the
+            // connection's own end is final (a host key changed at a rekey), as it is once connected.
             if !open, !(error is CancellationError) {
+                if let end = login.lossError, Self.refused(end) { throw end }
                 throw ConnectionLost(login.lossReason ?? HostConnectionPolicy.describe(error))
             }
             throw error
@@ -205,11 +214,13 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// connection (probe, cache check, upload, start) and greets again. A helper that exits before greeting
     /// (`HelperExited`: a home mounted noexec answers 126) is installed and started once more under the fallback root the
     /// bootstrap names (`HelperBootstrap.fallbackRoot`), on the same connection; a second failure, or none named, is the
-    /// failure. Each attempt's channel is closed when it fails; the login is the caller's.
+    /// failure. Each attempt's channel is closed when it fails; the login is the caller's. A cancelled run starts no
+    /// further attempt.
     private func helper(on login: any HostLogin, host: HostRecord, context: HostSessionContext,
                         phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> HelperLink {
         var root = HelperBootstrap.Root.home, retried = false, fromCache = true
         while true {
+            try Task.checkCancellation()
             let process = try await login.bootstrapHelper(binaries: binaries, capabilities: context.launch.capabilities,
                                                           environment: context.launch.environment, root: root,
                                                           fromCache: fromCache, phase: phase)
@@ -273,19 +284,10 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// The helper's end, when its channel ends within `wait` (`status` nil: no exit status, a signal, a lost channel or
     /// a refused exec request, `refusal`); nil while it still runs.
     static func end(of process: any HelperProcess, within wait: Duration) async -> HelperEnd? {
-        let once = Once()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<HelperEnd?, Never>) in
-            // Unstructured: an exit status wait does not end on cancellation, only with the channel (closed right after).
-            Task {
-                let end: HelperEnd
-                do { end = HelperEnd(status: try await process.exitStatus()) } catch {
-                    end = HelperEnd(status: nil, refusal: error as? SSHTransportError ?? .channelClosed)
-                }
-                once.run { continuation.resume(returning: end) }
-            }
-            Task {
-                try? await Task.sleep(for: wait)
-                once.run { continuation.resume(returning: nil) }
+        // An exit status wait does not end on cancellation, only with the channel (closed right after).
+        await answer(within: wait, or: nil) {
+            do { return HelperEnd(status: try await process.exitStatus()) } catch {
+                return HelperEnd(status: nil, refusal: error as? SSHTransportError ?? .channelClosed)
             }
         }
     }
@@ -358,8 +360,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 if tick.map({ !pulse.covers($0) }) ?? true {
                     group.addTask {
                         let started = ContinuousClock.now
-                        let echoed: [String: String]? = try? await client.connection.request("echo", params: [String: String]())
-                        if echoed != nil { latency(ContinuousClock.now - started) }
+                        if await Self.echo(client) { latency(ContinuousClock.now - started) }
                     }
                 }
                 let date = now()
@@ -376,18 +377,13 @@ struct SSHHostSessionDriver: HostSessionDriver {
 
     /// Whether the helper answers `echo` within `timeout` (after a network change: a dead link is closed and reconnects).
     static func alive(_ client: HelperClient, timeout: Duration) async -> Bool {
-        let once = Once()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            let asking = Task {
-                let echoed: [String: String]? = try? await client.connection.request("echo", params: [String: String]())
-                once.run { continuation.resume(returning: echoed != nil) }
-            }
-            Task {
-                try? await Task.sleep(for: timeout)
-                once.run { continuation.resume(returning: false) }
-                asking.cancel()
-            }
-        }
+        await answer(within: timeout, or: false) { await Self.echo(client) }
+    }
+
+    /// Whether the helper answered an `echo`.
+    private static func echo(_ client: HelperClient) async -> Bool {
+        let echoed: [String: String]? = try? await client.connection.request("echo", params: [String: String]())
+        return echoed != nil
     }
 
     /// The multiplexer whose topology a session follows, without starting anything on the host: the host's choice;
@@ -466,14 +462,9 @@ enum DriverLink: MobileTransport.HostSession {
 }
 
 /// A connection without a helper (plain SSH): the login, and why there is no helper (nil: the host's switch is off).
-final class PlainLink: MobileTransport.HostSession {
+struct PlainLink: MobileTransport.HostSession {
     let login: any HostLogin
     let reason: String?
-
-    init(login: any HostLogin, reason: String?) {
-        self.login = login
-        self.reason = reason
-    }
 
     func closed() async { await login.closed() }
     func close() async { await login.close() }
@@ -501,9 +492,6 @@ final class HelperLink: MobileTransport.HostSession {
         self.backends = backends
     }
 
-    var multiplexers: [HelperClient.Multiplexer] { Self.installed(rows) }
-    var versions: [String: String] { Self.versions(rows) }
-
     /// The multiplexers installed on the host, as the host session lists them (the helper's native one aside).
     static func installed(_ rows: [TabsMultiplexer]) -> [HelperClient.Multiplexer] {
         rows.filter { $0.installed != false && $0.name != "native" }
@@ -525,16 +513,15 @@ final class HelperLink: MobileTransport.HostSession {
             Task { _ = try? await process.exitStatus(); once.run { continuation.resume() } }
         }
         // Before closing: afterwards the SSH connection's end is this close.
-        ended.withLock { $0 = login.lossReason ?? "The helper on the host stopped." }
+        let reason = login.lossReason ?? "The helper on the host stopped."
         let error = login.lossError as? SSHTransportError
-        endError.withLock { $0 = error }
+        end.withLock { $0 = (reason, error) }
         await close()
     }
 
-    private let ended = Mutex<String?>(nil)
-    private let endError = Mutex<SSHTransportError?>(nil)
-    var lossReason: String? { ended.withLock { $0 } }
-    var lossError: (any Error)? { endError.withLock { $0 } }
+    private let end = Mutex<(reason: String?, error: SSHTransportError?)>((nil, nil))
+    var lossReason: String? { end.withLock { $0.reason } }
+    var lossError: (any Error)? { end.withLock { $0.error } }
 
     func close() async {
         client.connection.close()
@@ -543,15 +530,35 @@ final class HelperLink: MobileTransport.HostSession {
     }
 }
 
-/// Runs its body once, from whichever caller comes first.
+/// Runs its body once, from whichever caller comes first; also a flag set once (`set`, `isSet`).
 final class Once: Sendable {
     private let done = Mutex(false)
+    var isSet: Bool { done.withLock { $0 } }
+    func set() { done.withLock { $0 = true } }
     func run(_ body: () -> Void) {
         let first = done.withLock { done in
             defer { done = true }
             return !done
         }
         if first { body() }
+    }
+}
+
+/// `body`'s answer, or `late` once `timeout` passed first (`body`'s task is then cancelled). Both run on tasks of their
+/// own: the caller's cancellation ends neither.
+func answer<Answer: Sendable>(within timeout: Duration, or late: Answer,
+                              _ body: @escaping @Sendable () async -> Answer) async -> Answer {
+    let once = Once()
+    return await withCheckedContinuation { continuation in
+        let asking = Task {
+            let value = await body()
+            once.run { continuation.resume(returning: value) }
+        }
+        Task {
+            try? await Task.sleep(for: timeout)
+            once.run { continuation.resume(returning: late) }
+            asking.cancel()
+        }
     }
 }
 
@@ -592,7 +599,7 @@ actor KeyCache {
             return cached
         }
         cached = nil
-        var material: KeyMaterial?
+        let material: KeyMaterial?
         do { material = try await context.key() } catch { throw HostRefusal(error.localizedDescription) }
         guard let read = material else { throw HostRefusal(Self.missing) }
         // An imported file and its passphrase are wiped once the engine holds the parsed key (and on failure).
@@ -601,7 +608,6 @@ actor KeyCache {
                 file.wipe()
                 passphrase?.wipe()
             }
-            material = nil
         }
         let key: SSHKey
         var engine: SSHTransportEngine?
@@ -736,11 +742,4 @@ final class ReadyGate: Sendable {
             return state.pending
         }
     }
-}
-
-/// The run has been connected: its later connections are automatic reconnects.
-private final class ConnectedOnce: Sendable {
-    private let value = Mutex(false)
-    var isSet: Bool { value.withLock { $0 } }
-    func set() { value.withLock { $0 = true } }
 }

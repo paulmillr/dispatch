@@ -9,7 +9,7 @@ public final class HelperChannel: Sendable {
   public let read: FileHandle
   /// The helper's stdin: the same handle as `read`.
   public var write: FileHandle { read }
-  private let exec: SSHExec
+  let exec: SSHExec
   /// A second descriptor of the same socket, ours alone: `close()` shuts the socket down through it. The handle's own
   /// number is closed by its consumer whenever its transport ends, and the system hands that number to the next
   /// socket opened (another host's channel), which a shutdown by number would cut.
@@ -35,7 +35,8 @@ public final class HelperChannel: Sendable {
   /// The helper's exit status, once its channel closed (nil if it ended by a signal or the connection dropped, or the
   /// server refused the exec request: `refusal`).
   public func exitStatus() async -> Int32? {
-    try? await exec.exitStatus()
+    if case .status(let status) = await exec.state.ended.value { return Int32(bitPattern: status) }
+    return nil
   }
 
   /// The server's refusal of the exec request (`commandFailed(status: -1, …)`), once the channel ended so (by the
@@ -44,9 +45,6 @@ public final class HelperChannel: Sendable {
 
   /// The first 64 KiB the helper wrote to stderr.
   public func stderr() async -> String { exec.stderr }
-
-  /// `stderr()` as it stands now.
-  var stderrSoFar: String { exec.stderr }
 
   /// Ends the session: shuts the socket down both ways (EOF to the helper; the transport reads end of
   /// file). The handle's descriptor stays with its owner. Calling it again does nothing.

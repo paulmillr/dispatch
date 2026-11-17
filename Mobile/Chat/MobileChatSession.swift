@@ -96,6 +96,8 @@ final class MobileChatSession: Identifiable {
     private(set) var currentNote: String?
     /// The open turn's prompt, its first line: Agents' row says what the agent works on before it has written.
     private(set) var currentPrompt: String?
+    /// The open turn's newest reasoning, when it comes after the agent's newest message in the turn (`TabsNote.thought`).
+    private(set) var currentThought: String?
     /// The current step's kind (Agents' badge) and the steps since the agent last wrote, as the working row counts them.
     private(set) var currentStepKind: ChatStep.Kind?
     private(set) var currentStepCount = 0
@@ -317,6 +319,13 @@ final class MobileChatSession: Identifiable {
         let note = turn.flatMap { $0.items.last { $0.kind == .assistant && !$0.text.isEmpty } }
             .flatMap { TabsNote.line($0.text) }
         if currentNote != note { currentNote = note }
+        let said = turn?.items.lastIndex { $0.kind == .assistant && !$0.text.isEmpty }
+        let thought = turn.flatMap { turn in
+            turn.items.lastIndex { $0.kind == .reasoning && !$0.text.isEmpty }
+                .flatMap { index in said.map { index > $0 } ?? true ? index : nil }
+                .flatMap { TabsNote.thought(turn.items[$0].text) }
+        }
+        if currentThought != thought { currentThought = thought }
         let prompt = turn.flatMap { $0.items.first { $0.kind == .user && !$0.text.isEmpty } }.flatMap { TabsNote.line($0.text) }
         if currentPrompt != prompt { currentPrompt = prompt }
         if currentStepKind != current?.kind { currentStepKind = current?.kind }

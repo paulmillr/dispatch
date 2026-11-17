@@ -9,10 +9,8 @@ final class TransportKeepaliveTests: XCTestCase {
   static func harness(answer: ScriptedServer.KeepaliveAnswer, count: Int = 3, interval: Duration? = .seconds(15))
     throws -> TransportHarness
   {
-    var configuration = ScriptedServer.Configuration()
-    configuration.keepaliveAnswer = answer
     let harness = try TransportHarness(options: TransportHarness.options(keepalive: interval, count: count),
-                                       server: ScriptedServer(configuration: configuration))
+                                       server: ScriptedServer(configuration: .with { $0.keepaliveAnswer = answer }))
     harness.connect()
     XCTAssertTrue(harness.isEstablished)
     harness.service = .connection
@@ -25,10 +23,8 @@ final class TransportKeepaliveTests: XCTestCase {
   /// before userauth", found by InteropEngineTests against Dropbear 2025.89). The timer starts when the connection
   /// phase does; then keepalives go and count as usual.
   func testNoKeepaliveBeforeTheConnectionPhase() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.keepaliveAnswer = .none
     let harness = try TransportHarness(options: TransportHarness.options(keepalive: .seconds(15), count: 1),
-                                       server: ScriptedServer(configuration: configuration))
+                                       server: ScriptedServer(configuration: .with { $0.keepaliveAnswer = .none }))
     XCTAssertFalse(harness.connect().contains { if case .timer(.schedule(.keepalive, _)) = $0 { true } else { false } },
                    "a keepalive timer at the first exchange")
     XCTAssertTrue(harness.isEstablished)

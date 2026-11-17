@@ -85,25 +85,10 @@ final class HostKeyTests: XCTestCase {
     } catch {}
   }
 
-  private func until(_ condition: @escaping @Sendable () -> Bool, timeout: Duration = .seconds(5)) async throws {
-    let deadline = ContinuousClock.now + timeout
-    while !condition() {
-      guard ContinuousClock.now < deadline else { throw CancellationError() }
-      try await Task.sleep(for: .milliseconds(20))
-    }
-  }
-
   private func fingerprint(ofLine line: String) throws -> String {
     let file = SSHFixture.shared.root.appendingPathComponent("host_ed25519.pub")
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
-    process.arguments = ["-lf", file.path]
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    try process.run()
-    finish(process)
     XCTAssertTrue(String(decoding: try Data(contentsOf: file), as: UTF8.self).hasPrefix(line))
-    return String(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: " ")[1])
+    return try SSHFixture.fingerprint(file.path)
   }
 }
 

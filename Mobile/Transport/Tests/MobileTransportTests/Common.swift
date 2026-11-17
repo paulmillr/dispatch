@@ -44,3 +44,37 @@ private let sanitizerLiveBytes: (@Sendable () -> Int)? = {
   let function = unsafeBitCast(symbol, to: Function.self)
   return { function() }
 }()
+
+/// 127.0.0.1:`port`.
+func loopback(port: Int) -> sockaddr_in {
+  sockaddr_in(sin_len: UInt8(MemoryLayout<sockaddr_in>.size), sin_family: sa_family_t(AF_INET),
+              sin_port: UInt16(port).bigEndian, sin_addr: in_addr(s_addr: inet_addr("127.0.0.1")),
+              sin_zero: (0, 0, 0, 0, 0, 0, 0, 0))
+}
+
+/// A loopback port nothing listens on: one the system picked, bound by a socket that never listened and is closed.
+func closedLoopbackPort() throws -> Int {
+  let fd = socket(AF_INET, SOCK_STREAM, 0)
+  guard fd >= 0 else { throw POSIXError(.EIO) }
+  defer { Darwin.close(fd) }
+  var address = loopback(port: 0), length = socklen_t(MemoryLayout<sockaddr_in>.size)
+  let bound = withUnsafeMutablePointer(to: &address) { pointer in
+    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+      bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+    }
+  }
+  guard bound else { throw POSIXError(.EIO) }
+  return Int(UInt16(bigEndian: address.sin_port))
+}
+
+/// The wire blob of `key`'s public half (its public line's base64).
+func publicKeyBlob(_ key: SSHKey) -> Data { Data(base64Encoded: String(key.publicKey.split(separator: " ")[1]))! }
+
+/// Polls `condition` every 2 ms until it holds; throws `timedOut` after `timeout`.
+func until(timeout: Duration = .seconds(5), _ condition: @escaping @Sendable () -> Bool) async throws {
+  let deadline = ContinuousClock.now + timeout
+  while !condition() {
+    guard ContinuousClock.now < deadline else { throw SSHTransportError.timedOut("condition") }
+    try await Task.sleep(for: .milliseconds(2))
+  }
+}

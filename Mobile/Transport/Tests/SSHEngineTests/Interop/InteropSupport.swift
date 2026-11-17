@@ -117,17 +117,9 @@ struct InteropProfile: Decodable, Sendable {
   @discardableResult
   func signal(_ server: Server, pid: Int, _ signal: String) throws -> String {
     guard let executable = self.signal.first else { throw InteropUnavailable(reason: "no signal command") }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = Array(self.signal.dropFirst()) + [server.name, String(pid), signal]
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
-    process.standardInput = FileHandle.nullDevice
-    try process.run()
-    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
+    let arguments = Array(self.signal.dropFirst()) + [server.name, String(pid), signal]
+    let (status, output) = try runProcess(executable, arguments)
+    guard status == 0 else {
       throw InteropUnavailable(reason: "signal \(signal) to \(pid) on \(server.name) failed: \(output)")
     }
     return output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -325,10 +317,5 @@ func forEachServer(_ profile: InteropProfile, _ test: String, engine: String, se
 /// Fails the server's run unless `condition` holds.
 func require(_ condition: Bool, _ message: @autoclosure () -> String) throws {
   guard condition else { throw InteropFailure(message()) }
-}
-
-/// The SHA-256 of `bytes` as lowercase hex (what `sha256sum` prints).
-func sha256Hex(_ bytes: some DataProtocol) -> String {
-  SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 }
 #endif

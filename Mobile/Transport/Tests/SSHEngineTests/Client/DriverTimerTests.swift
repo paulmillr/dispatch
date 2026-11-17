@@ -184,4 +184,33 @@ final class DriverTimerTests: XCTestCase {
     XCTAssertLessThanOrEqual(final.maximumBacklog, Limits.outboundBacklogBytes + 64 * 1024)
     await session.close()
   }
+
+  /// The stream's read fails while a write is stuck (the peer stopped reading): the write never completes on its own,
+  /// so the stream is closed when the grace for the last bytes runs out, and `close()` returns.
+  func testAReadFailureWhileAWriteIsStuckStillCloses() async throws {
+    let script = ServerScript()
+    script.window = 64 * 1024 * 1024
+    script.commands["sink"] = []
+    let (client, server) = MemoryByteStream.pair(capacity: 64 * 1024)
+    let peer = ScriptedPeer(stream: server, script: script)
+    await peer.start()
+    let streams = MemoryConnector(result: .success(client))
+    let connector = ClientConnector(streams: streams, random: { SeededRandom(seed: 7) })
+    let session = try await connector.connect(MemoryWorld.options) { _ in true }
+    _ = try await session.authenticate(user: "phone", with: .password(SecretBytes(utf8: "fictional")))
+    let exec = try await session.exec("sink")
+    await peer.setSilent(true)
+    let write = Task { try await exec.write([UInt8](repeating: 7, count: 4 * 1024 * 1024)) }
+    _ = try await bounded(20, "the writer stops") {
+      await session.driver.waitForStats {
+        $0.waitingWriters == 1 && $0.maximumBacklog > Limits.outboundBacklogBytes / 2
+      }
+    }
+    // Reads fail; the write stays stuck in the full pipe.
+    await client.incoming.fail(.closed(.connectionLost))
+    let end = try await bounded(5, "the end") { await session.ended() }
+    XCTAssertEqual(end, .closed(.connectionLost))
+    try await bounded(5, "the close") { await session.close() }
+    write.cancel()
+  }
 }

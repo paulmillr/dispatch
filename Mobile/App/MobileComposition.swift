@@ -519,7 +519,8 @@ final class MobileComposition {
     private func routed(_ path: [TabsRoute], from previous: [TabsRoute]) {
         // On a phone's stack a push covers the tab bar, Agents' list with it (an iPad's split shows it beside).
         conversations.agentsListCovered = !navigator.split && !path.isEmpty
-        let onPath = Set(path.compactMap(\.tab))
+        // The iPad's other panes show their tabs too (`PadPanes`): a chat opening there is not abandoned.
+        let onPath = Set(path.compactMap(\.tab) + navigator.panes.otherTabs)
         for (ref, key) in pushing where !onPath.contains(ref) {
             pushing[ref] = nil
             conversations.abandoned(key)
@@ -641,7 +642,8 @@ final class MobileComposition {
                     ?? session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "working"
                 return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince,
                                   note: session.currentNote, kind: session.currentStepKind, steps: session.currentStepCount,
-                                  agents: session.subagents.count, asked: session.currentPrompt)
+                                  agents: session.subagents.count, asked: session.currentPrompt,
+                                  thought: session.currentThought)
             }
         }
         if row.summary.waiting { return TabsStatus(text: row.summary.attention ?? "needs you") }

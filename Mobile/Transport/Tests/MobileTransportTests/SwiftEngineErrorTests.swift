@@ -185,14 +185,14 @@ final class SwiftEngineErrorTests: XCTestCase {
   /// file only it reads parses there (and not on russh, in a `DISPATCH_RUSSH` build), and a connect to a closed
   /// loopback port fails as the seam says, from its own socket.
   func testTheSwiftEngineRunsConnectionsAndKeyFiles() async throws {
-    XCTAssertTrue(try SSHTransportEngine.swift.backend is SwiftEngine)
+    XCTAssertTrue(SSHTransportEngine.swift.backend is SwiftEngine)
     XCTAssertEqual(SSHTransportEngine.standard, .swift)
     XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? .swift, "the Swift engine unless chosen")
     let previous = SSHTransportEngine.preferred
     defer { SSHTransportEngine.preferred = previous }
     #if DISPATCH_RUSSH
     XCTAssertEqual(SSHTransportEngine.allCases, [.swift, .russh])
-    XCTAssertTrue(try SSHTransportEngine.russh.backend is RusshEngine)
+    XCTAssertTrue(SSHTransportEngine.russh.backend is RusshEngine)
     SSHTransportEngine.preferred = .russh
     XCTAssertThrowsError(try SSHKey.openSSH(Self.pkcs8ECDSA), "russh does not read this PKCS#8 file")
     #else
@@ -205,18 +205,7 @@ final class SwiftEngineErrorTests: XCTestCase {
     XCTAssertThrowsError(try SSHKey.openSSH(Data("not a key".utf8))) {
       XCTAssertEqual($0 as? SSHTransportError, .invalidKey(KeyFileProblem.notAKey.rawValue))
     }
-    let listener = socket(AF_INET, SOCK_STREAM, 0)
-    var address = sockaddr_in(sin_len: UInt8(MemoryLayout<sockaddr_in>.size), sin_family: sa_family_t(AF_INET), sin_port: 0,
-                              sin_addr: in_addr(s_addr: inet_addr("127.0.0.1")), sin_zero: (0, 0, 0, 0, 0, 0, 0, 0))
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let bound = withUnsafeMutablePointer(to: &address) { pointer in
-      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-        Darwin.bind(listener, $0, length) == 0 && getsockname(listener, $0, &length) == 0
-      }
-    }
-    Darwin.close(listener)  // Bound, never listening, now closed: nothing accepts on the port.
-    XCTAssertTrue(bound)
-    let port = Int(UInt16(bigEndian: address.sin_port))
+    let port = try closedLoopbackPort()
     do {
       _ = try await SSHConnection.connect(to: SSHEndpoint(host: "127.0.0.1", port: port, username: "sam"), credentials: [],
                                           trust: TrustOnFirstUse { _ in false })

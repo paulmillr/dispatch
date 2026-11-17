@@ -2,7 +2,7 @@ import SwiftUI
 
 // iPad, third pass: the Mac's layout. The sidebar is the Spaces tree alone (no bottom bar; New and Edit in its bar
 // row). The detail column opens with the space's tab strip: one glass track of tab pills (state dot, agent or
-// terminal glyph, title, ⌘n), "+" after them, and the mode button at the trailing end (`PadModeButton`): the shown
+// terminal glyph, title) spanning the strip, the pills sharing it equally as the Mac's tabs do, "+" after it, and the mode button at the trailing end (`PadModeButton`): the shown
 // mode's glyph and title, its menu Terminal, Chat, Files, Review (its count) and Commits, as the Mac's and the phone's.
 // No title header, no capsule.
 
@@ -43,28 +43,39 @@ struct PadStrip: View {
                 .padding(.horizontal, 12).frame(height: 38)
                 .glassEffect(.regular.interactive(), in: Capsule())
             }
+            // The track spans the strip up to "+", its pills sharing it equally as the Mac's tabs do, a hairline
+            // between two unselected ones.
+            let tabs = Array(MockSpaces.appTabs.prefix(4))
             HStack(spacing: 2) {
-                ForEach(Array(MockSpaces.appTabs.prefix(4).enumerated()), id: \.element.id) { i, tab in
+                ForEach(Array(tabs.enumerated()), id: \.element.id) { i, tab in
                     let on = i == selectedTab
                     HStack(spacing: 7) {
                         if let dot = tab.dot { Circle().fill(dot).frame(width: 7, height: 7) }
                         AgentGlyph(kind: tab.kind).scaleEffect(0.75).frame(width: 18)
                         Text(tab.name).font(.subheadline.weight(on ? .semibold : .medium)).lineLimit(1).truncationMode(.tail)
+                    }
+                    .foregroundStyle(on ? Color.primary : Color.secondary)
+                    .padding(.horizontal, on ? 30 : 12)
+                    .frame(maxWidth: .infinity).frame(height: 32)
+                    .overlay(alignment: .trailing) {
                         if on {
-                            Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary).padding(.leading, 2)
+                            Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                                .frame(width: 22, height: 22).padding(.trailing, 6)
                         }
                     }
-                    .padding(.horizontal, 12).frame(height: 32)
-                    .frame(maxWidth: on ? 260 : 200)
                     .background { if on { Capsule().fill(Color.lens) } }
+                    .overlay(alignment: .trailing) {
+                        if i + 1 < tabs.count, i != selectedTab, i + 1 != selectedTab {
+                            Rectangle().fill(Color(uiColor: .separator)).frame(width: 1, height: 16).offset(x: 1.5)
+                        }
+                    }
                 }
             }
             .padding(3)
             .glassEffect(.regular, in: Capsule())
-            .layoutPriority(1)
+            .frame(maxWidth: .infinity)
             Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 38, height: 38)
                 .glassEffect(.regular.interactive(), in: Circle())
-            Spacer(minLength: 8)
             // The mode button: the shown mode's glyph, filled in the accent away from Terminal, and its title (the column
             // is 640 points or wider beside the sidebar on its side).
             HStack(spacing: 6) {

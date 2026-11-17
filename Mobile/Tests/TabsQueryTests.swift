@@ -62,6 +62,18 @@ final class TabsQueryTests: XCTestCase {
         XCTAssertEqual(model.rows(in: app, serverOrder: true).map(\.tab.ref.key), ["herdr:app:1", "herdr:app:2", "herdr:app:3"])
     }
 
+    /// By time, a tab whose agent works comes first, though its newest record is the space's oldest; the rest by
+    /// activity. Manual keeps server order.
+    func testWorkingChatsComeFirstByTime() throws {
+        let (model, keys) = model(["p:claude": .working])
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        model.agentActivity = { _, terminal in keys[terminal] == "p:claude" ? base.addingTimeInterval(-3600) : nil }
+        model.status = { _, terminal in keys[terminal] == "p:claude" ? TabsStatus(text: "working", since: base.addingTimeInterval(-600)) : nil }
+        let app = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:app")))
+        XCTAssertEqual(model.rows(in: app).map(\.tab.ref.key), ["herdr:app:1", "herdr:app:2", "herdr:app:3"])
+        XCTAssertEqual(model.rows(in: app, serverOrder: true).map(\.tab.ref.key), ["herdr:app:1", "herdr:app:2", "herdr:app:3"])
+    }
+
     /// Tabs with no time yet go after the timed ones, among themselves in server order.
     func testTabsWithoutATimeGoLast() throws {
         let store = TabActivityStore(url: nil)

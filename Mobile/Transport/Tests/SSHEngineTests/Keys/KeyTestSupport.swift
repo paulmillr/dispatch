@@ -250,16 +250,13 @@ struct OpenSSHParts {
     return OpenSSHParts(publicBlob: Raw.string("ssh-ed25519") + Raw.string(point),
                         section: section(fields, comment: comment))
   }
+}
 
-  /// An unencrypted P-256 file for `key`.
-  static func p256(_ key: P256.Signing.PrivateKey, comment: String = "fictional@example.invalid") -> OpenSSHParts {
-    let point = Array(key.publicKey.x963Representation)
-    var writer = WireWriter()
-    writer.writeMPInt(magnitude: Array(key.rawRepresentation))
-    let fields = Raw.string("ecdsa-sha2-nistp256") + Raw.string("nistp256") + Raw.string(point) + (try! writer.finish())
-    return OpenSSHParts(publicBlob: Raw.string("ecdsa-sha2-nistp256") + Raw.string("nistp256") + Raw.string(point),
-                        section: section(fields, comment: comment))
-  }
+/// An `mpint` of a big-endian magnitude, as the engine's writer encodes it.
+func mpint(_ magnitude: [UInt8]) -> [UInt8] {
+  var writer = WireWriter()
+  writer.writeMPInt(magnitude: magnitude)
+  return try! writer.finish()
 }
 
 /// Plain SSH wire reads for tests (independent of `WireReader`).
@@ -415,23 +412,17 @@ struct TestRSAKey {
 
   var openSSH: OpenSSHParts { OpenSSHParts(publicBlob: publicBlob, section: OpenSSHParts.section(openSSHFields())) }
   var pkcs8: [UInt8] { TestDER.pkcs8(algorithm: TestDER.rsaEncryption, parameters: [0x05, 0x00], privateKey: pkcs1) }
-
-  func mpint(_ magnitude: [UInt8]) -> [UInt8] {
-    var writer = WireWriter()
-    writer.writeMPInt(magnitude: magnitude)
-    return try! writer.finish()
-  }
 }
 
 extension OpenSSHParts {
   /// An unencrypted ECDSA file for a CryptoKit key (`scalar` and `point` as CryptoKit gives them).
-  static func ecdsa(_ curve: ECDSACurve, scalar: [UInt8], point: [UInt8], comment: String = "fictional@example.invalid")
-    -> OpenSSHParts {
-    var writer = WireWriter()
-    writer.writeMPInt(magnitude: scalar)
-    let fields = Raw.string(curve.keyType) + Raw.string(curve.rawValue) + Raw.string(point) + (try! writer.finish())
-    return OpenSSHParts(publicBlob: Raw.string(curve.keyType) + Raw.string(curve.rawValue) + Raw.string(point),
-                        section: section(fields, comment: comment))
+  static func ecdsa(_ curve: ECDSACurve, scalar: [UInt8], point: [UInt8]) -> OpenSSHParts {
+    let blob = Raw.string(curve.keyType) + Raw.string(curve.rawValue) + Raw.string(point)
+    return OpenSSHParts(publicBlob: blob, section: section(blob + mpint(scalar)))
+  }
+
+  static func p256(_ key: P256.Signing.PrivateKey) -> OpenSSHParts {
+    ecdsa(.p256, scalar: Array(key.rawRepresentation), point: Array(key.publicKey.x963Representation))
   }
 
   static func p384(_ key: P384.Signing.PrivateKey) -> OpenSSHParts {

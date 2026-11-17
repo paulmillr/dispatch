@@ -121,8 +121,15 @@ struct WatchSnapshotBuilder {
             preview: summary.preview.map(WatchText.preview), attention: summary.attention, dot: row.dot.map(WatchDot.init),
             needsYou: summary.needsYou, busy: summary.busy, muted: row.muted, lastActivity: summary.lastActivity, stale: row.stale,
             step: status.map(AgentRow.progress), stepSymbol: status.flatMap(AgentRow.progressSymbol),
-            note: status.flatMap { $0.note ?? $0.asked }.map(WatchText.preview), workingSince: status?.since,
+            note: Self.note(status), workingSince: status?.since,
             waitingText: session.flatMap(Self.waiting) ?? (summary.needsYou ? summary.attention : nil))
+    }
+
+    /// A working row's upper line: what the agent last said in the turn, else the user's prompt in quotes (cut first,
+    /// so the closing quote stays).
+    static func note(_ status: TabsStatus?) -> String? {
+        guard let status else { return nil }
+        return status.note.map(WatchText.preview) ?? status.asked.map { TabsStatus.quoted(WatchText.preview($0)) }
     }
 
     /// "Editing Sidebar.tsx", "Reading README.md", "Running cargo test", "Searching fn drain": the step's kind as a verb and

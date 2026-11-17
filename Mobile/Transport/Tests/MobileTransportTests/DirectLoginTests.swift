@@ -99,16 +99,14 @@ final class DirectLoginTests: XCTestCase {
 
     // A direct attempt whose signer declines (Face ID dismissed) is cancelled, as with `.key`, and reported withdrawn.
     let declined = Answers()
-    let declining = SSHKey(kind: .ed25519, publicKeyBlob: Self.blob(of: key), hardwareBacked: true) { _ in throw CancellationError() }
+    let declining = SSHKey(kind: .ed25519, publicKeyBlob: publicKeyBlob(key), hardwareBacked: true) { _ in
+      throw CancellationError()
+    }
     do {
       _ = try await SSHConnection.connect(to: fixture.endpoint, credentials: [.directKey(declining, answered: declined.record)], trust: fixture.trust)
       XCTFail("a declined signature logged in")
     } catch SSHTransportError.cancelled {}
     XCTAssertEqual(declined.all, [.withdrawn])
-  }
-
-  private static func blob(of key: SSHKey) -> Data {
-    Data(base64Encoded: String(key.publicKey.split(separator: " ")[1]))!
   }
 }
 #endif

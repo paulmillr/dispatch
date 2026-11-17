@@ -55,10 +55,6 @@ public struct WireWriter {
     for shift in stride(from: 24, through: 0, by: -8) { buffer.append(UInt8(truncatingIfNeeded: value >> UInt32(shift))) }
   }
 
-  public mutating func writeUInt64(_ value: UInt64) {
-    for shift in stride(from: 56, through: 0, by: -8) { buffer.append(UInt8(truncatingIfNeeded: value >> UInt64(shift))) }
-  }
-
   /// Raw bytes with no length (a cookie, a nested encoding already framed).
   public mutating func writeBytes(_ bytes: some Collection<UInt8>) {
     buffer.append(contentsOf: bytes)

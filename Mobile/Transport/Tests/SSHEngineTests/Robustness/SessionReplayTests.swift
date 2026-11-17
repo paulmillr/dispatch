@@ -128,7 +128,6 @@ final class SessionReplayTests: XCTestCase {
         }
       }
     }
-    _ = stream.next()
     let seconds = Date().timeIntervalSince(started)
     print(String(format: "ROBUST %d cases in %.1f s, %d failed; most events from one input %d; most heap growth %d KiB",
                  cases, seconds, failed, mostEvents, mostHeap / 1024))
@@ -241,10 +240,11 @@ struct SessionReplay {
 
   /// The keys of every server direction in the recording, as text an error must not contain.
   var secretTexts: [String] {
-    var texts = [RobustSecrets.password, RobustSecrets.kbdAnswer, hexText(Array(RobustSecrets.userKey.rawRepresentation))]
+    let userKey = PrimitiveTestSupport.hex(RobustSecrets.userKey.rawRepresentation)
+    var texts = [RobustSecrets.password, RobustSecrets.kbdAnswer, userKey]
     for beat in session.beats {
       if case .record(.install(_, _, let keys, _)) = beat {
-        texts.append(keys.key.withUnsafeBytes { hexText(Array($0)) })
+        texts.append(keys.key.withUnsafeBytes { PrimitiveTestSupport.hex($0) })
       }
     }
     return texts
@@ -451,8 +451,6 @@ struct SessionReplay {
     return labels.joined(separator: ".")
   }
 }
-
-func hexText(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
 
 /// The live heap: malloc's bytes in use, or under the address sanitizer its allocator's count of live bytes (the zone
 /// statistics it reports there grow with every allocation, freed or not).

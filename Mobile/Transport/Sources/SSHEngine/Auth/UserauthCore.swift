@@ -103,13 +103,10 @@ public final class UserauthCore {
     var writer = WireWriter(capacity: request.count + signature.count + 4)
     writer.writeBytes(request)
     writer.writeString(signature)
+    guard send(writer) else { return }
     attempt.step = .answer(.publicKeySigned(direct: direct))
     self.attempt = attempt
-    guard send(writer) else { return }
-    if direct {
-      self.attempt?.directTimer = true
-      events.append(.timer(.schedule(.directAnswer, after: directAnswer)))
-    }
+    if direct { events.append(.timer(.schedule(.directAnswer, after: directAnswer))) }
   }
 
   /// The signer did not sign (`SSHError.cancelled` when declined): the attempt ends with `error`, sending nothing
@@ -135,7 +132,7 @@ public final class UserauthCore {
   /// A timer this core scheduled fired: a direct request still unanswered ends the connection
   /// (`timedOut(.directAnswer)`). Stale firings do nothing.
   public func timerFired(_ timer: CoreTimer) {
-    guard timer == .directAnswer, endedWith == nil, let attempt, attempt.directTimer,
+    guard timer == .directAnswer, endedWith == nil, let attempt,
       case .answer(.publicKeySigned(direct: true)) = attempt.step
     else { return }
     fail(.timedOut(.directAnswer))
@@ -225,7 +222,6 @@ public final class UserauthCore {
     let method: Method
     var step: Step
     var rounds = 0
-    var directTimer = false
 
     var wait: MessagePolicy.UserauthWait {
       guard case .answer(let answer) = step else { return .idle }
@@ -241,13 +237,15 @@ public final class UserauthCore {
   /// Moves the attempt as far as it can go without the server.
   private func proceed() {
     guard var attempt else { return }
+    let direct: Bool
+    if case .publicKey(_, direct: true) = attempt.method { direct = true } else { direct = false }
+    guard direct || service == .accepted else {
+      attempt.step = .awaitingService
+      self.attempt = attempt
+      return
+    }
     switch attempt.method {
-    case .publicKey(let key, let direct):
-      guard direct || service == .accepted else {
-        attempt.step = .awaitingService
-        self.attempt = attempt
-        return
-      }
+    case .publicKey(let key, _):
       guard let algorithm = signatureAlgorithm(for: key) else {
         attempt.step = .awaitingExtensions
         self.attempt = attempt
@@ -256,26 +254,15 @@ public final class UserauthCore {
       if direct {
         askSigner(algorithm: algorithm, blob: key.encoded, direct: true)
       } else {
-        var writer = publicKeyRequest(user: attempt.user, signed: false, algorithm: algorithm, blob: key.encoded)
         attempt.step = .answer(.publicKeyQuery(algorithm, blob: key.encoded))
         self.attempt = attempt
-        _ = send(writer.take())
+        _ = send(publicKeyRequest(user: attempt.user, signed: false, algorithm: algorithm, blob: key.encoded))
       }
     case .password(let password):
-      guard service == .accepted else {
-        attempt.step = .awaitingService
-        self.attempt = attempt
-        return
-      }
       attempt.step = .answer(.password)
       self.attempt = attempt
       sendPassword(user: attempt.user, password: password)
     case .keyboardInteractive:
-      guard service == .accepted else {
-        attempt.step = .awaitingService
-        self.attempt = attempt
-        return
-      }
       attempt.step = .answer(.keyboardInteractive)
       self.attempt = attempt
       var writer = Self.requestHeader(user: attempt.user, method: "keyboard-interactive", extra: 8)
@@ -296,8 +283,9 @@ public final class UserauthCore {
   /// the request's fields up to the public key.
   private func askSigner(algorithm: SignatureAlgorithm, blob: [UInt8], direct: Bool) {
     guard var attempt else { return }
-    var request = publicKeyRequest(user: attempt.user, signed: true, algorithm: algorithm, blob: blob)
-    let fields = request.take()
+    let request = publicKeyRequest(user: attempt.user, signed: true, algorithm: algorithm, blob: blob)
+    // Every field is bounded and named by the engine: this writer cannot fail.
+    let fields = (try? request.finish()) ?? []
     var data = WireWriter(capacity: fields.count + link.sessionID.count + 4)
     data.writeString(link.sessionID)
     data.writeBytes(fields)
@@ -381,21 +369,7 @@ public final class UserauthCore {
         throw .protocolViolation(.authentication(.tooManyRounds))
       }
       attempt.rounds += 1
-      let challenge = try message.decode { (reader: inout WireReader) throws(WireError) in
-        let name = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-        let instruction = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-        _ = try reader.readDisplayText(limit: Limits.languageTagBytes)
-        let count = try reader.readCount(limit: Limits.keyboardInteractivePrompts, elementBytes: 5)
-        var prompts: [KeyboardInteractiveChallenge.Prompt] = []
-        prompts.reserveCapacity(count)
-        for _ in 0..<count {
-          let text = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-          prompts.append(.init(text: PromptText.sanitize(text, multiline: false), echo: try reader.readBoolean()))
-        }
-        return KeyboardInteractiveChallenge(
-          name: PromptText.sanitize(name, multiline: false), instruction: PromptText.sanitize(instruction, multiline: true),
-          prompts: prompts)
-      }
+      let challenge = try message.decode(Self.challenge)
       if challenge.prompts.isEmpty {
         // A round with nothing to ask is answered at once (RFC 4256 §3.4 allows num-responses 0).
         self.attempt = attempt
@@ -429,12 +403,14 @@ public final class UserauthCore {
   }
 
   /// RFC 4252 §7: `boolean signed, string algorithm, string blob` after the header (no signature yet).
-  private func publicKeyRequest(user: String, signed: Bool, algorithm: SignatureAlgorithm, blob: [UInt8]) -> Builder {
+  private func publicKeyRequest(user: String, signed: Bool, algorithm: SignatureAlgorithm, blob: [UInt8])
+    -> WireWriter
+  {
     var writer = Self.requestHeader(user: user, method: "publickey", extra: 9 + algorithm.rawValue.utf8.count + blob.count)
     writer.writeBoolean(signed)
     writer.writeName(algorithm.rawValue)
     writer.writeString(blob)
-    return Builder(writer: writer)
+    return writer
   }
 
   /// RFC 4252 §8, sent as a secret: `boolean FALSE, string password`. The writer reserves all it needs, so the only
@@ -485,16 +461,6 @@ public final class UserauthCore {
     }
   }
 
-  private func send(_ payload: [UInt8]) -> Bool {
-    do throws(SSHError) {
-      try link.send(payload)
-      return true
-    } catch {
-      sendFailed(error)
-      return false
-    }
-  }
-
   /// A send that threw: after the end the connection's end decides (`connectionEnded`); otherwise the request did
   /// not fit (a user name too long for a packet) and only the attempt ends.
   private func sendFailed(_ error: SSHError) {
@@ -510,7 +476,8 @@ public final class UserauthCore {
 
   private func finish(_ result: Result<AuthOutcome, SSHError>) {
     guard let attempt else { return }
-    if attempt.directTimer { events.append(.timer(.cancel(.directAnswer))) }
+    // The `.directAnswer` timer runs exactly while a direct request is on the wire.
+    if case .answer(.publicKeySigned(direct: true)) = attempt.step { events.append(.timer(.cancel(.directAnswer))) }
     self.attempt = nil
     events.append(.finished(result))
   }
@@ -522,6 +489,23 @@ public final class UserauthCore {
   }
 
   /// A public key blob the engine signs with (`PublicKeyBlob`, canonical), or why not.
+  /// INFO_REQUEST's fields after its number (RFC 4256 §3.2): display text, sanitized for the app.
+  static func challenge(_ reader: inout WireReader) throws(WireError) -> KeyboardInteractiveChallenge {
+    let name = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
+    let instruction = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
+    _ = try reader.readDisplayText(limit: Limits.languageTagBytes)
+    let count = try reader.readCount(limit: Limits.keyboardInteractivePrompts, elementBytes: 5)
+    var prompts: [KeyboardInteractiveChallenge.Prompt] = []
+    prompts.reserveCapacity(count)
+    for _ in 0..<count {
+      let text = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
+      prompts.append(.init(text: PromptText.sanitize(text, multiline: false), echo: try reader.readBoolean()))
+    }
+    return KeyboardInteractiveChallenge(
+      name: PromptText.sanitize(name, multiline: false), instruction: PromptText.sanitize(instruction, multiline: true),
+      prompts: prompts)
+  }
+
   private static func decodeUserKey(_ blob: [UInt8]) throws(SSHError) -> PublicKeyBlob {
     do {
       return try PublicKeyBlob(decoding: blob)
@@ -532,14 +516,6 @@ public final class UserauthCore {
     } catch {
       throw .invalidKey("the public key blob is not a key the engine accepts")
     }
-  }
-
-  /// A writer whose bytes are taken once (keeps `finish`'s failure out of the call sites: every field written here
-  /// is bounded and named by the engine).
-  private struct Builder {
-    var writer: WireWriter
-
-    mutating func take() -> [UInt8] { (try? writer.finish()) ?? [] }
   }
 }
 

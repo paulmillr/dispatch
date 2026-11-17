@@ -113,8 +113,8 @@ final class AccessibilityLabelTests: XCTestCase {
     }
 
     func testTreeLinesSayTheirCountAndWork() {
-        XCTAssertEqual(SpacesSpaceLine.value(unread: 2, working: true), "2 unread, Working")
-        XCTAssertEqual(SpacesSpaceLine.value(unread: 0, working: false), "")
+        XCTAssertEqual(SpacesSpaceLine.value(unread: 2, workers: 3), "2 unread, 3 working")
+        XCTAssertEqual(SpacesSpaceLine.value(unread: 0, workers: 0), "")
     }
 
     /// The thinking row speaks in ten-second steps, so a focused VoiceOver user is not read a new number every second.

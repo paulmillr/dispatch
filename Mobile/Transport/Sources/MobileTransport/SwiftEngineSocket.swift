@@ -160,10 +160,8 @@ final class SwiftEngineSocket: @unchecked Sendable {
         // A cancelled source runs its cancellation handler only once running: start or resume the ones that are not.
         readSource.cancel()
         writeSource.cancel()
-        if !activated.read { readSource.activate() } else if !armed.read { readSource.resume() }
-        if !activated.write { writeSource.activate() } else if !armed.write { writeSource.resume() }
-        activated = (true, true)
-        armed = (true, true)
+        arm(readSource, activated: &activated.read, armed: &armed.read)
+        arm(writeSource, activated: &activated.write, armed: &armed.write)
         return (woken, false)
       }
       woken.forEach { $0.resume() }

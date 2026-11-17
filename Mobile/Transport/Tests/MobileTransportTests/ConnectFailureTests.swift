@@ -24,18 +24,7 @@ final class ConnectFailureTests: XCTestCase {
   }
 
   func testAClosedPortIsRefusedOnThatPort() async throws {
-    let listener = socket(AF_INET, SOCK_STREAM, 0)
-    var address = sockaddr_in(sin_len: UInt8(MemoryLayout<sockaddr_in>.size), sin_family: sa_family_t(AF_INET), sin_port: 0,
-                              sin_addr: in_addr(s_addr: inet_addr("127.0.0.1")), sin_zero: (0, 0, 0, 0, 0, 0, 0, 0))
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let bound = withUnsafeMutablePointer(to: &address) { pointer in
-      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-        Darwin.bind(listener, $0, length) == 0 && getsockname(listener, $0, &length) == 0
-      }
-    }
-    Darwin.close(listener)  // Bound, never listening, now closed: nothing accepts on the port.
-    XCTAssertTrue(bound)
-    let port = Int(UInt16(bigEndian: address.sin_port))
+    let port = try closedLoopbackPort()
     let error = await failure("127.0.0.1", port: port)
     XCTAssertEqual(error, .connectFailed(.refused, host: "127.0.0.1", port: port))
     XCTAssertEqual(error?.errorDescription?.contains("port \(port)"), true)

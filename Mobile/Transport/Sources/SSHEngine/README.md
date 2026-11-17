@@ -120,7 +120,7 @@ no certificate is ever decoded, so there is no nesting to bound.
 ## Message policy
 
 `MessagePolicy.route(for:in:)` per packet, `Context` = transport phase × service phase × "first packet after the
-first NEWKEYS" × EXT_INFO count. Summary (the tests hold the full table):
+first NEWKEYS" × EXT_INFO count × "an EXT_INFO came during authentication". Summary (the tests hold the full table):
 
 | Phase | Accepted |
 | --- | --- |
@@ -132,12 +132,16 @@ first NEWKEYS" × EXT_INFO count. Summary (the tests hold the full table):
 | service not requested / requested | 7 only as the first packet after NEWKEYS and the first EXT_INFO; 6 once requested |
 | userauth, no request out | 53 |
 | userauth, request out | 51, 52, 53, 7 (up to 2 in all); 60 for password, publickey query, keyboard-interactive |
+| userauth, after an EXT_INFO there | 52 only |
 | connection | 80, 90-100 |
 
 Global requests (80-82) are the transport's: it sends `keepalive@openssh.com` (after the login only), takes 81, 82 or an
-UNIMPLEMENTED for it as the answer (checking one is outstanding), and refuses the server's requests. Channel numbers, replies with
-nothing pending and the second EXT_INFO's place before USERAUTH_SUCCESS are checked by the layer that handles them.
-This is stricter than russh: two EXT_INFOs back to back after NEWKEYS end the connection at the second.
+UNIMPLEMENTED for it as the answer (checking one is outstanding), and refuses the server's requests. Channel numbers and
+replies with nothing pending are checked by the layer that handles them. An EXT_INFO during authentication immediately
+precedes USERAUTH_SUCCESS (RFC 8308 §2.4): the next message for the upper layers must be that success, anything else
+(a USERAUTH_FAILURE, a banner, another EXT_INFO) ends the connection as unexpected; IGNORE and DEBUG between the two are
+taken, as everywhere outside a strict first exchange. This is stricter than russh: two EXT_INFOs back to back after
+NEWKEYS end the connection at the second.
 
 ## Algorithms and policy
 

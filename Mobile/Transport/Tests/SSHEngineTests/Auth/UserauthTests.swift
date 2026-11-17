@@ -31,9 +31,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testPasswordRefusalsAndPartialSuccess() {
-    let harness = AuthHarness()
-    harness.start(.password(SecretBytes(utf8: "wrong")))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong")))
     harness.server(S.failure("publickey,keyboard-interactive,gssapi-with-mic"))
     XCTAssertEqual(harness.take(), [.outcome(.refused(remaining: [.publicKey, .keyboardInteractive], partialSuccess: false))])
     XCTAssertEqual(harness.phase, .userauth(.idle))
@@ -51,9 +49,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testPasswordChangeRequestEndsTheAttempt() {
-    let harness = AuthHarness()
-    harness.start(.password(SecretBytes(utf8: "expired")))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "expired")))
     // A Latin-1 prompt ("Kennwort ändern"): display text, never a reason to fail.
     harness.server(S.passwordChange([0x4B, 0x65, 0x6E, 0x6E, 0x77, 0x6F, 0x72, 0x74, 0x20, 0xE4, 0x6E, 0x64, 0x65, 0x72, 0x6E]))
     XCTAssertEqual(harness.take(), [.outcome(.passwordChangeRequested)])
@@ -66,9 +62,7 @@ final class UserauthTests: XCTestCase {
   func testAMalformedAnswerEndsTheConnection() {
     for answer: [UInt8] in [[52, 0], [51] + Raw.string("password") + [2], [51] + Raw.string("pass word") + [0],
                             [60] + Raw.string("prompt")] {
-      let harness = AuthHarness()
-      harness.start(.password(SecretBytes(utf8: "pw")))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "pw")))
       harness.server(answer)
       guard case .protocolViolation(.malformed)? = harness.link.endedWith else {
         XCTFail("\(answer): \(String(describing: harness.link.endedWith))")
@@ -125,9 +119,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testAKeyTheServerDoesNotTakeIsNeverSigned() {
-    let harness = AuthHarness()
-    harness.start(.publicKey(TestKey.ed25519, direct: false))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.publicKey(TestKey.ed25519, direct: false))
     harness.server(S.failure("password"))
     XCTAssertEqual(harness.take(), [.outcome(.refused(remaining: [.password], partialSuccess: false))])
   }
@@ -135,9 +127,7 @@ final class UserauthTests: XCTestCase {
   func testPKOKMustNameWhatWasAsked() {
     let key = TestKey.ed25519
     for answer in [S.pkOK("ssh-ed25519", TestKey.otherEd25519.publicKeyBlob), S.pkOK("ecdsa-sha2-nistp256", key.publicKeyBlob)] {
-      let harness = AuthHarness()
-      harness.start(.publicKey(key, direct: false))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.publicKey(key, direct: false))
       harness.server(answer)
       XCTAssertEqual(harness.link.endedWith, .protocolViolation(.authentication(.pkOKMismatch)))
       XCTAssertEqual(harness.take(), [.failed(.protocolViolation(.authentication(.pkOKMismatch)))])
@@ -145,9 +135,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testASignatureOfAnotherAlgorithmIsRefusedAndNothingIsSent() {
-    let harness = AuthHarness()
-    harness.start(.publicKey(TestKey.ed25519, direct: false))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.publicKey(TestKey.ed25519, direct: false))
     harness.server(S.pkOK("ssh-ed25519", TestKey.ed25519.publicKeyBlob))
     guard let (question, data, _) = harness.signRequest() else { return }
     let count = harness.sent.count
@@ -166,9 +154,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testADeclinedSignatureSendsNothingAndTheSessionGoesOn() {
-    let harness = AuthHarness()
-    harness.start(.publicKey(TestKey.ed25519, direct: false))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.publicKey(TestKey.ed25519, direct: false))
     harness.server(S.pkOK("ssh-ed25519", TestKey.ed25519.publicKeyBlob))
     guard let (question, _, _) = harness.signRequest() else { return }
     let count = harness.sent.count
@@ -287,9 +273,7 @@ final class UserauthTests: XCTestCase {
   // MARK: Keyboard-interactive
 
   func testKeyboardInteractiveRounds() {
-    let harness = AuthHarness()
-    harness.start(.keyboardInteractive({ _ in nil }))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     XCTAssertEqual(harness.sent.last, C.keyboardInteractive("phone"))
     XCTAssertEqual(harness.phase, .userauth(.keyboardInteractive))
     harness.server(S.infoRequest(name: Array("Login".utf8), instruction: Array("Two factors".utf8),
@@ -312,9 +296,7 @@ final class UserauthTests: XCTestCase {
   }
 
   func testPromptTextsAreReadLenientlyAndSanitized() {
-    let harness = AuthHarness()
-    harness.start(.keyboardInteractive({ _ in nil }))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     // Latin-1 ("für"), an escape sequence, a right-to-left override, a zero-width space, CR LF in the instruction.
     let prompt: [UInt8] = Array("Code f".utf8) + [0xFC] + Array("r \u{1B}[31mroot\u{202E}\u{200B}: ".utf8)
     harness.server(S.infoRequest(name: Array("PAM\r\n".utf8), instruction: Array("Line one\r\nLine\ttwo\u{0007}".utf8),
@@ -329,9 +311,7 @@ final class UserauthTests: XCTestCase {
 
   func testAWrongAnswerCountOrNoAnswerCancels() {
     for answers: [String]? in [nil, [], ["one", "two"]] {
-      let harness = AuthHarness()
-      harness.start(.keyboardInteractive({ _ in nil }))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
       harness.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
       guard let (question, _) = harness.promptRequest() else { return }
       let count = harness.sent.count
@@ -344,32 +324,24 @@ final class UserauthTests: XCTestCase {
   }
 
   func testRoundsAndPromptsAreBounded() {
-    let harness = AuthHarness()
-    harness.start(.keyboardInteractive({ _ in nil }))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     for _ in 0..<Limits.keyboardInteractiveRounds { harness.server(S.infoRequest(prompts: [])) }
     XCTAssertNil(harness.link.endedWith)
     harness.server(S.infoRequest(prompts: []))
     XCTAssertEqual(harness.link.endedWith, .protocolViolation(.authentication(.tooManyRounds)))
     XCTAssertEqual(harness.take(), [.failed(.protocolViolation(.authentication(.tooManyRounds)))])
 
-    let many = AuthHarness()
-    many.start(.keyboardInteractive({ _ in nil }))
-    many.server(S.accept)
+    let many = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     many.server(S.infoRequest(prompts: Array(repeating: (Array("P".utf8), false), count: Limits.keyboardInteractivePrompts + 1)))
     XCTAssertEqual(many.link.endedWith, .protocolViolation(.malformed(MessageNumber(60), .tooMany(limit: Limits.keyboardInteractivePrompts))))
     // A count the bytes cannot hold is refused before anything is reserved.
-    let huge = AuthHarness()
-    huge.start(.keyboardInteractive({ _ in nil }))
-    huge.server(S.accept)
+    let huge = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     huge.server([60] + Raw.string("") + Raw.string("") + Raw.string("") + Raw.u32(.max))
     XCTAssertEqual(huge.link.endedWith, .protocolViolation(.malformed(MessageNumber(60), .tooMany(limit: Limits.keyboardInteractivePrompts))))
   }
 
   func testAnAnswerWhileTheUserIsAskedEndsTheConnection() {
-    let harness = AuthHarness()
-    harness.start(.keyboardInteractive({ _ in nil }))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     harness.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
     _ = harness.take()
     harness.server(S.failure())
@@ -382,9 +354,7 @@ final class UserauthTests: XCTestCase {
   // MARK: Banner and EXT_INFO
 
   func testBannersAreAcceptedAndDropped() {
-    let harness = AuthHarness()
-    harness.start(.password(SecretBytes(utf8: "pw")))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "pw")))
     harness.server(S.banner(Array("Authorized use only\r\n".utf8)))
     harness.server(S.banner([0x57, 0x69, 0x6C, 0x6C, 0x6B, 0x6F, 0x6D, 0x6D, 0x65, 0x6E, 0xA0]))
     XCTAssertEqual(harness.take(), [])
@@ -409,8 +379,9 @@ final class UserauthTests: XCTestCase {
     XCTAssertEqual(harness.take(), [.failed(harness.link.endedWith!)])
   }
 
-  /// RFC 8308 §2.4's second EXT_INFO comes while a request is outstanding (just before USERAUTH_SUCCESS); while no
-  /// request is (between attempts, while the user or the signer answers) it is refused.
+  /// RFC 8308 §2.4's second EXT_INFO comes while a request is outstanding, immediately before USERAUTH_SUCCESS (a
+  /// failure after it is refused); while no request is (between attempts, while the user or the signer answers) it is
+  /// refused.
   func testTheSecondExtInfosPlace() {
     let harness = AuthHarness()
     harness.server(S.serverSigAlgs)
@@ -421,18 +392,22 @@ final class UserauthTests: XCTestCase {
     harness.server(S.success)
     XCTAssertEqual(harness.take(), [.outcome(.success)])
 
-    let idle = AuthHarness()
-    idle.start(.password(SecretBytes(utf8: "pw")))
-    idle.server(S.accept)
+    let failed = AuthHarness.accepted(.password(SecretBytes(utf8: "pw")))
+    failed.server(S.extInfo([]))
+    failed.server(S.failure())
+    guard case .protocolViolation(.unexpectedMessage(.userauthFailure, _))? = failed.link.endedWith else {
+      return XCTFail("\(String(describing: failed.link.endedWith))")
+    }
+    XCTAssertEqual(failed.take(), [.failed(failed.link.endedWith!)])
+
+    let idle = AuthHarness.accepted(.password(SecretBytes(utf8: "pw")))
     idle.server(S.failure())
     idle.server(S.extInfo([]))
     guard case .protocolViolation(.unexpectedMessage(.extInfo, _))? = idle.link.endedWith else {
       return XCTFail("\(String(describing: idle.link.endedWith))")
     }
 
-    let signing = AuthHarness()
-    signing.start(.publicKey(TestKey.ed25519, direct: false))
-    signing.server(S.accept)
+    let signing = AuthHarness.accepted(.publicKey(TestKey.ed25519, direct: false))
     signing.server(S.pkOK("ssh-ed25519", TestKey.ed25519.publicKeyBlob))
     _ = signing.take()
     signing.server(S.extInfo([]))
@@ -470,23 +445,14 @@ final class UserauthTests: XCTestCase {
 
   // MARK: The server's attempt limit
 
-  /// Ends the connection as the transport would, with `error`.
-  private func end(_ harness: AuthHarness, _ error: SSHError) {
-    harness.link.end(error)
-    harness.auth.connectionEnded(error)
-    harness.drain()
-  }
-
   private static let tooMany = SSHError.closed(.byServer(.protocolError, description: "Too many authentication failures"))
 
   /// OpenSSH at MaxAuthTries: a DISCONNECT while an asked-for request waits is a refusal naming no method (the login
   /// failed, nothing more to try), whatever came before; the DISCONNECT's text stays the connection's end.
   func testADisconnectWhileARequestWaitsIsARefusal() {
-    let harness = AuthHarness()
-    harness.start(.password(SecretBytes(utf8: "wrong")))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong")))
     _ = harness.take()
-    end(harness, Self.tooMany)
+    harness.endConnection(Self.tooMany)
     XCTAssertEqual(harness.take(), [.outcome(.refused(remaining: [], partialSuccess: false))])
     XCTAssertEqual(harness.auth.endedWith, Self.tooMany)
   }
@@ -494,56 +460,44 @@ final class UserauthTests: XCTestCase {
   /// Dropbear at its limit closes without a DISCONNECT: after a refusal on this connection, the close while the next
   /// request waits is a refusal too; before any refusal (or after a partial success only) it is a lost connection.
   func testACloseWhileARequestWaitsIsARefusalOnlyAfterARefusal() {
-    let refused = AuthHarness()
-    refused.start(.password(SecretBytes(utf8: "wrong-1")))
-    refused.server(S.accept)
+    let refused = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong-1")))
     refused.server(S.failure())
     refused.start(.password(SecretBytes(utf8: "wrong-2")))
     _ = refused.take()
-    end(refused, .closed(.connectionLost))
+    refused.endConnection(.closed(.connectionLost))
     XCTAssertEqual(refused.take(), [.outcome(.refused(remaining: [], partialSuccess: false))])
 
-    let fresh = AuthHarness()
-    fresh.start(.password(SecretBytes(utf8: "right")))
-    fresh.server(S.accept)
+    let fresh = AuthHarness.accepted(.password(SecretBytes(utf8: "right")))
     _ = fresh.take()
-    end(fresh, .closed(.connectionLost))
+    fresh.endConnection(.closed(.connectionLost))
     XCTAssertEqual(fresh.take(), [.failed(.closed(.connectionLost))], "a drop before any refusal")
 
-    let partial = AuthHarness()
-    partial.start(.password(SecretBytes(utf8: "first factor")))
-    partial.server(S.accept)
+    let partial = AuthHarness.accepted(.password(SecretBytes(utf8: "first factor")))
     partial.server(S.failure("password", partial: true))
     partial.start(.password(SecretBytes(utf8: "second")))
     _ = partial.take()
-    end(partial, .closed(.connectionLost))
+    partial.endConnection(.closed(.connectionLost))
     XCTAssertEqual(partial.take(), [.failed(.closed(.connectionLost))], "a partial success is no refusal")
   }
 
   /// Every asked-for request counts (keyboard-interactive answers, a key's query, its signature after PK_OK); a direct
   /// key's request, a round with the user, the client's own close, a timeout and a violation never do.
   func testWhichWaitsTheLimitCovers() {
-    let kbd = AuthHarness()
-    kbd.start(.keyboardInteractive({ _ in nil }))
-    kbd.server(S.accept)
+    let kbd = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     kbd.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
     guard let (question, _) = kbd.promptRequest() else { return }
     kbd.answer(question, ["wrong"])
     _ = kbd.take()
-    end(kbd, Self.tooMany)
+    kbd.endConnection(Self.tooMany)
     XCTAssertEqual(kbd.take(), [.outcome(.refused(remaining: [], partialSuccess: false))], "answers on the wire")
 
     let key = TestKey.ed25519
-    let query = AuthHarness()
-    query.start(.publicKey(key, direct: false))
-    query.server(S.accept)
+    let query = AuthHarness.accepted(.publicKey(key, direct: false))
     _ = query.take()
-    end(query, Self.tooMany)
+    query.endConnection(Self.tooMany)
     XCTAssertEqual(query.take(), [.outcome(.refused(remaining: [], partialSuccess: false))], "a query on the wire")
 
-    let signed = AuthHarness()
-    signed.start(.password(SecretBytes(utf8: "wrong")))
-    signed.server(S.accept)
+    let signed = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong")))
     signed.server(S.failure())
     _ = signed.take()
     signed.start(.publicKey(key, direct: false))
@@ -551,45 +505,37 @@ final class UserauthTests: XCTestCase {
     guard let (keyQuestion, data, algorithm) = signed.signRequest() else { return }
     signed.sign(key, keyQuestion, data, algorithm)
     _ = signed.take()
-    end(signed, .closed(.connectionLost))
+    signed.endConnection(.closed(.connectionLost))
     XCTAssertEqual(signed.take(), [.outcome(.refused(remaining: [], partialSuccess: false))], "a signature on the wire")
 
-    let direct = AuthHarness()
-    direct.start(.password(SecretBytes(utf8: "wrong")))
-    direct.server(S.accept)
+    let direct = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong")))
     direct.server(S.failure())
     _ = direct.take()
     direct.start(.publicKey(key, direct: true))
     guard let (directQuestion, directData, directAlgorithm) = direct.signRequest() else { return }
     direct.sign(key, directQuestion, directData, directAlgorithm)
     _ = direct.take()
-    end(direct, Self.tooMany)
+    direct.endConnection(Self.tooMany)
     XCTAssertEqual(direct.take().last, .failed(Self.tooMany), "a direct request is never refused by the end")
 
-    let prompting = AuthHarness()
-    prompting.start(.keyboardInteractive({ _ in nil }))
-    prompting.server(S.accept)
+    let prompting = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     prompting.server(S.infoRequest(prompts: [(Array("Code: ".utf8), true)]))
     _ = prompting.take()
-    end(prompting, Self.tooMany)
+    prompting.endConnection(Self.tooMany)
     XCTAssertEqual(prompting.take(), [.failed(Self.tooMany)], "the user was still answering")
 
     for error: SSHError in [.closed(.byClient), .timedOut(.directAnswer), .protocolViolation(.tooManyExtInfo)] {
-      let harness = AuthHarness()
-      harness.start(.password(SecretBytes(utf8: "wrong")))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "wrong")))
       harness.server(S.failure())
       harness.start(.password(SecretBytes(utf8: "again")))
       _ = harness.take()
-      end(harness, error)
+      harness.endConnection(error)
       XCTAssertEqual(harness.take(), [.failed(error)], "\(error)")
     }
   }
 
   func testAnswersAfterTheEndDoNothing() {
-    let harness = AuthHarness()
-    harness.start(.keyboardInteractive({ _ in nil }))
-    harness.server(S.accept)
+    let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     harness.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
     guard let (question, _) = harness.promptRequest() else { return }
     harness.link.end(.closed(.connectionLost))
@@ -621,9 +567,7 @@ final class UserauthTests: XCTestCase {
     XCTAssertEqual(accept.sent.last, C.password("phone", "pw2"), "the next attempt goes at once")
 
     // The signer is asked.
-    let signing = AuthHarness()
-    signing.start(.publicKey(TestKey.ed25519, direct: false))
-    signing.server(S.accept)
+    let signing = AuthHarness.accepted(.publicKey(TestKey.ed25519, direct: false))
     signing.server(S.pkOK("ssh-ed25519", TestKey.ed25519.publicKeyBlob))
     _ = signing.take()
     signing.auth.cancel()
@@ -632,9 +576,7 @@ final class UserauthTests: XCTestCase {
     XCTAssertNil(signing.link.endedWith)
 
     // The user is asked.
-    let prompting = AuthHarness()
-    prompting.start(.keyboardInteractive({ _ in nil }))
-    prompting.server(S.accept)
+    let prompting = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
     prompting.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
     _ = prompting.take()
     prompting.auth.cancel()
@@ -648,9 +590,7 @@ final class UserauthTests: XCTestCase {
     let requests: [Credential] = [.password(SecretBytes(utf8: "pw")), .publicKey(TestKey.ed25519, direct: false),
                                   .keyboardInteractive({ _ in nil })]
     for credential in requests {
-      let harness = AuthHarness()
-      harness.start(credential)
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(credential)
       XCTAssertNotEqual(harness.phase, .userauth(.idle))
       harness.auth.cancel()
       harness.drain()

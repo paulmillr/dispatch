@@ -13,18 +13,9 @@ public struct HostKeyInfo: Sendable, Hashable {
   /// The OpenSSH public key line (`algorithm base64`), what a known-hosts store keeps.
   public let openSSH: String
 
-  init(host: String, port: Int, algorithm: String, fingerprint: String, openSSH: String) {
-    self.host = host
-    self.port = port
-    self.algorithm = algorithm
-    self.fingerprint = fingerprint
-    self.openSSH = openSSH
-  }
-
   /// Lookup key of a known-hosts store: OpenSSH's `[host]:port` form (bare host on port 22).
   public var hostPattern: String { port == 22 ? host : "[\(host)]:\(port)" }
 }
-
 
 /// Decides whether to trust a host key. The app's implementation asks once (trust on first use)
 /// and remembers the answer; a changed key must be refused.

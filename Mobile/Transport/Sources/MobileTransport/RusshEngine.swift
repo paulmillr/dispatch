@@ -8,8 +8,6 @@ import Foundation
 struct RusshEngine: EngineBackend {
   static let shared = RusshEngine()
 
-  var version: String { String(cString: dms_version()) }
-
   func connect(
     _ options: EngineConnectOptions, events: any EngineSessionEvents,
     connected: @escaping @Sendable (Result<any EngineSession, SSHTransportError>) -> Void
@@ -20,21 +18,21 @@ struct RusshEngine: EngineBackend {
       host_key: { context, key, reply in
         let key = key!.pointee
         let reply = RusshReply(reply)
-        Context.borrow(context, as: SessionContext.self).events.hostKey(
+        Context.borrow(context, as: SessionContext.self).value.hostKey(
           EngineHostKey(algorithm: String(cString: key.algorithm), fingerprint: String(cString: key.fingerprint),
                         openSSH: String(cString: key.openssh)),
           answer: { reply.bool($0) })
       },
       disconnected: { context, code, message in
-        Context.release(context, as: SessionContext.self).events.disconnected(RusshEngine.error(code, message))
+        Context.release(context, as: SessionContext.self).value.disconnected(RusshEngine.error(code, message))
       })
-    let box = ConnectContext(session: sessionContext, connected: connected)
+    let box = ConnectContext((session: sessionContext, connected: connected))
     options.host.withCString { host in
       var raw = dms_connect_options(
         host: host, port: UInt16(clamping: options.port), timeout_ms: milliseconds(options.timeout),
         keepalive_interval_ms: milliseconds(options.keepalive), keepalive_max: UInt32(max(0, options.keepaliveMax)))
       dms_connect(&raw, callbacks, Context.retain(box)) { context, session, code, message in
-        let box = Context.release(context, as: ConnectContext.self)
+        let box = Context.release(context, as: ConnectContext.self).value
         if let session {
           box.connected(.success(RusshSession(session)))
         } else {
@@ -92,12 +90,6 @@ struct RusshEngine: EngineBackend {
     return .noCommonAlgorithm(category)
   }
 
-  static func methods(_ bits: UInt32) -> EngineMethods {
-    [(DMS_METHOD_PASSWORD, EngineMethods.password), (DMS_METHOD_PUBLICKEY, .publicKey),
-     (DMS_METHOD_KEYBOARD_INTERACTIVE, .keyboardInteractive), (DMS_METHOD_HOSTBASED, .hostbased)]
-      .reduce(into: []) { methods, pair in if bits & pair.0 != 0 { methods.insert(pair.1) } }
-  }
-
   /// `dms_exited_fn`'s arguments (the refusal's message travels in `signal`).
   static func exit(kind: Int32, status: UInt32, signal: String) -> EngineExit {
     switch kind {
@@ -118,8 +110,10 @@ final class RusshSession: EngineSession, @unchecked Sendable {
   func close() { dms_session_close(pointer) }
 
   func authenticate(user: String, password: String, done: @escaping @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void) {
-    let box = AuthContext(done)
-    withCStrings(user, password) { dms_auth_password(pointer, $0, $1, Context.retain(box), Self.authenticated) }
+    let box = AuthContext(Login(done: done))
+    user.withCString { user in
+      password.withCString { dms_auth_password(pointer, user, $0, Context.retain(box), Self.authenticated) }
+    }
   }
 
   func authenticate(user: String, key: any EngineKey, direct: Bool,
@@ -127,7 +121,7 @@ final class RusshSession: EngineSession, @unchecked Sendable {
     guard let key = key as? RusshKey else {
       return done(.failure(.invalidKey("the key was parsed by another SSH engine")))
     }
-    let box = AuthContext(done, keep: key)
+    let box = AuthContext(Login(done: done, keep: key))
     user.withCString { dms_auth_key(pointer, $0, key.pointer, direct, Context.retain(box), Self.authenticated) }
   }
 
@@ -135,10 +129,10 @@ final class RusshSession: EngineSession, @unchecked Sendable {
     user: String, prompt: @escaping @Sendable (KeyboardInteractiveChallenge, @escaping @Sendable ([String]?) -> Void) -> Void,
     done: @escaping @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void
   ) {
-    let box = AuthContext(done, prompt: prompt)
+    let box = AuthContext(Login(done: done, prompt: prompt))
     user.withCString {
       dms_auth_keyboard_interactive(pointer, $0, Context.retain(box), { context, name, instruction, prompts, count, reply in
-        let box = Context.borrow(context, as: AuthContext.self)
+        let box = Context.borrow(context, as: AuthContext.self).value
         let reply = RusshReply(reply)
         guard let prompt = box.prompt else { return reply.cancel() }
         let challenge = KeyboardInteractiveChallenge(
@@ -152,11 +146,11 @@ final class RusshSession: EngineSession, @unchecked Sendable {
   func authenticate(user: String, signer publicKeyBlob: Data, direct: Bool,
                     sign: @escaping @Sendable (Data, @escaping @Sendable (Data?) -> Void) -> Void,
                     done: @escaping @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void) {
-    let box = AuthContext(done, sign: sign)
+    let box = AuthContext(Login(done: done, sign: sign))
     publicKeyBlob.withUnsafeBytes { bytes in
       user.withCString {
         dms_auth_signer(pointer, $0, bytes.bindMemory(to: UInt8.self).baseAddress, publicKeyBlob.count, direct, Context.retain(box), { context, data, length, reply in
-          let box = Context.borrow(context, as: AuthContext.self)
+          let box = Context.borrow(context, as: AuthContext.self).value
           let reply = RusshReply(reply)
           guard let sign = box.sign else { return reply.cancel() }
           sign(Data(bytes: data!, count: length)) { signature in if let signature { reply.bytes(signature) } else { reply.cancel() } }
@@ -168,11 +162,12 @@ final class RusshSession: EngineSession, @unchecked Sendable {
   /// Every login's `done`: the last call for its context.
   private static var authenticated: dms_auth_fn {
     { context, code, remaining, _, message in
-      let box = Context.release(context, as: AuthContext.self)
+      let box = Context.release(context, as: AuthContext.self).value
       if code == DMS_OK {
         box.done(.success(.loggedIn))
       } else if code == DMS_AUTH_FAILED {
-        box.done(.success(.refused(remaining: RusshEngine.methods(remaining))))
+        // Same bits (`DMS_METHOD_*`).
+        box.done(.success(.refused(remaining: EngineMethods(rawValue: remaining))))
       } else {
         box.done(.failure(RusshEngine.error(code, message)))
       }
@@ -217,13 +212,6 @@ final class RusshKey: EngineKey, @unchecked Sendable {
   var fingerprint: String { String(cString: dms_key_fingerprint(pointer)) }
 }
 
-extension ExecState {
-  /// `dms_exited_fn`'s report (`RusshEngine.exit`).
-  func exited(kind: Int32, status: UInt32, signal: String) {
-    exited(RusshEngine.exit(kind: kind, status: status, signal: signal))
-  }
-}
-
 /// A `dms_reply *` answered later from Swift concurrency. Each is answered exactly once.
 struct RusshReply: @unchecked Sendable {
   let pointer: OpaquePointer?
@@ -266,37 +254,28 @@ private enum Context {
   }
 }
 
-/// A session's events, for `host_key` and `disconnected`; released by `disconnected` or a failed connect.
-private final class SessionContext: @unchecked Sendable {
-  let events: any EngineSessionEvents
-  init(_ events: any EngineSessionEvents) { self.events = events }
+/// A context's value as the object `Context` passes.
+private final class Box<Value>: @unchecked Sendable {
+  let value: Value
+  init(_ value: Value) { self.value = value }
 }
+
+/// A session's events, for `host_key` and `disconnected`; released by `disconnected` or a failed connect.
+private typealias SessionContext = Box<any EngineSessionEvents>
 
 /// `connected` and the session's context it drops on failure.
-private final class ConnectContext: @unchecked Sendable {
-  let session: UnsafeMutableRawPointer
-  let connected: @Sendable (Result<any EngineSession, SSHTransportError>) -> Void
-  init(session: UnsafeMutableRawPointer, connected: @escaping @Sendable (Result<any EngineSession, SSHTransportError>) -> Void) {
-    self.session = session
-    self.connected = connected
-  }
-}
+private typealias ConnectContext = Box<(session: UnsafeMutableRawPointer,
+                                        connected: @Sendable (Result<any EngineSession, SSHTransportError>) -> Void)>
 
-/// Context of one login: its `done`, the question it asks, and the key it must keep alive.
-private final class AuthContext: @unchecked Sendable {
+/// Context of one login.
+private typealias AuthContext = Box<Login>
+
+/// One login's `done`, the question it asks, and the key it must keep alive.
+private struct Login {
   let done: @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void
-  let keep: RusshKey?
-  let sign: (@Sendable (Data, @escaping @Sendable (Data?) -> Void) -> Void)?
-  let prompt: (@Sendable (KeyboardInteractiveChallenge, @escaping @Sendable ([String]?) -> Void) -> Void)?
-
-  init(_ done: @escaping @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void, keep: RusshKey? = nil,
-       sign: (@Sendable (Data, @escaping @Sendable (Data?) -> Void) -> Void)? = nil,
-       prompt: (@Sendable (KeyboardInteractiveChallenge, @escaping @Sendable ([String]?) -> Void) -> Void)? = nil) {
-    self.done = done
-    self.keep = keep
-    self.sign = sign
-    self.prompt = prompt
-  }
+  var keep: RusshKey?
+  var sign: (@Sendable (Data, @escaping @Sendable (Data?) -> Void) -> Void)?
+  var prompt: (@Sendable (KeyboardInteractiveChallenge, @escaping @Sendable ([String]?) -> Void) -> Void)?
 }
 
 /// A channel's events. Retained twice, once for `started` and once for `exited`, so that neither can find it freed
@@ -332,10 +311,6 @@ private final class ChannelContext: @unchecked Sendable {
       events.exited(RusshEngine.exit(kind: kind, status: status, signal: signal.map { String(cString: $0) } ?? ""))
     }
   }
-}
-
-private func withCStrings<R>(_ a: String, _ b: String, _ body: (UnsafePointer<CChar>, UnsafePointer<CChar>) -> R) -> R {
-  a.withCString { a in b.withCString { b in body(a, b) } }
 }
 
 private func milliseconds(_ duration: Duration) -> UInt32 {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// One host's live session as the app holds it: the SSH connection plus the helper's stdio channel.
-public struct SSHHostSession: HostSession {
+public struct SSHHostSession: Sendable {
   public let connection: SSHConnection
   public let helper: HelperChannel
   private let launch: Launch
@@ -20,7 +20,7 @@ public struct SSHHostSession: HostSession {
   public var installed: HelperBootstrap.Installed? {
     switch launch {
     case .installed(let installed): installed
-    case .cache(let bundled): HelperBootstrap.launched(helper.stderrSoFar, candidates: bundled)?.installed
+    case .cache(let bundled): HelperBootstrap.launched(helper.exec.stderr, candidates: bundled)?.installed
     }
   }
 
@@ -29,35 +29,6 @@ public struct SSHHostSession: HostSession {
     let stderr = await helper.stderr()
     guard case .cache(let bundled) = launch else { return stderr }
     return HelperBootstrap.launched(stderr, candidates: bundled)?.stderr ?? stderr
-  }
-
-  public func closed() async { await connection.closed() }
-
-  public var lossError: (any Error)? { connection.endReason }
-
-  public var lossReason: String? {
-    switch connection.endReason {
-    case nil: nil
-    case .channelClosed?: "The connection closed."
-    case let reason?: HostConnectionPolicy.describe(reason)
-    }
-  }
-
-  public func close() async {
-    await helper.close()
-    await connection.close()
-  }
-
-  /// Connects and authenticates (reporting `.authenticating` once the host key is trusted): the connection both modes
-  /// start from. Plain SSH (docs/ios.md) stops here and opens shells on it; the helper path goes on with
-  /// `bootstrapHelper(on:)`.
-  public static func connect(
-    endpoint: SSHEndpoint, credentials: [SSHCredential], trust: any HostKeyTrust, keepalive: Duration = .seconds(15),
-    keepaliveMax: Int = 3, phase: @escaping @Sendable (HostConnectionPhase) async -> Void
-  ) async throws -> SSHConnection {
-    try await SSHConnection.connect(
-      to: endpoint, credentials: credentials, trust: trust, keepalive: keepalive, keepaliveMax: keepaliveMax,
-      authenticating: { await phase(.authenticating) })
   }
 
   /// Installs the helper under `root` if needed (`HelperBootstrap.install`, which may move on to the runtime folder) and
@@ -90,20 +61,4 @@ public struct SSHHostSession: HostSession {
     return SSHHostSession(connection: connection, helper: helper, launch: .installed(installed))
   }
 
-  /// `connect` then `bootstrapHelper`, closing the connection when the helper cannot start.
-  public static func establish(
-    endpoint: SSHEndpoint, credentials: [SSHCredential], trust: any HostKeyTrust, binaries: URL,
-    capabilities: String, environment: [String: String] = [:], keepalive: Duration = .seconds(15), keepaliveMax: Int = 3,
-    phase: @escaping @Sendable (HostConnectionPhase) async -> Void
-  ) async throws -> SSHHostSession {
-    let connection = try await connect(endpoint: endpoint, credentials: credentials, trust: trust, keepalive: keepalive,
-                                       keepaliveMax: keepaliveMax, phase: phase)
-    do {
-      return try await bootstrapHelper(on: connection, binaries: binaries, capabilities: capabilities,
-                                       environment: environment, phase: phase)
-    } catch {
-      await connection.close()
-      throw error
-    }
-  }
 }

@@ -33,7 +33,7 @@ final class ConcurrencyTests: XCTestCase {
     sendable(SystemReconnectClock.self)
     sendable((any HostSession).self)
     sendable(HostConnectionPhase.self)
-    actor(HostConnection<SSHHostSession>.self)
+    actor(HostConnection<HostConnectionTests.Live>.self)
     sendable(HostConnectionPolicy.self)
     sendable(SSHKey.self)
     sendable(SSHKey.Kind.self)

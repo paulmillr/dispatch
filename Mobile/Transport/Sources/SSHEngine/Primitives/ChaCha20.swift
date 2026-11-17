@@ -67,18 +67,9 @@ struct ChaCha20: Sendable {
     _ = memset_s(&keyWords, MemoryLayout.size(ofValue: keyWords), 0, MemoryLayout.size(ofValue: keyWords))
   }
 
-  /// Keystream block `counter` (64 bytes). The RFC layout takes counters below 2^32 only (a precondition: callers
-  /// choose counters, data never does).
-  func block(counter: UInt64) -> [UInt8] {
-    [UInt8](unsafeUninitializedCapacity: Self.blockSize) { buffer, initialized in
-      // `block(counter:into:)` initializes all 64 bytes.
-      block(counter: counter, into: UnsafeMutableRawBufferPointer(buffer))
-      initialized = Self.blockSize
-    }
-  }
-
   /// Writes keystream block `counter` to the first 64 bytes of `output` (initialized or not). The SSH cipher takes its
-  /// Poly1305 key from block 0 this way, into a buffer it owns and clears.
+  /// Poly1305 key from block 0 this way, into a buffer it owns and clears. The RFC layout takes counters below 2^32
+  /// only (a precondition: callers choose counters, data never does).
   func block(counter: UInt64, into output: UnsafeMutableRawBufferPointer) {
     precondition(output.count >= Self.blockSize, "a ChaCha20 block is 64 bytes")
     precondition(wideCounter || counter <= UInt64(UInt32.max), "the RFC 8439 layout has a 32-bit counter")

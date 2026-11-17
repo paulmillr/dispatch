@@ -135,6 +135,7 @@ final class TabsSpacesTreeTests: XCTestCase {
         let mba2 = model.sections()[1]
         XCTAssertEqual(mba2.spaces[0].unread, 2, "dev unseen and zsh needing you")
         XCTAssertTrue(mba2.spaces[0].working)
+        XCTAssertEqual(mba2.spaces[0].workers, 1, "how many work, for the row's count")
         XCTAssertEqual(mba2.spaces[1].unread, 0)
         XCTAssertFalse(mba2.spaces[1].working)
         XCTAssertEqual(mba2.unread, 2)

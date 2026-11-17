@@ -145,7 +145,7 @@ Commits are a 360-point list beside a pane; the stats widget is a popover on the
 
 | Group | Screens |
 |---|---|
-| ipad | I1 files, I2 review (I2b before a selection), I3 commits (I3b before a selection), I4 chat, I5 host popover, I7 terminal, I8 sidebar hidden |
+| ipad | I1 files, I2 review (I2b before a selection), I3 commits (I3b before a selection), I4 chat, I5 host popover, I7 terminal, I8 sidebar hidden, I9 four agents in the Grid layout (docs/ios.md, iPad › Panes): a strip per pane, the focused one's at full strength and the others dimmed with their empty composers folded (a Reply circle while idle), the layout button in the top right pane's strip |
 | ipad-half | I6 Split View at 507 points, which is the phone stack: files, and I6b spaces |
 
 **iPhone on its side** (`Sources/FullHeight.swift`, `Landscape.swift`; an iPhone simulator turned by

@@ -411,7 +411,9 @@ final class EngineParityTests: XCTestCase {
     XCTAssertEqual(echo.status, 7)
 
     let payload = Data((0..<(8 << 20)).map { UInt8(truncatingIfNeeded: $0 % 251) })
-    let cat = try await within(.seconds(60), "8 MiB through cat") { try await connection.run("cat", input: payload, limit: 16 << 20) }
+    let cat = try await bounded(60, "8 MiB through cat") {
+      try await connection.run("cat", input: payload, limit: 16 << 20)
+    }
     XCTAssertTrue(cat.stdout == payload, "echoed \(cat.stdout.count) of \(payload.count) bytes")
     XCTAssertEqual(cat.status, 0)
     let log = try await server.log().value
@@ -424,7 +426,7 @@ final class EngineParityTests: XCTestCase {
   func testBytesWrittenBeforeTheExecReplyReachTheCommand() async throws {
     let server = try ParityServer.start(self)
     let connection = try await server.loggedIn()
-    let exec = try await within(.seconds(5), "the exec without its reply") { try await connection.exec("noreply") }
+    let exec = try await bounded(5, "the exec without its reply") { try await connection.exec("noreply") }
     let output = OutputReader(exec)
     try await exec.write(Data("ping".utf8))
     assertEqual(try await output.read(until: "ping"), "ping")
@@ -439,7 +441,7 @@ final class EngineParityTests: XCTestCase {
   func testOutputBeforeTheExecReplyIsKept() async throws {
     let server = try ParityServer.start(self)
     let connection = try await server.loggedIn()
-    let exec = try await within(.seconds(5), "the exec") { try await connection.exec("early") }
+    let exec = try await bounded(5, "the exec") { try await connection.exec("early") }
     assertEqual(try await OutputReader(exec).readToEnd(), Data("early".utf8))
     assertEqual(try await exec.exitStatus(), 5)
     await connection.close()
@@ -450,7 +452,7 @@ final class EngineParityTests: XCTestCase {
   func testARefusedExecEndsAsRefused() async throws {
     let server = try ParityServer.start(self)
     let connection = try await server.loggedIn()
-    let exec = try await within(.seconds(5), "the exec") { try await connection.exec("refuse") }
+    let exec = try await bounded(5, "the exec") { try await connection.exec("refuse") }
     try? await exec.write(Data("hello".utf8))
     let output = OutputReader(exec)
     assertEqual(try await output.readToEnd(), Data())
@@ -484,7 +486,9 @@ final class EngineParityTests: XCTestCase {
     let server = try ParityServer.start(self, script: script) { $0.rekeyAfterBytes = 16 * 1024 }
     let connection = try await server.loggedIn()
     let payload = Data((0..<(512 * 1024)).map { UInt8(truncatingIfNeeded: $0 % 251) })
-    let cat = try await within(.seconds(30), "512 KiB through cat") { try await connection.run("cat", input: payload, limit: 1 << 20) }
+    let cat = try await bounded(30, "512 KiB through cat") {
+      try await connection.run("cat", input: payload, limit: 1 << 20)
+    }
     XCTAssertTrue(cat.stdout == payload, "echoed \(cat.stdout.count) of \(payload.count) bytes")
     XCTAssertEqual(cat.status, 0)
     XCTAssertEqual(server.trust.asked.value.count, 1, "a rekey never asks")

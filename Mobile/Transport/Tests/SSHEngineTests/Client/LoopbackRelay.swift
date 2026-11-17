@@ -59,27 +59,7 @@ final class LoopbackRelay: @unchecked Sendable {
     terminal = (fds[0], fds[1])
     guard pipe(&fds) == 0 else { throw LiveSSHD.Failure("pipe") }
     frozen = (fds[0], fds[1])
-    let listener = socket(AF_INET, SOCK_STREAM, 0)
-    guard listener >= 0 else { throw LiveSSHD.Failure("socket") }
-    self.listener = listener
-    var on: Int32 = 1
-    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
-    var address = sockaddr_in()
-    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    let bound = withUnsafeMutablePointer(to: &address) { pointer -> Int in
-      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { raw in
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        guard bind(listener, raw, length) == 0, getsockname(listener, raw, &length) == 0 else { return -1 }
-        return Int(UInt16(bigEndian: pointer.pointee.sin_port))
-      }
-    }
-    guard bound > 0, listen(listener, 16) == 0 else {
-      Darwin.close(listener)
-      throw LiveSSHD.Failure("bind")
-    }
-    port = bound
+    (listener, port) = try SilentListener.listen()
     spawn { [self] in acceptLoop() }
   }
 
@@ -191,10 +171,23 @@ final class SilentListener: @unchecked Sendable {
   let port: Int
   private let fd: Int32
 
-  init() throws {
+  /// The kernel completes the TCP handshake for queued connections; nothing ever accepts or writes.
+  init() throws { (fd, port) = try Self.listen() }
+
+  deinit { Darwin.close(fd) }
+
+  /// A port nothing listens on (bound, then closed at once).
+  static func closedPort() throws -> Int {
+    let listener = try SilentListener()
+    return listener.port
+  }
+
+  /// A loopback TCP socket listening on a free port.
+  static func listen() throws -> (fd: Int32, port: Int) {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     guard fd >= 0 else { throw LiveSSHD.Failure("socket") }
-    self.fd = fd
+    var on: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
     var address = sockaddr_in()
     address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     address.sin_family = sa_family_t(AF_INET)
@@ -206,20 +199,11 @@ final class SilentListener: @unchecked Sendable {
         return Int(UInt16(bigEndian: pointer.pointee.sin_port))
       }
     }
-    // The kernel completes the TCP handshake for queued connections; nothing ever accepts or writes.
-    guard bound > 0, listen(fd, 16) == 0 else {
+    guard bound > 0, Darwin.listen(fd, 16) == 0 else {
       Darwin.close(fd)
       throw LiveSSHD.Failure("listen")
     }
-    port = bound
-  }
-
-  deinit { Darwin.close(fd) }
-
-  /// A port nothing listens on (bound, then closed at once).
-  static func closedPort() throws -> Int {
-    let listener = try SilentListener()
-    return listener.port
+    return (fd, bound)
   }
 }
 #endif

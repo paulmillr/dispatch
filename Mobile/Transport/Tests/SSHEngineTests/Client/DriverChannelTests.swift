@@ -22,12 +22,11 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testASignalARefusalAndALoss() async throws {
-    let script = ServerScript()
-    script.commands["killed"] = [.exitSignal("TERM"), .eof, .close]
-    script.commands["vanish"] = [.close]
-    script.execReply = { $0 != "refused" }
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (_, session) = try await MemoryWorld.loggedIn {
+      $0.commands["killed"] = [.exitSignal("TERM"), .eof, .close]
+      $0.commands["vanish"] = [.close]
+      $0.execReply = { $0 != "refused" }
+    }
     let killed = try await session.exec("killed")
     let killedOutput = try await killed.read()
     XCTAssertNil(killedOutput)
@@ -71,10 +70,7 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testARefusedOpen() async throws {
-    let script = ServerScript()
-    script.refuseOpen = true
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (_, session) = try await MemoryWorld.loggedIn { $0.refuseOpen = true }
     await assertThrows(.channelOpenFailed(.administrativelyProhibited, description: "no channels here")) {
       try await session.exec("cat")
     }
@@ -84,11 +80,10 @@ final class DriverChannelTests: XCTestCase {
   /// A server whose window is 0 stops the writer once the channel holds `Limits.channelInputBytes`; its adjust lets
   /// the write finish, and everything arrives in order.
   func testTheWindowStopsTheWriter() async throws {
-    let script = ServerScript()
-    script.window = 0
-    script.commands["sink"] = []
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.window = 0
+      $0.commands["sink"] = []
+    }
     let exec = try await session.exec("sink")
     let data = (0..<(Limits.channelInputBytes + 100_000)).map { UInt8(truncatingIfNeeded: $0 &* 31) }
     let write = Task { try await exec.write(data) }
@@ -138,10 +133,7 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testRefusedShellRequests() async throws {
-    let script = ServerScript()
-    script.ptyReply = false
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn { $0.ptyReply = false }
     await assertThrows(.requestRefused(.ptyRequest)) { try await session.shell(term: "xterm", size: .init(columns: 80, rows: 24)) }
     await world.peer.edit { $0.ptyReply = true; $0.shellReply = false }
     await assertThrows(.requestRefused(.shell)) { try await session.shell(term: "xterm", size: .init(columns: 80, rows: 24)) }
@@ -154,10 +146,9 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testClosingAnExecDropsItsOutput() async throws {
-    let script = ServerScript()
-    script.commands["chatty"] = [.stdout(Array("one".utf8)), .stdout(Array("two".utf8))]
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (_, session) = try await MemoryWorld.loggedIn {
+      $0.commands["chatty"] = [.stdout(Array("one".utf8)), .stdout(Array("two".utf8))]
+    }
     let exec = try await session.exec("chatty")
     let first = try await exec.read()
     XCTAssertEqual(first, .stdout(Array("one".utf8)))
@@ -193,10 +184,7 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testTooManyChannels() async throws {
-    let script = ServerScript()
-    script.commands["idle"] = []
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn { $0.commands["idle"] = [] }
     var open: [any ExecChannel] = []
     for _ in 0..<Limits.channels { open.append(try await session.exec("idle")) }
     await assertThrows(.usage(.tooManyChannels)) { try await session.exec("idle") }
@@ -219,11 +207,10 @@ final class DriverChannelTests: XCTestCase {
 
   /// The connection ends with operations pending: each ends with the connection's reason, once.
   func testTheEndWhileOperationsArePending() async throws {
-    let script = ServerScript()
-    script.commands["idle"] = []
-    script.window = 0
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.commands["idle"] = []
+      $0.window = 0
+    }
     let exec = try await session.exec("idle")
     let reader = Task { try await exec.read() }
     let writer = Task { try await exec.write([UInt8](repeating: 7, count: Limits.channelInputBytes + 1)) }
@@ -265,11 +252,10 @@ final class DriverChannelTests: XCTestCase {
   /// Output that arrived before the connection's end is still read, then the end; a channel whose output had ended
   /// reads nil.
   func testBufferedOutputSurvivesTheEnd() async throws {
-    let script = ServerScript()
-    script.commands["partial"] = [.stdout(Array("kept".utf8))]
-    script.commands["done"] = [.stdout(Array("all".utf8)), .exitStatus(0), .eof]
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.commands["partial"] = [.stdout(Array("kept".utf8))]
+      $0.commands["done"] = [.stdout(Array("all".utf8)), .exitStatus(0), .eof]
+    }
     let partial = try await session.exec("partial")
     let done = try await session.exec("done")
     _ = try await bounded(10, "the output") {
@@ -294,10 +280,9 @@ final class DriverChannelTests: XCTestCase {
 
   /// A server that sends past the window it was granted breaks the protocol: the connection ends with it.
   func testDataBeyondTheWindowEndsTheConnection() async throws {
-    let script = ServerScript()
-    script.commands["flood"] = (0..<70).map { _ in .stdout([UInt8](repeating: 1, count: 32 * 1024)) }
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.commands["flood"] = (0..<70).map { _ in .stdout([UInt8](repeating: 1, count: 32 * 1024)) }
+    }
     let exec = try await session.exec("flood")
     let violation = SSHError.protocolViolation(.channel(.windowExceeded))
     let end = await session.ended()
@@ -314,10 +299,7 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testCancellingAnOpen() async throws {
-    let script = ServerScript()
-    script.holdOpen = true
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn { $0.holdOpen = true }
     let opening = Task { try await session.exec("cat") }
     _ = await world.peer.waitFor { !$0.numbered(90).isEmpty }
     opening.cancel()
@@ -332,11 +314,10 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testCancellingAReadAndAWrite() async throws {
-    let script = ServerScript()
-    script.window = 0
-    script.commands["idle"] = []
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (_, session) = try await MemoryWorld.loggedIn {
+      $0.window = 0
+      $0.commands["idle"] = []
+    }
     let exec = try await session.exec("idle")
     let reader = Task { try await exec.read() }
     let writer = Task { try await exec.write([UInt8](repeating: 1, count: Limits.channelInputBytes + 10)) }
@@ -385,10 +366,7 @@ final class DriverChannelTests: XCTestCase {
   }
 
   func testReleasingAChannelClosesIt() async throws {
-    let script = ServerScript()
-    script.commands["idle"] = []
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn { $0.commands["idle"] = [] }
     var exec: (any ExecChannel)? = try await session.exec("idle")
     _ = exec
     exec = nil
@@ -408,11 +386,10 @@ final class DriverChannelGuaranteeTests: XCTestCase {
   /// The client's own close ends a pending read at once (nil), and every later one, though the server never answers
   /// the CLOSE.
   func testTheClientsCloseEndsAPendingRead() async throws {
-    let script = ServerScript()
-    script.commands["idle"] = []
-    script.answerClose = false
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.commands["idle"] = []
+      $0.answerClose = false
+    }
     let exec = try await session.exec("idle")
     let shell = try await session.shell(term: "vt100", size: .init(columns: 80, rows: 24))
     let execRead = Task { try await exec.read() }
@@ -436,14 +413,27 @@ final class DriverChannelGuaranteeTests: XCTestCase {
     await session.close()
   }
 
+  /// The client's close drops unread output also when the server had closed the channel first: a later read is nil.
+  func testTheClientsCloseAfterTheServersDropsUnreadOutput() async throws {
+    let (_, session) = try await MemoryWorld.loggedIn {
+      $0.commands["said"] = [.stdout(Array("unread".utf8)), .exitStatus(0), .eof, .close]
+    }
+    let exec = try await session.exec("said")
+    let exit = try await bounded(10, "the exit") { await exec.exit() }
+    XCTAssertEqual(exit, .status(0))
+    await exec.close()
+    let after = try await exec.read()
+    XCTAssertNil(after)
+    await session.close()
+  }
+
   /// A write suspended for the window throws once the channel closes, whichever side closed it; so does every later
   /// write. (The connection's end: `DriverChannelTests.testTheEndWhileOperationsArePending`.)
   func testASuspendedWriteThrowsWhenTheChannelCloses() async throws {
-    let script = ServerScript()
-    script.window = 0
-    script.commands["idle"] = []
-    let world = await MemoryWorld.make(script: script)
-    let session = try await world.loggedIn()
+    let (world, session) = try await MemoryWorld.loggedIn {
+      $0.window = 0
+      $0.commands["idle"] = []
+    }
     let big = [UInt8](repeating: 9, count: Limits.channelInputBytes + 1)
 
     let ours = try await session.exec("idle")
@@ -507,5 +497,15 @@ final class DriverChannelGuaranteeTests: XCTestCase {
     let end = try await shell.read()
     XCTAssertNil(end)
     await session.close()
+  }
+}
+
+extension MemoryWorld {
+  /// A world whose script `configure` set up, connected and logged in with a password.
+  static func loggedIn(_ configure: (ServerScript) -> Void) async throws -> (MemoryWorld, any SSHSession) {
+    let script = ServerScript()
+    configure(script)
+    let world = await MemoryWorld.make(script: script)
+    return (world, try await world.loggedIn())
   }
 }

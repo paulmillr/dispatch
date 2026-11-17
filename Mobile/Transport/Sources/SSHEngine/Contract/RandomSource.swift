@@ -12,12 +12,7 @@ extension RandomSource {
   /// `count` random bytes.
   public func bytes(_ count: Int) throws(SSHError) -> [UInt8] {
     var result = [UInt8](repeating: 0, count: max(0, count))
-    // withUnsafeMutableBytes rethrows untyped: carry the typed error out by hand.
-    var failure: SSHError?
-    result.withUnsafeMutableBytes { buffer in
-      do throws(SSHError) { try fill(buffer) } catch { failure = error }
-    }
-    if let failure { throw failure }
+    try withTypedMutableBytes(of: &result) { (buffer) throws(SSHError) in try fill(buffer) }
     return result
   }
 

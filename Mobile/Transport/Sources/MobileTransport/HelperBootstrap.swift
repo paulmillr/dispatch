@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 /// Installs the Dispatch helper on a host over an exec channel: `SSHBootstrap.install` of the Mac app,
 /// with the same shell (Dispatch/SSH/SSHBootstrapScript.swift, shared through a symlink) but streaming
@@ -247,26 +248,18 @@ public enum HelperBootstrap: Sendable {
       var status = stat()
       guard stat(file.path, &status) == 0 else { return nil }
       let stamp = "\(status.st_dev):\(status.st_ino):\(status.st_size):\(status.st_mtimespec.tv_sec).\(status.st_mtimespec.tv_nsec)"
-      if let known = identities.known(file.path), known.stamp == stamp { return known.helper }
+      if let known = identities.withLock({ $0[file.path] }), known.stamp == stamp { return known.helper }
       let helper = (try? helper(name, in: binaries)).flatMap { binary -> Bundled? in
         guard !binary.isEmpty, binary.count <= SSHBootstrapScript.maximumSize else { return nil }
         return Bundled(name: name, size: binary.count, digest: SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined())
       }
-      identities.keep(file.path, stamp: stamp, helper: helper)
+      identities.withLock { $0[file.path] = (stamp, helper) }
       return helper
     }
   }
 
-  private static let identities = Identities()
-
   /// `bundled`'s results by file path, with the stamp each was computed for.
-  private final class Identities: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [String: (stamp: String, helper: Bundled?)] = [:]
-
-    func known(_ path: String) -> (stamp: String, helper: Bundled?)? { lock.withLock { values[path] } }
-    func keep(_ path: String, stamp: String, helper: Bundled?) { lock.withLock { values[path] = (stamp, helper) } }
-  }
+  private static let identities = Mutex<[String: (stamp: String, helper: Bundled?)]>([:])
 
   /// Text for a helper that exited before greeting, from its exit status (nil: a signal or a lost channel) and stderr:
   /// 126 is a folder that cannot run programs, 127 a helper that could not be started; otherwise the setup reason or the

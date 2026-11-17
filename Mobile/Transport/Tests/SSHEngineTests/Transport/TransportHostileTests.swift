@@ -52,15 +52,10 @@ final class TransportHostileTests: XCTestCase {
 
   static func serverKexInit(strict: Bool = true, kex: [String] = ["curve25519-sha256"], cipher: [String] = ["aes256-gcm@openssh.com"],
                             compression: [String] = ["none"], follows: Bool = false) -> [UInt8] {
-    var writer = WireWriter(.kexInit)
-    writer.writeBytes([UInt8](repeating: 0xAB, count: 16))
-    for list in [kex + (strict ? [KexSignal.strictServer] : []), ["ssh-ed25519"], cipher, cipher,
-                 ["hmac-sha2-256-etm@openssh.com"], ["hmac-sha2-256-etm@openssh.com"], compression, compression, [], []] {
-      writer.writeNameList(list)
-    }
-    writer.writeBoolean(follows)
-    writer.writeUInt32(0)
-    return (try? writer.finish()) ?? []
+    var kexInit = NegotiationTests.server(kex: kex + (strict ? [KexSignal.strictServer] : []), ciphers: cipher,
+                                          compression: compression)
+    kexInit.firstKexPacketFollows = follows
+    return (try? kexInit.encoded()) ?? []
   }
 
   // MARK: The version exchange
@@ -179,17 +174,13 @@ final class TransportHostileTests: XCTestCase {
   }
 
   func testATamperedPacketInEveryFamily() throws {
-    var cases: [(CipherAlgorithm, MACAlgorithm?)] = [(.aes256GCM, nil), (.aes128GCM, nil), (.chacha20Poly1305, nil)]
-    for cipher in [CipherAlgorithm.aes256CTR, .aes192CTR, .aes128CTR] {
-      for mac in MACAlgorithm.allCases { cases.append((cipher, mac)) }
-    }
     // The last byte (the tag or MAC), a ciphertext byte, and (where the length is covered) the length's last byte.
     let tamperings: [(String, (inout [UInt8]) -> Void)] = [
       ("tag", { $0[$0.count - 1] ^= 0x01 }),
       ("ciphertext", { $0[$0.count / 2] ^= 0x80 }),
       ("padding length", { $0[4] ^= 0x01 }),
     ]
-    for (cipher, mac) in cases {
+    for (cipher, mac) in PacketProtectionTests.families {
       for (what, tamper) in tamperings {
         let harness = try TransportExchangeTests.connected(TransportExchangeTests.only(cipher: cipher, mac: mac))
         harness.server.corruptNextPacket = tamper
@@ -233,10 +224,8 @@ final class TransportHostileTests: XCTestCase {
   // MARK: Sequence numbers
 
   func testTheInboundSequenceNumberNeverWraps() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.strict = false
-    let harness = try TransportExchangeTests.connected(TransportExchangeTests.only(cipher: .aes256GCM),
-                                                       server: ScriptedServer(configuration: configuration))
+    let server = ScriptedServer(configuration: .with { $0.strict = false })
+    let harness = try TransportExchangeTests.connected(TransportExchangeTests.only(cipher: .aes256GCM), server: server)
     harness.client.setSequenceNumbers(inbound: UInt64(UInt32.max))
     harness.server.setSequenceNumbers(outbound: UInt64(UInt32.max))
     harness.server.send(TransportExchangeTests.channelData([1]))
@@ -254,10 +243,8 @@ final class TransportHostileTests: XCTestCase {
   }
 
   func testTheOutboundSequenceNumberNeverWraps() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.strict = false
-    let harness = try TransportExchangeTests.connected(TransportExchangeTests.only(cipher: .aes256GCM),
-                                                       server: ScriptedServer(configuration: configuration))
+    let server = ScriptedServer(configuration: .with { $0.strict = false })
+    let harness = try TransportExchangeTests.connected(TransportExchangeTests.only(cipher: .aes256GCM), server: server)
     harness.client.setSequenceNumbers(outbound: UInt64(UInt32.max))
     harness.server.setSequenceNumbers(inbound: UInt64(UInt32.max))
     try harness.client.send(TransportExchangeTests.channelData([1]))
@@ -274,9 +261,7 @@ final class TransportHostileTests: XCTestCase {
 
   func testUnderStrictKeyExchangeKexInitMustBeTheFirstPacket() throws {
     for first in [[MessageNumber.ignore.rawValue] + Raw.string(""), [MessageNumber.debug.rawValue, 0] + Raw.string("") + Raw.string("")] {
-      var configuration = ScriptedServer.Configuration()
-      configuration.beforeKexInit = [first]
-      let harness = try TransportHarness(server: ScriptedServer(configuration: configuration))
+      let harness = try TransportHarness(server: ScriptedServer(configuration: .with { $0.beforeKexInit = [first] }))
       harness.connect()
       XCTAssertEqual(harness.endReason(), .protocolViolation(.strictKeyExchange))
       XCTAssertEqual(harness.server.disconnectReason, DisconnectReason.keyExchangeFailed.rawValue)
@@ -315,9 +300,8 @@ final class TransportHostileTests: XCTestCase {
   }
 
   func testAHostKeyAlgorithmOnlyTheServerKnows() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.hostKeyAlgorithms = ["ssh-rsa", "ssh-dss"]
-    let harness = try TransportHarness(server: ScriptedServer(configuration: configuration))
+    let server = ScriptedServer(configuration: .with { $0.hostKeyAlgorithms = ["ssh-rsa", "ssh-dss"] })
+    let harness = try TransportHarness(server: server)
     harness.connect()
     XCTAssertEqual(harness.endReason(), .protocolViolation(.negotiation(.noCommonAlgorithm(.hostKey))))
   }

@@ -26,6 +26,9 @@ pub(super) struct Subagent {
     name: Option<String>,
     /// The call that started it (its meta's "toolUseId"), so the transcript's record of it is this one.
     call: Option<String>,
+    /// Taken from the transcript (`adopt`), no SubagentStart having reached this helper: it leaves when the transcript
+    /// says it ended.
+    adopted: bool,
     /// Meta reads that found no name; at MISSES the meta file is not asked for again.
     misses: u8,
     started_ms: Option<u64>,
@@ -49,6 +52,7 @@ impl Subagent {
             kind: kind.to_owned(),
             name: None,
             call: None,
+            adopted: false,
             misses: 0,
             started_ms: None,
             calls: BTreeMap::new(),
@@ -218,6 +222,47 @@ impl Claude {
         }
         // SessionStart/SessionEnd are not ours alone: let other handlers see them.
         matches!(event, "SubagentStart" | "SubagentStop")
+    }
+
+    /// The transcript's background agents (`Launched` with an agent id) no SubagentStart reached this helper for join the
+    /// running ones as if one had, from the call's time and with its task: their files are followed for their tokens.
+    /// One the transcript no longer lists (its notification, a stop) leaves; one from before the agent's process
+    /// (`since`) never joins. Foreground calls waiting for their result have no id yet, so no file (`merged` shows
+    /// them). True when the running agents changed.
+    pub(super) fn adopt(&mut self, io: &mut dyn Io, session: &str, launched: &[crate::history::Launched], since: Option<u64>) -> bool {
+        let running: Vec<(&str, &crate::history::Launched)> = launched
+            .iter()
+            .filter(|entry| !since.is_some_and(|since| entry.started_ms.is_some_and(|ms| ms < since)))
+            .filter_map(|entry| entry.agent.as_deref().map(|id| (id, entry)))
+            .collect();
+        let ended: Vec<String> = self
+            .subagents
+            .running
+            .get(session)
+            .map(|agents| {
+                agents.iter().filter(|a| a.adopted && !running.iter().any(|(id, _)| *id == a.id)).map(|a| a.id.clone()).collect()
+            })
+            .unwrap_or_default();
+        let mut changed = false;
+        for id in ended {
+            changed |= self.stop(io, session, Some(&id));
+        }
+        for (id, entry) in running {
+            let agents = self.subagents.running.entry(session.to_owned()).or_default();
+            if agents.iter().any(|a| a.id == id || a.call.as_deref() == Some(entry.call.as_str())) {
+                continue;
+            }
+            let mut agent = Subagent::new(id, &entry.kind);
+            agent.name = entry.name.clone();
+            agent.call = Some(entry.call.clone());
+            agent.started_ms = entry.started_ms;
+            agent.adopted = true;
+            agents.push(agent);
+            agents.sort_by_key(|a| a.started_ms.unwrap_or(u64::MAX));
+            self.follow(io, session, id);
+            changed = true;
+        }
+        changed
     }
 
     /// Ends `agent` (every agent of the session when None): its watch and reads stop. True when

@@ -69,32 +69,6 @@ enum ChannelWire {
   }
 }
 
-/// A link whose backlog grows with every payload sent until the driver "writes" it (`drain`), as the real transport's
-/// does; the rest is the fake's.
-final class BacklogLink: TransportLink {
-  let fake = FakeTransportLink()
-  private(set) var outboundBacklog = 0
-
-  var sessionID: [UInt8] { fake.sessionID }
-  var hostKey: HostKey { fake.hostKey }
-  var serverExtensions: ServerExtensions? { fake.serverExtensions }
-  var isOpen: Bool { fake.isOpen }
-
-  func send(_ payload: [UInt8]) throws(SSHError) {
-    try fake.send(payload)
-    outboundBacklog += payload.count
-  }
-
-  func send(secret payload: SecretBytes) throws(SSHError) {
-    try fake.send(secret: payload)
-    outboundBacklog += payload.count
-  }
-
-  func end(_ error: SSHError) { fake.end(error) }
-
-  func drain() { outboundBacklog = 0 }
-}
-
 /// A connection core on a fake link, the server's messages routed through the policy in the connection phase. The
 /// server addresses our channel numbers (`ChannelID.rawValue`); we address its numbers (`remote`).
 final class ChannelHarness {
@@ -104,11 +78,6 @@ final class ChannelHarness {
 
   init() {
     link = FakeTransportLink()
-    core = ConnectionCore(link: link)
-  }
-
-  init(link: BacklogLink) {
-    self.link = link.fake
     core = ConnectionCore(link: link)
   }
 

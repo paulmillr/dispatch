@@ -344,8 +344,7 @@ final class NetworkByteStream: ByteStream, @unchecked Sendable {
     if cancelled { return .failure(.cancelled) }
     if closed { return reading ? .success([]) : .failure(.closed(.byClient)) }
     switch NetworkStreamConnector.error(error, path: nil) {
-    case .connectionRefused, .unreachable, .noAnswer: return .failure(.closed(.connectionLost))
-    case .cancelled: return .failure(.closed(.connectionLost))
+    case .connectionRefused, .unreachable, .noAnswer, .cancelled: return .failure(.closed(.connectionLost))
     case let other: return .failure(other)
     }
   }

@@ -28,19 +28,19 @@ public final class SSHConnection: Sendable {
     timeout: Duration = .seconds(15), keepalive: Duration = .seconds(15), keepaliveMax: Int = 3,
     authenticating: (@Sendable () async -> Void)? = nil
   ) async throws -> SSHConnection {
-    let engine = try SSHTransportEngine.preferred.backend
+    let engine = SSHTransportEngine.preferred.backend
     let clock = ContinuousClock()
     let start = clock.now
     let link = SessionLink(host: endpoint.host, port: endpoint.port, trust: trust, trusted: authenticating)
-    let completion = Completion<any EngineSession>()
+    let completion = Once<Result<any EngineSession, SSHTransportError>>()
     let options = EngineConnectOptions(
       host: endpoint.host, port: endpoint.port, timeout: timeout, keepalive: keepalive, keepaliveMax: keepaliveMax)
-    engine.connect(options, events: link) { completion.finish($0.mapError { $0 }) }
+    engine.connect(options, events: link) { completion.set($0) }
     // Cancelling the connect withdraws the questions it asks (host key, login prompts, signatures): their tasks are
     // not children of this one, so without this a sheet would outlive the connection that asked.
     let session: any EngineSession
     do {
-      session = try await withTaskCancellationHandler { try await completion.value } onCancel: { link.withdraw() }
+      session = try await withTaskCancellationHandler { try await completion.value.get() } onCancel: { link.withdraw() }
     } catch {
       throw link.explain(error)
     }
@@ -146,8 +146,8 @@ public final class SSHConnection: Sendable {
   /// One login. The questions it asks (signatures, prompts) go to the app on tasks `link` withdraws when the connect is
   /// cancelled; each answers the engine exactly once.
   private static func attempt(_ credential: SSHCredential, session: any EngineSession, link: SessionLink, user: String) async throws -> EngineAuthOutcome {
-    let completion = Completion<EngineAuthOutcome>()
-    let done: @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void = { completion.finish($0.mapError { $0 }) }
+    let completion = Once<Result<EngineAuthOutcome, SSHTransportError>>()
+    let done: @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void = { completion.set($0) }
     switch credential {
     case .password(let password):
       session.authenticate(user: user, password: password, done: done)
@@ -172,7 +172,7 @@ public final class SSHConnection: Sendable {
         }
       }, done: done)
     }
-    return try await completion.value
+    return try await completion.value.get()
   }
 }
 
@@ -192,8 +192,7 @@ final class SessionLink: EngineSessionEvents, @unchecked Sendable {
   private let lock = NSLock()
   private var decided: (HostKeyInfo, HostKeyDecision)?
   private var decisionTime: Duration = .zero
-  private var end: SSHTransportError?
-  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private let end = Once<SSHTransportError>()
   /// The open questions to the app (host key, login prompts, signatures), and whether the connect was cancelled.
   private var questions: [UUID: Task<Void, Never>] = [:]
   private var withdrawn = false
@@ -207,12 +206,14 @@ final class SessionLink: EngineSessionEvents, @unchecked Sendable {
 
   var decision: (HostKeyInfo, HostKeyDecision)? { lock.withLock { decided } }
   var deciding: Duration { lock.withLock { decisionTime } }
-  var ending: SSHTransportError? { lock.withLock { end } }
+  var ending: SSHTransportError? { end.current }
 
   func hostKey(_ key: EngineHostKey, answer: @escaping @Sendable (Bool) -> Void) {
     let info = HostKeyInfo(host: host, port: port, algorithm: key.algorithm, fingerprint: key.fingerprint, openSSH: key.openSSH)
     let trust = trust, trusted = trusted
     ask {
+      // Asked after the connect was cancelled: the app is not asked (no sheet for a connection nobody wants).
+      guard !Task.isCancelled else { return answer(false) }
       let start = ContinuousClock.now
       let decision = await trust.evaluate(info)
       self.lock.withLock {
@@ -229,15 +230,14 @@ final class SessionLink: EngineSessionEvents, @unchecked Sendable {
   /// Runs a question to the app on its own task, which `withdraw` cancels (the answer still goes to the engine).
   func ask(_ body: @escaping @Sendable () async -> Void) {
     let id = UUID()
-    let task = Task {
-      await body()
-      self.lock.withLock { _ = self.questions.removeValue(forKey: id) }
+    // Started under the lock, so its end (which takes the lock) comes after it was kept.
+    lock.withLock {
+      let task = Task {
+        await body()
+        self.lock.withLock { _ = self.questions.removeValue(forKey: id) }
+      }
+      if withdrawn { task.cancel() } else { questions[id] = task }
     }
-    let cancel = lock.withLock { () -> Bool in
-      if !withdrawn { questions[id] = task }
-      return withdrawn
-    }
-    if cancel { task.cancel() }
   }
 
   /// The connect was cancelled: open questions are cancelled (a sheet waiting for the user goes away and answers no),
@@ -264,23 +264,8 @@ final class SessionLink: EngineSessionEvents, @unchecked Sendable {
     }
   }
 
-  func disconnected(_ reason: SSHTransportError) {
-    let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
-      if end == nil { end = reason }
-      defer { self.waiters = [] }
-      return self.waiters
-    }
-    waiters.forEach { $0.resume() }
-  }
+  /// The first reason stands.
+  func disconnected(_ reason: SSHTransportError) { end.set(reason) }
 
-  func closed() async {
-    await withCheckedContinuation { continuation in
-      let done = lock.withLock { () -> Bool in
-        if end != nil { return true }
-        waiters.append(continuation)
-        return false
-      }
-      if done { continuation.resume() }
-    }
-  }
+  func closed() async { _ = await end.value }
 }

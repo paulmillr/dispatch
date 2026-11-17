@@ -7,12 +7,18 @@ import XCTest
 /// Interactive shells on a PTY (plain SSH mode): the login shell (the account's, with the fixture's private HOME)
 /// under OpenSSH's sshd.
 final class ShellTests: XCTestCase {
-  func testPromptAppearsWithTheRequestedTerm() async throws {
+  /// A connection to the shared fixture and a shell on it, once its prompt showed.
+  private func prompted() async throws -> (SSHConnection, SSHShell, ShellOutput) {
     let connection = try await SSHFixture.shared.connect()
-    defer { Task { await connection.close() } }
     let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
     let output = ShellOutput(shell)
     try await output.wait("a prompt") { !$0.isEmpty }
+    return (connection, shell, output)
+  }
+
+  func testPromptAppearsWithTheRequestedTerm() async throws {
+    let (connection, shell, output) = try await prompted()
+    defer { Task { await connection.close() } }
     // Computed, so the echo of the typed line never matches.
     try await shell.write(Data("echo term=$TERM sum=$((40+2))\r".utf8))
     try await output.wait("the command's output") { $0.contains("term=xterm-256color sum=42") }
@@ -20,11 +26,8 @@ final class ShellTests: XCTestCase {
   }
 
   func testSttySizeFollowsResize() async throws {
-    let connection = try await SSHFixture.shared.connect()
+    let (connection, shell, output) = try await prompted()
     defer { Task { await connection.close() } }
-    let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
-    let output = ShellOutput(shell)
-    try await output.wait("a prompt") { !$0.isEmpty }
     try await shell.write(Data("stty size\r".utf8))
     try await output.wait("the opening grid") { $0.contains("24 80") }
     try await shell.resize(columns: 100, rows: 30)
@@ -34,11 +37,8 @@ final class ShellTests: XCTestCase {
   }
 
   func testExitStatus() async throws {
-    let connection = try await SSHFixture.shared.connect()
+    let (connection, shell, output) = try await prompted()
     defer { Task { await connection.close() } }
-    let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
-    let output = ShellOutput(shell)
-    try await output.wait("a prompt") { !$0.isEmpty }
     try await shell.write(Data("exit 3\r".utf8))
     try await output.ended()
     let status = try await shell.exitStatus()
@@ -50,10 +50,7 @@ final class ShellTests: XCTestCase {
   }
 
   func testClosingTheConnectionLosesTheShell() async throws {
-    let connection = try await SSHFixture.shared.connect()
-    let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
-    let output = ShellOutput(shell)
-    try await output.wait("a prompt") { !$0.isEmpty }
+    let (connection, shell, output) = try await prompted()
     await connection.close()
     try await output.ended()
     do {
@@ -65,11 +62,8 @@ final class ShellTests: XCTestCase {
   /// `close()` closes the channel at once (a PTY has no end of file): the shell ends without a status and the
   /// connection stays up for the next one.
   func testCloseEndsTheShellAndKeepsTheConnection() async throws {
-    let connection = try await SSHFixture.shared.connect()
+    let (connection, shell, output) = try await prompted()
     defer { Task { await connection.close() } }
-    let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
-    let output = ShellOutput(shell)
-    try await output.wait("a prompt") { !$0.isEmpty }
     await shell.close()
     try await output.ended()
     do {
@@ -84,11 +78,8 @@ final class ShellTests: XCTestCase {
   /// Detaching closes the shell while its reader waits in `read`: neither that read nor a later write, resize or
   /// close may touch the next socket that takes the number (a new shell, another host's channel).
   func testCloseWhileReadingNeverTouchesASocketThatReusedTheNumber() async throws {
-    let connection = try await SSHFixture.shared.connect()
+    let (connection, shell, output) = try await prompted()
     defer { Task { await connection.close() } }
-    let shell = try await connection.shell(term: "xterm-256color", columns: 80, rows: 24)
-    let output = ShellOutput(shell)
-    try await output.wait("a prompt") { !$0.isEmpty }
     let number = try XCTUnwrap(shell.descriptor.fd)
     await shell.close()
     try await output.ended()

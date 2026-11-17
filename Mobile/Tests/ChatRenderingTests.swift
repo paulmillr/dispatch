@@ -115,6 +115,12 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(ChatElapsed.text(14, reduceMotion: true), "10s")
         XCTAssertEqual(ChatElapsed.text(86, reduceMotion: true), "1m 25s")
         XCTAssertEqual(ChatElapsed.text(86, reduceMotion: false), "1m 26s")
+        // Past ten minutes the thinking time drops its seconds; hours keep their minutes.
+        XCTAssertEqual(ChatElapsed.text(599, reduceMotion: false), "9m 59s")
+        XCTAssertEqual(ChatElapsed.text(600, reduceMotion: false), "10m")
+        XCTAssertEqual(ChatElapsed.text(754, reduceMotion: false), "12m")
+        XCTAssertEqual(ChatElapsed.text(3_900, reduceMotion: false), "1h 5m")
+        XCTAssertEqual(ChatTurnSummary.elapsed(754), "12m 34s", "a finished turn's time keeps its seconds")
     }
 
     func testStepsReadAsTheMockupsLog() throws {
@@ -252,22 +258,34 @@ final class ChatRenderingTests: XCTestCase {
         try await TestSupport.eventually { reads == 3 }
     }
 
-    /// Running subagents take one step's place in the unfolded log, over the steps line: the log keeps its height, at
-    /// any text size. Their row says how many, their tasks (else types) and their tokens together.
-    func testTheAgentsRowTakesAStepsPlace() {
+    /// Running subagents take steps' places in the unfolded log, over the steps line, one line each: the log keeps
+    /// about its height (a step for each two lines) at any text size. Past three agents the first two keep their lines
+    /// and the rest fold into "+N more" with their tokens, which opens to every agent.
+    func testTheAgentsRowTakesStepsPlaces() {
         let start = Date(timeIntervalSince1970: 1_000)
         let agents = [ChatSubagent(id: "a1", kind: "Explore", name: "Find every webhook handler", tokens: 18_400, started: start),
                       ChatSubagent(id: "a2", kind: "general-purpose", tokens: 6_200, started: start)]
+        let eight = (1...8).map { ChatSubagent(id: "a\($0)", kind: "general-purpose", name: "Review part \($0)", tokens: UInt64($0) * 1_000, started: start) }
         for typeSize in [DynamicTypeSize.large, .accessibility2] {
             let plain = size(ChatStepWindow(steps: [], openStep: { _ in }).environment(\.dynamicTypeSize, typeSize)).height
-            let with = size(ChatStepWindow(steps: [], agents: agents, openStep: { _ in }).environment(\.dynamicTypeSize, typeSize)).height
-            XCTAssertEqual(with, plain, accuracy: 1, "\(typeSize)")
+            for running in [Array(agents.prefix(1)), agents, eight] {
+                let with = size(ChatStepWindow(steps: [], agents: running, openStep: { _ in }).environment(\.dynamicTypeSize, typeSize)).height
+                XCTAssertEqual(with, plain, accuracy: plain * 0.2, "\(typeSize), \(running.count) agents: \(with) against \(plain)")
+            }
         }
         XCTAssertEqual(ChatAgentsLogRow.title(1), "1 agent running")
         XCTAssertEqual(ChatAgentsLogRow.title(2), "2 agents running")
-        XCTAssertEqual(ChatAgentsLogRow.detail(agents), "Find every webhook handler · general-purpose")
-        XCTAssertEqual(ChatAgentsLogRow.tokens(agents), "24.6K tokens")
+        XCTAssertEqual(agents.map(ChatAgentsLogRow.name), ["Find every webhook handler", "general-purpose"])
+        XCTAssertEqual(ChatAgentsLogRow.tokens(agents), "24.6K")
         XCTAssertNil(ChatAgentsLogRow.tokens([ChatSubagent(id: "x", kind: "Explore", started: start)]))
+        let folded = ChatAgentsLogRow.lines(eight, expanded: false)
+        XCTAssertEqual(folded.shown.map(\.id), ["a1", "a2"])
+        XCTAssertEqual(folded.more, 6)
+        XCTAssertEqual(ChatAgentsLogRow.tokens(Array(eight.suffix(folded.more))), "33.0K", "the folded six's tokens")
+        XCTAssertEqual(ChatAgentsLogRow.lineCount(eight, expanded: false), 3)
+        XCTAssertEqual(ChatAgentsLogRow.lines(eight, expanded: true).shown.count, 8)
+        XCTAssertEqual(ChatAgentsLogRow.lineCount(eight, expanded: true), 9, "every agent, then Show fewer")
+        XCTAssertEqual(ChatAgentsLogRow.lines(agents, expanded: false).more, 0, "three or fewer: a line each")
         XCTAssertTrue(ChatStepWindow.hidden(count: 5, offset: 0, pitch: 50, visible: 3) == (0, 2), "three shown under the agents")
     }
 

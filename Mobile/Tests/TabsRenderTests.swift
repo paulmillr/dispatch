@@ -324,9 +324,12 @@ extension TabsRenderTests {
                 let height = host.sizeThatFits(in: CGSize(width: width, height: 400)).height
                 XCTAssertLessThan(height, 72, "\(entry.label) at \(width)")
                 XCTAssertGreaterThan(height, 56, "\(entry.label) at \(width)")
-                // The time at its full width, never cut for the title.
-                let time = try XCTUnwrap(TabsTime.label(entry.activity, now: Date()))
-                let full = UIHostingController(rootView: Text(time).font(.subheadline).lineLimit(1).fixedSize())
+                // The time at its full width, never cut for the title: a working agent's turn clock, else the row's time.
+                let line = SpaceTabRow.line(entry, model: model)
+                let clock = entry.urgency == .working ? line?.since : nil
+                let time = try clock.map { TabsTime.elapsed(Date().timeIntervalSince($0)) }
+                    ?? XCTUnwrap(TabsTime.label(entry.activity, now: Date()))
+                let full = UIHostingController(rootView: Text(time).font(.subheadline).monospacedDigit().lineLimit(1).fixedSize())
                     .sizeThatFits(in: CGSize(width: 1000, height: 100)).width
                 _ = try render(row.frame(width: width), size: CGSize(width: width, height: 80))
                 XCTAssertEqual(try XCTUnwrap(widths.time.last, "\(entry.label)"), full, accuracy: 0.5, "\(entry.label)'s \(time) at \(width)")

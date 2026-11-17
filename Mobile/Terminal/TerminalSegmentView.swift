@@ -20,6 +20,8 @@ struct TerminalSegmentView: View {
     /// The tab's rail on a phone's side (`MobileLandscape`): its keyboard button acts on this terminal, and the
     /// capsule shows only on a docked keyboard (`MobileLandscape.keyCapsule`).
     @Environment(\.tabRail) private var rail
+    /// The iPad detail column's pane it is in is the focused one (`PadPanes`): only that terminal takes the keys.
+    @Environment(\.padPaneFocused) private var paneFocused
 
     @MainActor final class Slot {
         var controller: TerminalController?
@@ -107,8 +109,11 @@ struct TerminalSegmentView: View {
             .coordinateSpace(.named(TerminalDPadCluster.space))
             .background(Color(controller.hostView.backgroundColor ?? .black))
             .onAppear {
-                controller.appear()
+                controller.appear(focused: paneFocused)
                 rail?.terminal = controller
+            }
+            .onChange(of: paneFocused) { _, focused in
+                if focused { controller.takeKeys() } else { controller.giveKeys() }
             }
             .onDisappear {
                 controller.disappear()

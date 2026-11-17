@@ -51,7 +51,7 @@ GROUPS = {
     },
     'ipad': {
         'ipad': ['I1-split-files', 'I2-split-review', 'I2b-split-review-empty', 'I3-split-commits', 'I3b-split-commits-empty',
-                 'I4-split-chat', 'I5-host-popover', 'I7-full-width-terminal', 'I8-sidebar-hidden'],
+                 'I4-split-chat', 'I5-host-popover', 'I7-full-width-terminal', 'I8-sidebar-hidden', 'I9-grid-agents'],
         'ipad-half': ['I6-half-width', 'I6b-half-width-spaces'],
     },
     'landscape': {

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 @testable import MobileTransport
 import XCTest
@@ -72,20 +71,14 @@ final class CachedLaunchTests: XCTestCase {
   #if os(macOS)
   /// Each bundled helper's identity is the expanded file's, as the upload's; a missing one is left out.
   func testBundledIdentities() throws {
-    let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("bundled-\(UUID().uuidString.prefix(6))")
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: folder) }
+    let folder = try temporaryFolder()
     let plain = Data("plain helper".utf8)
     try plain.write(to: folder.appendingPathComponent("linux-x86_64"))
-    let gzip = Process()
-    gzip.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
-    gzip.arguments = ["-9n", "-k", folder.appendingPathComponent("linux-x86_64").path]
-    try gzip.run()
-    finish(gzip)
+    try SSHFixture.run("/usr/bin/gzip", ["-9n", "-k", folder.appendingPathComponent("linux-x86_64").path])
     try FileManager.default.moveItem(at: folder.appendingPathComponent("linux-x86_64.gz"),
                                      to: folder.appendingPathComponent("darwin-arm64.gz"))
     let found = HelperBootstrap.bundled(in: folder)
-    let digest = SHA256.hash(data: plain).map { String(format: "%02x", $0) }.joined()
+    let digest = sha256(plain)
     XCTAssertEqual(found, [.init(name: "darwin-arm64", size: plain.count, digest: digest),
                            .init(name: "linux-x86_64", size: plain.count, digest: digest)])
     XCTAssertEqual(HelperBootstrap.bundled(in: folder), found, "again, from what this run computed")
@@ -98,13 +91,8 @@ final class CachedLaunchTests: XCTestCase {
   /// A "helper" that reads one line of stdin and reports it, its arguments, a variable of the launch environment and its
   /// folder, then exits with `status`.
   private func scriptBinaries(in fixture: SSHFixture, status: Int32 = 0) throws -> URL {
-    let directory = fixture.root.appendingPathComponent("cl-\(UUID().uuidString.prefix(6))")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let body = "#!/bin/sh\n# \(UUID().uuidString)\nIFS= read -r line\nprintf 'read %s|%s|%s\\n' \"$line\" \"$*\" \"$X_Y\"\npwd -P\nexit \(status)\n"
-    for name in ["darwin-arm64", "linux-aarch64", "linux-x86_64"] {
-      try Data(body.utf8).write(to: directory.appendingPathComponent(name))
-    }
-    return directory
+    return try fixture.helpers(Data(body.utf8))
   }
 
   private struct Started {
@@ -301,12 +289,7 @@ final class CachedLaunchTests: XCTestCase {
   /// An ACL that denies the account execute on `file`: its mode stays 0700, `test -x` refuses it and an exec fails
   /// with 126, as on a home the system will not run programs from.
   private func deny(execute file: URL) throws {
-    let chmod = Process()
-    chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
-    chmod.arguments = ["+a", "user:\(NSUserName()) deny execute", file.path]
-    try chmod.run()
-    finish(chmod)
-    XCTAssertEqual(chmod.terminationStatus, 0)
+    try SSHFixture.run("/bin/chmod", ["+a", "user:\(NSUserName()) deny execute", file.path])
   }
   #endif
 }

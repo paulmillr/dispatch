@@ -22,19 +22,12 @@ final class AuthMutationTests: XCTestCase {
       harness.start(.password(SecretBytes(utf8: "pw")))
       return harness
     }, seeds: [S.accept, S.serverSigAlgs, S.banner(Array("hi".utf8)), S.failure(), S.success]),
-    Phase(name: "password", make: {
-      let harness = AuthHarness()
-      harness.start(.password(SecretBytes(utf8: "pw")))
-      harness.server(S.accept)
-      return harness
-    }, seeds: [S.failure("publickey,password,keyboard-interactive", partial: true), S.success,
-               S.passwordChange(latin1Prompt), S.banner(latin1Prompt), S.extInfo([("server-sig-algs", "rsa-sha2-256")])]),
-    Phase(name: "publickey query", make: {
-      let harness = AuthHarness()
-      harness.start(.publicKey(TestKey.p256, direct: false))
-      harness.server(S.accept)
-      return harness
-    }, seeds: [S.pkOK("ecdsa-sha2-nistp256", TestKey.p256.publicKeyBlob), S.failure(), S.success, S.banner([])]),
+    Phase(name: "password", make: { AuthHarness.accepted(.password(SecretBytes(utf8: "pw"))) },
+          seeds: [S.failure("publickey,password,keyboard-interactive", partial: true), S.success,
+                  S.passwordChange(latin1Prompt), S.banner(latin1Prompt),
+                  S.extInfo([("server-sig-algs", "rsa-sha2-256")])]),
+    Phase(name: "publickey query", make: { AuthHarness.accepted(.publicKey(TestKey.p256, direct: false)) },
+          seeds: [S.pkOK("ecdsa-sha2-nistp256", TestKey.p256.publicKeyBlob), S.failure(), S.success, S.banner([])]),
     Phase(name: "direct, before the accept", make: {
       let harness = AuthHarness(extensions: nil)
       harness.start(.publicKey(TestKey.rsa, direct: true))
@@ -47,24 +40,17 @@ final class AuthMutationTests: XCTestCase {
       harness.server(S.accept)
       return harness
     }, seeds: [S.failure(), S.success, S.extInfo([("ping@openssh.com", "0")]), S.banner(Array("x".utf8))]),
-    Phase(name: "keyboard-interactive", make: {
-      let harness = AuthHarness()
-      harness.start(.keyboardInteractive({ _ in nil }))
-      harness.server(S.accept)
-      return harness
-    }, seeds: [S.infoRequest(name: Array("n".utf8), instruction: latin1Prompt, prompts: [(latin1Prompt, false), (Array("OTP".utf8), true)]),
-               S.infoRequest(prompts: []), S.failure(), S.success, S.banner(latin1Prompt)]),
+    Phase(name: "keyboard-interactive", make: { AuthHarness.accepted(.keyboardInteractive({ _ in nil })) },
+          seeds: [S.infoRequest(name: Array("n".utf8), instruction: latin1Prompt,
+                                prompts: [(latin1Prompt, false), (Array("OTP".utf8), true)]),
+                  S.infoRequest(prompts: []), S.failure(), S.success, S.banner(latin1Prompt)]),
     Phase(name: "prompting", make: {
-      let harness = AuthHarness()
-      harness.start(.keyboardInteractive({ _ in nil }))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.keyboardInteractive({ _ in nil }))
       harness.server(S.infoRequest(prompts: [(Array("Password: ".utf8), false)]))
       return harness
     }, seeds: [S.banner(Array("b".utf8)), S.failure(), S.infoRequest(prompts: [])]),
     Phase(name: "between attempts", make: {
-      let harness = AuthHarness()
-      harness.start(.password(SecretBytes(utf8: "pw")))
-      harness.server(S.accept)
+      let harness = AuthHarness.accepted(.password(SecretBytes(utf8: "pw")))
       harness.server(S.failure())
       return harness
     }, seeds: [S.banner(Array("b".utf8)), S.success, S.accept]),

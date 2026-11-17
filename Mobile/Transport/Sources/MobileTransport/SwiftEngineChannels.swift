@@ -13,54 +13,49 @@ enum SwiftEngineBridge {
   /// Exec: stdout to the socket, stderr to `events` as it comes, the caller's end of input as EOF; then, once the
   /// channel closed, the socket closed and `exited` as the last call.
   static func exec(_ channel: any ExecChannel, socket: SwiftEngineSocket, events: any EngineChannelEvents) async {
-    let input = Task {
+    // stdout for the socket, stderr to `events` on the way.
+    let read = { () async throws -> [UInt8]? in
       while true {
-        switch await socket.read() {
-        case .data(let bytes):
-          // Fails once the channel closed or the connection ended: nobody takes more input.
-          do { try await channel.write(bytes) } catch { return }
-        case .end:
-          // EOF after what was written; the channel stays open for output.
-          return await channel.finishInput()
-        case .closed:
-          return
+        switch try await channel.read() {
+        case .stdout(let bytes)?: return bytes
+        case .stderr(let bytes)?: events.stderr(Data(bytes))
+        case nil: return nil
         }
       }
     }
-    pumping: while true {
-      let output: ChannelOutput?
-      do { output = try await channel.read() } catch { break }
-      switch output {
-      case .stdout(let bytes)?:
-        guard await socket.write(bytes) else {
-          // The caller closed its end: nobody reads the rest, so the channel goes (`exited` with what came before).
-          await channel.close()
-          break pumping
-        }
-      case .stderr(let bytes)?:
-        events.stderr(Data(bytes))
-      case nil:
-        // The remote's EOF (or the channel's end): the caller reads end of file after all the data.
-        socket.finishWriting()
-        break pumping
-      }
-    }
-    let exit = await channel.exit()
-    await socket.close()
-    input.cancel()
+    let exit = await pump(socket, write: { try await channel.write($0) }, endOfInput: { await channel.finishInput() },
+                          read: read, close: { await channel.close() }, ending: { await channel.exit() })
     events.exited(Self.exit(exit))
   }
 
   /// Shell: output to the socket; the caller's end of input closes the channel (a PTY has no end of file). Returns how
   /// the shell ended once the channel closed and the socket is closed; the caller reports it.
   static func shell(_ channel: any ShellChannel, socket: SwiftEngineSocket) async -> EngineExit {
+    let exit = await pump(socket, write: { try await channel.write($0) }, endOfInput: { await channel.close() },
+                          read: { try await channel.read() }, close: { await channel.close() },
+                          ending: { await channel.exit() })
+    // A shell's requests were confirmed before it opened: the engine reports no refusal for it.
+    return exit == .refused ? .lost : Self.exit(exit)
+  }
+
+  /// Both directions of one channel. A task of its own takes the caller's input into the channel (`write`) until the
+  /// caller's end of input (`endOfInput`) or until the channel takes no more; this one writes the channel's output
+  /// (`read`) into the socket until nil, the remote's EOF (the caller reads end of file after all the data), or a
+  /// failure, the channel's or connection's end; output the caller can no longer take (its end closed) closes the
+  /// channel (`close`), nobody reading the rest. Then, once the channel closed (`ending`), the socket is closed.
+  private static func pump(
+    _ socket: SwiftEngineSocket, write: @escaping @Sendable ([UInt8]) async throws -> Void,
+    endOfInput: @escaping @Sendable () async -> Void, read: () async throws -> [UInt8]?, close: () async -> Void,
+    ending: () async -> ChannelExit
+  ) async -> ChannelExit {
     let input = Task {
       while true {
         switch await socket.read() {
         case .data(let bytes):
-          do { try await channel.write(bytes) } catch { return }
+          // Fails once the channel closed or the connection ended: nobody takes more input.
+          do { try await write(bytes) } catch { return }
         case .end:
-          return await channel.close()
+          return await endOfInput()
         case .closed:
           return
         }
@@ -68,21 +63,20 @@ enum SwiftEngineBridge {
     }
     while true {
       let output: [UInt8]?
-      do { output = try await channel.read() } catch { break }
+      do { output = try await read() } catch { break }
       guard let output else {
         socket.finishWriting()
         break
       }
       guard await socket.write(output) else {
-        await channel.close()
+        await close()
         break
       }
     }
-    let exit = await channel.exit()
+    let exit = await ending()
     await socket.close()
     input.cancel()
-    // A shell's requests were confirmed before it opened: the engine reports no refusal for it.
-    return exit == .refused ? .lost : Self.exit(exit)
+    return exit
   }
 
   static func exit(_ exit: ChannelExit) -> EngineExit {

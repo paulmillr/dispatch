@@ -2,13 +2,11 @@
 /// ranges reuse numbers (60 is PK_OK, PASSWD_CHANGEREQ or INFO_REQUEST by the userauth method in progress; 30 and 31
 /// are each key exchange method's own), and a server may send any byte. Which numbers are acceptable when is
 /// `MessagePolicy`'s decision.
-public struct MessageNumber: RawRepresentable, Hashable, Sendable, Comparable, CustomStringConvertible {
+public struct MessageNumber: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
   public let rawValue: UInt8
 
   public init(rawValue: UInt8) { self.rawValue = rawValue }
   public init(_ rawValue: UInt8) { self.rawValue = rawValue }
-
-  public static func < (left: MessageNumber, right: MessageNumber) -> Bool { left.rawValue < right.rawValue }
 
   // MARK: Transport layer generic, 1-19 (RFC 4253 §12, RFC 8308)
 
@@ -71,27 +69,6 @@ public struct MessageNumber: RawRepresentable, Hashable, Sendable, Comparable, C
   public static let channelRequest = MessageNumber(98)
   public static let channelSuccess = MessageNumber(99)
   public static let channelFailure = MessageNumber(100)
-
-  /// The RFC 4250 range the number falls in.
-  public var range: Range {
-    switch rawValue {
-    case 1...19: .transportGeneric
-    case 20...29: .algorithmNegotiation
-    case 30...49: .keyExchangeMethod
-    case 50...59: .userauthGeneric
-    case 60...79: .userauthMethod
-    case 80...89: .connectionGeneric
-    case 90...127: .channel
-    default: .reserved
-    }
-  }
-
-  public enum Range: Sendable, Hashable {
-    case transportGeneric, algorithmNegotiation, keyExchangeMethod, userauthGeneric, userauthMethod
-    case connectionGeneric, channel
-    /// 0, 128-191 (client protocols), 192-255 (local extensions): never accepted.
-    case reserved
-  }
 
   /// The RFC name, or the bare number where it depends on the method (30, 31, 60) or is unassigned.
   public var description: String {

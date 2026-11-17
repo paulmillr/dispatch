@@ -32,12 +32,7 @@ final class DriverConnectTests: XCTestCase {
 
   func testARejectedKeyFailsTheConnectAndClosesTheStream() async throws {
     let world = await MemoryWorld.make()
-    do {
-      _ = try await world.connect { _ in false }
-      XCTFail("connected with a rejected key")
-    } catch {
-      XCTAssertEqual(error, .hostKeyRejected)
-    }
+    await assertThrows(.hostKeyRejected, "connected with a rejected key") { try await world.connect { _ in false } }
     let received = await world.peer.waitFor { $0.contains { $0.first == 1 } }
     XCTAssertEqual(received.numbered(1).count, 1, "one DISCONNECT")
     let newKeys = received.numbered(MessageNumber.newKeys.rawValue)
@@ -48,11 +43,8 @@ final class DriverConnectTests: XCTestCase {
   func testASilentServerTimesOutTheHandshake() async throws {
     let world = await MemoryWorld.make(start: .not)
     let started = ContinuousClock.now
-    do {
-      _ = try await world.connect(options(handshake: .milliseconds(300)))
-      XCTFail("connected to a silent server")
-    } catch {
-      XCTAssertEqual(error, .timedOut(.handshake))
+    await assertThrows(.timedOut(.handshake), "connected to a silent server") {
+      try await world.connect(options(handshake: .milliseconds(300)))
     }
     let elapsed = ContinuousClock.now - started
     XCTAssertGreaterThanOrEqual(elapsed, .milliseconds(300))
@@ -63,11 +55,8 @@ final class DriverConnectTests: XCTestCase {
     var configuration = ScriptedServer.Configuration()
     configuration.holdFirstKexInit = true
     let world = await MemoryWorld.make(configuration: configuration, start: .stallingAfterVersion)
-    do {
-      _ = try await world.connect(options(handshake: .milliseconds(300)))
-      XCTFail("connected without a key exchange")
-    } catch {
-      XCTAssertEqual(error, .timedOut(.handshake))
+    await assertThrows(.timedOut(.handshake), "connected without a key exchange") {
+      try await world.connect(options(handshake: .milliseconds(300)))
     }
   }
 
@@ -133,12 +122,7 @@ final class DriverConnectTests: XCTestCase {
   func testTheStreamConnectorsFailurePassesThrough() async throws {
     for failure in [SSHError.hostNotFound, .connectionRefused, .unreachable, .noAnswer, .timedOut(.lookup), .network("x")] {
       let connector = ClientConnector(streams: MemoryConnector(result: .failure(failure)), random: { SeededRandom(seed: 1) })
-      do {
-        _ = try await connector.connect(MemoryWorld.options) { _ in true }
-        XCTFail("connected")
-      } catch {
-        XCTAssertEqual(error, failure)
-      }
+      await assertThrows(failure, "connected") { try await connector.connect(MemoryWorld.options) { _ in true } }
     }
   }
 
@@ -146,12 +130,7 @@ final class DriverConnectTests: XCTestCase {
     let world = await MemoryWorld.make()
     var options = MemoryWorld.options
     options.port = 0
-    do {
-      _ = try await world.connect(options)
-      XCTFail("connected to port 0")
-    } catch {
-      XCTAssertEqual(error, .usage(.invalidArgument("port 0")))
-    }
+    await assertThrows(.usage(.invalidArgument("port 0")), "connected to port 0") { try await world.connect(options) }
   }
 
   func testEOFDuringTheHandshake() async throws {

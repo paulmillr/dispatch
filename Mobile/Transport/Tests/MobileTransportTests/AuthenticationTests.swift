@@ -99,8 +99,9 @@ final class AuthenticationTests: XCTestCase {
   func testSignerFailureIsCancelled() async throws {
     let fixture = SSHFixture.shared
     let real = P256.Signing.PrivateKey()
-    let blob = SSHKey(p256: real).publicKey.split(separator: " ").last.flatMap { Data(base64Encoded: String($0)) }!
-    let key = SSHKey(kind: .ecdsaP256, publicKeyBlob: blob, hardwareBacked: true) { _ in throw CancellationError() }
+    let key = SSHKey(kind: .ecdsaP256, publicKeyBlob: publicKeyBlob(SSHKey(p256: real)), hardwareBacked: true) { _ in
+      throw CancellationError()
+    }
     try fixture.authorize(key.publicKey)
     do {
       _ = try await SSHConnection.connect(to: fixture.endpoint, credentials: [.key(key)], trust: fixture.trust)

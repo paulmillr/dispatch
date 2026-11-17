@@ -49,10 +49,12 @@ final class SwiftEngineKeyTests: XCTestCase {
           for (format, extra, encrypted) in formats {
             let name = "\(type)-\(format)"
             let file = directory.appendingPathComponent(name)
-            try keygen(arguments + extra + ["-N", encrypted ? passphrase : "", "-C", "sam@\(name).example", "-f", file.path])
+            try SSHFixture.keygen(arguments + extra + ["-N", encrypted ? passphrase : "", "-C", "sam@\(name).example",
+                                                       "-f", file.path])
             let line = try String(contentsOf: URL(fileURLWithPath: file.path + ".pub"), encoding: .utf8)
               .trimmingCharacters(in: .whitespacesAndNewlines)
-            made.append(Made(name: name, file: try Data(contentsOf: file), line: line, fingerprint: try fingerprint(file.path + ".pub"),
+            made.append(Made(name: name, file: try Data(contentsOf: file), line: line,
+                             fingerprint: try SSHFixture.fingerprint(file.path + ".pub"),
                              encrypted: encrypted, openSSH: format.hasPrefix("openssh")))
           }
         }
@@ -96,7 +98,8 @@ final class SwiftEngineKeyTests: XCTestCase {
       for passphrase in [nil, "", "wrong"] as [String?] {
         for engine in Self.engines {
           XCTAssertThrowsError(try Self.parse(engine, key.file, passphrase)) {
-            XCTAssertEqual($0 as? SSHTransportError, .wrongPassphrase, "\(key.name) \(String(describing: passphrase)) \(engine.version)")
+            XCTAssertEqual($0 as? SSHTransportError, .wrongPassphrase,
+                           "\(key.name) \(String(describing: passphrase)) \(type(of: engine))")
           }
         }
       }
@@ -119,7 +122,7 @@ final class SwiftEngineKeyTests: XCTestCase {
       for engine in Self.engines {
         XCTAssertThrowsError(try Self.parse(engine, file, nil)) { error in
           guard case SSHTransportError.invalidKey(let reason)? = error as? SSHTransportError else {
-            return XCTFail("\(name) on \(engine.version): \(error)")
+            return XCTFail("\(name) on \(type(of: engine)): \(error)")
           }
           if let text { XCTAssertEqual(reason, text, name) }
         }
@@ -138,12 +141,13 @@ final class SwiftEngineKeyTests: XCTestCase {
       var files: [(String, URL, KeyFileRefusal)] = []
       for (name, arguments) in [("rsa", ["-t", "rsa", "-b", "2048"]), ("ecdsa", ["-t", "ecdsa", "-b", "256"])] {
         let file = directory.appendingPathComponent("\(name)-pem")
-        try Self.keygen(arguments + ["-m", "PEM", "-N", Self.passphrase, "-C", "sam@pem.example", "-f", file.path])
+        try SSHFixture.keygen(arguments + ["-m", "PEM", "-N", Self.passphrase, "-C", "sam@pem.example",
+                                           "-f", file.path])
         files.append((name + " PEM", file, .encryptedPEM))
       }
       let pkcs8 = directory.appendingPathComponent("pkcs8")
-      try Self.run("/usr/bin/openssl", ["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-aes-256-cbc",
-                                        "-pass", "pass:" + Self.passphrase, "-out", pkcs8.path])
+      try SSHFixture.run("/usr/bin/openssl", ["genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
+                                              "-aes-256-cbc", "-pass", "pass:" + Self.passphrase, "-out", pkcs8.path])
       chmod(pkcs8.path, 0o600)
       files.append(("PKCS#8", pkcs8, .encryptedPKCS8))
       for (name, file, refusal) in files {
@@ -155,7 +159,7 @@ final class SwiftEngineKeyTests: XCTestCase {
           XCTAssertEqual(error?.errorDescription?.contains("OpenSSH format"), true, name)
         }
         // The advice, followed.
-        try Self.keygen(["-p", "-f", file.path, "-P", Self.passphrase, "-N", "new " + Self.passphrase])
+        try SSHFixture.keygen(["-p", "-f", file.path, "-P", Self.passphrase, "-N", "new " + Self.passphrase])
         let converted = try Self.parse(Self.swift, try Data(contentsOf: file), "new " + Self.passphrase)
         XCTAssertFalse(converted.fingerprint.isEmpty, name)
       }
@@ -188,9 +192,9 @@ final class SwiftEngineKeyTests: XCTestCase {
   func testStoredFilesOnlyRusshReads() throws {
     try Self.inDirectory { directory in
       let small = directory.appendingPathComponent("rsa1024")
-      try Self.keygen(["-t", "rsa", "-b", "1024", "-N", "", "-C", "sam@rsa1024.example", "-f", small.path])
+      try SSHFixture.keygen(["-t", "rsa", "-b", "1024", "-N", "", "-C", "sam@rsa1024.example", "-f", small.path])
       let rounds = directory.appendingPathComponent("rounds")
-      try Self.keygen(["-t", "ed25519", "-a", String(Limits.keyFileBcryptRounds + 1), "-N", Self.passphrase,
+      try SSHFixture.keygen(["-t", "ed25519", "-a", String(Limits.keyFileBcryptRounds + 1), "-N", Self.passphrase,
                        "-C", "sam@rounds.example", "-f", rounds.path])
       let cases: [(URL, String?, KeyFileRefusal)] = [(small, nil, .rsaKeySize), (rounds, Self.passphrase, .bcryptRounds)]
       for (file, passphrase, refusal) in cases {
@@ -203,7 +207,7 @@ final class SwiftEngineKeyTests: XCTestCase {
         }
       }
       // The advice, followed: ssh-keygen's default rounds.
-      try Self.keygen(["-p", "-f", rounds.path, "-P", Self.passphrase, "-N", Self.passphrase])
+      try SSHFixture.keygen(["-p", "-f", rounds.path, "-P", Self.passphrase, "-N", Self.passphrase])
       XCTAssertEqual(try Self.parse(Self.swift, try Data(contentsOf: rounds), Self.passphrase).algorithm, "ssh-ed25519")
     }
   }
@@ -222,30 +226,5 @@ final class SwiftEngineKeyTests: XCTestCase {
     return try body(directory)
   }
 
-  static func keygen(_ arguments: [String]) throws {
-    try run("/usr/bin/ssh-keygen", ["-q"] + arguments)
-  }
-
-  @discardableResult
-  static func run(_ tool: String, _ arguments: [String]) throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: tool)
-    process.arguments = arguments
-    let output = Pipe()
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    process.standardInput = FileHandle.nullDevice
-    try process.run()
-    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    finish(process)
-    guard process.terminationStatus == 0 else {
-      throw NSError(domain: tool, code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: arguments.joined(separator: " ")])
-    }
-    return text
-  }
-
-  static func fingerprint(_ publicFile: String) throws -> String {
-    String(try run("/usr/bin/ssh-keygen", ["-lf", publicFile]).split(separator: " ")[1])
-  }
 }
 #endif

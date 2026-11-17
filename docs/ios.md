@@ -156,7 +156,7 @@ Mac views built on the Mac chat stack are ported, not shared.
 | Area | Directory | Owns |
 | --- | --- | --- |
 | Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, plain SSH shell tabs (`ShellSessions`), New host and Edit host, trust sheet |
-| Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, Spaces tree, a space's tabs, `TabScreen` and its header menu, the iPad split and strip (with the space switcher), the menu bar (`MobileCommands`) |
+| Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, Spaces tree, a space's tabs, `TabScreen` and its header menu, the iPad split, its panes and strip (with the space switcher), the menu bar (`MobileCommands`) |
 | Chat | `Mobile/Chat`, `Mobile/Agents` | `MobileChatSession`, Agents list, thread, approvals, queue, side conversations, New chat |
 | Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed` (`PlainShellFeed` for plain SSH), `TerminalPresence`, key capsule, search |
 | Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec and shell (PTY) channels, bootstrap, plain SSH fallback, reconnect |
@@ -504,11 +504,15 @@ The policies below are the ones a change must keep; the screens themselves are d
   footer in place of New space. Both columns show the one `SpacesNavigator.path`, so folding and
   unfolding keep the screens. The unfolded Duo held as a book gives the sidebar the iPad's 320 points and the tab the
   rest, across the fold (`MobileSplit.bookSidebar`); its tab's header is the phone's without Back. The iPad's detail
-  column has a strip of the space's tabs and one mode button (`PadStrip`, `PadModeButton`, `PadMode`): the shown mode's
+  column has a strip of the space's tabs and one mode button (`PadStrip`, `PadModeButton`, `PadMode`). The tabs are
+  pills in one glass track that spans the strip up to "+", sharing it equally as the Mac's tabs do (`PadPillsLayout`,
+  title centred, a hairline between two unselected ones, no lens on a lone tab), down to 120 points (the selected one
+  150, its × kept), past which the track keeps the ones that fit, the selected one always, and an overflow menu of the
+  rest (`PadPills.visible`). The mode button shows the shown mode's
   glyph, with its title where the column is 640 points or wider, whose menu lists Terminal, Chat, Files, Review (its
   comment count) and Commits, as the Mac's and the phone's do; the sidebar can hide (⌃⌘S) and comes back when no tab is
-  left. An iPad remembers the shown tab, mode and sidebar state across launches (`restoreSplit`, before the first
-  body), keyed by topology key. The vertical bar of iOS 27.1 is off on windows wide enough for the split
+  left. The detail column splits into panes (iPad › Panes). An iPad remembers the shown tab, mode, sidebar state and
+  panes across launches (`restoreSplit`, before the first body), keyed by topology key. The vertical bar of iOS 27.1 is off on windows wide enough for the split
   (`MobileVerticalBar`).
 - **Landscape.** A phone's window wider than tall that does not split (every iPhone on its side, the Duo's cover
   screen; `MobileLandscape`, by the window's size, which the keyboard does not change) gives a tab the whole window:
@@ -534,7 +538,8 @@ The policies below are the ones a change must keep; the screens themselves are d
 - **Spaces.** herdr workspaces and tmux sessions are spaces; windows and tabs are tabs. The list shows a space's
   branch beside its name only with Settings › Hosts › Show git branches (`spaces.gitBranches`, off by default, as the
   Mac's); off, its rows read no branch (the space's screen and the switcher still name it in their headers). A split tmux window shows one
-  pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
+  pane: the app never creates or shows server splits (tmux panes, herdr splits); the iPad's panes (iPad › Panes) show
+  tabs side by side. The helper's native multiplexer never counts (its sessions die with the connection).
   Close Tab ends the tab, as the Mac's does: a tab whose every pane runs an agent with its
   turn over (idle, or a result not yet seen, as Chat knows it live) is terminated at once; otherwise `close.request`
   `check` asks the helper, and verified idle work is closed through `prompt`, while busy work, or a check the
@@ -554,7 +559,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   agents. New space (the tab bar's New in Spaces, the host's line and its quick menu, the host sheet's +) always makes a space of its own with one shell tab and opens it over the space's screen; its tab
   counts only once it shows in a space that was not there before (a tmux window placed into a new space is waited
   for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A space
-  lists its tabs by activity (their times, below): most recent first, tabs with no time yet last, ties in server order;
+  lists its tabs by time: the tabs whose agent works first, by when their turn began (longest working first, as Agents' Working section, so a write never moves one), then the rest by activity (their times, below): most recent first, tabs with no time yet last, ties in server order;
   or, by its header's sort menu (By time, Manual; `MobileTabs.tabSort`, this device's for every space; the switcher's
   rows follow it), in server order; the iPad strip keeps server order. A tab row's long press is the tab's menu
   (`TabsTabMenu`) with the space's Edit in Rename…'s place: Edit, Move to, then Detach and Close Tab. Move to (also
@@ -566,7 +571,10 @@ The policies below are the ones a change must keep; the screens themselves are d
   (B7): Back's circle, then one glass capsule with the host's disc, the name with its branch and `host · folder`, whose
   tap is the space's menu without New tab, headed by `space · host` in full (Edit, Stats (the host's), then Detach and
   Terminate…; a Shell space: Stats, then Close all shells), and the
-  sort menu trailing. In the Spaces list a space's long press is
+  sort menu trailing. In the Spaces list a space's row ends, as Mail's mailboxes, with what it holds before the
+  chevron (`SpacesSpaceLine`): how many agents work (the amber dot and the count, "• 3"), then how many need you or
+  have a result not seen (a filled blue capsule with the count), told apart by shape as well as colour; VoiceOver says
+  "2 unread, 3 working". A space's long press is
   its menu, as a tab's is (`SpaceMenuItems`): New tab, Edit (the list's, in Rename…'s place), then Detach and
   Terminate… (a Shell space: Close all shells); dragged from there, without Edit, a space dropped on another of its
   host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The list's Edit renames a multiplexer's spaces
@@ -658,23 +666,26 @@ The policies below are the ones a change must keep; the screens themselves are d
   through two host entries listed once, under the connected one (`sameMachine`, also while the other entry
   reconnects). Sections: Needs you, Working, Recent (by newest record, else when the row first appeared, so a new
   agent is on top), and Offline (hosts not connected or connecting: their last-known rows, folded on a tap, the footer
-  naming each host's last update and problem). Group by the title (an icon where Spaces has Edit; a disc in the iPad's
+  naming each host's last update and problem). The Working section keeps its rows in the order their turns began, longest working first
+  (`ChatConversation.workingStarted`: the open thread's turn start, else when the list first saw it busy, kept while it
+  works), so a write never moves a row. Group by the title (an icon where Spaces has Edit; a disc in the iPad's
   sidebar), kept as `agents.grouping`: Status (those sections), Host (a section per host, in the hosts' order), or
   Host and Space (one per host and space, a host's spaces by their most pressing row); an offline host's last
-  section's footer says its update and problem. A row is always three lines (`AgentRow`): the mark, its name (as the
-  Mac names the tab) and the time; then two lines, the host's name (grey, as the lines) beside the first (no host when
-  grouped by host; the section's host name takes the colour). Working, the mark is the chat's thinking glyph (still
-  under Reduce Motion), the time column counts the turn in amber (with no thread open, from the list's mark only when it saw the turn begin;
-  else the row's time), and the lines are what the agent last said in the
-  turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is
-  newer than the row's newest record when the list first saw it busy, a mark in the host's clock), else the turn's
-  prompt, then the step inline in the line's grey (its kind's symbol, "Run · 12 steps": the steps since the agent
-  last wrote), the running subagents after ("· 2 agents"); with no thread open, "Working…". Spaces' tab rows say it the
-  same way on their one line (`SpaceTabRow`: the turn's time in amber in the time column, then what the agent said in
-  the turn, else the step, `AgentProgressLine`); the switcher's rows (no time column) and the watch's tab rows keep
-  the step's kind and the elapsed time ("Running shell command… · 48s"); the watch's agent rows say what
-  these rows say (`AgentRow.progress`, docs/watch.md). Otherwise the question or approval in the primary colour while it waits, else the last message, on two
-  lines, the room for two kept when it is shorter. A row whose data is not live (the cache's, the
+  section's footer says its update and problem. A row is always two lines (`AgentRow`; three with Settings › Chat › Agent rows, `MobileSettings.agentRowLinesKey`, where a working agent's reasoning, else what it said, else the prompt in quotes goes over its step, and the message takes two lines): the mark, its name (as the
+  Mac names the tab) and the time; then one line, the host's name (grey, as the line) beside it (no host when grouped
+  by host; the section's host name takes the colour). Working, the mark is the chat's thinking glyph (still under
+  Reduce Motion), the time column counts the turn in amber (with no thread open, from the list's mark only when it saw
+  the turn begin; else the row's time), and the line is what the agent last said in the turn (`TabsStatus.note`: the
+  open thread's newest message, else the host's list's preview when its `reply_ms` is newer than the row's newest
+  record when the list first saw it busy, a mark in the host's clock), in italics its reasoning instead when that is
+  newer than anything it said in the turn (an open thread's only, `TabsNote.thought`: a Codex summary's bold title,
+  else Claude's thinking's first sentence; never a finished row's line, never news), else the step inline in the line's grey (its
+  kind's symbol, "Run · 12 steps": the steps since the agent last wrote), the running subagents after ("· 2 agents");
+  with no thread open, "Working…" (VoiceOver reads the note, else the turn's prompt in quotes, as the watch's rows show it, and the step). Spaces' tab rows
+  say it the same way (`SpaceTabRow`, `AgentProgressLine`); the switcher's rows (no time column) and the watch's tab
+  rows keep the step's kind and the elapsed time ("Running shell command… · 48s"); the watch's agent rows say what
+  these rows say (`AgentRow.progress`, docs/watch.md). Otherwise the question or approval in the primary colour while
+  it waits, else the last message, on one line, the line's room kept when there is nothing to say. A row whose data is not live (the cache's, the
   previous connection's until the first `chat.list` over the new one answers, or a read the helper could not complete)
   dims whole, dot included. Chips, Spaces' own (All's symbol one bubble, as Spaces' Agents): All, Needs you (live rows, with the count), Unread (needs you or a result not
   seen), kept as `agents.filter`. The tab item shows the needs-you count. A row's menu: Open Chat, Open Terminal (both
@@ -746,7 +757,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   and Pi's thinking has none. Once a turn ends on a reply its thinking leaves the thread (`ChatThinkingFold`, shared with the Mac and the watch) and message details list each thought as a `Think` step that pushes its whole text, counted apart from the tools ("4 · 1 thought"); a turn stopped or failed before a reply keeps it, and a side conversation, which has no details, keeps it too. A turn seen ending live holds its thoughts for 1.2 s, then they fade; a reader scrolled up holds them until they return to the end or the next turn starts. Message details keep "12 steps · 2m 4s"; a steps summary's time under 5 s is left out ("2 steps", `ChatTranscript.summaryElapsed`), on the Mac's step groups and the watch too, while a step's own row keeps its time. While a turn runs the
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's or Pi's thinking), as the Mac's live tool group counts them, and it holds Stop
-  beside the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware
+  beside the elapsed time (seconds for its first ten minutes, then whole minutes, "12m": `ChatTranscript.clock`, as the agents' lines say it; the watch's running clocks drop seconds after the first minute), away from the trailing controls (the composer's slot stays the mic; Esc from a hardware
   keyboard still stops). Stop does not stop at a tap: it stops once held 3 s where it is, the thumb never
   moving; the row then reads "stopping" (no shimmer, no clock) until the agent is idle, a refused stop or one the
   agent still works through 15 s later giving it back. A touch on it raises a "Hold to stop" capsule over the row (`ChatStopHold`, only a sign) that fills as Stop
@@ -761,7 +772,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   and shares stay as dim as the line until a window passes 80% (`LimitCaution`, an orange in light), then 95% (red).
   The limits are read through `chat.limits` as the row unfolds (`ChatLimitsReader`): Claude Code and Codex only,
   after Show Limits there (its alert says what reading does; kept on the device, per agent; Not Now until the next
-  launch), at most every 10 minutes per host and agent (`ChatLimitsReader.reuse`; the Mac's popover, once a minute), in memory only; a failed read offers Retry limits, VoiceOver's hint saying the helper's reason. Running subagents (`State.agents`, the Mac's `ChatSubagent`) show folded as the Mac's footer badge, the agents' symbol and count beside the steps' count (`ChatAgentsBadge`); unfolded as a row of a step's height over the steps line (`ChatAgentsLogRow`: a badge with the count, "2 agents running", their tasks, else types, and their tokens together), the window then three steps tall so the row keeps its height. Then a window four steps tall that scrolls through them, the newest at its foot and followed
+  launch), at most every 10 minutes per host and agent (`ChatLimitsReader.reuse`; the Mac's popover, once a minute), in memory only; a failed read offers Retry limits, VoiceOver's hint saying the helper's reason. Running subagents (`State.agents`, the Mac's `ChatSubagent`) show folded as the Mac's footer badge, the agents' symbol and count beside the steps' count (`ChatAgentsBadge`); unfolded as a row over the steps line (`ChatAgentsLogRow`): a badge with the count, then a line for each agent, oldest first, its task (else its type) with how long it has run and its tokens ("12m 3s · 24.6K", VoiceOver saying "tokens"; the clocks on the shared ticks), the name keeping the room; past three agents the first two keep their lines and the rest fold into "+6 more · 33.0K", which a tap opens to every agent ("Show fewer" folds them). The window gives up a step for each two of the row's lines, at least one step left, so the row keeps about its height. Then a window four steps tall that scrolls through them, the newest at its foot and followed
   while the foot is in view (`ChatStepWindow`). The window is as tall with no step as with forty and every step is two
   lines (its result's line kept when it has none), so the row never changes height as steps come. Each step ends in
   the Mac's status mark: a check, a failure mark, a spinner on the live step, a dotted ring on another still running.
@@ -1046,8 +1057,8 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
 | Dispatch | Settings… ⌘, |
 | File | New Tab ⌘T, New Space… ⌘N, New Chat… ⌥⌘N, New Host…; Rename Tab…, Rename Space…; Close Tab ⌘W, Close Space… ⇧⌘W, Detach Space |
 | Edit | the system's items, then Find… ⌘F, Find Next ⌘G, Find Previous ⇧⌘G (the terminal's search or the conversation's), Clear Screen ⌘K, Attach Files… ⇧⌘A |
-| View | Increase, Decrease, Reset Font Size ⌘+ ⌘- ⌘0; Toggle Sidebar ⌃⌘S, Switch Terminal / Chat ⇧⌘C, Switch Terminal / Files ⇧⌘F, Review Changes ⇧⌘U, Commits ⇧⌘L |
-| Navigate | Spaces ⌘1, Agents ⌘2; Next and Previous Attention ⌘J ⇧⌘J; Previous and Next Tab ⌘[ ⌘] |
+| View | Increase, Decrease, Reset Font Size ⌘+ ⌘- ⌘0; Toggle Sidebar ⌃⌘S, Split Right ⌘D, Split Down ⇧⌘D, Merge Panes, Single, Side by Side, Stacked, Two Above One, Grid, Switch Terminal / Chat ⇧⌘C, Switch Terminal / Files ⇧⌘F, Review Changes ⇧⌘U, Commits ⇧⌘L |
+| Navigate | Spaces ⌘1, Agents ⌘2; Next and Previous Attention ⌘J ⇧⌘J; Previous and Next Tab ⌘[ ⌘]; Previous and Next Pane ⌥⌘[ ⌥⌘] |
 | Help | Keyboard Shortcuts ⌘/ |
 
 - Commands act on the screen on top, in the stack and the split alike (`SpacesNavigator+Commands`); items that do
@@ -1058,6 +1069,65 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
   first responder either; a field's or the terminal's own Esc is theirs.
 - SwiftUI's menu-group quirks (why the sections sit where they do, why Find is not a submenu) are documented in
   `MobileCommands.swift`.
+
+### Panes
+
+The detail column splits as the Mac's panes do (`PadPanes`, `SpacesNavigator+Panes`, `PadSplitDetail`): a tree of
+splits across (Split Right) and down (Split Down), at most four panes, each one tab with its own strip (its space's
+pills, "+", the mode button) over its own stack, so a file or a commit a pane pushes opens in that pane. Only an
+iPad's split has panes; the Duo's tab, a narrow window's stack and the phone show the focused pane alone, and the
+panes come back when the window splits again (a pane that shows the tab the stack left on top goes).
+
+- **The focused pane is the path.** Its tab and what is pushed over it are `SpacesNavigator.path` (`splitPath`), so
+  every command, Close Tab, the sidebar's mark, Agents and notifications act on it; the other panes keep their tab and
+  stack in `PadPanes` until focused. A touch anywhere in a pane focuses it (a simultaneous tap, beside what the touch
+  does); its strip dims while it is not focused, as an inactive window's toolbar does. Opening a tab another pane shows
+  (a pill, a sidebar row, Agents, Next Attention) focuses that pane; any other tab shows in the focused pane.
+- **Splitting.** Split Right and Split Down (⌘D ⇧⌘D, and the mode button's menu for touch) make a new tab in the
+  focused tab's space, in its folder (`newTab(in:cwd:)`; a plain host's Shell space a new shell), in a new pane after the
+  focused one, which takes half its share and the focus; along a split's own axis the pane joins that split. A pill's
+  context menu opens that tab beside its pane (Open in Split Right, Down) when no pane shows it. A split needs both
+  halves at least 375 × 280 points (`PadPanes.minimum`: the tab still lays out as on a phone), so a 13-inch iPad on
+  its side beside the sidebar takes two across and two down, an 11-inch upright splits across only with the sidebar
+  hidden. The panes keep their shares when the window shrinks (they get smaller, as the Mac's do). A hairline drags (only the two panes beside it change, each
+  kept at 240 × 160).
+- **Merge Panes** (no key, as the Mac's) joins the innermost split around the focused pane into it; Previous and Next
+  Pane (⌥⌘[ ⌥⌘]) step through the panes in reading order.
+- **Layouts** are the Mac's presets that fit four panes (`PadLayout`, the Mac's `LayoutPreset` names and trees: Single,
+  Side by Side, Stacked, Two Above One, Grid), from the layout button, the View menu (no keys: the Mac's ⌃ digits are
+  the terminal's here) and, in a pane whose strip has no button, a Layout submenu of the mode button's menu. As the
+  Mac's, a layout moves existing tabs and starts nothing (`PadPanes.arranged`): each pane goes into the new pane it
+  overlaps most (the focused one first, which stays focused; within a hundredth a tie, the earlier pane taking it), one
+  left without a pane it overlaps takes a free one, and panes still empty take the focused space's tabs no pane shows,
+  in strip order; a pane that finds no place stops showing its tab (it stays in its strip). A layout needs that many
+  tabs ("Grid needs 4 tabs. This space has 3.", counting the tabs the panes show and the space's others) and every pane
+  at `PadPanes.minimum` ("Grid needs a larger window."); the menus dim it and say so. The layout already shown evens its
+  dividers. A tree of splits that is a preset's reads as it (⌘D then ⇧⌘D in each half is a Grid). No layout memory per
+  space yet (the Mac's `LayoutMemory`).
+- **The layout button** (`PadLayoutButton`, the Mac's layout picker) ends the strip of the top right pane, after the
+  mode button and on one glass pill with it, as the Mac's strip ends (`PadActionsPill`), when it is at least 420 points wide and the space has two tabs or the column is split:
+  the shown layout's glyph (Two Above One drawn as the Mac draws it), in the accent while split; its menu lists the
+  layouts, the shown one checked. Mockup I9 (four agents in the Grid).
+- **Closing.** A pane whose tab closes (here or on the host) shows the next tab of its strip that no pane shows, else
+  the one before; without one the pane goes and the pane taking its place takes the focus. A closed space takes its
+  panes.
+- **Keys.** Only the focused pane's terminal or chat composer takes a hardware keyboard's keys: as it shows, and as its
+  pane takes the focus; a pane losing the focus gives them up (`padPaneFocused`, `TerminalController.takeKeys`,
+  `ChatThreadView`).
+- **Inactive panes fold their input**, as the Mac's unfocused panes do: a chat's empty composer folds away
+  (`ChatThreadView.composerFolded`), leaving the thread the pane's height and, while the agent is idle, a glass Reply
+  circle at its bottom trailing corner (`ChatPaneReplyButton`; not while it works, whose row says so in place, nor
+  while a permission or a question waits, whose buttons sit there). A
+  draft, attachments, a reply's quote or Reply keep the composer. A tap anywhere focuses the pane and its composer
+  unfolds (with a hardware keyboard, focused).
+- **Kept** with the shown tab (`tabs.panes`: the tree and the other panes' tabs); a tab the cached topology no longer
+  has leaves its pane out.
+- Debug: `-DispatchTabsScript` takes `right:<tab key>`, `down:<tab key>`, `pane:<n>` (reading order), `layout:<name>`
+  (`PadLayout`'s raw value), `merge` and `sidebar`, e.g.
+  `./build.sh --ios --demo`, then relaunch with `-DispatchDemo YES -DispatchTabsScript
+  "tab:herdr:web:1,sidebar,right:herdr:web:2,down:herdr:web:3"`.
+- Not yet: dragging a pill into a pane. Not checked: a docked software keyboard under panes stacked down (the column
+  may shrink every pane by its share rather than only the bottom one), and anything on a real iPad.
 
 ## SwiftUI and UIKit pitfalls
 

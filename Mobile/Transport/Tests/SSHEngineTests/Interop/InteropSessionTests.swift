@@ -331,7 +331,7 @@ final class InteropSessionTests: XCTestCase {
       for _ in 0..<20 where !seen {
         let mark = output.stdout.count
         try await shell.write(Data("stty size\r".utf8))
-        seen = (try? await output.read(until: "43 132", from: mark, timeout: .seconds(1))) != nil
+        seen = (try? await output.read(until: "43 132", from: mark, timeout: 1)) != nil
       }
       try require(seen, "the resize never reached the shell")
       try await shell.write(Data("exit 5\r".utf8))
@@ -384,7 +384,7 @@ final class InteropSessionTests: XCTestCase {
         }
       }
       let output = OutputReader(exec)
-      let stdout = try await output.readToEnd(timeout: .seconds(30))
+      let stdout = try await output.readToEnd()
       try require(stdout == Data("done\n".utf8), "stdout \(String(decoding: stdout, as: UTF8.self))")
       let status = try await exec.exitStatus()
       try require(status == 4, "status \(status)")
@@ -469,7 +469,7 @@ final class InteropSessionTests: XCTestCase {
         let connection = try await Self.connect(profile, server, [.password(profile.password)])
         let pid = try await Self.servingPid(connection)
         let exec = try await connection.exec("cat")
-        let reading = Task { try await OutputReader(exec).readToEnd(timeout: .seconds(20)) }
+        let reading = Task { try await OutputReader(exec).readToEnd(timeout: 20) }
         let pids = try profile.signal(server, pid: pid, signal)
         try await bounded(15, "the end") { await connection.closed() }
         let read: String

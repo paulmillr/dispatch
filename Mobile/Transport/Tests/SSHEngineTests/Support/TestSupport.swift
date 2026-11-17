@@ -1,3 +1,4 @@
+import CryptoKit
 import SSHEngine
 import XCTest
 
@@ -33,22 +34,10 @@ enum Raw {
 
   static func string(_ bytes: [UInt8]) -> [UInt8] { u32(UInt32(bytes.count)) + bytes }
   static func string(_ text: String) -> [UInt8] { string(Array(text.utf8)) }
-
-  static func hex(_ text: String) -> [UInt8] {
-    var bytes: [UInt8] = []
-    var high: UInt8?
-    for character in text where character.isHexDigit {
-      let nibble = UInt8(character.hexDigitValue!)
-      if let value = high {
-        bytes.append(value << 4 | nibble)
-        high = nil
-      } else {
-        high = nibble
-      }
-    }
-    return bytes
-  }
 }
+
+/// The SHA-256 of `bytes` as lowercase hex (what `sha256sum` prints).
+func sha256Hex(_ bytes: some DataProtocol) -> String { PrimitiveTestSupport.hex(SHA256.hash(data: bytes)) }
 
 /// Fictional keys: fixed byte patterns, not keys anyone holds.
 enum Fixture {

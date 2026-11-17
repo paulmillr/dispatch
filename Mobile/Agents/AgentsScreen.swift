@@ -62,6 +62,7 @@ struct AgentsScreen: View {
     var refresh: (@MainActor () async -> Void)?
     @Environment(\.tabsShownTab) private var shownTab
     @AppStorage("agents.offlineFolded") private var offlineFolded = false
+    @AppStorage(MobileSettings.agentRowLinesKey) private var rowLines = 2
     @AppStorage(AgentsGrouping.key) private var grouping = AgentsGrouping.status
     /// Between the list's appearance and disappearance (a change of its first rows meanwhile is reported too).
     @State private var listOnScreen = false
@@ -234,7 +235,7 @@ struct AgentsScreen: View {
         let selected = shownTab != nil && tab == shownTab
         return Button { context.open(row) } label: {
             AgentRow(row: row, status: context.status(row), location: location(row),
-                     host: grouping == .status ? row.hostName : nil, now: now, selected: selected)
+                     host: grouping == .status ? row.hostName : nil, now: now, selected: selected, rowLines: rowLines)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("agents-row")
@@ -323,6 +324,12 @@ struct AgentsSections {
             case .unread, .idle: recent.append(row)
             }
         }
+        // Working: by when each turn began, longest working first; a write never moves a row (the others keep the
+        // list's newest-first order).
+        working.sort { a, b in
+            let (x, y) = (a.workingStarted ?? .distantFuture, b.workingStarted ?? .distantFuture)
+            return x != y ? x < y : (a.key.host.uuidString, a.key.node) < (b.key.host.uuidString, b.key.node)
+        }
     }
 
     var isEmpty: Bool { needsYou.isEmpty && working.isEmpty && recent.isEmpty && offline.isEmpty }
@@ -390,12 +397,13 @@ struct AgentsGroup: Identifiable {
     }
 }
 
-/// One conversation, always three lines (A1): the gutter mark, its name and the time; then two lines of what it is
-/// doing, with its host beside the first, in grey (none when the list groups by host: the section names
-/// it). Working, the mark is the chat's thinking glyph and the time column counts the turn (amber); the lines are what
-/// the agent last said in the turn (else its prompt), then the step (its symbol, kind and the steps since it last
-/// wrote) and its running subagents. Otherwise its message or question (in the primary colour while it waits) on two lines, room for
-/// two kept when it is shorter. A row whose data is not live dims whole, mark included, until its host answers.
+/// One conversation, always two lines (A1; three with Settings › Chat › Agent rows, `lines`): the gutter mark, its name
+/// and the time; then one line of what it is doing,
+/// with its host beside it, in grey (none when the list groups by host: the section names it). Working, the mark is the
+/// chat's thinking glyph, the time column counts the turn (amber) and the line is what the agent last said in the turn,
+/// else its step (its symbol, kind and the steps since it last wrote) and running subagents, as a Spaces tab row says
+/// it. Otherwise its message or question (in the primary colour while it waits). A row whose data is not live dims
+/// whole, mark included, until its host answers.
 struct AgentRow: View {
     let row: ChatConversation
     let status: TabsStatus?
@@ -405,6 +413,8 @@ struct AgentRow: View {
     var host: String?
     var now = Date()
     var selected = false
+    /// The row's lines, the name's included: 2 or 3 (Settings › Chat › Agent rows).
+    var rowLines = 2
 
     /// The turn runs and its start is known: the time column counts it.
     private var running: Date? { row.urgency == .running ? status?.since : nil }
@@ -476,20 +486,37 @@ struct AgentRow: View {
         }
     }
 
-    /// Two lines, always: whatever they hold sits over two lines' room.
+    /// `count` lines under the name (the Agent rows setting: one or two), always: whatever they hold sits over that
+    /// room (a row with less to say keeps its height). One: working, its reasoning, else what it said, else its step;
+    /// two: working, its reasoning, else what it said, else the prompt (quoted), over its step; else the message on two.
     private var lines: some View {
         ZStack(alignment: .topLeading) {
-            Text(verbatim: " ").lineLimit(2, reservesSpace: true).hidden().accessibilityHidden(true)
+            Text(verbatim: " ").lineLimit(count, reservesSpace: true).hidden().accessibilityHidden(true)
             if row.urgency == .running, let status {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let said = status.note ?? status.asked { Text(said).lineLimit(1) }
+                if count > 1 {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let thought = status.thought {
+                            Text(thought).italic().lineLimit(1)
+                        } else if let said = status.note ?? status.asked.map(TabsStatus.quoted) {
+                            Text(said).lineLimit(1)
+                        }
+                        progress(status)
+                    }
+                } else if let thought = status.thought {
+                    Text(thought).italic().lineLimit(1)
+                } else if let note = status.note {
+                    Text(note).lineLimit(1)
+                } else {
                     progress(status)
                 }
             } else if let status {
-                Text(Self.capitalized(status.text)).lineLimit(2)
+                Text(Self.capitalized(status.text)).lineLimit(count)
             }
         }
     }
+
+    /// Lines under the name: 1 or 2 (`MobileSettings.agentRowLinesKey`'s 2 or 3).
+    private var count: Int { max(1, min(2, rowLines - 1)) }
 
     /// The step inline, in the line above's colour: its kind's symbol, then "Run · 12 steps" (the steps
     /// since the agent last wrote), else the step in words; its running subagents after. No badge: the log's badges are
@@ -534,7 +561,8 @@ struct AgentRow: View {
             let since = status.since.map { "for " + ChatWorkingAccessibility.spoken(now.timeIntervalSince($0)) }
             let step = status.kind.flatMap { kind in status.steps > 0 ? "\(kind.label), \(count(status.steps, "step"))" : nil }
                 ?? capitalized(status.text)
-            return [state, since, row.muted ? "Muted" : nil, status.note ?? status.asked, step,
+            return [state, since, row.muted ? "Muted" : nil, status.thought.map { "thinking: " + $0 },
+                    status.note ?? status.asked.map(TabsStatus.quoted), step,
                     status.agents > 0 ? count(status.agents, "agent") : nil, location, row.stale ? "Not up to date" : nil]
                 .compactMap { $0 }.joined(separator: ", ")
         }

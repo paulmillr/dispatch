@@ -147,8 +147,52 @@ struct PadStrip: View {
     let content: TabsContent
     /// The sidebar is hidden: its pill and the space's capsule lead the strip.
     let sidebarHidden: Bool
+    /// The detail column's pane the strip heads (`PadPanes`): its pills show their tab there, its mode button's menu
+    /// splits it.
+    var pane: PadPanes.ID? = nil
+    /// The layout button after the mode button (`PadLayoutButton`): the top right pane's strip has it, as the Mac's
+    /// top right pane has its picker.
+    var layoutButton = false
 
     private var model: MobileTabs { navigator.model }
+
+    /// A pill picked in this pane: the pane takes the focus first, so the tab shows here (or where another pane shows it).
+    private func select(_ tab: TabRef) {
+        if let pane { navigator.focusPane(pane) }
+        navigator.select(tab)
+    }
+
+    /// Split Right, Split Down and Merge Panes in the mode button's menu, for this pane.
+    private var splits: PadPaneActions? {
+        guard let pane, navigator.panesApply, let tab = model.tab(ref), let space = model.space(tab.space),
+              model.workspace(ref.host)?.canAddTab(to: space) == true || navigator.panes.isSplit else { return nil }
+        let navigator = navigator
+        let adds = model.workspace(ref.host)?.canAddTab(to: space) == true
+        let room = navigator.paneRoom
+        return PadPaneActions(
+            right: adds && navigator.panes.canSplit(pane, axis: .columns, in: room),
+            down: adds && navigator.panes.canSplit(pane, axis: .rows, in: room),
+            merge: navigator.panes.isSplit,
+            layouts: layoutButton ? nil : navigator,
+            perform: { action in
+                navigator.focusPane(pane)
+                switch action {
+                case .right: navigator.splitPane(.columns)
+                case .down: navigator.splitPane(.rows)
+                case .merge: navigator.mergePanes()
+                }
+            })
+    }
+
+    /// A pill's Open in Split Right and Down: a tab no pane shows, beside this pane.
+    private func pillMenu(_ tab: TabRef) -> PadPillMenu? {
+        guard let pane else { return nil }
+        let right = navigator.canOpenBeside(tab, pane: pane, axis: .columns)
+        let down = navigator.canOpenBeside(tab, pane: pane, axis: .rows)
+        guard right || down else { return nil }
+        let navigator = navigator
+        return PadPillMenu(right: right, down: down) { axis in navigator.split(pane, axis, showing: tab) }
+    }
 
     var body: some View {
         if let tab = model.tab(ref), let workspace = model.workspace(ref.host) {
@@ -165,19 +209,28 @@ struct PadStrip: View {
                     }
                 }
                 PadTabPills(model: model, tabs: model.strip(for: ref), selected: ref,
-                            select: { navigator.select($0) },
-                            close: { navigator.actions.close(.tab($0), .close) }) {
+                            select: { select($0) },
+                            close: { navigator.actions.close(.tab($0), .close) },
+                            menu: pane == nil ? nil : { pillMenu($0) }) {
                     if let space = workspace.space(of: tab) {
                         PadNewTabButton(navigator: navigator, space: space, connected: workspace.client != nil || workspace.opensShells)
                     }
                 }
-                PadModeButton(modes: modes.slots, enabled: Set(modes.available), selected: modes.shown,
-                              review: modes.available.contains(.review) ? content.files.reviewCount(ref) : 0) { mode in
-                    model.setMode(mode, for: ref)
+                // As the Mac's strip: the mode button, then the layout button at the trailing end, the two on one
+                // glass pill (`stripActionsPill`).
+                let layouts = layoutButton && navigator.panesApply && (navigator.panes.isSplit || model.strip(for: ref).count > 1)
+                HStack(spacing: 0) {
+                    PadModeButton(modes: modes.slots, enabled: Set(modes.available), selected: modes.shown,
+                                  review: modes.available.contains(.review) ? content.files.reviewCount(ref) : 0,
+                                  splits: splits) { mode in
+                        model.setMode(mode, for: ref)
+                    }
+                    .onChange(of: model.repository(tab, facts: content.gitFacts), initial: true) { _, known in
+                        if let known { navigator.rememberRepository(ref, known) }
+                    }
+                    if layouts { PadLayoutButton(navigator: navigator) }
                 }
-                .onChange(of: model.repository(tab, facts: content.gitFacts), initial: true) { _, known in
-                    if let known { navigator.rememberRepository(ref, known) }
-                }
+                .modifier(PadActionsPill(merged: layouts))
             }
             .padding(.horizontal, 16)
             .padding(.top, 6)
@@ -301,35 +354,40 @@ struct PadHostStatsButton: View {
     }
 }
 
-/// The space's tabs as pills in one glass track: the selected one on the lens with its ×, the others up to 200 points
-/// and it up to 260, at their own widths while they fit. When they do not, every pill shrinks (its title truncating) down
-/// to 120 points (the selected one 150, its × kept) before any is left out; past that the track keeps the pills that fit
-/// (the selected one always) and an overflow menu of the rest, so no pill is cut by the track's edge. `trailing` ("+")
-/// follows the track.
+/// The space's tabs as pills in one glass track, the Mac's strip: the track spans the strip up to `trailing` ("+",
+/// which follows it) and the pills share it equally (`PadPillsLayout`), the selected one on the lens with its ×, a
+/// hairline between two unselected ones. Down to 120 points each (the selected one 150, its × kept); past that the
+/// track keeps the pills that fit (the selected one always) and an overflow menu of the rest, so no pill is cut by the
+/// track's edge.
 struct PadTabPills<Trailing: View>: View {
     let model: MobileTabs
     let tabs: [MobileTab]
     let selected: TabRef
     let select: (TabRef) -> Void
     let close: (TabRef) -> Void
+    /// A pill's context menu (Open in Split, `PadStrip`); nil: none.
+    var menu: ((TabRef) -> PadPillMenu?)? = nil
     @ViewBuilder var trailing: Trailing
     /// The room for the track and `trailing`, measured; nil before the first layout (every pill, shrinking).
     @State private var room: CGFloat?
 
-
     var body: some View {
         let split = PadPills.visible(tabs.map(\.ref), selected: selected, room: room.map { $0 - PadPills.reserved })
+        let shown = tabs.filter { split.shown.contains($0.ref) }
         HStack(spacing: 10) {
             PadPillsLayout(spacing: 2) {
-                ForEach(tabs.filter { split.shown.contains($0.ref) }) { tab in
+                ForEach(shown) { tab in
                     PadTabPill(title: label(tab), urgency: model.urgency(of: tab), agent: model.agent(of: tab), shell: tab.isShell,
-                               selected: tab.ref == selected, select: { select(tab.ref) }, close: { close(tab.ref) })
+                               selected: tab.ref == selected, select: { select(tab.ref) }, close: { close(tab.ref) },
+                               menu: menu?(tab.ref),
+                               divider: PadPills.divider(after: tab.ref, in: shown.map(\.ref), selected: selected),
+                               alone: tabs.count == 1)
                         .accessibilityIdentifier("pad-tab-" + tab.ref.key)
                         .layoutValue(key: PadPillMinimum.self, value: tab.ref == selected ? PadPills.selectedMinimum : PadPills.minimum)
                 }
                 if !split.hidden.isEmpty {
                     PadOverflowPill(tabs: tabs.filter { split.hidden.contains($0.ref) }, label: label, select: select)
-                        .layoutValue(key: PadPillMinimum.self, value: PadPills.overflowWidth)
+                        .layoutValue(key: PadPillFixed.self, value: PadPills.overflowWidth)
                 }
             }
             .padding(3)
@@ -348,8 +406,15 @@ struct PadTabPills<Trailing: View>: View {
 
 /// The strip's pill sizes and which pills the track holds (`PadTabPills`).
 enum PadPills {
-    static let width: CGFloat = 200, selectedWidth: CGFloat = 260
+    /// The narrowest pills, as the Mac's tabs' 120 points; the selected one keeps room for its ×.
     static let minimum: CGFloat = 120, selectedMinimum: CGFloat = 150
+
+    /// A hairline after this pill, between two unselected ones, as the Mac's strip has (`StripTab.divider`): the
+    /// selected pill's lens separates it from its neighbours.
+    static func divider(after tab: TabRef, in tabs: [TabRef], selected: TabRef) -> Bool {
+        guard let index = tabs.firstIndex(of: tab), index + 1 < tabs.count else { return false }
+        return tab != selected && tabs[index + 1] != selected
+    }
     /// What the overflow menu's pill takes.
     static let overflowWidth: CGFloat = 64
     /// "+" and the gap before it, the track's padding.
@@ -377,48 +442,61 @@ struct PadPillMinimum: LayoutValueKey {
     static let defaultValue: CGFloat = 0
 }
 
-/// The track: the pills side by side at their own widths when they fit; else the widest give way first, each down to
-/// its `PadPillMinimum`, so all of them share the room.
+/// A width the track never changes (the overflow pill's); nil: the pill shares the track.
+struct PadPillFixed: LayoutValueKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+/// The track, as the Mac's strip (`StripTab.width`): it spans the room it is offered and its pills share it equally,
+/// none under its `PadPillMinimum`; the overflow pill keeps its `PadPillFixed` width. Unoffered a width (a measure),
+/// the pills at their own widths.
 struct PadPillsLayout: Layout {
     var spacing: CGFloat = 2
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let widths = widths(proposal.width, subviews)
         let height = subviews.map { $0.sizeThatFits(.unspecified).height }.max() ?? 0
-        let width = widths.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1))
-        // Never wider than offered: the column keeps its width whatever the pills need.
-        return CGSize(width: proposal.width.map { Swift.min(width, $0) } ?? width, height: height)
+        if let width = proposal.width, width.isFinite { return CGSize(width: width, height: height) }
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        return CGSize(width: ideal.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1)), height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let widths = Self.share(minimum: subviews.map { $0[PadPillMinimum.self] }, fixed: subviews.map { $0[PadPillFixed.self] },
+                                room: bounds.width - spacing * CGFloat(max(0, subviews.count - 1)))
         var x = bounds.minX
-        for (subview, width) in zip(subviews, widths(bounds.width, subviews)) {
+        for (subview, width) in zip(subviews, widths) {
             subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width, height: nil))
             x += width + spacing
         }
     }
 
-    /// Each pill's width in `room`: its own when all fit, else the widest capped at a common width found by halving,
-    /// none under its minimum.
-    func widths(_ room: CGFloat?, _ subviews: Subviews) -> [CGFloat] {
-        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
-        let minimum = subviews.map { $0[PadPillMinimum.self] }
-        return Self.shrink(ideal: ideal, minimum: minimum, room: room.map { $0 - spacing * CGFloat(max(0, subviews.count - 1)) })
-    }
-
-    static func shrink(ideal: [CGFloat], minimum: [CGFloat], room: CGFloat?) -> [CGFloat] {
-        guard let room, ideal.reduce(0, +) > room else { return ideal }
-        // Under the minimums (before the track's room is measured, `PadPills.visible`): all in proportion.
-        let floor = zip(ideal, minimum).map { Swift.min($0, $1) }
-        let least = floor.reduce(0, +)
-        if least > room { return floor.map { ($0 * Swift.max(0, room) / least).rounded(.down) } }
-        func widths(_ cap: CGFloat) -> [CGFloat] { zip(ideal, minimum).map { Swift.min($0, Swift.max(cap, $1)) } }
-        var low: CGFloat = 0, high = ideal.max() ?? 0
-        for _ in 0..<24 {
-            let cap = (low + high) / 2
-            if widths(cap).reduce(0, +) > room { high = cap } else { low = cap }
+    /// Each pill's width in `room` (the spacing left out): the fixed ones theirs, the others an equal share of the rest
+    /// in whole points, a pill whose minimum is over the share at its minimum and the others sharing what it leaves;
+    /// under the minimums (before the track's room is measured, `PadPills.visible`), all in proportion.
+    static func share(minimum: [CGFloat], fixed: [CGFloat?], room: CGFloat) -> [CGFloat] {
+        let free = max(0, room - fixed.compactMap { $0 }.reduce(0, +))
+        var flexible = fixed.indices.filter { fixed[$0] == nil }
+        var widths = fixed.map { $0 ?? 0 }
+        let least = flexible.map { minimum[$0] }.reduce(0, +)
+        if least > free {
+            for index in flexible { widths[index] = (minimum[index] * free / least).rounded(.down) }
+            return widths
         }
-        return widths(low).map { $0.rounded(.down) }
+        var left = free
+        while let index = flexible.first(where: { minimum[$0] > left / CGFloat(flexible.count) }) {
+            widths[index] = minimum[index]
+            left -= minimum[index]
+            flexible.removeAll { $0 == index }
+        }
+        guard !flexible.isEmpty else { return widths }
+        let each = (left / CGFloat(flexible.count)).rounded(.down)
+        // The points rounding leaves go one each to the first pills, so the track ends on the room's edge.
+        var spare = Int((left - each * CGFloat(flexible.count)).rounded(.down))
+        for index in flexible {
+            widths[index] = each + (spare > 0 ? 1 : 0)
+            spare -= 1
+        }
+        return widths
     }
 }
 
@@ -451,8 +529,9 @@ struct PadOverflowPill: View {
     }
 }
 
-/// One pill (I1): the state dot (blue unread for needs you or an unseen result, amber working), the agent's mark or a
-/// terminal glyph, the title; selected, on the lens and with its × (Close Tab).
+/// One pill (I1), a Mac strip tab: the state dot (blue unread for needs you or an unseen result, amber working), the
+/// agent's mark or a terminal glyph and the title, centred on the pill as the Mac centres them; selected, on the lens and
+/// with its × (Close Tab) at the trailing end. The track sizes it (`PadPillsLayout`), the title truncating.
 struct PadTabPill: View {
     let title: String
     let urgency: TabUrgency?
@@ -461,10 +540,18 @@ struct PadTabPill: View {
     let selected: Bool
     let select: () -> Void
     let close: () -> Void
+    var menu: PadPillMenu? = nil
+    /// A hairline at its trailing edge (`PadPills.divider`).
+    var divider = false
+    /// The strip's only tab: with nothing to tell it apart from, no lens, as the Mac's lone tab drops its mark.
+    var alone = false
     @ScaledMetric(relativeTo: .subheadline) private var height: CGFloat = 32
 
+    /// The ×'s room, kept on both sides of the selected pill so its title stays centred.
+    static let closeRoom: CGFloat = 30
+
     var body: some View {
-        HStack(spacing: 2) {
+        ZStack(alignment: .trailing) {
             Button(action: select) {
                 HStack(spacing: 7) {
                     if let urgency {
@@ -472,12 +559,13 @@ struct PadTabPill: View {
                     }
                     AgentGlyph(agent: agent, size: 14)
                     Text(title)
-                        .font(.subheadline.weight(selected ? .semibold : .medium))
+                        .font(.subheadline.weight(selected && !alone ? .semibold : .medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                .foregroundStyle(.primary)
-                .frame(minHeight: max(32, height))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .padding(.horizontal, selected ? Self.closeRoom : 12)
+                .frame(maxWidth: .infinity, minHeight: max(32, height))
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -493,15 +581,28 @@ struct PadTabPill: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .padding(.trailing, 6)
                 .accessibilityLabel("Close \(title)")
             }
         }
-        .padding(.leading, 12)
-        .padding(.trailing, selected ? 6 : 12)
-        .modifier(PadPillWidth(max: selected ? PadPills.selectedWidth : PadPills.width))
-        .background { if selected { Capsule().fill(Color.lens) } }
+        .background { if selected && !alone { Capsule().fill(Color.lens) } }
+        .overlay(alignment: .trailing) {
+            if divider {
+                Rectangle().fill(Color(uiColor: .separator)).frame(width: 1, height: 16)
+                    .offset(x: 1.5).allowsHitTesting(false)
+            }
+        }
         .contentShape(.hoverEffect, Capsule())
         .hoverEffect(.highlight)
+        // No items, no menu: a pill a split cannot take (shown in a pane, no room) keeps a plain press.
+        .contextMenu {
+            if let menu, menu.right {
+                Button("Open in Split Right", systemImage: MobileCommand.splitRight.symbol) { menu.open(.columns) }
+            }
+            if let menu, menu.down {
+                Button("Open in Split Down", systemImage: MobileCommand.splitDown.symbol) { menu.open(.rows) }
+            }
+        }
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
@@ -512,36 +613,6 @@ struct PadTabPill: View {
         case .unseen?: "Unread"
         case nil: nil
         }
-    }
-}
-
-/// A pill at its own width up to `max`, its title truncating past it (`TabsCappedWidth`).
-private struct PadPillWidth: ViewModifier {
-    let max: CGFloat
-    func body(content: Content) -> some View {
-        PadPillCap(max: max) { content }
-    }
-}
-
-/// Its content at its own width up to `max`, or narrower when the track proposes less (`PadPillsLayout`), the title
-/// truncating.
-private struct PadPillCap: Layout {
-    let max: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        let width = width(content, proposal)
-        return CGSize(width: width, height: content.sizeThatFits(ProposedViewSize(width: width, height: nil)).height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let content = subviews.first else { return }
-        content.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
-                      proposal: ProposedViewSize(width: bounds.width, height: nil))
-    }
-
-    private func width(_ content: LayoutSubview, _ proposal: ProposedViewSize) -> CGFloat {
-        Swift.min(content.sizeThatFits(.unspecified).width, max, proposal.width ?? .infinity)
     }
 }
 
@@ -618,6 +689,8 @@ struct PadModeSwitch: View {
     let selected: PadMode
     /// Review's comment count; zero draws none.
     let review: Int
+    /// The pane's Split Right, Split Down and Merge Panes, under the modes; nil lists none.
+    var splits: PadPaneActions? = nil
     let choose: (PadMode) -> Void
 
     var body: some View {
@@ -680,6 +753,8 @@ struct PadModeButton: View {
     let selected: PadMode
     /// Review's comment count; zero draws none.
     let review: Int
+    /// The pane's Split Right, Split Down and Merge Panes, under the modes; nil lists none.
+    var splits: PadPaneActions? = nil
     let choose: (PadMode) -> Void
     @Environment(\.tabsColumnWidth) private var column
 
@@ -698,6 +773,20 @@ struct PadModeButton: View {
             }
             Section {
                 ForEach(modes.filter { $0.segment == .files }) { item($0) }
+            }
+            if let splits {
+                Section {
+                    Button(MobileCommand.splitRight.title, systemImage: MobileCommand.splitRight.symbol) { splits.perform(.right) }
+                        .disabled(!splits.right)
+                    Button(MobileCommand.splitDown.title, systemImage: MobileCommand.splitDown.symbol) { splits.perform(.down) }
+                        .disabled(!splits.down)
+                    if splits.merge {
+                        Button(MobileCommand.mergePanes.title, systemImage: MobileCommand.mergePanes.symbol) { splits.perform(.merge) }
+                    }
+                    if let layouts = splits.layouts {
+                        Menu("Layout", systemImage: PadLayout.grid.symbol) { PadLayoutItems(navigator: layouts) }
+                    }
+                }
             }
         } label: {
             HStack(spacing: 6) {
@@ -718,7 +807,7 @@ struct PadModeButton: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .tint(Color.primary)
-        .glassEffect(.regular.interactive(), in: Capsule())
+        .modifier(PadOwnGlass(shape: Capsule()))
         .contentShape(.hoverEffect, Capsule())
         .hoverEffect(.highlight)
         .fixedSize()
@@ -738,6 +827,105 @@ struct PadModeButton: View {
         }
         .disabled(!(enabled?.contains(mode) ?? true))
     }
+}
+
+/// A strip's pane actions in its mode button's menu (`PadStrip.splits`): which apply, and the way to run one.
+struct PadPaneActions {
+    enum Action { case right, down, merge }
+    let right: Bool
+    let down: Bool
+    let merge: Bool
+    /// The layouts' submenu (`PadLayoutItems`), for a pane whose strip has no layout button.
+    var layouts: SpacesNavigator? = nil
+    let perform: @MainActor (Action) -> Void
+}
+
+/// The layout button (the Mac's layout picker, `LayoutPicker`): the shown layout's glyph, in the accent while the
+/// column is split, after the mode button on one glass pill with it (`PadActionsPill`); its menu lists the layouts
+/// (`PadLayoutItems`).
+struct PadLayoutButton: View {
+    let navigator: SpacesNavigator
+    @Environment(\.padActionsMerged) private var merged
+
+    /// The narrowest pane whose strip takes the button beside its pills, "+" and the mode button (the selected pill and
+    /// the overflow pill keep their least); a narrower top right pane lists the layouts in its mode button's menu.
+    static let room: CGFloat = 420
+
+    var body: some View {
+        let layout = navigator.paneLayout
+        let split = navigator.panes.isSplit
+        Menu {
+            PadLayoutItems(navigator: navigator)
+        } label: {
+            PadLayoutIcon.image(split ? layout ?? .grid : .grid)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(split ? Color.dispatchPink : Color.primary)
+                .frame(width: merged ? 44 : 38, height: 38)
+                .contentShape(Circle())
+        }
+        .menuOrder(.fixed)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .modifier(PadOwnGlass(shape: Circle()))
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .accessibilityLabel("Choose layout")
+        .accessibilityValue(split ? layout?.title ?? "Custom" : PadLayout.single.title)
+        .accessibilityIdentifier("pad-layout")
+    }
+}
+
+/// The layouts, the shown one checked; one that cannot apply is dimmed and says why ("Grid needs 4 tabs. This space
+/// has 2."). Under them, as under the Mac's picker, what a layout does.
+struct PadLayoutItems: View {
+    let navigator: SpacesNavigator
+
+    var body: some View {
+        Section {
+            ForEach(PadLayout.allCases) { layout in
+                let shown = navigator.panes.isSplit ? navigator.paneLayout == layout : layout == .single
+                let refusal = shown ? nil : navigator.layoutRefusal(layout)
+                Toggle(isOn: Binding(get: { shown }, set: { _ in navigator.applyLayout(layout) })) {
+                    Text(layout.title)
+                    if let refusal { Text(refusal) }
+                    PadLayoutIcon.image(layout)
+                }
+                .disabled(refusal != nil)
+            }
+        } footer: {
+            Text("Layouts move existing tabs. Add tabs first for more panes.")
+        }
+    }
+}
+
+/// A layout's glyph: its symbol, or for Two Above One (which no symbol draws) the stacked symbol with its top half
+/// split too, as the Mac's picker draws it, rendered once as a template so menus tint it as a symbol.
+enum PadLayoutIcon {
+    @MainActor static func image(_ layout: PadLayout) -> Image {
+        layout == .twoAbove ? twoAbove : Image(systemName: layout.symbol)
+    }
+
+    @MainActor private static let twoAbove: Image = {
+        let size: CGFloat = 17
+        let glyph = Image(systemName: "rectangle.split.1x2").font(.system(size: size)).foregroundStyle(.black)
+            .overlay {
+                GeometryReader { box in
+                    Rectangle().fill(.black).frame(width: size / 12, height: box.size.height / 2 - 1)
+                        .position(x: box.size.width / 2, y: (box.size.height / 2 + 1) / 2)
+                }
+            }
+        let renderer = ImageRenderer(content: glyph)
+        renderer.scale = 3
+        guard let image = renderer.uiImage else { return Image(systemName: "rectangle.split.1x2") }
+        return Image(uiImage: image.withRenderingMode(.alwaysTemplate))
+    }()
+}
+
+/// A pill's Open in Split Right and Down (`PadStrip.pillMenu`): which fit, and the way to open it.
+struct PadPillMenu {
+    let right: Bool
+    let down: Bool
+    let open: @MainActor (PadPanes.Axis) -> Void
 }
 
 /// Under the iPad's context row: the line a mode's accessory is on the phone (Review sent with Undo, offline with
@@ -828,4 +1016,31 @@ struct PadPaneHeader<Subtitle: View, Trailing: View>: View {
 extension EnvironmentValues {
     /// The iPad's Review and Commits panes: the route the pane shows, so its list marks the row (`PadListPane`).
     @Entry var filesPaneSelection: FilesRoute? = nil
+}
+
+/// The strip's mode and layout buttons on one glass pill, as the Mac's (`stripActionsPill`); the buttons on it draw
+/// no glass of their own (`PadOwnGlass`). Not merged (no layout button), the mode button keeps its capsule.
+struct PadActionsPill: ViewModifier {
+    let merged: Bool
+    func body(content: Content) -> some View {
+        if merged {
+            content.environment(\.padActionsMerged, true).glassEffect(.regular, in: Capsule())
+        } else {
+            content
+        }
+    }
+}
+
+/// A strip button's own interactive glass, unless it sits on the shared pill (`PadActionsPill`).
+struct PadOwnGlass<S: Shape>: ViewModifier {
+    let shape: S
+    @Environment(\.padActionsMerged) private var merged
+    func body(content: Content) -> some View {
+        if merged { content } else { content.glassEffect(.regular.interactive(), in: shape) }
+    }
+}
+
+extension EnvironmentValues {
+    /// On the strip's shared actions pill (`PadActionsPill`).
+    @Entry var padActionsMerged = false
 }

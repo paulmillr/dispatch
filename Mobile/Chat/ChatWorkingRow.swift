@@ -732,8 +732,14 @@ struct ChatStepWindow: View {
     var agents: [ChatSubagent] = []
     var openStep: (ChatStep) -> Void
     static let visible = 4
-    /// Steps the window shows: one fewer under the agents' row.
-    private var shown: Int { agents.isEmpty ? Self.visible : Self.visible - 1 }
+    /// Every running agent listed (their row's "+N more" tapped).
+    @State private var agentsExpanded = false
+    /// Steps the window shows: under the agents' row, one fewer for each two of its lines (a step is about two), at
+    /// least one.
+    private var shown: Int {
+        guard !agents.isEmpty else { return Self.visible }
+        return max(1, Self.visible - (ChatAgentsLogRow.lineCount(agents, expanded: agentsExpanded) + 1) / 2)
+    }
     /// The window's scroll offset and one step's height with its rule: what lies above.
     @State private var offset: CGFloat = 0
     @State private var pitch: CGFloat = 0
@@ -743,7 +749,7 @@ struct ChatStepWindow: View {
         let hidden = Self.hidden(count: steps.count, offset: offset, pitch: pitch, visible: shown)
         VStack(spacing: 0) {
             if !agents.isEmpty {
-                ChatAgentsLogRow(agents: agents)
+                ChatAgentsLogRow(agents: agents, expanded: $agentsExpanded)
                 Rectangle().fill(Color.hairline.opacity(0.6)).frame(height: Self.rule)
             }
             let caption = [Self.caption(steps, above: hidden.above, below: hidden.below), usage].compactMap { $0 }
@@ -848,44 +854,98 @@ struct ChatAgentsBadge: View {
     }
 }
 
-/// The running subagents in the unfolded log, a step's row in height (two lines): a badge with their count, "2 agents
-/// running", their tasks (else types) oldest first, and their tokens together.
+/// The running subagents in the unfolded log, oldest first: their count's badge, then one line each, its task (else its
+/// type) with how long it has run and the tokens it used ("12m 3s · 24.6K"; VoiceOver says "tokens"), the name keeping
+/// the room. More than `folded` agents: the first two, then "+6 more · 312K", which a tap opens to every agent and
+/// "Show fewer" closes.
 struct ChatAgentsLogRow: View {
     let agents: [ChatSubagent]
+    /// Every agent shown (the "+N more" line tapped).
+    @Binding var expanded: Bool
+
+    /// Most agents shown one line each before the rest fold into one.
+    static let folded = 3
 
     /// "1 agent running", "2 agents running" (the Mac's `ChatComposerAgents.title`).
     static func title(_ count: Int) -> String { count == 1 ? "1 agent running" : "\(count) agents running" }
-    /// "Find the timer · explorer": each agent's task, else its type.
-    static func detail(_ agents: [ChatSubagent]) -> String { agents.map { $0.name ?? $0.kind }.joined(separator: " · ") }
-    /// "24.6K tokens" for every agent that counts them; nil when none does.
+    /// What an agent's line names: its task, else its type.
+    static func name(_ agent: ChatSubagent) -> String { agent.name ?? agent.kind }
+    /// "24.6K" for agents that count tokens; nil when none does.
     static func tokens(_ agents: [ChatSubagent]) -> String? {
         let counted = agents.compactMap(\.tokens)
         guard !counted.isEmpty else { return nil }
-        return ChatUsage.count(Int(clamping: counted.reduce(0, +))) + " tokens"
+        return ChatUsage.count(Int(clamping: counted.reduce(0, +)))
+    }
+    /// The agents with lines of their own, and how many fold into "+N more".
+    static func lines(_ agents: [ChatSubagent], expanded: Bool) -> (shown: [ChatSubagent], more: Int) {
+        guard agents.count > folded, !expanded else { return (agents, 0) }
+        return (Array(agents.prefix(folded - 1)), agents.count - (folded - 1))
+    }
+    /// Lines the row takes: an agent each, and the folded rest's one.
+    static func lineCount(_ agents: [ChatSubagent], expanded: Bool) -> Int {
+        let lines = lines(agents, expanded: expanded)
+        return lines.shown.count + (lines.more > 0 || (expanded && agents.count > folded) ? 1 : 0)
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        let lines = Self.lines(agents, expanded: expanded)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             ChatStepBadge(kind: .tool, custom: (symbol: "person.2", word: "\(agents.count)", tint: Color("StepTool")))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Self.title(agents.count))
-                    .scaledFont(13.5, relativeTo: .footnote)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(Self.detail(agents))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            Spacer(minLength: 0)
-            if let tokens = Self.tokens(agents) {
-                Text(tokens).font(.caption).monospacedDigit().foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(lines.shown) { agent in
+                    line(Self.name(agent), started: agent.started, tokens: agent.tokens.map { ChatUsage.count(Int(clamping: $0)) })
+                        .accessibilityElement(children: .combine)
+                }
+                if lines.more > 0 || (expanded && agents.count > Self.folded) {
+                    Button {
+                        expanded.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(expanded ? "Show fewer" : "+\(lines.more) more")
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            if !expanded, let tokens = Self.tokens(Array(agents.suffix(lines.more))) {
+                                Text(tokens).monospacedDigit().foregroundStyle(.secondary).fixedSize()
+                                    .accessibilityLabel(tokens + " tokens")
+                            }
+                        }
+                        .font(.caption)
+                        .lineLimit(1)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(expanded ? "Shows the first agents only" : "Shows every agent")
+                }
             }
         }
         .padding(.vertical, 9)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Self.title(agents.count))
         .accessibilityIdentifier("chat-agents-row")
+    }
+
+    /// One agent: its name, then its time and tokens at the line's end (the shared second ticks, `Ticks`).
+    private func line(_ name: String, started: Date, tokens: String?) -> some View {
+        HStack(spacing: 6) {
+            Text(name)
+                .scaledFont(13.5, relativeTo: .footnote)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
+                let time = ChatTranscript.clock(context.date.timeIntervalSince(started))
+                Text([time, tokens].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .accessibilityLabel([time, tokens.map { $0 + " tokens" }].compactMap { $0 }.joined(separator: ", "))
+            }
+            .fixedSize()
+            .layoutPriority(1)
+        }
     }
 }
 
@@ -1007,6 +1067,6 @@ struct ChatElapsed: View {
 
     static func text(_ interval: TimeInterval, reduceMotion: Bool) -> String {
         let seconds = max(0, Int(interval))
-        return ChatTurnSummary.elapsed(TimeInterval(reduceMotion && seconds >= 10 ? seconds / 5 * 5 : seconds))
+        return ChatTranscript.clock(TimeInterval(reduceMotion && seconds >= 10 ? seconds / 5 * 5 : seconds))
     }
 }

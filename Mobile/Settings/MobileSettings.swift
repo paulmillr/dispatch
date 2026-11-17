@@ -59,6 +59,9 @@ final class MobileSettings {
     /// Settings › Hosts › Show git branches (the Mac's): each space's branch beside its name in Spaces, off by default;
     /// the list and Settings read it (`@AppStorage`).
     nonisolated static let gitBranchesKey = "spaces.gitBranches"
+    /// Agents' rows: 2 lines (the name, then one line of what it is doing) or 3 (two lines of it). Read where shown
+    /// (`@AppStorage`), as Show git branches is.
+    nonisolated static let agentRowLinesKey = "agents.rowLines"
     /// Settings › Hosts › SSH engine (`SSHTransportEngine`'s raw value), the Swift engine by default. Only a build with
     /// more than one engine (russh built in, `DISPATCH_RUSSH=1`) offers the choice; another ignores what is saved.
     nonisolated static let sshEngineKey = "ssh.engine"

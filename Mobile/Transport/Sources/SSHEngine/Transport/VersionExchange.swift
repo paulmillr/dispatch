@@ -4,9 +4,6 @@
 /// software version. Lines end with CR LF; a bare LF is taken too, as OpenSSH does. The line as hashed (`V_S`) has no
 /// line end.
 enum VersionExchange {
-  /// The client's identification line as sent, CR LF included.
-  static func clientLine(_ software: String) -> [UInt8] { Array("SSH-2.0-\(software)\r\n".utf8) }
-
   enum Line: Equatable {
     /// A whole line without its LF (a CR before it is still there).
     case line([UInt8])
@@ -28,12 +25,7 @@ enum VersionExchange {
   static func identification(_ rawLine: [UInt8]) throws(SSHError) -> [UInt8]? {
     let line = rawLine.last == 0x0D ? Array(rawLine.dropLast()) : rawLine
     guard line.starts(with: Array("SSH-".utf8)) else { return nil }
-    let prefix: [UInt8]
-    if line.starts(with: Array("SSH-2.0-".utf8)) {
-      prefix = Array("SSH-2.0-".utf8)
-    } else if line.starts(with: Array("SSH-1.99-".utf8)) {
-      prefix = Array("SSH-1.99-".utf8)
-    } else {
+    guard let prefix = ["SSH-2.0-", "SSH-1.99-"].map({ Array($0.utf8) }).first(where: { line.starts(with: $0) }) else {
       throw .protocolViolation(.version(.notSSH2))
     }
     // Printable US-ASCII and spaces only (no CR, NUL or controls inside), and a software version after the prefix.

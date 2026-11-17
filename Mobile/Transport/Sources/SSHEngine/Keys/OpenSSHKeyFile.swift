@@ -37,16 +37,12 @@ enum OpenSSHKeyFile {
       guard envelope.section.count % cipher.blockBytes == 0 else { throw KeyFileProblem.damaged.error }
       var derived: [UInt8]
       do {
-        derived = try passphrase.withUnsafeBytes { password in
-          try envelope.salt.withUnsafeBytes { salt in
-            try BcryptPBKDF.derive(password: password, salt: salt, rounds: envelope.rounds,
-                                   count: cipher.keyBytes + cipher.ivBytes)
-          }
-        }
+        derived = try BcryptPBKDF.derive(password: passphrase, salt: envelope.salt, rounds: envelope.rounds,
+                                         count: cipher.keyBytes + cipher.ivBytes)
       } catch {
         throw KeyFileProblem.damaged.error
       }
-      defer { wipe(&derived) }
+      defer { wipeBytes(&derived) }
       plain = try withTypedBytes(of: derived) { (keyAndIV) throws(SSHError) in
         try cipher.decrypt(envelope.section, tag: envelope.tag, keyAndIV: keyAndIV)
       }

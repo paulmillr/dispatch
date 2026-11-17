@@ -262,7 +262,7 @@ final class MobileTabs {
                 let entries = space.tabs.map { entry($0, space: space, host: workspace.host) }
                 guard filter == .all || entries.contains(where: { $0.matches(filter) }) else { return nil }
                 return SpacesSpaceRow(space: space, unread: entries.filter { $0.urgency?.unread == true }.count,
-                                      working: entries.contains { $0.urgency == .working }, id: space.ref)
+                                      workers: entries.filter { $0.urgency == .working }.count, id: space.ref)
             }
             return SpacesSection(host: workspace.host, spaces: rows, unread: rows.map(\.unread).reduce(0, +),
                                  collapsed: collapsed.contains(workspace.id), detached: workspace.detached.count)
@@ -392,19 +392,36 @@ final class MobileTabs {
         }
     }
 
-    /// A space's tabs with their urgency, time and name (P2, P3), by activity: most recent first, tabs with no time yet
-    /// last, ties in server order (the Mac strip's). `serverOrder`, or the Manual sort (`tabSort`), keeps the server's
-    /// alone: Edit's drags reorder it.
+    /// A space's tabs with their urgency, time and name (P2, P3), by time: the tabs whose agent works first, by when
+    /// their turn began (longest working first, as Agents' Working section: a write never moves one; a start not known
+    /// yet after those known), then the rest by activity, most recent first, tabs with no time yet last; ties in server
+    /// order (the Mac strip's). `serverOrder`, or the Manual sort (`tabSort`), keeps the server's alone: Edit's drags
+    /// reorder it.
     func rows(in space: MobileSpace, serverOrder: Bool = false) -> [TabsEntry] {
         guard let host = workspace(space.ref.host)?.host else { return [] }
         let rows = space.tabs.map { entry($0, space: space, host: host) }
         guard !serverOrder, tabSort == .activity else { return rows }
+        let started: [TabRef: Date] = Dictionary(rows.compactMap { row in
+            guard row.urgency == .working, let pane = row.tab.agentPane else { return nil }
+            return status(host.id, pane.id)?.since.map { (row.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
         return rows.enumerated().sorted { a, b in
-            switch (a.element.activity, b.element.activity) {
-            case let (x?, y?) where x != y: x > y
-            case (.some, nil): true
-            case (nil, .some): false
-            default: a.offset < b.offset
+            let (x, y) = (a.element, b.element)
+            let (xWorks, yWorks) = (x.urgency == .working, y.urgency == .working)
+            if xWorks != yWorks { return xWorks }
+            if xWorks {
+                switch (started[x.id], started[y.id]) {
+                case let (p?, q?) where p != q: return p < q
+                case (.some, nil): return true
+                case (nil, .some): return false
+                default: return a.offset < b.offset
+                }
+            }
+            switch (x.activity, y.activity) {
+            case let (p?, q?) where p != q: return p > q
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default: return a.offset < b.offset
             }
         }.map(\.element)
     }

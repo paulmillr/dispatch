@@ -368,10 +368,12 @@ extension MobileWorkspace {
 
     /// New tab in a space: a new window (tmux) or tab (herdr) in the directory the space's active tab is in. No `cwd`,
     /// as the Mac sends none to a multiplexer: the server knows its focused pane's live directory (tmux
-    /// `#{pane_current_path}`), which a folder the topology last reported may no longer be.
-    func newTab(in space: MobileSpace, timeout: Duration = .seconds(10)) async throws -> MobileTab {
+    /// `#{pane_current_path}`), which a folder the topology last reported may no longer be. An iPad's Split Right and
+    /// Split Down pass the focused pane's tab's folder (`cwd`), as the Mac's splits open in the focused tab's: the
+    /// server's active window may be another.
+    func newTab(in space: MobileSpace, cwd: String? = nil, timeout: Duration = .seconds(10)) async throws -> MobileTab {
         let commands = try commands()
-        let terminal = try await commands.createTerminal(parent: space.node, cwd: nil)
+        let terminal = try await commands.createTerminal(parent: space.node, cwd: cwd)
         guard let tab = await tab(for: terminal, timeout: timeout) else {
             throw TabsFailure(message: "The tab was created, but the host has not shown it yet.")
         }

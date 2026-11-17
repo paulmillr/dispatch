@@ -34,12 +34,7 @@ final class AlgorithmPolicyTests: XCTestCase {
   /// and AES-CTR with an encrypt-and-MAC MAC pass; with it, everything passes. The refusal names the mode.
   func testOnlyTruncatableModesNeedStrictKex() {
     XCTAssertTrue(AlgorithmPolicy.truncatableModesRequireStrictKex)
-    var modes: [NegotiatedAlgorithms.Direction] = []
-    for cipher in CipherAlgorithm.allCases {
-      if cipher.isAEAD { modes.append(.init(cipher: cipher, mac: nil)) } else {
-        modes += MACAlgorithm.allCases.map { .init(cipher: cipher, mac: $0) }
-      }
-    }
+    let modes = PacketProtectionTests.families.map { NegotiatedAlgorithms.Direction(cipher: $0.0, mac: $0.1) }
     func negotiated(_ c2s: NegotiatedAlgorithms.Direction, _ s2c: NegotiatedAlgorithms.Direction, strict: Bool)
       -> NegotiatedAlgorithms
     {

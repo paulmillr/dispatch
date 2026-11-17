@@ -7,15 +7,18 @@
 /// The phase has two halves, owned by different layers: the transport's (`TransportPhase`: key exchanges) and the
 /// layers above it (`ServicePhase`: the userauth service, then the connection protocol). While a key exchange is
 /// running past both KEXINITs, nothing of the upper layers is accepted (RFC 4253 §7.1). What the policy cannot see
-/// is checked by the layer that handles the message: a channel number, a reply with no request pending, the second
-/// EXT_INFO's position relative to USERAUTH_SUCCESS.
+/// is checked by the layer that handles the message: a channel number, a reply with no request pending.
 ///
 /// Transport generics (RFC 4253 §11): DISCONNECT is accepted everywhere. IGNORE and DEBUG everywhere except in a
 /// strict initial exchange once both KEXINITs are known (`kex-strict-*`: "any unexpected packet"); before the server's
 /// KEXINIT strictness is unknown, so they are accepted there and `checkFirstKexInit` refuses a strict KEXINIT that was
 /// not packet 0. UNIMPLEMENTED only after the initial exchange (before it the engine sent nothing a server may lack);
-/// the transport then ends the connection unless the sequence number is a keepalive's (a server may answer a
-/// keepalive before authentication that way, as OpenSSH's sshd does).
+/// the transport then ends the connection unless the sequence number is a keepalive's (a server without global
+/// requests may answer one that way).
+///
+/// EXT_INFO (RFC 8308 §2.4): as the first packet after the first NEWKEYS, and while a userauth request is out, where
+/// it immediately precedes USERAUTH_SUCCESS: after it the next message for the layers above must be that success
+/// (`Context.extInfoBeforeSuccess`). Transport messages between them (IGNORE, DEBUG) are taken as anywhere else.
 public enum MessagePolicy {
   /// Where a key exchange is, past both KEXINITs.
   public enum KeyExchangeStage: Sendable, Hashable {
@@ -75,13 +78,17 @@ public enum MessagePolicy {
     public var firstPacketAfterNewKeys: Bool
     /// EXT_INFO messages received so far.
     public var extInfoReceived: Int
+    /// An EXT_INFO arrived during authentication and no message for the upper layers since: the next one must be
+    /// USERAUTH_SUCCESS (RFC 8308 §2.4, "immediately preceding").
+    public var extInfoBeforeSuccess: Bool
 
     public init(transport: TransportPhase, service: ServicePhase = .serviceNotRequested,
-                firstPacketAfterNewKeys: Bool = false, extInfoReceived: Int = 0) {
+                firstPacketAfterNewKeys: Bool = false, extInfoReceived: Int = 0, extInfoBeforeSuccess: Bool = false) {
       self.transport = transport
       self.service = service
       self.firstPacketAfterNewKeys = firstPacketAfterNewKeys
       self.extInfoReceived = extInfoReceived
+      self.extInfoBeforeSuccess = extInfoBeforeSuccess
     }
 
     public var description: String {
@@ -127,7 +134,8 @@ public enum MessagePolicy {
       // and refuses the server's own requests, which RFC 4254 allows only after authentication.
       if number == .requestSuccess || number == .requestFailure { return .transport }
       if number == .globalRequest { return context.service == .connection ? .transport : nil }
-      return serviceAccepts(number, context.service) ? .service : nil
+      guard serviceAccepts(number, context.service) else { return nil }
+      return !context.extInfoBeforeSuccess || number == .userauthSuccess ? .service : nil
     }
   }
 
@@ -153,10 +161,10 @@ public enum MessagePolicy {
     }
   }
 
-  /// RFC 8308 §2.4: as the first packet after the server's first NEWKEYS, and while a userauth request is
-  /// outstanding (the server's second, "just before USERAUTH_SUCCESS"); never more than `Limits.extInfoMessages`.
+  /// As the first packet after the server's first NEWKEYS, and while a userauth request is outstanding unless one
+  /// already came there (it precedes USERAUTH_SUCCESS); never more than `Limits.extInfoMessages`.
   private static func extInfoAccepted(in context: Context) -> Bool {
-    guard context.extInfoReceived < Limits.extInfoMessages else { return false }
+    guard context.extInfoReceived < Limits.extInfoMessages, !context.extInfoBeforeSuccess else { return false }
     switch context.service {
     case .serviceNotRequested, .serviceRequested:
       return context.firstPacketAfterNewKeys && context.extInfoReceived == 0

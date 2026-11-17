@@ -36,16 +36,6 @@ public enum ChannelExit: Sendable, Equatable {
   case lost
   /// The server refused the exec request: nothing ran, and the engine closed the channel (DMS_EXIT_REFUSED).
   case refused
-
-  /// `dms_exited_fn`'s kind.
-  public var dmsKind: Int32 {
-    switch self {
-    case .status: 0
-    case .signal: 1
-    case .lost: 2
-    case .refused: 3
-    }
-  }
 }
 
 /// A command on its own session channel (`dms_exec`). Handed over as soon as the exec request is sent, without

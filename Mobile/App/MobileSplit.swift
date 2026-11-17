@@ -184,42 +184,131 @@ struct MobileSplitDetail: View {
     }
 }
 
-/// The iPad split's detail column (I1–I8): the strip (`PadStrip`: the space's tabs, "+", the modes) over the column's
-/// stack, which holds the tab's mode (`TabScreen` in its strip layout: no header, no capsule) and what it pushes (a
-/// file, a commit's diff, the space's details), so a pushed screen opens under the strip, in the pane. Before any tab
-/// is open, where to find one.
+/// The iPad split's detail column (I1–I8): its panes (`PadPanes`, one until Split Right or Split Down), each a strip
+/// (`PadStrip`: the space's tabs, "+", the modes) over its own stack, which holds the tab's mode (`TabScreen` in its
+/// strip layout: no header, no capsule) and what it pushes (a file, a commit's diff, the space's details), so a pushed
+/// screen opens under the strip, in the pane. Hairlines between the panes, which a drag moves. Before any tab is open,
+/// where to find one.
 struct PadSplitDetail: View {
     @Bindable var navigator: SpacesNavigator
     let content: TabsContent
     let hostViews: SpacesHostViews
-    /// The sidebar is hidden: the strip leads with its pill and the space's capsule (I8).
+    /// The sidebar is hidden: the leading top pane's strip leads with its pill and the space's capsule (I8).
     let sidebarHidden: Bool
 
+    /// The column's width as the shell gives it, until the panes are measured.
+    @Environment(\.tabsColumnWidth) private var column
+
     var body: some View {
-        let tab = navigator.splitPath.tab.flatMap { navigator.model.tab($0) == nil ? nil : $0 }
+        let panes = navigator.panes
+        let layout = panes.layout(in: CGRect(origin: .zero, size: navigator.paneRoom))
+        PadPanesLayout(panes: panes) {
+            ForEach(panes.leaves.map(\.id), id: \.self) { id in
+                let frame = layout.panes[id]
+                PadPaneColumn(navigator: navigator, pane: id, content: content, hostViews: hostViews,
+                              sidebarHidden: sidebarHidden && id == panes.leaves.first?.id, split: panes.isSplit,
+                              layoutButton: frame.map { $0.minY < 1 && $0.maxX > navigator.paneRoom.width - 1
+                                  && $0.width >= PadLayoutButton.room } ?? (id == panes.leaves.first?.id))
+                    .environment(\.tabsColumnWidth, navigator.paneRoom.width > 0 ? layout.panes[id]?.width : column)
+                    .layoutValue(key: PadPanesLayout.Item.self, value: .pane(id))
+            }
+            ForEach(Array(layout.dividers.indices), id: \.self) { index in
+                PadPaneDivider(navigator: navigator, index: index)
+                    .layoutValue(key: PadPanesLayout.Item.self, value: .divider(index))
+            }
+        }
+        .coordinateSpace(.named(PadPaneDivider.space))
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { navigator.paneRoom = $0 }
+        .background(Color.canvas)
+        .background { PadColumnMarker().accessibilityHidden(true) }
+    }
+}
+
+/// Places the detail column's panes and dividers where `PadPanes.layout` puts them: real layout frames (not offsets),
+/// so each pane gets the safe area and the keyboard its own edges touch.
+struct PadPanesLayout: Layout {
+    enum Item: LayoutValueKey, Equatable {
+        case pane(PadPanes.ID), divider(Int)
+        static let defaultValue = Item.divider(-1)
+    }
+
+    let panes: PadPanes
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = panes.layout(in: CGRect(origin: .zero, size: bounds.size))
+        for subview in subviews {
+            let frame: CGRect
+            switch subview[Item.self] {
+            case .pane(let id): frame = layout.panes[id] ?? .zero
+            case .divider(let index):
+                guard layout.dividers.indices.contains(index) else { frame = .zero; break }
+                // The hairline in the middle of a band a finger or the pointer can take.
+                let line = layout.dividers[index].frame
+                frame = layout.dividers[index].axis == .columns
+                    ? line.insetBy(dx: -PadPaneDivider.reach, dy: 0)
+                    : line.insetBy(dx: 0, dy: -PadPaneDivider.reach)
+            }
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+}
+
+/// One pane of the detail column: its tab's strip over its stack. The focused pane's tab and stack are the
+/// navigator's path; another pane's are kept in `PadPanes` and a touch anywhere in it focuses it (its strip dims while
+/// it is not, as an inactive window's toolbar does).
+struct PadPaneColumn: View {
+    @Bindable var navigator: SpacesNavigator
+    let pane: PadPanes.ID
+    let content: TabsContent
+    let hostViews: SpacesHostViews
+    let sidebarHidden: Bool
+    /// The column is split: the focus shows.
+    let split: Bool
+    /// Its strip has the layout button (the top right pane's).
+    let layoutButton: Bool
+
+    @Environment(\.tabsRootTitle) private var rootTitle
+    private var agents: Bool { rootTitle == MobileSection.agents.title }
+    private var focused: Bool { navigator.panes.focused == pane }
+
+    var body: some View {
+        let ref = navigator.paneTab(pane)
+        let tab = ref.flatMap { navigator.model.tab($0) == nil ? nil : $0 }
         // Above the stack, not a bar of it: a `safeAreaBar` on the stack never reached its hosted root (the root's own
         // bar, the mode's row, drew under the strip).
         VStack(spacing: 0) {
             if let tab {
-                PadStrip(navigator: navigator, ref: tab, content: content, sidebarHidden: sidebarHidden)
+                PadStrip(navigator: navigator, ref: tab, content: content, sidebarHidden: sidebarHidden, pane: pane,
+                         layoutButton: layoutButton)
+                    .opacity(split && !focused ? 0.55 : 1)
             }
-            stack
+            stack(ref)
         }
         .background(Color.canvas)
-        .background { PadColumnMarker().accessibilityHidden(true) }
+        .environment(\.padPaneFocused, focused)
+        // Beside whatever the touch does in the pane (a terminal taking the keys, a pill, a row).
+        .simultaneousGesture(TapGesture().onEnded { navigator.focusPane(pane) })
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pad-pane-\(navigator.panes.leaves.firstIndex { $0.id == pane } ?? 0)")
+        .accessibilityAddTraits(split && focused ? .isSelected : [])
     }
 
-    @Environment(\.tabsRootTitle) private var rootTitle
-    private var agents: Bool { rootTitle == MobileSection.agents.title }
-
-    private var stack: some View {
-        NavigationStack(path: Binding(get: { navigator.splitPath.detail }, set: { navigator.setDetail($0) })) {
+    private func stack(_ ref: TabRef?) -> some View {
+        let id = pane, navigator = navigator
+        return NavigationStack(path: Binding(get: { navigator.paneDetail(id) }, set: { navigator.setPaneDetail(id, $0) })) {
             Group {
-                if let tab = navigator.splitPath.tab {
-                    TabScreen(model: navigator.model, ref: tab, path: $navigator.path, content: content)
+                if let ref {
+                    TabScreen(model: navigator.model, ref: ref,
+                              path: Binding(get: { navigator.panePath(id) }, set: { navigator.setPanePath(id, $0) }),
+                              content: content)
                         .environment(\.tabsSplitDetail, true)
                         .environment(\.tabsPadStrip, true)
-                        .id(tab)
+                        .id(ref)
                 } else {
                     // As the sidebar's section says it: a space's tabs, or a conversation.
                     ContentUnavailableView {
@@ -238,6 +327,46 @@ struct PadSplitDetail: View {
         }
         .filesZoomScope()
     }
+}
+
+/// The hairline between two panes, in a band that a drag moves (only the panes either side change; each keeps
+/// `PadPanes.dragMinimum`).
+struct PadPaneDivider: View {
+    let navigator: SpacesNavigator
+    let index: Int
+
+    /// How far either side of the hairline a drag can start.
+    static let reach: CGFloat = 8
+    static let space = "pad-panes"
+
+    var body: some View {
+        let divider = navigator.panes.layout(in: CGRect(origin: .zero, size: navigator.paneRoom)).dividers
+        let current = divider.indices.contains(index) ? divider[index] : nil
+        let columns = current?.axis != .rows
+        ZStack {
+            Rectangle()
+                .fill(Color.hairline)
+                .frame(width: columns ? PadPanes.divider : nil, height: columns ? nil : PadPanes.divider)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .hoverEffect(.highlight)
+        .gesture(
+            DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
+                .onChanged { value in
+                    guard let current else { return }
+                    let shares = PadPanes.dragged(current, to: columns ? value.location.x : value.location.y)
+                    if shares != current.shares { navigator.panes.setShares(shares, at: current.path) }
+                }
+        )
+        .accessibilityHidden(true)
+    }
+}
+
+extension EnvironmentValues {
+    /// The pane is the focused one of the iPad's detail column (`PadPanes`): its terminal takes a hardware keyboard's
+    /// keys as it shows or as the pane takes the focus, another pane's never does. True everywhere else.
+    @Entry var padPaneFocused = true
 }
 
 /// The iPad tab's column as a view UIKit lays out (behind the strip and the column's stack, which has no visible bar

@@ -43,6 +43,15 @@ struct KeyExchangeReply {
       throw .protocolViolation(.malformed(.kexECDHReply, error))
     }
   }
+
+  /// The exchange's output: H over the transcript, K_S, both values and K (`encoded`, framed as it is hashed).
+  func output(_ algorithm: KeyExchangeAlgorithm, transcript: KeyExchangeTranscript, clientValue: [UInt8],
+              encoded: SecretBytes) -> KeyExchangeOutput {
+    let hash = ExchangeHash.compute(algorithm.hash, transcript: transcript, hostKeyBlob: hostKeyBlob,
+                                    clientValue: clientValue, serverValue: serverValue, encodedSharedSecret: encoded)
+    return KeyExchangeOutput(hostKeyBlob: hostKeyBlob, signature: signature, exchangeHash: hash,
+                             encodedSharedSecret: encoded, hash: algorithm.hash)
+  }
 }
 
 /// Message 30 with the client's value as its one string.
@@ -117,10 +126,7 @@ final class Curve25519Exchange: KeyExchangeMethod {
     let reply = try KeyExchangeReply(payload)
     let shared = try X25519.shared(privateKey, server: reply.serverValue[...])
     let encoded = shared.withUnsafeBytes { SecretBytes.mpint(magnitude: $0) }
-    let hash = ExchangeHash.compute(algorithm.hash, transcript: transcript, hostKeyBlob: reply.hostKeyBlob,
-                                    clientValue: clientValue, serverValue: reply.serverValue, encodedSharedSecret: encoded)
-    return KeyExchangeOutput(hostKeyBlob: reply.hostKeyBlob, signature: reply.signature, exchangeHash: hash,
-                             encodedSharedSecret: encoded, hash: algorithm.hash)
+    return reply.output(algorithm, transcript: transcript, clientValue: clientValue, encoded: encoded)
   }
 }
 
@@ -214,10 +220,7 @@ final class ECDHExchange: KeyExchangeMethod {
       raw.count == curve.scalarBytes ? SecretBytes.mpint(magnitude: raw) : nil
     }
     guard let encoded else { throw .protocolViolation(.keyExchange(.invalidSharedSecret)) }
-    let hash = ExchangeHash.compute(algorithm.hash, transcript: transcript, hostKeyBlob: reply.hostKeyBlob,
-                                    clientValue: clientValue, serverValue: point, encodedSharedSecret: encoded)
-    return KeyExchangeOutput(hostKeyBlob: reply.hostKeyBlob, signature: reply.signature, exchangeHash: hash,
-                             encodedSharedSecret: encoded, hash: algorithm.hash)
+    return reply.output(algorithm, transcript: transcript, clientValue: clientValue, encoded: encoded)
   }
 }
 
@@ -284,9 +287,6 @@ final class MLKEMHybridExchange: KeyExchangeMethod {
     quantum.withUnsafeBytes { hasher.update(bufferPointer: $0) }
     classical.withUnsafeBytes { hasher.update(bufferPointer: $0) }
     let encoded = hasher.finalize().withUnsafeBytes { SecretBytes.string($0) }
-    let hash = ExchangeHash.compute(algorithm.hash, transcript: transcript, hostKeyBlob: reply.hostKeyBlob,
-                                    clientValue: clientValue, serverValue: value, encodedSharedSecret: encoded)
-    return KeyExchangeOutput(hostKeyBlob: reply.hostKeyBlob, signature: reply.signature, exchangeHash: hash,
-                             encodedSharedSecret: encoded, hash: algorithm.hash)
+    return reply.output(algorithm, transcript: transcript, clientValue: clientValue, encoded: encoded)
   }
 }

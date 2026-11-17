@@ -63,14 +63,6 @@ public struct WireReader {
     return value
   }
 
-  public mutating func readUInt64() throws(WireError) -> UInt64 {
-    guard remaining >= 8 else { throw .truncated }
-    var value: UInt64 = 0
-    for index in offset..<offset + 8 { value = value << 8 | UInt64(bytes[index]) }
-    offset += 8
-    return value
-  }
-
   /// Exactly `count` raw bytes (a KEXINIT cookie). `count` is the caller's constant, not a value from the input.
   public mutating func readBytes(count: Int) throws(WireError) -> [UInt8] {
     guard count >= 0, remaining >= count else { throw .truncated }
@@ -88,27 +80,13 @@ public struct WireReader {
 
   /// A `string`: uint32 length, then that many bytes. The length must be at most `limit` and fit in the input.
   public mutating func readString(limit: Int) throws(WireError) -> [UInt8] {
-    let start = offset
-    let length = try readLength(limit: limit)
-    guard remaining >= length else {
-      offset = start
-      throw .truncated
-    }
-    defer { offset += length }
-    return Array(bytes[offset..<offset + length])
+    Array(bytes[try readStringRange(limit: limit)])
   }
 
   /// A `string` read straight into wiped memory (a private key's fields, a decrypted secret): no array copy of the
   /// value is made. The reader's own input is the caller's to wipe.
   public mutating func readSecretString(limit: Int) throws(WireError) -> SecretBytes {
-    let start = offset
-    let length = try readLength(limit: limit)
-    guard remaining >= length else {
-      offset = start
-      throw .truncated
-    }
-    defer { offset += length }
-    return SecretBytes(copying: bytes[offset..<offset + length])
+    SecretBytes(copying: bytes[try readStringRange(limit: limit)])
   }
 
   /// A `string` holding UTF-8 text (RFC 4251 §5: ISO-10646 UTF-8) that the engine compares, acts on or echoes back.
@@ -157,17 +135,21 @@ public struct WireReader {
   ) throws(WireError) -> [String] {
     let start = offset
     let raw = try readString(limit: byteLimit)
+    do {
+      return try Self.names(raw, countLimit: countLimit)
+    } catch {
+      offset = start
+      throw error
+    }
+  }
+
+  /// A name-list's bytes (without the length prefix) split into its names, as `readNameList` takes them.
+  static func names(_ raw: [UInt8], countLimit: Int = Limits.nameListCount) throws(WireError) -> [String] {
     if raw.isEmpty { return [] }
     var names: [String] = []
     for element in raw.split(separator: UInt8(ascii: ","), omittingEmptySubsequences: false) {
-      guard names.count < countLimit else {
-        offset = start
-        throw .tooMany(limit: countLimit)
-      }
-      guard let name = Self.name(element) else {
-        offset = start
-        throw .invalidName
-      }
+      guard names.count < countLimit else { throw .tooMany(limit: countLimit) }
+      guard let name = Self.name(element) else { throw .invalidName }
       names.append(name)
     }
     return names
@@ -212,15 +194,21 @@ public struct WireReader {
 
   // MARK: Helpers
 
-  /// A uint32 length, at most `limit`. Does not check the remaining bytes.
-  private mutating func readLength(limit: Int) throws(WireError) -> Int {
+  /// Where a `string`'s bytes are: its uint32 length, checked against `limit` before the remaining bytes, then
+  /// skipped. The position is left alone when either check fails.
+  private mutating func readStringRange(limit: Int) throws(WireError) -> Range<Int> {
     let start = offset
     let value = try readUInt32()
     guard let length = Int(exactly: value), length <= max(0, limit) else {
       offset = start
       throw .tooLong(limit: limit)
     }
-    return length
+    guard remaining >= length else {
+      offset = start
+      throw .truncated
+    }
+    offset += length
+    return offset - length..<offset
   }
 
   /// `bytes` as a name (RFC 4251 §6): 1 to `Limits.nameLength` bytes of printable US-ASCII (0x21-0x7E) other than

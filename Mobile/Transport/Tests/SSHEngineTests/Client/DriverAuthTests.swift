@@ -20,11 +20,8 @@ final class DriverAuthTests: XCTestCase {
     let session = try await world.connect()
     let outcome = try await session.authenticate(user: "phone", with: password)
     XCTAssertEqual(outcome, .success)
-    do {
-      _ = try await session.authenticate(user: "phone", with: password)
-      XCTFail("logged in twice")
-    } catch {
-      XCTAssertEqual(error, .usage(.alreadyAuthenticated))
+    await assertThrows(.usage(.alreadyAuthenticated), "logged in twice") {
+      try await session.authenticate(user: "phone", with: password)
     }
     await session.close()
   }
@@ -54,11 +51,8 @@ final class DriverAuthTests: XCTestCase {
     let session = try await world.connect()
     let first = Task { [password] in try await session.authenticate(user: "phone", with: password) }
     _ = await world.peer.waitFor { !$0.numbered(50).isEmpty }
-    do {
-      _ = try await session.authenticate(user: "phone", with: password)
-      XCTFail("two attempts at once")
-    } catch {
-      XCTAssertEqual(error, .usage(.authenticationInProgress))
+    await assertThrows(.usage(.authenticationInProgress), "two attempts at once") {
+      try await session.authenticate(user: "phone", with: password)
     }
     await session.close()
     let failure = await first.sshError
@@ -90,11 +84,8 @@ final class DriverAuthTests: XCTestCase {
     let world = await MemoryWorld.make(script: script)
     let session = try await world.connect(options(directAnswer: .milliseconds(300)))
     let key = try cryptoKitEd25519()
-    do {
-      _ = try await session.authenticate(user: "phone", with: .publicKey(key, direct: true))
-      XCTFail("logged in")
-    } catch {
-      XCTAssertEqual(error, .timedOut(.directAnswer))
+    await assertThrows(.timedOut(.directAnswer), "logged in") {
+      try await session.authenticate(user: "phone", with: .publicKey(key, direct: true))
     }
     let end = await session.ended()
     XCTAssertEqual(end, .timedOut(.directAnswer))
@@ -139,11 +130,8 @@ final class DriverAuthTests: XCTestCase {
     let session = try await world.connect()
     let declining = try cryptoKitEd25519(before: { () async throws(SSHError) in throw .cancelled })
     for direct in [false, true] {
-      do {
-        _ = try await session.authenticate(user: "phone", with: .publicKey(declining, direct: direct))
-        XCTFail("logged in with a declined signature")
-      } catch {
-        XCTAssertEqual(error, .cancelled)
+      await assertThrows(.cancelled, "logged in with a declined signature") {
+        try await session.authenticate(user: "phone", with: .publicKey(declining, direct: direct))
       }
     }
     let outcome = try await session.authenticate(user: "phone", with: password)
@@ -195,11 +183,8 @@ final class DriverAuthTests: XCTestCase {
   func testAWrongNumberOfAnswersCancels() async throws {
     let world = await MemoryWorld.make()
     let session = try await world.connect()
-    do {
-      _ = try await session.authenticate(user: "phone", with: .keyboardInteractive { _ in [] })
-      XCTFail("logged in")
-    } catch {
-      XCTAssertEqual(error, .cancelled)
+    await assertThrows(.cancelled, "logged in") {
+      try await session.authenticate(user: "phone", with: .keyboardInteractive { _ in [] })
     }
     let outcome = try await session.authenticate(user: "phone", with: password)
     XCTAssertEqual(outcome, .success)
@@ -220,11 +205,8 @@ final class DriverAuthTests: XCTestCase {
     XCTAssertEqual(failure, .cancelled)
     let end = await session.ended()
     XCTAssertEqual(end, .cancelled)
-    do {
-      _ = try await session.authenticate(user: "phone", with: password)
-      XCTFail("a login after the end")
-    } catch {
-      XCTAssertEqual(error, .closed(.alreadyEnded))
+    await assertThrows(.closed(.alreadyEnded), "a login after the end") {
+      try await session.authenticate(user: "phone", with: password)
     }
   }
 

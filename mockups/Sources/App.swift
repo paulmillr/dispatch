@@ -125,6 +125,7 @@ enum Screens {
         case "I5-host-popover": PadStripScreen(detail: .files, popover: true)
         case "I7-full-width-terminal": PadStripScreen(detail: .terminal)
         case "I8-sidebar-hidden": PadStripScreen(detail: .chat, sidebarHidden: true)
+        case "I9-grid-agents": PadGridScreen()
         // The iPhone Duo: unfolded (the inner screen, the split) and folded (the cover screen, the phone's stack).
         case "V1-duo-chat": DuoSplitScreen(detail: .chat)
         case "V2-duo-files": DuoSplitScreen(detail: .files)

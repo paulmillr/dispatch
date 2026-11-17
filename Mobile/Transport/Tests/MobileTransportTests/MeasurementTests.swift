@@ -84,7 +84,7 @@ final class MeasurementTests: XCTestCase {
     let fixture = SSHFixture.shared
     let key = try SSHKey.openSSH(TestKeys.shared.data("ed25519"))
     var totals: [Double] = [], handshakes: [Double] = [], auths: [Double] = []
-    // Warm up NIO's loop, Citadel's registration and the sshd.
+    // Warm up the engine and the sshd.
     await (try fixture.connect([.key(key)])).close()
     for _ in 0..<20 {
       let connection = try await SSHConnection.connect(to: fixture.endpoint, credentials: [.key(key)], trust: fixture.trust)

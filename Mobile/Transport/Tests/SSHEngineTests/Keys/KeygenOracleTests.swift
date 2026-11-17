@@ -24,7 +24,7 @@ final class KeygenOracleTests: XCTestCase {
   ]
 
   /// Every type and size; OpenSSH format plain and encrypted (ssh-keygen's default cipher, aes256-ctr), PEM and
-  /// PKCS#8 (which ssh-keygen cannot write for Ed25519: `PEMKeyFileTests` builds those); signatures both ways.
+  /// PKCS#8 (which ssh-keygen cannot write for Ed25519: `KeyFileFormatTests` builds those); signatures both ways.
   func testEveryTypeSizeAndFormat() throws {
     let tool = try KeyTool()
     defer { tool.remove() }

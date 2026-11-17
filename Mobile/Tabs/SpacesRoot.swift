@@ -41,6 +41,7 @@ struct TabsContent {
 final class SpacesNavigator {
     var path: [TabsRoute] = [] {
         didSet {
+            followPanes(from: oldValue)
             if let ref = Self.split(path).tab, let tab = model.tab(ref) {
                 lastTabs[tab.space] = ref
                 remember(strip: tab)
@@ -66,6 +67,7 @@ final class SpacesNavigator {
             if split, !oldValue, sidebarHides, splitPath.tab != nil, splitPath.sidebar.contains(where: \.isSpace) {
                 path.removeAll(where: \.isSpace)
             }
+            if split, !oldValue { settlePanes() }
             rememberSplit()
             // The same path shown another way (beside the sidebar, or as one stack).
             if split != oldValue { routed?(path, path) }
@@ -73,6 +75,13 @@ final class SpacesNavigator {
     }
     /// The split hides its sidebar (`toggleSidebar`): an iPad's does, the Duo's never (`MobileRoot` sets it).
     var sidebarHides = false
+    /// The iPad detail column's panes (`PadPanes`, `SpacesNavigator+Panes`): one until Split Right or Split Down. The
+    /// focused pane's tab is the path's; kept while the window is the stack, which shows the focused one.
+    var panes = PadPanes.single {
+        didSet { if panes.kept != oldValue.kept { rememberSplit() } }
+    }
+    /// The detail column's size (`PadSplitDetail`), for which splits fit; zero before it lays out.
+    var paneRoom = CGSize.zero
     /// The phone is on its side (`MobileLandscape`, set by `MobileRoot`): Review and Commits open beside their lists.
     var landscape = false
     /// The iPad split's sidebar is hidden and the tab takes the window (`MobileRoot`, `toggleSidebar`). Only while a tab
@@ -133,6 +142,13 @@ final class SpacesNavigator {
     func reconcile() {
         for ref in model.paneRoutes.keys where model.tab(ref) == nil && model.workspace(ref.host)?.spaces.isEmpty == false {
             model.paneRoutes[ref] = nil
+        }
+        if panesApply {
+            let gone = { (ref: TabRef) in self.model.tab(ref) == nil && self.model.workspace(ref.host)?.spaces.isEmpty == false }
+            panesLost(gone) { tab, leaf in
+                leaf?.strip ?? (self.stripOrder?.tab == tab ? self.stripOrder?.tabs ?? [] : [])
+            }
+            rememberPaneStrips()
         }
         guard sidebarHides, split, let shown = splitPath.tab else { return }
         if let tab = model.tab(shown) {
@@ -259,6 +275,8 @@ final class SpacesNavigator {
 
     /// On top of the stack; in the split, in the detail column in place of the tab shown there (and what it pushed).
     private func show(_ ref: TabRef) {
+        // A tab another pane shows: that pane takes the focus, with what it showed.
+        if panesApply, let pane = panes.pane(showing: ref) { return focusPane(pane) }
         if split { path = splitPath.sidebar + [.tab(ref)] } else if path.last != .tab(ref) { path.append(.tab(ref)) }
         // Already on top (a notification for the thread being read, a second tap): nothing is pushed over itself.
     }
@@ -308,6 +326,14 @@ final class SpacesNavigator {
     /// does not arrive without it. On an iPad the strip's neighbour takes the detail column, as a closed tab's
     /// neighbour does on the Mac (the next, else the one before).
     func closed(_ target: TabsActions.Target) {
+        if panesApply {
+            switch target {
+            case .tab(let closed):
+                panesLost({ $0 == closed }) { tab, _ in self.model.strip(for: tab).map(\.ref) }
+            case .space(let closed):
+                panesLost({ ref in self.model.tab(ref).map { $0.space == closed } ?? true }) { _, _ in [] }
+            }
+        }
         var neighbour: TabRef?
         if sidebarHides, split, case .tab(let closed) = target, splitPath.tab == closed {
             let tabs = model.strip(for: closed).map(\.ref)
@@ -444,7 +470,9 @@ final class SpacesNavigator {
 
     /// `-DispatchTabsScript "edit,done,space:herdr:app,pop,tab:herdr:app:1,pop"`: one step every 1.5 s after a
     /// 2 s start, for screen recordings that check every transition frame by frame. `agents` and `spaces` switch the
-    /// tab bar (through `selectSection`).
+    /// tab bar (through `selectSection`); on an iPad `right:<tab>` and `down:<tab>` open a tab beside the focused pane,
+    /// `pane:<n>` focuses the nth pane, `layout:<grid|twoAbove|…>` applies a layout, `merge` merges and `sidebar` hides or
+    /// shows the sidebar.
     func run(_ script: String) {
         let steps = script.split(separator: ",").map(String.init)
         Task { @MainActor in
@@ -461,6 +489,14 @@ final class SpacesNavigator {
                 case "space": if let host { path.append(.space(SpaceRef(host: host, key: key))) }
                 case "tab": if let host { path.append(.tab(TabRef(host: host, key: key))) }
                 case "chat": if let host { openChat(TabRef(host: host, key: key)) }
+                // The iPad's panes: that tab beside the focused pane (Open in Split Right, Down), a pane focused by its
+                // place in reading order, Merge Panes.
+                case "right", "down":
+                    if let host { split(panes.focused, parts[0] == "right" ? .columns : .rows, showing: TabRef(host: host, key: key)) }
+                case "pane": if let index = Int(key), panes.leaves.indices.contains(index) { focusPane(panes.leaves[index].id) }
+                case "merge": mergePanes()
+                case "layout": if let layout = PadLayout(rawValue: key) { applyLayout(layout) }
+                case "sidebar": toggleSidebar()
                 case "pop": if !path.isEmpty { path.removeLast() }
                 case "agents", "spaces": selectSection?(parts[0])
                 default: break
@@ -1317,7 +1353,7 @@ struct SpacesSpaceLine: View {
             .listRowBackground(selected ? Color.lens : nil)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(row.space.name)
-            .accessibilityValue(Self.value(unread: row.unread, working: row.working, branch: branch))
+            .accessibilityValue(Self.value(unread: row.unread, workers: row.workers, branch: branch))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityIdentifier("space-row")
             .task(id: showsBranches ? gitKey : nil) {
@@ -1328,10 +1364,10 @@ struct SpacesSpaceLine: View {
             NavigationLink(value: TabsRoute.space(row.space.ref)) {
                 label
             }
-            // "app", the unread count and the amber dot's meaning as the value.
+            // "app", the unread count and how many work as the value.
             .accessibilityElement(children: .combine)
             .accessibilityLabel(row.space.name)
-            .accessibilityValue(Self.value(unread: row.unread, working: row.working, branch: branch))
+            .accessibilityValue(Self.value(unread: row.unread, workers: row.workers, branch: branch))
             .accessibilityIdentifier("space-row")
             .task(id: showsBranches ? gitKey : nil) {
                 guard showsBranches, let gitFacts, let gitKey else { return }
@@ -1340,8 +1376,10 @@ struct SpacesSpaceLine: View {
         }
     }
 
-    /// The name and branch, the amber dot while something works, the unread count. The branch sits on the name's last
-    /// line's baseline: centred beside the larger name, the caption rode high, above the name's baseline.
+    /// The name and branch, then as Mail's mailboxes count theirs before the chevron: how many agents work (the amber
+    /// dot and the count, "• 3"), then how many need you or have a result not seen (a filled blue capsule with the
+    /// count): told apart by shape, not by colour alone. The branch sits on the name's last line's baseline: centred
+    /// beside the larger name, the caption rode high, above the name's baseline.
     private var label: some View {
         HStack(spacing: 8) {
             HStack(alignment: .lastTextBaseline, spacing: 8) {
@@ -1350,10 +1388,21 @@ struct SpacesSpaceLine: View {
             }
             Spacer(minLength: 0)
             if row.working {
-                Circle().fill(Color.stateWorking).frame(width: 10, height: 10)
+                HStack(spacing: 4) {
+                    Circle().fill(Color.stateWorking).frame(width: 8, height: 8)
+                    Text("\(row.workers)").font(.subheadline.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(Color.stateWorking)
+                }
+                .fixedSize()
             }
             if row.unread > 0 {
-                Text("\(row.unread)").font(.body).foregroundStyle(Color.stateUnread).monospacedDigit()
+                Text("\(row.unread)")
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .frame(minWidth: 22, minHeight: 22)
+                    .background(Color.stateUnread, in: Capsule())
+                    .fixedSize()
             }
         }
     }
@@ -1399,9 +1448,9 @@ struct SpacesBranchChip: View {
 }
 
 extension SpacesSpaceLine {
-    static func value(unread: Int, working: Bool, branch: String? = nil) -> String {
-        [branch.map { "branch \($0)" }, unread > 0 ? "\(unread) unread" : nil, working ? "Working" : nil].compactMap { $0 }
-            .joined(separator: ", ")
+    static func value(unread: Int, workers: Int, branch: String? = nil) -> String {
+        [branch.map { "branch \($0)" }, unread > 0 ? "\(unread) unread" : nil, workers > 0 ? "\(workers) working" : nil]
+            .compactMap { $0 }.joined(separator: ", ")
     }
 }
 

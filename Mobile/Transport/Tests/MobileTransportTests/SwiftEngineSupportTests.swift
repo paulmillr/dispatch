@@ -75,11 +75,8 @@ extension XCTestCase {
 
 /// A host key for the fakes: an Ed25519 key made now.
 func fakeHostKey() -> SSHEngine.HostKey {
-  var blob: [UInt8] = []
-  for field in [Array("ssh-ed25519".utf8), Array(Curve25519.Signing.PrivateKey().publicKey.rawRepresentation)] {
-    blob += withUnsafeBytes(of: UInt32(field.count).bigEndian, Array.init) + field
-  }
-  return try! SSHEngine.HostKey(algorithm: .ed25519, blob: blob)
+  let key = SSHKey(ed25519: Curve25519.Signing.PrivateKey())
+  return try! SSHEngine.HostKey(algorithm: .ed25519, blob: Array(publicKeyBlob(key)))
 }
 
 /// Connects as `script` says, recording the options.
@@ -501,9 +498,12 @@ enum CallerSide {
   static func isBlocking(_ fd: Int32) -> Bool { fcntl(fd, F_GETFL) & O_NONBLOCK == 0 }
 }
 
-func sha256(_ bytes: [UInt8]) -> String {
+/// SHA-256 in lowercase hex, as `HelperBootstrap` names a helper and `shasum -a 256` prints it.
+func sha256(_ bytes: some DataProtocol) -> String {
   SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 }
+
+func sha256(_ text: String) -> String { sha256(Data(text.utf8)) }
 
 /// The fakes themselves, so a broken fake fails here rather than as an adapter failure.
 final class SwiftEngineSupportTests: XCTestCase {

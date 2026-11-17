@@ -300,9 +300,9 @@ final class ChatIPadTests: XCTestCase {
                          urgency: PaneUrgency(waiting: waiting, working: working, unread: false), muted: false, unread: false)
     }
 
-    /// Every row is three lines tall, whatever it says: a short message, a long one, a question, and a working agent
-    /// with or without a note.
-    func testAgentsRowsAreAlwaysThreeLines() {
+    /// Every row is as tall as the Agent rows setting says (2 lines, or 3), whatever it says: a short message, a long one,
+    /// none, a question, and a working agent with a note, a thought, a prompt only, or nothing said.
+    func testAgentsRowsKeepTheirLines() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let since = now.addingTimeInterval(-130)
         let long = String(repeating: "Webhook retries are now keyed on the Stripe event id. ", count: 4)
@@ -313,24 +313,34 @@ final class ChatIPadTests: XCTestCase {
             ("question", agentRow(waiting: true), TabsStatus(text: "Allow cargo test?")),
             ("working, a note", agentRow(working: true),
              TabsStatus(text: "Running shell command…", since: since, note: "Tests pass, now the docs", kind: .run, steps: 12, agents: 2)),
+            ("working, a thought", agentRow(working: true),
+             TabsStatus(text: "Reading file…", since: since, kind: .read, steps: 3, thought: "Inspecting the webhook guard")),
+            ("working, a prompt", agentRow(working: true), TabsStatus(text: "working", since: since, asked: "Make the retries idempotent")),
             ("working, nothing said", agentRow(working: true), TabsStatus(text: "working", since: since)),
         ]
-        var heights: [String: CGFloat] = [:]
-        for (name, row, status) in rows {
-            let view = AgentRow(row: row, status: status, location: "studio · app", host: "studio", now: now).frame(width: 370)
-            heights[name] = UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 370, height: 1000)).height
+        var tall: [Int: CGFloat] = [:]
+        for lines in [2, 3] {
+            var heights: [String: CGFloat] = [:]
+            for (name, row, status) in rows {
+                let view = AgentRow(row: row, status: status, location: "studio · app", host: "studio", now: now, rowLines: lines)
+                    .frame(width: 370)
+                heights[name] = UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 370, height: 1000)).height
+            }
+            let short = heights["short"]!
+            for (name, height) in heights { XCTAssertEqual(height, short, accuracy: 1.5, "\(lines) lines, \(name): \(heights)") }
+            tall[lines] = short
         }
-        let short = heights["short"]!
-        for (name, height) in heights { XCTAssertEqual(height, short, accuracy: 1.5, "\(name): \(heights)") }
+        XCTAssertGreaterThan(tall[3]!, tall[2]! + 10, "a line taller")
     }
 
-    /// Working, VoiceOver reads how long, what it last said, the step and its count, and the subagents.
+    /// Working, VoiceOver reads how long, what it last said (else the prompt, quoted), the step and its count, and the
+    /// subagents.
     func testAWorkingAgentsRowReadsItsProgress() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let status = TabsStatus(text: "Reading file…", since: now.addingTimeInterval(-130), note: nil, kind: .read, steps: 1,
                                 agents: 2, asked: "Make billing webhook retries idempotent")
         XCTAssertEqual(AgentRow.value(agentRow(working: true), status: status, location: "studio · app", now: now),
-                       "Working, for 2 minutes, 10 seconds, Make billing webhook retries idempotent, Read, 1 step, 2 agents, studio · app")
+                       "Working, for 2 minutes, 10 seconds, “Make billing webhook retries idempotent”, Read, 1 step, 2 agents, studio · app")
         XCTAssertEqual(AgentRow.count(12, "step"), "12 steps")
     }
 
@@ -377,6 +387,25 @@ final class ChatIPadTests: XCTestCase {
                                                offlineFolded: true).map(\.name), ["needs", "working", "recent"])
         XCTAssertEqual(AgentsScreen.shownOrder(rows, grouping: .host, hosts: [mba2, studio], offline: offline,
                                                offlineFolded: false).map(\.name), ["offline", "recent", "working", "needs"])
+    }
+
+    /// Working rows stay in the order their turns began, longest working first, whatever they write meanwhile (the
+    /// newest-first order of the rest would reshuffle them on every step); one whose start is not known yet goes last.
+    func testWorkingRowsKeepTheOrderTheirTurnsBegan() {
+        let host = UUID(), now = Date(timeIntervalSince1970: 1_800_000_000)
+        func row(_ node: String, started: TimeInterval?, wrote: TimeInterval) -> ChatConversation {
+            var row = ChatConversation(key: ChatConversationKey(host: host, node: node), terminal: 1, hostName: "studio", name: node,
+                                       space: nil, spaceNode: nil, cwd: nil,
+                                       binding: HelperTopology.Binding(session: node, transcript: nil, pid: nil, start: nil, executable: nil),
+                                       summary: ChatConversationSummary(busy: true, lastActivity: now.addingTimeInterval(-wrote)),
+                                       urgency: PaneUrgency(waiting: false, working: true, unread: false), muted: false, unread: false)
+            row.workingStarted = started.map { now.addingTimeInterval(-$0) }
+            return row
+        }
+        // Newest write first, as the list builds them: the 45 s one just wrote.
+        let rows = [row("short", started: 45, wrote: 1), row("unknown", started: nil, wrote: 2), row("long", started: 900, wrote: 30),
+                    row("medium", started: 300, wrote: 10)]
+        XCTAssertEqual(AgentsSections(rows: rows, offline: { _ in false }).working.map(\.name), ["long", "medium", "short", "unknown"])
     }
 
     func testAgentsEmptyStateSaysWhyThereAreNoRows() {

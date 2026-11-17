@@ -6,8 +6,10 @@ final class MessagePolicyTests: XCTestCase {
   typealias Context = MessagePolicy.Context
 
   static func connected(_ service: MessagePolicy.ServicePhase, first: Bool = false, extInfo: Int = 0,
-                        transport: MessagePolicy.TransportPhase = .established) -> Context {
-    Context(transport: transport, service: service, firstPacketAfterNewKeys: first, extInfoReceived: extInfo)
+                        beforeSuccess: Bool = false, transport: MessagePolicy.TransportPhase = .established)
+    -> Context {
+    Context(transport: transport, service: service, firstPacketAfterNewKeys: first, extInfoReceived: extInfo,
+            extInfoBeforeSuccess: beforeSuccess)
   }
 
   /// Every phase shape, for the table and the mutation loop.
@@ -27,6 +29,7 @@ final class MessagePolicyTests: XCTestCase {
         for (first, extInfo) in [(true, 0), (false, 0), (false, 1), (false, 2)] {
           contexts.append(MessagePolicyTests.connected(service, first: first, extInfo: extInfo, transport: transport))
         }
+        contexts.append(MessagePolicyTests.connected(service, extInfo: 1, beforeSuccess: true, transport: transport))
       }
     }
     return contexts
@@ -73,6 +76,13 @@ final class MessagePolicyTests: XCTestCase {
     }
     // Never a third EXT_INFO.
     XCTAssertEqual(accepted(MessagePolicyTests.connected(.userauth(.publicKeySigned), extInfo: 2)), generics.union([51, 52, 53]))
+    // One came while the request was out: of the upper layers' messages, only USERAUTH_SUCCESS is next.
+    let waits: [MessagePolicy.UserauthWait] = [.noneMethod, .password, .publicKeyQuery, .publicKeySigned,
+                                               .keyboardInteractive]
+    for wait in waits {
+      let context = MessagePolicyTests.connected(.userauth(wait), extInfo: 1, beforeSuccess: true)
+      XCTAssertEqual(accepted(context), generics.union([52]), "\(wait)")
+    }
   }
 
   func testConnection() {

@@ -14,6 +14,15 @@ final class KeyExchangeTests: XCTestCase {
     [MessageNumber.kexECDHReply.rawValue] + Raw.string(hostKey) + Raw.string(value) + Raw.string(signature)
   }
 
+  /// CryptoKit's digest of `data` under `hash`.
+  static func digest(_ hash: HashAlgorithm, _ data: [UInt8]) -> [UInt8] {
+    switch hash {
+    case .sha256: Array(SHA256.hash(data: data))
+    case .sha384: Array(SHA384.hash(data: data))
+    case .sha512: Array(SHA512.hash(data: data))
+    }
+  }
+
   /// The client's value from its message 30.
   static func value(_ initMessage: [UInt8]) -> [UInt8] { Array(initMessage.dropFirst(5)) }
 
@@ -29,7 +38,7 @@ final class KeyExchangeTests: XCTestCase {
       XCTAssertEqual(Array(initMessage[1..<5]), Raw.u32(UInt32(clientValue.count)))
       let (serverValue, serverK) = try ScriptedServer.serverSide(algorithm, clientValue: clientValue, random: SeededRandom(seed: 6))
       let output = try method.receiveReply(Self.reply(serverValue), transcript: Self.transcript)
-      XCTAssertTrue(output.encodedSharedSecret.constantTimeEquals(serverK), "\(algorithm)")
+      XCTAssertTrue(ConstantTime.equal(output.encodedSharedSecret, serverK), "\(algorithm)")
       XCTAssertEqual(output.hash, algorithm.hash)
       XCTAssertEqual(output.hostKeyBlob, Self.hostKeyBlob)
       // H, recomputed by hand: every field a string, then K as encoded.
@@ -37,12 +46,7 @@ final class KeyExchangeTests: XCTestCase {
         + Raw.string(Self.transcript.clientKexInit) + Raw.string(Self.transcript.serverKexInit) + Raw.string(Self.hostKeyBlob)
         + Raw.string(clientValue) + Raw.string(serverValue)
       hashed += output.encodedSharedSecret.withUnsafeBytes { Array($0) }
-      let expected: [UInt8] = switch algorithm.hash {
-      case .sha256: Array(SHA256.hash(data: hashed))
-      case .sha384: Array(SHA384.hash(data: hashed))
-      case .sha512: Array(SHA512.hash(data: hashed))
-      }
-      XCTAssertEqual(output.exchangeHash, expected, "\(algorithm)")
+      XCTAssertEqual(output.exchangeHash, Self.digest(algorithm.hash, hashed), "\(algorithm)")
       // K's encoding: an mpint for ECDH and X25519, a 32-byte string for the hybrid.
       let k = output.encodedSharedSecret.withUnsafeBytes { Array($0) }
       if algorithm == .mlkem768x25519 {
@@ -186,16 +190,9 @@ final class KeyExchangeTests: XCTestCase {
     for (hash, count) in [(HashAlgorithm.sha256, 12), (.sha256, 32), (.sha256, 64), (.sha256, 100), (.sha384, 48),
                           (.sha512, 16), (.sha512, 64), (.sha512, 130)] {
       for letter in "ABCDEF" {
-        func digest(_ data: [UInt8]) -> [UInt8] {
-          switch hash {
-          case .sha256: Array(SHA256.hash(data: data))
-          case .sha384: Array(SHA384.hash(data: data))
-          case .sha512: Array(SHA512.hash(data: data))
-          }
-        }
         let kBytes = k.withUnsafeBytes { Array($0) }
-        var expected = digest(kBytes + h + [letter.asciiValue!] + session)
-        while expected.count < count { expected += digest(kBytes + h + expected) }
+        var expected = Self.digest(hash, kBytes + h + [letter.asciiValue!] + session)
+        while expected.count < count { expected += Self.digest(hash, kBytes + h + expected) }
         let derived = KeyDerivation.derive(letter, count: count, sharedSecret: k, exchangeHash: h, sessionID: session, hash: hash)
         XCTAssertEqual(derived.withUnsafeBytes { Array($0) }, Array(expected.prefix(count)), "\(hash) \(count) \(letter)")
       }

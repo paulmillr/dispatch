@@ -1,10 +1,5 @@
 /// Knobs the tests turn; the app uses the defaults.
 struct DriverTuning: Sendable {
-  /// The most bytes one stream read asks for.
-  var readSize = 64 * 1024
-  /// How long the last bytes (a DISCONNECT) may take to leave once the connection ended, before the stream is closed
-  /// regardless (a peer that stopped reading must not keep a closed session's socket open).
-  var disconnectGrace: Duration = .seconds(2)
   /// The transport's re-exchange thresholds, lowered by tests to make the client start re-exchanges under load.
   var rekeyBytes: UInt64?
   var rekeyInterval: Duration?
@@ -15,13 +10,11 @@ struct DriverTuning: Sendable {
 /// Counters the tests read (`ConnectionDriver.stats`, `waitForStats`): nothing in the engine acts on them.
 struct DriverStats: Sendable, Equatable {
   var reads = 0
+  /// Bytes the stream delivered (a test checks an announced packet was refused before it was read).
   var bytesRead = 0
   var writes = 0
-  var bytesWritten = 0
   var rekeys = 0
   var keepalivesFired = 0
-  /// Times the read loop waited for the outbound backlog to drain.
-  var readPauses = 0
   /// The largest outbound backlog seen after a step (bytes the transport held for the stream).
   var maximumBacklog = 0
   /// The most output one channel held that the app had not read (bounded by the window the engine grants).
@@ -51,8 +44,15 @@ struct DriverStats: Sendable, Equatable {
 ///
 /// The end: decided once, by the core's `.ended` (stream failures, deadlines, cancellation and `close` all go through
 /// `ClientCore.end`). Then every timer, question and helper task is cancelled, the write loop writes what is left (a
-/// DISCONNECT) within `DriverTuning.disconnectGrace`, and the stream is closed.
+/// DISCONNECT) within `disconnectGrace`, and the stream is closed.
 actor ConnectionDriver {
+  /// The most bytes one stream read asks for.
+  static let readSize = 64 * 1024
+  /// How long the last bytes (a DISCONNECT) may take to leave once the connection ended, before the stream is closed
+  /// regardless (a peer that stopped reading must not keep a closed session's socket open). It runs after a stream
+  /// failure too: a write in flight then may never complete, and the close waits for nothing else.
+  static let disconnectGrace: Duration = .seconds(2)
+
   private let options: ConnectOptions
   private let tuning: DriverTuning
   private let core: ClientCore
@@ -60,12 +60,11 @@ actor ConnectionDriver {
   private let clock = ContinuousClock()
 
   /// Why the connection ended, decided once.
-  private(set) var endReason: SSHError?
-  private var endedWaiters: [CheckedContinuation<SSHError, Never>] = []
+  private let ending = Outcome<SSHError>()
+  var endReason: SSHError? { ending.value }
   private var streamBroken = false
-  private var streamClosed = false
   private var streamClosing = false
-  private var streamClosedWaiters: [CheckedContinuation<Void, Never>] = []
+  private let streamClosed = Outcome<Void>()
 
   private(set) var stats = DriverStats()
   private var statWaiters: [(predicate: @Sendable (DriverStats) -> Bool, continuation: CheckedContinuation<DriverStats, Never>)] = []
@@ -74,9 +73,7 @@ actor ConnectionDriver {
     self.options = options
     self.tuning = tuning
     core = try ClientCore(options: options, verifier: SSHSignatureVerifier(), random: random())
-    if tuning.rekeyBytes != nil || tuning.rekeyInterval != nil {
-      core.setRekeyThresholds(bytes: tuning.rekeyBytes, interval: tuning.rekeyInterval)
-    }
+    core.setRekeyThresholds(bytes: tuning.rekeyBytes, interval: tuning.rekeyInterval)
   }
 
   deinit { tuning.released?() }
@@ -88,8 +85,7 @@ actor ConnectionDriver {
   private var handshakeDeadline: ContinuousClock.Instant?
   /// The handshake time left while the trust question is open (the deadline pauses).
   private var handshakeRemaining: Duration?
-  private var connectOutcome: Result<HostKey, SSHError>?
-  private var connectWaiter: CheckedContinuation<Result<HostKey, SSHError>, Never>?
+  private let connected = Outcome<Result<HostKey, SSHError>>()
 
   /// TCP, the version exchange and the first key exchange under `options.handshakeTimeout` (paused while `trust`
   /// decides); returns the trusted host key once the first exchange completed. On failure the stream is closed before
@@ -111,13 +107,7 @@ actor ConnectionDriver {
     Task { await self.writeLoop() }
     process()
     let outcome = await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Result<HostKey, SSHError>, Never>) in
-        if let connectOutcome {
-          continuation.resume(returning: connectOutcome)
-        } else {
-          connectWaiter = continuation
-        }
-      }
+      await withCheckedContinuation { connected.wait($0) }
     } onCancel: {
       Task { await self.cancelConnect() }
     }
@@ -131,7 +121,7 @@ actor ConnectionDriver {
   }
 
   private func cancelConnect() {
-    guard connectOutcome == nil else { return }
+    guard connected.value == nil else { return }
     core.end(.cancelled)
     process()
   }
@@ -170,14 +160,7 @@ actor ConnectionDriver {
     handshakeDeadline = nil
     handshakeRemaining = nil
     trust = nil
-    resolveConnect(.success(core.hostKey))
-  }
-
-  private func resolveConnect(_ outcome: Result<HostKey, SSHError>) {
-    guard connectOutcome == nil else { return }
-    connectOutcome = outcome
-    connectWaiter?.resume(returning: outcome)
-    connectWaiter = nil
+    connected.resolve(.success(core.hostKey))
   }
 
   // MARK: The session
@@ -194,8 +177,7 @@ actor ConnectionDriver {
 
   /// Why the connection ended; waits until it has.
   func ended() async -> SSHError {
-    if let endReason { return endReason }
-    return await withCheckedContinuation { continuation in endedWaiters.append(continuation) }
+    await withCheckedContinuation { ending.wait($0) }
   }
 
   // MARK: Logins
@@ -203,8 +185,7 @@ actor ConnectionDriver {
   private final class Attempt {
     let number: UInt64
     let credential: Credential
-    var waiter: CheckedContinuation<Result<AuthOutcome, SSHError>, Never>?
-    var result: Result<AuthOutcome, SSHError>?
+    let outcome = Outcome<Result<AuthOutcome, SSHError>>()
     /// The signer or responder at work.
     var helper: Task<Void, Never>?
 
@@ -227,13 +208,7 @@ actor ConnectionDriver {
     process()
     let number = current.number
     let result = await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Result<AuthOutcome, SSHError>, Never>) in
-        if let result = current.result {
-          continuation.resume(returning: result)
-        } else {
-          current.waiter = continuation
-        }
-      }
+      await withCheckedContinuation { current.outcome.wait($0) }
     } onCancel: {
       Task { await self.cancelAttempt(number) }
     }
@@ -292,51 +267,36 @@ actor ConnectionDriver {
     attempt = nil
     finished.helper?.cancel()
     finished.helper = nil
-    finished.result = result
-    finished.waiter?.resume(returning: result)
-    finished.waiter = nil
+    finished.outcome.resolve(result)
   }
 
   // MARK: Channels
-
-  enum ChannelKind: Sendable { case exec, shell }
 
   private final class PendingWrite {
     let number: UInt64
     let bytes: [UInt8]
     var offset = 0
-    var waiter: CheckedContinuation<Result<Void, SSHError>, Never>?
-    var result: Result<Void, SSHError>?
+    let outcome = Outcome<Result<Void, SSHError>>()
 
     init(number: UInt64, bytes: [UInt8]) {
       self.number = number
       self.bytes = bytes
     }
-
-    func finish(_ outcome: Result<Void, SSHError>) {
-      guard result == nil else { return }
-      result = outcome
-      waiter?.resume(returning: outcome)
-      waiter = nil
-    }
   }
 
   private final class Channel {
-    let kind: ChannelKind
-    /// The core's number for it while `live`.
+    /// The core's number for it until it is `closed`.
     let id: ChannelID
     let mailbox: ShellMailbox?
-    /// The core still reports events for `id` to this record (until `.closed` or `.openFailed`).
-    var live = true
-    var openResult: Result<Void, SSHError>?
-    var opener: CheckedContinuation<Result<Void, SSHError>, Never>?
+    let opened = Outcome<Result<Void, SSHError>>()
 
     var output: [ChannelOutput] = []
     var outputStart = 0
     var buffered = 0
     var eof = false
+    /// The core reports nothing more for `id` to this record (`.closed` or `.openFailed` came).
     var closed = false
-    var exit: ChannelExit?
+    let exited = Outcome<ChannelExit>()
     /// The connection's end, when that is what ended the channel before its output did (what reads throw).
     var lostWith: SSHError?
     /// The connection's end, when that is what ended the channel (what writes throw).
@@ -346,10 +306,8 @@ actor ConnectionDriver {
     var writers: [PendingWrite] = []
     var finishRequested = false
     var finishSent = false
-    var exitWaiters: [CheckedContinuation<ChannelExit, Never>] = []
 
-    init(kind: ChannelKind, id: ChannelID, mailbox: ShellMailbox?) {
-      self.kind = kind
+    init(id: ChannelID, mailbox: ShellMailbox?) {
       self.id = id
       self.mailbox = mailbox
     }
@@ -365,7 +323,7 @@ actor ConnectionDriver {
         output.removeFirst(outputStart)
         outputStart = 0
       }
-      buffered -= chunk.byteCount
+      buffered -= chunk.bytes.count
       return chunk
     }
 
@@ -382,43 +340,34 @@ actor ConnectionDriver {
   private var handles: UInt64 = 0
   private var waiters: UInt64 = 0
 
-  /// Opens an exec or a shell channel and returns its handle once the core handed it over (an exec once its request
-  /// is sent; a shell once both requests were confirmed). Cancelling the calling task closes the channel and throws
-  /// `cancelled`.
-  func open(_ kind: ChannelKind, command: String = "", term: String = "", size: TerminalSize? = nil)
-    async throws(SSHError) -> (handle: UInt64, mailbox: ShellMailbox?)
-  {
+  /// Opens an exec channel and returns its handle once the core handed it over (once its request is sent).
+  /// Cancelling the calling task closes the channel and throws `cancelled`.
+  func openExec(_ command: String) async throws(SSHError) -> UInt64 {
     guard endReason == nil else { throw .closed(.alreadyEnded) }
-    let id: ChannelID
-    let mailbox: ShellMailbox?
-    switch kind {
-    case .exec:
-      id = try core.openExec(command)
-      mailbox = nil
-    case .shell:
-      id = try core.openShell(term: term, size: size ?? TerminalSize(columns: 80, rows: 24))
-      mailbox = ShellMailbox()
-    }
+    return try await opened(try core.openExec(command), mailbox: nil)
+  }
+
+  /// Opens a shell, as `openExec` (handed over once both requests were confirmed); `mailbox` takes its resizes.
+  func openShell(term: String, size: TerminalSize, mailbox: ShellMailbox) async throws(SSHError) -> UInt64 {
+    guard endReason == nil else { throw .closed(.alreadyEnded) }
+    return try await opened(try core.openShell(term: term, size: size), mailbox: mailbox)
+  }
+
+  private func opened(_ id: ChannelID, mailbox: ShellMailbox?) async throws(SSHError) -> UInt64 {
     handles &+= 1
     let handle = handles
-    let channel = Channel(kind: kind, id: id, mailbox: mailbox)
+    let channel = Channel(id: id, mailbox: mailbox)
     channels[handle] = channel
     live[id] = handle
     process()
     let result = await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Result<Void, SSHError>, Never>) in
-        if let result = channel.openResult {
-          continuation.resume(returning: result)
-        } else {
-          channel.opener = continuation
-        }
-      }
+      await withCheckedContinuation { channel.opened.wait($0) }
     } onCancel: {
       Task { await self.cancelOpen(handle) }
     }
     switch result {
     case .success:
-      return (handle, mailbox)
+      return handle
     case .failure(let error):
       channels[handle] = nil
       throw error
@@ -426,7 +375,7 @@ actor ConnectionDriver {
   }
 
   private func cancelOpen(_ handle: UInt64) {
-    guard let channel = channels[handle], channel.openResult == nil, channel.live else { return }
+    guard let channel = channels[handle], channel.opened.value == nil else { return }
     core.closeChannel(channel.id)
     process()
   }
@@ -442,17 +391,11 @@ actor ConnectionDriver {
     channel.writers.append(pending)
     pumpWriters(channel)
     process()
-    if let result = pending.result { return try result.get() }
+    if let result = pending.outcome.value { return try result.get() }
     stats.writeSuspensions += 1
     let number = pending.number
     let result = await withTaskCancellationHandler {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Result<Void, SSHError>, Never>) in
-        if let result = pending.result {
-          continuation.resume(returning: result)
-        } else {
-          pending.waiter = continuation
-        }
-      }
+      await withCheckedContinuation { pending.outcome.wait($0) }
     } onCancel: {
       Task { await self.cancelWrite(handle, number) }
     }
@@ -463,7 +406,7 @@ actor ConnectionDriver {
     guard let channel = channels[handle], let index = channel.writers.firstIndex(where: { $0.number == number })
     else { return }
     let pending = channel.writers.remove(at: index)
-    pending.finish(.failure(.cancelled))
+    pending.outcome.resolve(.failure(.cancelled))
     pumpWriters(channel)
     process()
   }
@@ -481,9 +424,9 @@ actor ConnectionDriver {
       pending.offset += taken
       guard pending.offset >= pending.bytes.count else { return }
       channel.writers.removeFirst()
-      pending.finish(.success(()))
+      pending.outcome.resolve(.success(()))
     }
-    if channel.finishRequested, !channel.finishSent, channel.live, !channel.closed {
+    if channel.finishRequested, !channel.finishSent, !channel.closed {
       channel.finishSent = true
       core.finishInput(channel.id)
     }
@@ -492,7 +435,7 @@ actor ConnectionDriver {
   private func failWriters(_ channel: Channel, _ error: SSHError) {
     let failed = channel.writers
     channel.writers = []
-    for pending in failed { pending.finish(.failure(error)) }
+    for pending in failed { pending.outcome.resolve(.failure(error)) }
   }
 
   func finishInput(_ handle: UInt64) {
@@ -557,39 +500,35 @@ actor ConnectionDriver {
   }
 
   private func consumed(_ chunk: ChannelOutput, on channel: Channel) {
-    guard channel.live, !channel.closed else { return }
-    core.consumed(chunk.byteCount, on: channel.id)
+    guard !channel.closed else { return }
+    core.consumed(chunk.bytes.count, on: channel.id)
   }
 
-  /// Closes the channel (the app's side ends at once; unread output is dropped).
+  /// Closes the channel (the app's side ends at once; unread output is dropped, also when the server closed first).
   func closeChannel(_ handle: UInt64) {
     guard let channel = channels[handle] else { return }
     channel.mailbox?.markClosed()
-    guard !channel.closed else { return }
     channel.dropOutput()
-    if channel.live, endReason == nil {
-      core.closeChannel(channel.id)
-      process()
-    }
+    guard !channel.closed, endReason == nil else { return }
+    core.closeChannel(channel.id)
+    process()
   }
 
   func exit(_ handle: UInt64) async -> ChannelExit {
     guard let channel = channels[handle] else { return .lost }
-    if channel.closed { return channel.exit ?? .lost }
-    return await withCheckedContinuation { continuation in channel.exitWaiters.append(continuation) }
+    return await withCheckedContinuation { channel.exited.wait($0) }
   }
 
-  /// The facade object went away: the channel closes and its record is dropped.
+  /// The facade object went away (no read, write or exit can wait on it): the channel closes, its record is dropped.
   func release(_ handle: UInt64) {
     closeChannel(handle)
-    guard let channel = channels[handle], channel.closed else { return }
     channels[handle] = nil
   }
 
   /// Sends the size waiting in the shell's mailbox, if any (`ShellChannel.resize`).
   func applyResize(_ handle: UInt64) {
     guard let channel = channels[handle], let size = channel.mailbox?.take() else { return }
-    guard channel.live, !channel.closed, endReason == nil else { return }
+    guard !channel.closed, endReason == nil else { return }
     try? core.resize(channel.id, to: size)
     process()
   }
@@ -598,26 +537,20 @@ actor ConnectionDriver {
 
   private func channelOpened(_ id: ChannelID) {
     guard let handle = live[id], let channel = channels[handle] else { return }
-    channel.openResult = .success(())
-    channel.opener?.resume(returning: .success(()))
-    channel.opener = nil
+    channel.opened.resolve(.success(()))
   }
 
+  /// The open's caller gets the error and drops the record; nobody else holds the channel.
   private func channelOpenFailed(_ id: ChannelID, _ error: SSHError) {
     guard let handle = live.removeValue(forKey: id), let channel = channels[handle] else { return }
-    channel.live = false
     channel.closed = true
-    channel.exit = .lost
-    channel.mailbox?.markClosed()
-    channel.openResult = .failure(error)
-    channel.opener?.resume(returning: .failure(error))
-    channel.opener = nil
+    channel.opened.resolve(.failure(error))
   }
 
   private func channelOutput(_ id: ChannelID, _ output: ChannelOutput) {
     guard let handle = live[id], let channel = channels[handle] else { return }
     channel.output.append(output)
-    channel.buffered += output.byteCount
+    channel.buffered += output.bytes.count
     stats.maximumBufferedOutput = max(stats.maximumBufferedOutput, channel.buffered)
     serveReaders(channel)
   }
@@ -630,17 +563,13 @@ actor ConnectionDriver {
 
   private func channelClosed(_ id: ChannelID, _ exit: ChannelExit, lostWith: SSHError?) {
     guard let handle = live.removeValue(forKey: id), let channel = channels[handle] else { return }
-    channel.live = false
     channel.closed = true
-    channel.exit = exit
     channel.lostWith = channel.eof ? nil : lostWith
     channel.endedBy = lostWith
     channel.mailbox?.markClosed()
     failWriters(channel, lostWith ?? .usage(.channelClosed))
     serveReaders(channel)
-    let waiting = channel.exitWaiters
-    channel.exitWaiters = []
-    for waiter in waiting { waiter.resume(returning: exit) }
+    channel.exited.resolve(exit)
   }
 
   private func channelWritable(_ id: ChannelID) {
@@ -679,33 +608,17 @@ actor ConnectionDriver {
     }
   }
 
+  /// The core ended the login (`.authFinished`) and every channel (`.closed`, `.openFailed`) before `.ended`, so no
+  /// attempt, open, read, write or exit is left waiting here.
   private func connectionEnded(_ error: SSHError) {
     guard endReason == nil else { return }
-    endReason = error
-    resolveConnect(.failure(error))
+    ending.resolve(error)
+    connected.resolve(.failure(error))
     for kind in Array(timers.keys) { cancelTimer(kind) }
     trustTask?.cancel()
     trustTask = nil
     trust = nil
-    attempt?.helper?.cancel()
-    // The core ended every channel before `.ended`; anything still waiting is answered here all the same.
-    for channel in channels.values where !channel.closed {
-      channel.closed = true
-      channel.live = false
-      channel.lostWith = channel.eof ? nil : error
-      channel.endedBy = error
-      channel.mailbox?.markClosed()
-      failWriters(channel, error)
-      serveReaders(channel)
-      let exits = channel.exitWaiters
-      channel.exitWaiters = []
-      for waiter in exits { waiter.resume(returning: channel.exit ?? .lost) }
-    }
-    live.removeAll()
-    let waiting = endedWaiters
-    endedWaiters = []
-    for waiter in waiting { waiter.resume(returning: error) }
-    if !streamBroken { schedule(.disconnectGrace, at: clock.now.advanced(by: tuning.disconnectGrace)) }
+    schedule(.disconnectGrace, at: clock.now.advanced(by: Self.disconnectGrace))
   }
 
   // MARK: The stream
@@ -717,13 +630,12 @@ actor ConnectionDriver {
     guard let stream else { return }
     while endReason == nil {
       if core.readsPaused {
-        stats.readPauses += 1
         await withCheckedContinuation { continuation in readWaiter = continuation }
         continue
       }
       let result: Result<[UInt8], SSHError>
       do throws(SSHError) {
-        result = .success(try await stream.read(maximum: tuning.readSize))
+        result = .success(try await stream.read(maximum: Self.readSize))
       } catch {
         result = .failure(error)
       }
@@ -767,7 +679,6 @@ actor ConnectionDriver {
         break
       }
       stats.writes += 1
-      stats.bytesWritten += bytes.count
       process()
     }
     await closeStream()
@@ -791,16 +702,12 @@ actor ConnectionDriver {
     streamClosing = true
     cancelTimer(.disconnectGrace)
     await stream?.close()
-    streamClosed = true
+    streamClosed.resolve(())
     wakeReader()
-    let waiting = streamClosedWaiters
-    streamClosedWaiters = []
-    for waiter in waiting { waiter.resume() }
   }
 
   private func waitForStreamClosed() async {
-    guard !streamClosed else { return }
-    await withCheckedContinuation { continuation in streamClosedWaiters.append(continuation) }
+    await withCheckedContinuation { streamClosed.wait($0) }
   }
 
   // MARK: Timers
@@ -884,7 +791,7 @@ actor ConnectionDriver {
       core.timerFired(timer)
       process()
     case .handshake:
-      guard connectOutcome == nil, endReason == nil else { return }
+      guard connected.value == nil, endReason == nil else { return }
       core.end(.timedOut(.handshake))
       process()
     case .disconnectGrace:
@@ -919,21 +826,30 @@ actor ConnectionDriver {
     stats.waitingReaders = channels.values.reduce(0) { $0 + $1.readers.count }
   }
 
-  /// Output a channel holds that the app has not read.
-  func bufferedOutput(_ handle: UInt64) -> Int { channels[handle]?.buffered ?? 0 }
-
-  var keepalivesOutstanding: Int { core.keepalivesOutstanding }
-  var outboundBacklog: Int { core.outboundBacklog }
   var channelRecords: Int { channels.count }
 }
 
-extension ChannelOutput {
-  var byteCount: Int {
-    switch self {
-    case .stdout(let bytes), .stderr(let bytes): bytes.count
-    }
+/// A result decided once, and the tasks waiting for it. The driver's own: used only on its actor.
+final class Outcome<Value: Sendable> {
+  private(set) var value: Value?
+  private var waiters: [CheckedContinuation<Value, Never>] = []
+
+  /// Resumes `continuation` with the value: at once if it is decided, else once it is.
+  func wait(_ continuation: CheckedContinuation<Value, Never>) {
+    if let value { continuation.resume(returning: value) } else { waiters.append(continuation) }
   }
 
+  /// Decides the value and resumes every waiter; later calls change nothing.
+  func resolve(_ value: Value) {
+    guard self.value == nil else { return }
+    self.value = value
+    let waiting = waiters
+    waiters = []
+    for waiter in waiting { waiter.resume(returning: value) }
+  }
+}
+
+extension ChannelOutput {
   var bytes: [UInt8] {
     switch self {
     case .stdout(let bytes), .stderr(let bytes): bytes

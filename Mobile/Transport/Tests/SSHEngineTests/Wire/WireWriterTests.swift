@@ -1,20 +1,21 @@
-import SSHEngine
 import XCTest
+@testable import SSHEngine
 
 final class WireWriterTests: XCTestCase {
+  private typealias T = PrimitiveTestSupport
+
   func testValuesMatchTheRFCEncodings() throws {
     var writer = WireWriter(.serviceRequest)
     writer.writeString("ssh-userauth")
     writer.writeBoolean(true)
     writer.writeBoolean(false)
     writer.writeUInt32(0x0102_0304)
-    writer.writeUInt64(0x0A0B_0C0D_0E0F_1011)
     writer.writeByte(0xFE)
     writer.writeBytes([9, 9])
     writer.writeNameList(["a", "b-c@example.org"])
     writer.writeNameList([])
-    let expected = [5] + Raw.string("ssh-userauth") + [1, 0, 1, 2, 3, 4, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11]
-      + [0xFE, 9, 9] + Raw.string("a,b-c@example.org") + Raw.u32(0)
+    let expected = [5] + Raw.string("ssh-userauth") + [1, 0, 1, 2, 3, 4, 0xFE, 9, 9] + Raw.string("a,b-c@example.org")
+      + Raw.u32(0)
     XCTAssertEqual(try writer.finish(), expected)
   }
 
@@ -24,7 +25,7 @@ final class WireWriterTests: XCTestCase {
       ([0, 0, 0], Raw.u32(0)),
       ([0x80], Raw.u32(2) + [0, 0x80]),
       ([0, 0, 0x7F], Raw.u32(1) + [0x7F]),
-      (Raw.hex("09 a3 78 f9 b2 e3 32 a7"), Raw.u32(8) + Raw.hex("09 a3 78 f9 b2 e3 32 a7")),
+      (T.bytes("09 a3 78 f9 b2 e3 32 a7"), Raw.u32(8) + T.bytes("09 a3 78 f9 b2 e3 32 a7")),
     ]
     for (magnitude, wire) in cases {
       var writer = WireWriter()
@@ -65,9 +66,9 @@ final class WireWriterTests: XCTestCase {
 
   func testSecretBytes() throws {
     let a = SecretBytes(copying: [1, 2, 3]), b = SecretBytes(copying: [1, 2, 3]), c = SecretBytes(copying: [1, 2, 4])
-    XCTAssertTrue(a.constantTimeEquals(b))
-    XCTAssertFalse(a.constantTimeEquals(c))
-    XCTAssertFalse(a.constantTimeEquals(SecretBytes(copying: [1, 2])))
+    XCTAssertTrue(ConstantTime.equal(a, b))
+    XCTAssertFalse(ConstantTime.equal(a, c))
+    XCTAssertFalse(ConstantTime.equal(a, SecretBytes(copying: [1, 2])))
     XCTAssertEqual("\(a)", "SecretBytes(3 bytes)")
     struct Refused: Error, Equatable {}
     XCTAssertThrows(Refused()) { () throws(Refused) in

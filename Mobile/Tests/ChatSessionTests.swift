@@ -259,6 +259,28 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(helper.requests("queue.add").map { $0.params["text"] as? String }, ["unbound"])
     }
 
+    /// While the agent thinks after its last message in the turn, its row's line is that reasoning (a Codex summary's
+    /// bold title, else the first sentence); a message after it takes the line back.
+    func testTheRowsThoughtIsReasoningNewerThanTheLastMessage() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
+            ChatFixture.record("t1:started", "turn_started", turn: "t1", time: 946_719_200_000),
+            ChatFixture.record("u1", "user", turn: "t1", text: "Make the retries idempotent.", time: 946_719_200_000),
+            ChatFixture.record("a1", "assistant", turn: "t1", text: "Looking at the handlers.", time: 946_719_201_000),
+            ChatFixture.record("r1", "reasoning", turn: "t1", text: "**Inspecting the webhook guard**\n\nThe guard keys on the attempt.",
+                               time: 946_719_202_000)]])
+        try await TestSupport.eventually { chat.currentThought == "Inspecting the webhook guard" }
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
+            ChatFixture.record("a2", "assistant", turn: "t1", text: "Keyed on the event id now.", time: 946_719_203_000)]])
+        try await TestSupport.eventually { chat.currentThought == nil && chat.currentNote == "Keyed on the event id now." }
+        XCTAssertEqual(TabsNote.thought("I need to check whether the guard runs twice. Then the tests."),
+                       "I need to check whether the guard runs twice.")
+        XCTAssertNil(TabsNote.thought("  "))
+    }
+
     func testStopSendsChatStop() async throws {
         let helper = ScriptedHelper()
         script(helper) { request in request.method == "chat.stop" ? .result(ChatFixture.sent()) : nil }

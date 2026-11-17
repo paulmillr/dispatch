@@ -367,3 +367,25 @@ fn transcript_agents_fill_in_what_the_hooks_missed() {
     assert_eq!(agents[0].name.as_deref(), Some("task toolu_1"));
     assert_eq!(agents[0].tokens, None, "its tokens are the hooks' to read");
 }
+
+/// A background agent only the transcript names (its SubagentStart came before this helper) is followed as a hook's
+/// is: its task and start from the call, its tokens from its own transcript; it leaves when the transcript ends it.
+/// A hook agent of the same call is not taken twice, and one from before the agent's process never joins.
+#[test]
+fn a_transcript_agent_is_followed_for_its_tokens() {
+    let mut world = World::new("adopted");
+    world.write("agent-a7.jsonl", &(user(0) + &call("m1", 1, 2, 300, 4_000, 9_000)));
+    let entry = launched("toolu_7", Some("a7"), "general-purpose", Some(5_000));
+    let old = launched("toolu_0", Some("a0"), "general-purpose", Some(500));
+    assert!(world.claude.adopt(&mut world.io, SESSION, &[old.clone(), entry.clone()], Some(1_000)));
+    world.pump();
+    assert_eq!(
+        world.agents(),
+        vec![Agent { id: "a7".into(), kind: "general-purpose".into(), name: Some("task toolu_7".into()), tokens: Some(4_302), started_ms: Some(5_000) }]
+    );
+    assert_eq!(world.io.watches[0].1, world.folder.join("agent-a7.jsonl"));
+    assert!(!world.claude.adopt(&mut world.io, SESSION, &[entry], Some(1_000)), "already followed");
+    assert!(world.claude.adopt(&mut world.io, SESSION, &[], Some(1_000)), "the transcript ended it");
+    assert!(world.agents().is_empty());
+    assert_eq!(world.io.unwatched, vec![world.io.watches[0].0]);
+}

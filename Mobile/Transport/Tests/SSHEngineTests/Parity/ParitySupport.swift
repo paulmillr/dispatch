@@ -175,28 +175,6 @@ final class Recorder<Value: Sendable>: @unchecked Sendable {
   var all: [Value] { values.value }
 }
 
-// `TimedOut` is Client/ClientTestSupport.swift's.
-
-/// `body`'s result, or `TimedOut` after `timeout` (the body is then cancelled and left to finish on its own).
-func within<T: Sendable>(_ timeout: Duration = .seconds(10), _ what: String,
-                         _ body: @escaping @Sendable () async throws -> T) async throws -> T {
-  let result = Watched<Result<T, any Error>?>(nil)
-  let work = Task {
-    let outcome: Result<T, any Error>
-    do { outcome = .success(try await body()) } catch { outcome = .failure(error) }
-    result.update { if $0 == nil { $0 = outcome } }
-  }
-  let deadline = Task {
-    try? await Task.sleep(for: timeout)
-    guard !Task.isCancelled else { return }
-    result.update { if $0 == nil { $0 = .failure(TimedOut(what: what)) } }
-    work.cancel()
-  }
-  defer { deadline.cancel() }
-  let outcome = try await result.wait(what, timeout: timeout + .seconds(5)) { $0 != nil }
-  return try outcome!.get()
-}
-
 /// Reads a shell's or an exec's output across calls (one iterator), each read bounded.
 final class OutputReader: @unchecked Sendable {
   private var shell: SSHShell.AsyncIterator?
@@ -210,9 +188,10 @@ final class OutputReader: @unchecked Sendable {
 
   /// Reads until stdout holds `expected` from `from` on, or the output ends. Returns stdout from `from` on.
   @discardableResult
-  func read(until expected: String, from: Int = 0, timeout: Duration = .seconds(10)) async throws -> String {
+  func read(until expected: String, from: Int = 0, timeout: Double = 10) async throws -> String {
     let needle = Data(expected.utf8)
-    try await within(timeout, "output \(expected.debugDescription); seen \(String(decoding: stdout, as: UTF8.self).debugDescription)") {
+    let seen = String(decoding: stdout, as: UTF8.self).debugDescription
+    try await bounded(timeout, "output \(expected.debugDescription); seen \(seen)") {
       while !self.ended, self.stdout.dropFirst(from).range(of: needle) == nil { try await self.next() }
     }
     return String(decoding: stdout.dropFirst(from), as: UTF8.self)
@@ -220,8 +199,8 @@ final class OutputReader: @unchecked Sendable {
 
   /// Reads until the output ends; returns all of stdout.
   @discardableResult
-  func readToEnd(timeout: Duration = .seconds(30)) async throws -> Data {
-    try await within(timeout, "the end of the output") {
+  func readToEnd(timeout: Double = 30) async throws -> Data {
+    try await bounded(timeout, "the end of the output") {
       while !self.ended { try await self.next() }
     }
     return stdout

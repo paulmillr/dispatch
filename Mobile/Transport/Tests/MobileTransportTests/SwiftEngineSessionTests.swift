@@ -83,7 +83,6 @@ final class SwiftEngineSessionTests: XCTestCase {
     for options in [mapped(timeout: .zero), mapped(keepalive: .zero), mapped(max: 0), mapped(max: 500), mapped(port: 70_000)] {
       XCTAssertNoThrow(try options.validate())
     }
-    XCTAssertEqual(SwiftEngine(connector: ScriptedConnector(ScriptedSession())).version, "dispatch-mobile-ssh (SSHEngine, Swift)")
   }
 
   /// A refused key fails the connect as russh's does (its text, which the wrappers replace from the app's decision), and
@@ -185,6 +184,20 @@ final class SwiftEngineSessionTests: XCTestCase {
     guard case SSHTransportError.hostKeyRejected? = result.error.map(link.explain) else {
       return XCTFail("\(String(describing: result.error))")
     }
+  }
+
+  /// A host key question that comes once the connect was cancelled (the engine's handshake went on) answers no
+  /// without asking the app, as a later signature or prompt does: no sheet for a connection nobody wants.
+  func testAQuestionAfterTheWithdrawalIsNotAsked() async {
+    let trust = Pending()
+    let link = SessionLink(host: "studio", port: 22, trust: trust, trusted: nil)
+    link.withdraw()
+    let answer = Watched<Bool?>(nil)
+    let key = EngineHostKey(algorithm: "ssh-ed25519", fingerprint: "SHA256:fictional", openSSH: "ssh-ed25519 AAAA")
+    link.hostKey(key) { value in answer.change { $0 = value } }
+    await wait(answer, "the answer") { $0 != nil }
+    XCTAssertEqual(answer.value, false)
+    XCTAssertFalse(trust.asked.value, "the app was asked about a cancelled connect's host key")
   }
 
   /// `disconnected` exactly once whatever races to end the connection: closes from many tasks, the server's end, the
@@ -644,20 +657,13 @@ final class Signer: @unchecked Sendable {
   private let answer: @Sendable (Data) -> Data?
 
   init(_ key: Curve25519.Signing.PrivateKey, answer: (@Sendable (Data) -> Data?)? = nil) {
-    var blob = Data()
-    blob.appendSSHString(Data("ssh-ed25519".utf8))
-    blob.appendSSHString(key.publicKey.rawRepresentation)
-    self.blob = blob
+    blob = publicKeyBlob(SSHKey(ed25519: key))
     algorithm = .ed25519
     self.answer = answer ?? { try? key.signature(for: $0) }
   }
 
   init(_ key: P256.Signing.PrivateKey, answer: (@Sendable (Data) -> Data?)? = nil) {
-    var blob = Data()
-    blob.appendSSHString(Data("ecdsa-sha2-nistp256".utf8))
-    blob.appendSSHString(Data("nistp256".utf8))
-    blob.appendSSHString(key.publicKey.x963Representation)
-    self.blob = blob
+    blob = publicKeyBlob(SSHKey(p256: key))
     algorithm = .ecdsaP256
     self.answer = answer ?? { try? key.signature(for: $0).rawRepresentation }
   }

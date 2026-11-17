@@ -19,5 +19,15 @@ extension SSHFixture {
     let key = try SSHKey.openSSH(TestKeys.shared.data("ed25519"))
     return try await SSHConnection.connect(to: endpoint, credentials: credentials ?? [.key(key)], trust: trust)
   }
+
+  /// A folder under the root with `contents` as each bundled platform's helper.
+  func helpers(_ contents: Data) throws -> URL {
+    let directory = root.appendingPathComponent("helpers-\(UUID().uuidString.prefix(6))")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for name in ["darwin-arm64", "linux-aarch64", "linux-x86_64"] {
+      try contents.write(to: directory.appendingPathComponent(name))
+    }
+    return directory
+  }
 }
 #endif

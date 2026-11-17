@@ -136,9 +136,7 @@ final class DirectPublicKeyTests: XCTestCase {
       for accepted in [false, true] {
         let harness = pipelined()
         if accepted { harness.server(S.accept) }
-        harness.link.end(end)
-        harness.auth.connectionEnded(end)
-        harness.drain()
+        harness.endConnection(end)
         XCTAssertEqual(harness.take(), [.timer(.schedule(.directAnswer, after: Self.deadline)), .timer(.cancel(.directAnswer)),
                                         .failed(end)])
         // A late timer firing is stale.

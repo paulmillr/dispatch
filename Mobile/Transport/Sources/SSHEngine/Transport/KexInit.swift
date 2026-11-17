@@ -45,6 +45,14 @@ struct KexInit: Equatable {
     do { return try writer.finish() } catch { throw .protocolViolation(.malformed(.kexInit, error)) }
   }
 
+  private var lists: [[String]] {
+    [keyExchange, hostKey, cipherClientToServer, cipherServerToClient, macClientToServer, macServerToClient,
+     compressionClientToServer, compressionServerToClient, languageClientToServer, languageServerToClient]
+  }
+}
+
+// In an extension, so the struct keeps its memberwise initializer.
+extension KexInit {
   /// The server's KEXINIT payload, every list within `Limits.nameListBytes` and `Limits.nameListCount`. Names the
   /// engine does not know are kept (they never match).
   init(decoding payload: [UInt8]) throws(SSHError) {
@@ -63,30 +71,6 @@ struct KexInit: Equatable {
     } catch {
       throw .protocolViolation(.malformed(.kexInit, error))
     }
-  }
-
-  init(cookie: [UInt8], keyExchange: [String], hostKey: [String], cipherClientToServer: [String],
-       cipherServerToClient: [String], macClientToServer: [String], macServerToClient: [String],
-       compressionClientToServer: [String], compressionServerToClient: [String], languageClientToServer: [String],
-       languageServerToClient: [String], firstKexPacketFollows: Bool, reserved: UInt32) {
-    self.cookie = cookie
-    self.keyExchange = keyExchange
-    self.hostKey = hostKey
-    self.cipherClientToServer = cipherClientToServer
-    self.cipherServerToClient = cipherServerToClient
-    self.macClientToServer = macClientToServer
-    self.macServerToClient = macServerToClient
-    self.compressionClientToServer = compressionClientToServer
-    self.compressionServerToClient = compressionServerToClient
-    self.languageClientToServer = languageClientToServer
-    self.languageServerToClient = languageServerToClient
-    self.firstKexPacketFollows = firstKexPacketFollows
-    self.reserved = reserved
-  }
-
-  private var lists: [[String]] {
-    [keyExchange, hostKey, cipherClientToServer, cipherServerToClient, macClientToServer, macServerToClient,
-     compressionClientToServer, compressionServerToClient, languageClientToServer, languageServerToClient]
   }
 }
 

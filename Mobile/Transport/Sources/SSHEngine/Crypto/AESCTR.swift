@@ -36,11 +36,9 @@ final class AESCTRStream {
   }
 
   func apply(_ bytes: inout [UInt8], from start: Int = 0) throws(SSHError) {
-    var failure: SSHError?
-    bytes.withUnsafeMutableBytes { raw in
-      do throws(SSHError) { try apply(UnsafeMutableRawBufferPointer(rebasing: raw[start...])) } catch { failure = error }
+    try withTypedMutableBytes(of: &bytes) { (raw) throws(SSHError) in
+      try apply(UnsafeMutableRawBufferPointer(rebasing: raw[start...]))
     }
-    if let failure { throw failure }
   }
 }
 
@@ -58,40 +56,25 @@ struct MACKey {
 
   var tagBytes: Int { algorithm.tagBytes }
 
-  /// HMAC(key, uint32 sequence ‖ parts...).
-  func code(sequence: UInt32, _ parts: ArraySlice<UInt8>...) -> [UInt8] {
-    var number = sequence.bigEndian
+  /// HMAC(key, uint32 sequence ‖ data).
+  func code(sequence: UInt32, _ data: ArraySlice<UInt8>) -> [UInt8] {
     switch algorithm {
-    case .hmacSHA256, .hmacSHA256ETM:
-      var hmac = HMAC<SHA256>(key: key)
-      withUnsafeBytes(of: &number) { hmac.update(data: $0) }
-      for part in parts { part.withUnsafeBytes { hmac.update(data: $0) } }
-      return Array(hmac.finalize())
-    case .hmacSHA512, .hmacSHA512ETM:
-      var hmac = HMAC<SHA512>(key: key)
-      withUnsafeBytes(of: &number) { hmac.update(data: $0) }
-      for part in parts { part.withUnsafeBytes { hmac.update(data: $0) } }
-      return Array(hmac.finalize())
+    case .hmacSHA256, .hmacSHA256ETM: code(SHA256.self, sequence: sequence, data)
+    case .hmacSHA512, .hmacSHA512ETM: code(SHA512.self, sequence: sequence, data)
     }
   }
 
-  /// Whether `received` is the MAC of the parts, compared in constant time.
-  func verify(_ received: ArraySlice<UInt8>, sequence: UInt32, _ parts: ArraySlice<UInt8>...) -> Bool {
+  /// Whether `received` is the MAC of `data`, compared in constant time.
+  func verify(_ received: ArraySlice<UInt8>, sequence: UInt32, _ data: ArraySlice<UInt8>) -> Bool {
+    ConstantTime.equal(code(sequence: sequence, data), received)
+  }
+
+  private func code<H: HashFunction>(_: H.Type, sequence: UInt32, _ data: ArraySlice<UInt8>) -> [UInt8] {
     var number = sequence.bigEndian
-    let expected: [UInt8]
-    switch algorithm {
-    case .hmacSHA256, .hmacSHA256ETM:
-      var hmac = HMAC<SHA256>(key: key)
-      withUnsafeBytes(of: &number) { hmac.update(data: $0) }
-      for part in parts { part.withUnsafeBytes { hmac.update(data: $0) } }
-      expected = Array(hmac.finalize())
-    case .hmacSHA512, .hmacSHA512ETM:
-      var hmac = HMAC<SHA512>(key: key)
-      withUnsafeBytes(of: &number) { hmac.update(data: $0) }
-      for part in parts { part.withUnsafeBytes { hmac.update(data: $0) } }
-      expected = Array(hmac.finalize())
-    }
-    return ConstantTime.equal(expected, received)
+    var hmac = HMAC<H>(key: key)
+    withUnsafeBytes(of: &number) { hmac.update(data: $0) }
+    data.withUnsafeBytes { hmac.update(data: $0) }
+    return Array(hmac.finalize())
   }
 }
 

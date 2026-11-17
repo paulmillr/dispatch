@@ -16,6 +16,7 @@ struct SettingsView: View {
     /// Why background refresh stayed off (notifications not allowed).
     @State private var refreshNote: String?
     @AppStorage(MobileSettings.gitBranchesKey) private var showGitBranches = false
+    @AppStorage(MobileSettings.agentRowLinesKey) private var agentRowLines = 2
     /// The pushed screens (G2 to G5, and Color scheme).
     @State private var path: [Route]
 
@@ -116,6 +117,11 @@ struct SettingsView: View {
                             ForEach(ChatAgentStart.allCases) { Text($0.title).tag($0) }
                         }
                         .accessibilityIdentifier("settings-chat-agent-start")
+                        Picker("Agent rows", selection: $agentRowLines) {
+                            Text("2 lines").tag(2)
+                            Text("3 lines").tag(3)
+                        }
+                        .accessibilityIdentifier("settings-agent-row-lines")
                         Toggle("Keep history on this iPhone", isOn: $settings.chatKeepHistory)
                             .accessibilityIdentifier("settings-chat-keep-history")
                             .onChange(of: settings.chatKeepHistory) { _, keep in
@@ -143,6 +149,7 @@ struct SettingsView: View {
                             Text("Open agents in picks what an agent tab shows first; the tab's switch shows the other. Esc twice keeps a stray Esc from a hardware keyboard from stopping the agent.")
                             Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
                             Text("Voice is what conversation mode and Read Aloud speak in.")
+                            Text("Agent rows sets how much each row in Agents says: with 3 lines, a working agent's words over its step, and two lines of the last message.")
                             Text("Keep history saves what each chat showed, so it reads while its host is offline; turning it off deletes it.")
                         }
                     }

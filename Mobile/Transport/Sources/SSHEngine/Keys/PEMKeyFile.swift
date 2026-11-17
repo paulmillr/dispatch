@@ -76,7 +76,7 @@ enum PEMKeyFile {
       try inner.expectEnd()
       guard seed.count == 32 else { throw KeyFileProblem.damaged.error }
       let key: Curve25519.Signing.PrivateKey
-      do { key = try Curve25519.Signing.PrivateKey(rawRepresentation: SecretBytes.copying(der, range: seed)) } catch {
+      do { key = try Curve25519.Signing.PrivateKey(rawRepresentation: SecretBytes(copying: der[seed])) } catch {
         throw KeyFileProblem.damaged.error
       }
       let point = Array(key.publicKey.rawRepresentation)
@@ -102,7 +102,7 @@ enum PEMKeyFile {
     let modulus = Array(der[modulusRange]), exponent = Array(der[exponentRange])
     try checkRSASize(exponent: exponent, modulus: modulus)
 
-    let secKey = try SecretBytes.copying(der, range: element).withBytes { (bytes) throws(SSHError) in
+    let secKey = try withTypedBytes(of: der[element]) { (bytes) throws(SSHError) in
       try RSAKeys.privateKey(pkcs1: bytes)
     }
     try RSAKeys.checkPair(secKey, exponent: exponent, modulus: modulus)
@@ -136,7 +136,7 @@ enum PEMKeyFile {
     }
     try key.expectEnd()
     guard let curve else { throw KeyFileProblem.damaged.error }
-    let (material, point) = try ECKeys.privateKey(curve: curve, scalar: SecretBytes.copying(der, range: scalar))
+    let (material, point) = try ECKeys.privateKey(curve: curve, scalar: SecretBytes(copying: der[scalar]))
     for range in [inner, publicKey].compactMap({ $0 }) where !der[range].elementsEqual(point) {
       throw KeyFileProblem.mismatchedHalves.error
     }
@@ -146,7 +146,7 @@ enum PEMKeyFile {
   /// `Limits`' RSA bounds: a size outside them is `KeyFileRefusal.rsaKeySize`; another violation (an even modulus,
   /// an exponent of 1 or above `Limits.rsaExponentBytes`) is `damaged`.
   static func checkRSASize(exponent: [UInt8], modulus: [UInt8]) throws(SSHError) {
-    let bits = modulus.first.map { (modulus.count - 1) * 8 + (8 - $0.leadingZeroBitCount) } ?? 0
+    let bits = PublicKeyBlob.bits(modulus)
     guard (Limits.rsaMinimumBits...Limits.rsaMaximumBits).contains(bits) else { throw KeyFileRefusal.rsaKeySize.error }
     do { try PublicKeyBlob.checkRSA(exponent: exponent, modulus: modulus) } catch {
       throw KeyFileProblem.damaged.error

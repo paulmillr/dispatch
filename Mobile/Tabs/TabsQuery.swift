@@ -53,6 +53,13 @@ struct TabsStatus: Equatable, Sendable {
     var steps = 0
     var agents = 0
     var asked: String? = nil
+    /// While it works, from its open thread: its reasoning, when that is newer than anything it said in the turn
+    /// (`TabsNote.thought`); the row shows it in the note's place, in italics.
+    var thought: String? = nil
+
+    /// The user's own words where a preview shows them (the turn's prompt, `asked`): in quotes, so they never read as
+    /// the agent's.
+    static func quoted(_ text: String) -> String { "“" + text + "”" }
 }
 
 /// How much a tab wants attention, from Chat's per-conversation state (`PaneUrgency`'s precedence: waiting, then
@@ -150,5 +157,19 @@ enum TabsNote {
         guard let first else { return nil }
         let line = first.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return line.count > 160 ? String(line.prefix(160)) + "…" : line
+    }
+
+    /// A working row's line from the agent's reasoning: a bold title it starts with (Codex's summaries,
+    /// "**Inspecting the parser**"), else the first sentence of its first line (Claude's thinking).
+    static func thought(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("**"), let end = trimmed.dropFirst(2).range(of: "**"),
+           !trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<end.lowerBound].contains("\n") {
+            let title = trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<end.lowerBound].trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty { return title }
+        }
+        guard var line = Self.line(trimmed) else { return nil }
+        if let end = line.range(of: #"[.!?](?=\s)"#, options: .regularExpression) { line = String(line[..<end.upperBound]) }
+        return line
     }
 }

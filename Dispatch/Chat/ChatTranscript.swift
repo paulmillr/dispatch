@@ -74,6 +74,15 @@ struct ChatTranscript {
         return "\(seconds / 3600)h \(seconds / 60 % 60)m"
     }
 
+    /// A clock that runs (the working row's thinking time, a subagent's): seconds only for its first ten minutes,
+    /// whole minutes after ("12m", "1h 5m"), where a ticking second only distracts. A finished turn keeps `elapsed`.
+    static func clock(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        if seconds < 600 { return elapsed(interval) }
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        return elapsed(interval)
+    }
+
     @discardableResult
     mutating func turn(_ id: String, at date: Date = Date(), fileOffset: UInt64? = nil) -> Int {
         Self.turn(id, at: date, fileOffset: fileOffset, in: &turns)

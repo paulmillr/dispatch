@@ -114,7 +114,7 @@ public final class ConnectionCore {
   /// for a channel not yet handed over. The number stays taken until the server's CLOSE. Idempotent.
   public func close(_ id: ChannelID) {
     guard endedWith == nil, let channel = channels[id.rawValue] else { return }
-    if channel.stage == .open { closeLocally(channel) }
+    closeLocally(channel)
     report(channel, failure: .cancelled)
   }
 
@@ -325,57 +325,41 @@ public final class ConnectionCore {
   private func receivedClose(_ message: InboundMessage) throws(SSHError) {
     let number = try message.decode { (reader: inout WireReader) throws(WireError) in try reader.readUInt32() }
     let channel = try lookup(number, for: message.number)
-    if channel.stage == .open { closeLocally(channel) }
+    closeLocally(channel)
     channels[number] = nil
     report(channel, failure: .closed(.channelClosed))
   }
 
-  private enum ServerRequest {
-    case exitStatus(UInt32)
-    case exitSignal(name: String, coreDumped: Bool, message: String)
-    /// keepalive@openssh.com, eow@openssh.com, and anything else: not acted on.
-    case other
-  }
-
   /// A request the server makes on one of our channels: exit-status and exit-signal are kept (the first one) and,
   /// if a reply is wanted, confirmed; everything else (`keepalive@openssh.com`, `eow@openssh.com`, unknown names) is
-  /// answered with FAILURE when a reply is wanted, as OpenSSH's client does. No reply once our CLOSE went.
+  /// not acted on and answered with FAILURE when a reply is wanted, as OpenSSH's client does. No reply once our CLOSE
+  /// went.
   private func receivedRequest(_ message: InboundMessage) throws(SSHError) {
-    let (number, wantReply, request) = try message.decode { (reader: inout WireReader) throws(WireError) in
+    let (number, wantReply, exit) = try message.decode { (reader: inout WireReader) throws(WireError) in
       let number = try reader.readUInt32()
       let name = try reader.readName()
       let wantReply = try reader.readBoolean()
-      let request: ServerRequest
+      let exit: ChannelExit?
       switch name {
       case "exit-status":
-        request = .exitStatus(try reader.readUInt32())
+        exit = .status(try reader.readUInt32())
       case "exit-signal":
         let signal = try reader.readName()
         let coreDumped = try reader.readBoolean()
         let text = try reader.readDisplayText(limit: Limits.channelMessageBytes)
         _ = try reader.readDisplayText(limit: Limits.languageTagBytes)
-        request = .exitSignal(name: signal, coreDumped: coreDumped, message: DisplayText.sanitize(Array(text.utf8)))
+        exit = .signal(name: signal, coreDumped: coreDumped, message: DisplayText.sanitize(Array(text.utf8)))
       default:
         _ = reader.readRemaining()
-        request = .other
+        exit = nil
       }
-      return (number, wantReply, request)
+      return (number, wantReply, exit)
     }
     let channel = try lookup(number, for: message.number)
     guard channel.stage == .open else { return }
-    let known: Bool
-    switch request {
-    case .exitStatus(let status):
-      if channel.exit == nil { channel.exit = .status(status) }
-      known = true
-    case .exitSignal(let name, let coreDumped, let text):
-      if channel.exit == nil { channel.exit = .signal(name: name, coreDumped: coreDumped, message: text) }
-      known = true
-    case .other:
-      known = false
-    }
+    if channel.exit == nil { channel.exit = exit }
     guard wantReply else { return }
-    var writer = WireWriter(known ? .channelSuccess : .channelFailure, capacity: 5)
+    var writer = WireWriter(exit != nil ? .channelSuccess : .channelFailure, capacity: 5)
     writer.writeUInt32(channel.remote)
     _ = send(writer)
   }

@@ -65,10 +65,12 @@ extension SpacesNavigator {
     }
 
     /// The launch's window on an iPad (`MobileRoot`, before its first frame): the split shows the tab it showed last
-    /// time on the mode it showed (`PadMode`), with the sidebar as the user left it, if the host's cached topology still
-    /// has that tab. Once a launch.
+    /// time on the mode it showed (`PadMode`), with the sidebar as the user left it and the panes beside it
+    /// (`restorePanes`), if the host's cached topology still has that tab. Once a launch.
     func restoreSplit(splits: Bool) {
         guard !sidebarHides else { return }
+        // Read before anything changes: each change keeps the state as it is then, the single pane first.
+        let panes = memory?.data(forKey: Self.panesKey)
         let tab = memory?.data(forKey: Self.shownTabKey).flatMap { try? JSONDecoder().decode(TabRef.self, from: $0) }
         let hidden = memory?.bool(forKey: Self.sidebarHiddenKey) ?? false
         let mode = memory?.string(forKey: Self.shownModeKey).flatMap(PadMode.init(rawValue:))
@@ -86,11 +88,12 @@ extension SpacesNavigator {
             model.setMode(git && model.knownRepositories[MobileTabs.repositoryKey(tab)] != true ? .files : mode, for: tab)
         }
         path = [.tab(tab)]
+        restorePanes(panes, showing: tab)
         sidebarHidden = hidden
     }
 
     /// Keeps what `restoreSplit` brings back: the tab on screen (the detail column's, or the stack's top screen), its
-    /// mode and the sidebar's state. Only on an iPad (the phone opens on the tab bar).
+    /// mode, the sidebar's state and the panes. Only on an iPad (the phone opens on the tab bar).
     func rememberSplit() {
         guard sidebarHides, let memory else { return }
         let tab = split ? splitPath.tab : path.last?.tab
@@ -102,5 +105,9 @@ extension SpacesNavigator {
         let mode = tab.flatMap(model.tab).map { model.chosenMode($0).rawValue }
         if memory.string(forKey: Self.shownModeKey) != mode { memory.set(mode, forKey: Self.shownModeKey) }
         if memory.bool(forKey: Self.sidebarHiddenKey) != sidebarHidden { memory.set(sidebarHidden, forKey: Self.sidebarHiddenKey) }
+        let panes = keptPanes
+        if memory.data(forKey: Self.panesKey) != panes {
+            if let panes { memory.set(panes, forKey: Self.panesKey) } else { memory.removeObject(forKey: Self.panesKey) }
+        }
     }
 }

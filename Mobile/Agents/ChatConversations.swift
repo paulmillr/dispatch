@@ -346,6 +346,9 @@ struct ChatConversation: Identifiable, Equatable {
     /// phone can tell (`TabsStatus.note`), and when the turn began when the phone saw it begin.
     var workingNote: String? = nil
     var workingSince: Date? = nil
+    /// While it works, when its turn began as the list first knew it (the open thread's start, else when the list first
+    /// saw it busy), kept until it stops: the Working section's order, longest working first.
+    var workingStarted: Date? = nil
 
     /// What the list sorts by: the newest record, else when the row appeared (a new agent is at the top, not the end).
     var order: Date { summary.lastActivity ?? since }
@@ -440,6 +443,9 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
     /// answer is compared with the host's times), and whether the row was seen idle before (its start is then the
     /// turn's). A message newer than the mark is this turn's; the previous turn's answer is older.
     @ObservationIgnored private var busyMarks: [ChatConversationKey: (mark: Date, begun: Bool)] = [:]
+    /// When each working row's turn began, as first known (`ChatConversation.workingStarted`): kept while it works, so
+    /// the Working section's order does not follow its writes.
+    @ObservationIgnored private var workingStarts: [ChatConversationKey: Date] = [:]
     /// Rows seen idle in this run: a later busy one was seen to begin.
     @ObservationIgnored private var seenIdle: Set<ChatConversationKey> = []
     /// The newest agent message's preview per open session, by transcript revision: Markdown is read once per change.
@@ -1122,7 +1128,13 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                             workingNote = TabsNote.line(preview)
                         }
                         workingSince = mark.begun ? mark.mark : nil
+                        if workingStarts[key] == nil {
+                            // The open thread's turn start when it knows one, else when the list first saw it busy.
+                            let turn = session.flatMap { $0.phase == .verified ? $0.submittedAt ?? $0.openTurnStarted ?? $0.workingSince : nil }
+                            workingStarts[key] = turn ?? mark.mark
+                        }
                     } else {
+                        workingStarts[key] = nil
                         busyMarks[key] = nil
                         seenIdle.insert(key)
                     }
@@ -1155,7 +1167,8 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                     spaceNode: space?.id, cwd: node.cwd, binding: binding, summary: summary,
                     urgency: PaneUrgency(waiting: summary.needsYou, working: summary.busy, unread: unread),
                     muted: markers.muted(host: host.id, node: node.key), unread: unread, stale: stale,
-                    since: firstSeen[key] ?? now, workingNote: workingNote, workingSince: workingSince))
+                    since: firstSeen[key] ?? now, workingNote: workingNote, workingSince: workingSince,
+                    workingStarted: summary.busy ? workingStarts[key] : nil))
             }
         }
         rows.sort {

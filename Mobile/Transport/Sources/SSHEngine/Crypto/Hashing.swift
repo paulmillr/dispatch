@@ -52,25 +52,23 @@ struct SSHHasher {
   }
 
   func finalize() -> [UInt8] {
-    let count: Int
     switch state {
-    case .sha256: count = HashAlgorithm.sha256.digestBytes
-    case .sha384: count = HashAlgorithm.sha384.digestBytes
-    case .sha512: count = HashAlgorithm.sha512.digestBytes
+    case .sha256(let hasher): Array(hasher.finalize())
+    case .sha384(let hasher): Array(hasher.finalize())
+    case .sha512(let hasher): Array(hasher.finalize())
     }
-    var digest = [UInt8](repeating: 0, count: count)
-    digest.withUnsafeMutableBytes { finalize(into: $0) }
-    return digest
   }
 }
 
 /// Comparisons and tests on secret bytes whose time depends on the lengths only.
 enum ConstantTime {
-  /// Equal lengths and equal bytes; every byte is compared.
+  /// Equal lengths and equal bytes (tags, MACs): every byte is compared, and the difference is folded to a bit
+  /// without a branch on the bytes. Unequal lengths are unequal (lengths are public).
   static func equal(_ a: UnsafeRawBufferPointer, _ b: UnsafeRawBufferPointer) -> Bool {
     guard a.count == b.count else { return false }
     var difference: UInt8 = 0
     for index in 0..<a.count { difference |= a[index] ^ b[index] }
+    // 0 → 1, 1...255 → 0: (d - 1) >> 8 has bit 0 set only when d was 0.
     return (UInt32(difference) &- 1) &>> 8 & 1 == 1
   }
 
@@ -109,9 +107,4 @@ extension SecretBytes {
       for index in 0..<bytes.count { buffer[4 + index] = bytes[index] }
     }
   }
-}
-
-/// Zeroes an array's bytes in place (a plaintext packet, a decrypted block) in a way the optimizer keeps.
-func wipeBytes(_ bytes: inout [UInt8]) {
-  bytes.withUnsafeMutableBytes { SecretBytes.wipe($0) }
 }

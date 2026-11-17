@@ -108,7 +108,7 @@ final class ExecTests: XCTestCase {
     let exec = SSHExec(state: state, fd: pair[0])
     XCTAssertNil(exec.refusal)
     #if DISPATCH_RUSSH
-    state.exited(kind: DMS_EXIT_REFUSED, status: 0, signal: "the server refused the exec request")
+    state.exited(RusshEngine.exit(kind: DMS_EXIT_REFUSED, status: 0, signal: "the server refused the exec request"))
     #else
     state.exited(.refused("the server refused the exec request"))
     #endif
@@ -119,6 +119,20 @@ final class ExecTests: XCTestCase {
     } catch let error as SSHTransportError {
       XCTAssertEqual(error, .commandFailed(status: -1, stderr: "the server refused the exec request"))
     }
+  }
+
+  /// The helper channel's exit status is the status the command exited with, and none for a command a signal killed
+  /// (`HelperChannel.exitStatus`, which `HelperBootstrap.launchFailure` reads: nil is "it was killed").
+  func testAHelperKilledByASignalHasNoExitStatus() async throws {
+    let connection = try await SSHFixture.shared.connect()
+    defer { Task { await connection.close() } }
+    let exited = try await HelperChannel.open(on: connection, command: "exit 3")
+    let status = await exited.exitStatus()
+    XCTAssertEqual(status, 3)
+    let killed = try await HelperChannel.open(on: connection, command: "kill -TERM $$")
+    let none = await killed.exitStatus()
+    XCTAssertNil(none)
+    XCTAssertNil(killed.refusal)
   }
 
   static var machine: String {

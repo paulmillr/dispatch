@@ -213,20 +213,20 @@ final class Poly1305Tests: XCTestCase {
   func testTagComparison() {
     var random = PrimitiveRandom(seed: T.seed &+ 14)
     let tag = random.bytes(16)
-    XCTAssertTrue(Poly1305.tagsEqual(tag, tag))
-    XCTAssertTrue(Poly1305.tagsEqual([UInt8](), [UInt8]()))
+    XCTAssertTrue(ConstantTime.equal(tag, tag))
+    XCTAssertTrue(ConstantTime.equal([UInt8](), [UInt8]()))
     for index in 0..<16 {
       for bit in 0..<8 {
         var other = tag
         other[index] ^= 1 << bit
-        XCTAssertFalse(Poly1305.tagsEqual(tag, other), "byte \(index) bit \(bit)")
+        XCTAssertFalse(ConstantTime.equal(tag, other), "byte \(index) bit \(bit)")
       }
     }
     var all = tag
     for index in 0..<16 { all[index] = ~all[index] }
-    XCTAssertFalse(Poly1305.tagsEqual(tag, all))
-    XCTAssertFalse(Poly1305.tagsEqual(tag, Array(tag.prefix(15))))
-    XCTAssertFalse(Poly1305.tagsEqual(tag, tag + [0]))
+    XCTAssertFalse(ConstantTime.equal(tag, all))
+    XCTAssertFalse(ConstantTime.equal(tag, Array(tag.prefix(15))))
+    XCTAssertFalse(ConstantTime.equal(tag, tag + [0]))
   }
 
   /// `finalize` clears the state: a second finalize is the tag of nothing under the all-zero key (zero).

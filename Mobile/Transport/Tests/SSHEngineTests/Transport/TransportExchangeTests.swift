@@ -105,11 +105,7 @@ final class TransportExchangeTests: XCTestCase {
   }
 
   func testEveryCipherAndMACBothWays() throws {
-    var cases: [(CipherAlgorithm, MACAlgorithm?)] = [(.aes256GCM, nil), (.aes128GCM, nil), (.chacha20Poly1305, nil)]
-    for cipher in [CipherAlgorithm.aes256CTR, .aes192CTR, .aes128CTR] {
-      for mac in MACAlgorithm.allCases { cases.append((cipher, mac)) }
-    }
-    for (cipher, mac) in cases {
+    for (cipher, mac) in PacketProtectionTests.families {
       for chunk in [0, 7] {
         let harness = try Self.connected(Self.only(cipher: cipher, mac: mac), chunk: chunk)
         XCTAssertEqual(harness.client.negotiated?.clientToServer, .init(cipher: cipher, mac: mac))
@@ -123,11 +119,12 @@ final class TransportExchangeTests: XCTestCase {
   }
 
   func testNonStrictExchangeWithAESGCM() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.strict = false
-    // Before the server's KEXINIT strictness is unknown: IGNORE and DEBUG are fine there when it is not strict.
-    configuration.beforeKexInit = [[MessageNumber.ignore.rawValue] + Raw.string("x"),
-                                   [MessageNumber.debug.rawValue, 0] + Raw.string("hello") + Raw.string("")]
+    let configuration = ScriptedServer.Configuration.with {
+      $0.strict = false
+      // Before the server's KEXINIT strictness is unknown: IGNORE and DEBUG are fine there when it is not strict.
+      $0.beforeKexInit = [[MessageNumber.ignore.rawValue] + Raw.string("x"),
+                          [MessageNumber.debug.rawValue, 0] + Raw.string("hello") + Raw.string("")]
+    }
     let harness = try Self.connected(Self.only(cipher: .aes128GCM), server: ScriptedServer(configuration: configuration))
     XCTAssertEqual(harness.client.negotiated?.strictKex, false)
     // Without strict key exchange sequence numbers run on from the first packet: the server sent 2 + KEXINIT, reply,
@@ -156,31 +153,27 @@ final class TransportExchangeTests: XCTestCase {
   /// encrypt-then-MAC MAC (Terrapin's truncatable modes) are refused before the method's first message, with a
   /// DISCONNECT; AES-GCM and AES-CTR with an encrypt-and-MAC MAC establish, carry traffic and re-exchange.
   func testWithoutStrictKeyExchangeTheTruncatableModesAreRefused() throws {
-    for cipher in CipherAlgorithm.allCases {
-      for mac in cipher.isAEAD ? [nil] : MACAlgorithm.allCases.map(Optional.some) {
-        let mode = NegotiatedAlgorithms.Direction(cipher: cipher, mac: mac)
-        var configuration = ScriptedServer.Configuration()
-        configuration.strict = false
-        let harness = try TransportHarness(options: TransportHarness.options(Self.only(cipher: cipher, mac: mac)),
-                                           server: ScriptedServer(configuration: configuration))
-        harness.connect()
-        if AlgorithmPolicy.isTruncatable(mode) {
-          let expected: SSHError = mac.map { .protocolViolation(.negotiation(.encryptThenMACRequiresStrictKex(cipher, $0))) }
-            ?? .protocolViolation(.negotiation(.cipherRequiresStrictKex(cipher)))
-          XCTAssertEqual(harness.endReason(), expected, "\(mode)")
-          XCTAssertTrue(harness.serverReceived([30]).isEmpty, "\(mode): refused before the method's first message")
-          XCTAssertEqual(harness.server.disconnectReason, DisconnectReason.keyExchangeFailed.rawValue, "\(mode)")
-        } else {
-          XCTAssertTrue(harness.isEstablished, "\(mode)")
-          XCTAssertEqual(harness.client.negotiated?.strictKex, false)
-          XCTAssertEqual(harness.client.negotiated?.clientToServer, mode)
-          XCTAssertEqual(harness.client.negotiated?.serverToClient, mode)
-          harness.service = .connection
-          harness.client.timerFired(.rekey)
-          XCTAssertTrue(harness.pump().contains(.rekeyed), "\(mode)")
-          try Self.exchangeTraffic(harness)
-          XCTAssertNil(harness.endReason(), "\(mode)")
-        }
+    for (cipher, mac) in PacketProtectionTests.families {
+      let mode = NegotiatedAlgorithms.Direction(cipher: cipher, mac: mac)
+      let harness = try TransportHarness(options: TransportHarness.options(Self.only(cipher: cipher, mac: mac)),
+                                         server: ScriptedServer(configuration: .with { $0.strict = false }))
+      harness.connect()
+      if AlgorithmPolicy.isTruncatable(mode) {
+        let expected: SSHError = .protocolViolation(.negotiation(
+          mac.map { .encryptThenMACRequiresStrictKex(cipher, $0) } ?? .cipherRequiresStrictKex(cipher)))
+        XCTAssertEqual(harness.endReason(), expected, "\(mode)")
+        XCTAssertTrue(harness.serverReceived([30]).isEmpty, "\(mode): refused before the method's first message")
+        XCTAssertEqual(harness.server.disconnectReason, DisconnectReason.keyExchangeFailed.rawValue, "\(mode)")
+      } else {
+        XCTAssertTrue(harness.isEstablished, "\(mode)")
+        XCTAssertEqual(harness.client.negotiated?.strictKex, false)
+        XCTAssertEqual(harness.client.negotiated?.clientToServer, mode)
+        XCTAssertEqual(harness.client.negotiated?.serverToClient, mode)
+        harness.service = .connection
+        harness.client.timerFired(.rekey)
+        XCTAssertTrue(harness.pump().contains(.rekeyed), "\(mode)")
+        try Self.exchangeTraffic(harness)
+        XCTAssertNil(harness.endReason(), "\(mode)")
       }
     }
   }
@@ -201,11 +194,11 @@ final class TransportExchangeTests: XCTestCase {
        .failure(.protocolViolation(.negotiation(.encryptThenMACRequiresStrictKex(.aes128CTR, .hmacSHA256ETM))))),
     ]
     for (ciphers, macs, expected) in cases {
-      var configuration = ScriptedServer.Configuration()
-      configuration.strict = false
-      configuration.ciphers = ciphers.map(\.rawValue)
-      configuration.macs = macs.map(\.rawValue)
-      let harness = try TransportHarness(server: ScriptedServer(configuration: configuration))
+      let harness = try TransportHarness(server: ScriptedServer(configuration: .with {
+        $0.strict = false
+        $0.ciphers = ciphers.map(\.rawValue)
+        $0.macs = macs.map(\.rawValue)
+      }))
       harness.connect()
       let label = "\(ciphers.map(\.rawValue)) \(macs.map(\.rawValue))"
       switch expected {
@@ -323,6 +316,21 @@ final class TransportExchangeTests: XCTestCase {
     try Self.exchangeTraffic(harness)
   }
 
+  /// The rekey timer firing while a re-exchange runs (either side's) is satisfied by it: no second one follows.
+  func testARekeyFallingDueDuringAReexchangeIsSatisfiedByIt() throws {
+    for serverStarts in [true, false] {
+      let harness = try Self.connected()
+      if serverStarts { harness.server.startRekey() } else { harness.client.timerFired(.rekey) }
+      harness.deliver(harness.server.takeOutbound())
+      harness.drain()
+      harness.client.timerFired(.rekey)
+      XCTAssertTrue(harness.pump().contains(.rekeyed), "server starts: \(serverStarts)")
+      harness.pump()
+      XCTAssertEqual(harness.serverReceived([20]).count, 2, "server starts: \(serverStarts)")
+      XCTAssertEqual(harness.server.exchanges, 2, "server starts: \(serverStarts)")
+    }
+  }
+
   func testOurReexchangeWaitsForTheConnectionPhase() throws {
     let harness = try TransportHarness()
     harness.connect()
@@ -392,9 +400,9 @@ final class TransportExchangeTests: XCTestCase {
   }
 
   func testAHostKeyOfAnotherTypeThanNegotiatedIsRefused() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.hostKeyAlgorithms = ["ssh-ed25519"]
-    let harness = try TransportHarness(server: ScriptedServer(configuration: configuration, identity: .ecdsaP256(seed: 3)))
+    let configuration = ScriptedServer.Configuration.with { $0.hostKeyAlgorithms = ["ssh-ed25519"] }
+    let server = ScriptedServer(configuration: configuration, identity: .ecdsaP256(seed: 3))
+    let harness = try TransportHarness(server: server)
     harness.connect()
     XCTAssertEqual(harness.endReason(), .protocolViolation(.keyExchange(.hostKeyTypeMismatch)))
   }
@@ -486,9 +494,7 @@ final class TransportExchangeTests: XCTestCase {
   // MARK: EXT_INFO
 
   func testWithoutExtInfoTheExtensionsAreEmptyOnceTheNextPacketCame() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.extInfo = false
-    let harness = try TransportHarness(server: ScriptedServer(configuration: configuration))
+    let harness = try TransportHarness(server: ScriptedServer(configuration: .with { $0.extInfo = false }))
     harness.connect()
     XCTAssertTrue(harness.isEstablished)
     XCTAssertNil(harness.client.serverExtensions)
@@ -519,10 +525,34 @@ final class TransportExchangeTests: XCTestCase {
     XCTAssertEqual(harness.endReason(), .protocolViolation(.tooManyExtInfo))
   }
 
+  /// RFC 8308 §2.4: an EXT_INFO during authentication comes just before USERAUTH_SUCCESS. The next message for the
+  /// layers above must be that success; IGNORE and DEBUG may come between, as anywhere outside a strict first exchange.
+  func testAnExtInfoDuringAuthenticationIsFollowedByTheSuccess() throws {
+    let failure = [MessageNumber.userauthFailure.rawValue] + Raw.string("password") + [0]
+    let banner = [MessageNumber.userauthBanner.rawValue] + Raw.string("hello") + Raw.string("")
+    let extInfo = [MessageNumber.extInfo.rawValue] + Raw.u32(0)
+    for next in [[MessageNumber.userauthSuccess.rawValue], failure, banner, extInfo] {
+      // No EXT_INFO after NEWKEYS, so a second one in a row is refused for its place, not for the count.
+      let harness = try Self.connected(server: ScriptedServer(configuration: .with { $0.extInfo = false }))
+      harness.service = .userauth(.password)
+      harness.server.send(extInfo)
+      harness.server.send([MessageNumber.ignore.rawValue] + Raw.string(""))
+      harness.server.send([MessageNumber.debug.rawValue, 0] + Raw.string("note") + Raw.string(""))
+      harness.server.send(next)
+      harness.pump()
+      let number = MessageNumber(next[0])
+      if number == .userauthSuccess {
+        XCTAssertNil(harness.endReason())
+        XCTAssertEqual(harness.messages.last?.payload, next)
+      } else {
+        XCTAssertEqual(harness.endReason()?.isUnexpected(number), true, "\(number)")
+        XCTAssertFalse(harness.messages.contains { $0.number == number }, "\(number)")
+      }
+    }
+  }
+
   func testAnExtInfoClaimingMoreThanItHoldsIsMalformed() throws {
-    var configuration = ScriptedServer.Configuration()
-    configuration.extInfo = false
-    let harness = try TransportHarness(server: ScriptedServer(configuration: configuration))
+    let harness = try TransportHarness(server: ScriptedServer(configuration: .with { $0.extInfo = false }))
     harness.connect()
     harness.server.send([MessageNumber.extInfo.rawValue] + Raw.u32(10_000) + Raw.string("a") + Raw.string("b"))
     harness.pump()
@@ -538,5 +568,14 @@ final class TransportExchangeTests: XCTestCase {
     try harness.client.send(secret: SecretBytes(copying: secret))
     harness.pump()
     XCTAssertEqual(harness.serverReceived([50]), [secret])
+  }
+}
+
+extension ScriptedServer.Configuration {
+  /// The default configuration as `change` leaves it.
+  static func with(_ change: (inout Self) -> Void) -> Self {
+    var configuration = Self()
+    change(&configuration)
+    return configuration
   }
 }

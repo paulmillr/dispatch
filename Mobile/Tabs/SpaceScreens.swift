@@ -579,7 +579,9 @@ struct SpaceTabRow: View {
                     Group {
                         if working != nil {
                             // The time is the column's: the line says what the agent said, else its step.
-                            if let note = line.note { Text(note) } else { AgentProgressLine(status: line) }
+                            if let thought = line.thought {
+                                Text(thought).italic()
+                            } else if let note = line.note { Text(note) } else { AgentProgressLine(status: line) }
                         } else {
                             TabsStatusText(status: line)
                         }

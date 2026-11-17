@@ -277,10 +277,7 @@ final class Pilot {
     case .output(let id, let output):
       if !liveChannels.contains(id.rawValue) { violation("output on \(id), which is not open") }
       if eofChannels.contains(id.rawValue) { violation("output on \(id) after its EOF") }
-      let count: Int
-      switch output {
-      case .stdout(let bytes), .stderr(let bytes): count = bytes.count
-      }
+      let count = output.bytes.count
       if consumes {
         core.consumed(count, on: id)
       } else {

@@ -16,7 +16,7 @@ public final class SSHShell: AsyncSequence, Sendable {
   static func start(term: String, columns: Int, rows: Int, on session: any EngineSession) async throws -> SSHShell {
     let state = ExecState()
     let control = session.shell(term: term, columns: cells(columns), rows: cells(rows), events: state)
-    let fd = try await state.started.value
+    let fd = try await state.started.value.get()
     return SSHShell(state: state, fd: fd, control: control)
   }
 
@@ -34,19 +34,15 @@ public final class SSHShell: AsyncSequence, Sendable {
   /// Sends the new grid to the server (`window-change`, no pixel size). Throws `channelClosed` once the shell ended
   /// or was closed; the server sends no answer, so a change racing the end is lost silently.
   public func resize(columns: Int, rows: Int) async throws {
-    guard descriptor.fd != nil, state.finished == nil else { throw SSHTransportError.channelClosed }
+    guard descriptor.fd != nil, state.ended.current == nil else { throw SSHTransportError.channelClosed }
     control.resize(columns: cells(columns), rows: cells(rows))
   }
 
   /// Status when the shell ended by exit; 128 on a signal; throws `SSHTransportError.channelClosed` when the channel
   /// or connection was lost before an exit status (same convention as `SSHExec`).
   public func exitStatus() async throws -> Int32 {
-    switch await state.exit {
-    case .status(let status): return Int32(bitPattern: status)
-    case .signal: return 128
     // A shell's requests are confirmed before it starts: the engine reports no refusal after that.
-    case .lost, .refused: throw SSHTransportError.channelClosed
-    }
+    try await state.exitStatus(refusal: false)
   }
 
   /// Closes the socket, which closes the channel at once. `exitStatus()` then reports what the server sent before
@@ -59,12 +55,7 @@ public final class SSHShell: AsyncSequence, Sendable {
     let shell: SSHShell
     /// The next output chunk; nil once the output ended and the channel closed (then `exitStatus()` answers).
     public mutating func next() async throws -> Data? {
-      if !shell.state.stdoutEnded, let data = try await shell.descriptor.read() {
-        if !data.isEmpty { return data }
-        shell.state.stdoutEnded = true
-      }
-      _ = await shell.state.exit
-      return nil
+      try await shell.state.output(shell.descriptor)
     }
   }
 

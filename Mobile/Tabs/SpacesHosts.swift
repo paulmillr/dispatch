@@ -158,6 +158,9 @@ enum SpacesEditRow: Identifiable {
 struct SpacesSpaceRow: Identifiable {
     let space: MobileSpace
     let unread: Int
-    let working: Bool
+    /// Its tabs whose agent works.
+    let workers: Int
     let id: SpaceRef
+
+    var working: Bool { workers > 0 }
 }

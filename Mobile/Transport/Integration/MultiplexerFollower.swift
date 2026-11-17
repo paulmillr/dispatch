@@ -12,11 +12,9 @@ final class FollowPreference: Sendable {
 
     init(_ value: HostRecord.MultiplexerPreference) { state = Mutex(State(value: value)) }
 
-    var value: HostRecord.MultiplexerPreference { state.withLock { $0.value } }
-
     /// "herdr" or "tmux" when the host names one, nil for Automatic.
     var override: String? {
-        let value = value
+        let value = state.withLock { $0.value }
         return value == .automatic ? nil : value.rawValue
     }
 
@@ -73,23 +71,21 @@ struct MultiplexerFollower: Sendable {
             }
             let follow = choice.flatMap { $0.name != "herdr" || herdrRunning ? $0.route : nil }
             let client = client, delay = reopenDelay
-            _ = await withTaskGroup(of: Bool.self) { group in
+            await withTaskGroup(of: Void.self) { group in
                 group.addTask {
                     var delivered = false
                     if let follow { delivered = await Self.follow(follow, on: client, topology: topology, activity: activity) }
-                    guard !Task.isCancelled else { return false }
+                    guard !Task.isCancelled else { return }
                     if !delivered { none() }
                     // No server yet (or it went away): look again after a while.
                     try? await Task.sleep(for: delay)
-                    return false
                 }
                 group.addTask {
                     var iterator = changes.makeAsyncIterator()
-                    return await iterator.next() != nil
+                    _ = await iterator.next()
                 }
-                let first = await group.next() ?? false
+                await group.next()
                 group.cancelAll()
-                return first
             }
             guard !Task.isCancelled else { return }
             if let fresh = try? await client.backends() { backends = fresh }
@@ -123,12 +119,11 @@ struct MultiplexerFollower: Sendable {
 
     /// `backends.open` until the subscription ends (the server went away, the open failed) or the task is cancelled.
     /// True when it delivered at least one topology.
-    @discardableResult
     static func follow(_ route: HelperBackend.Route, on client: HelperClient,
                        topology: @escaping @Sendable (HelperTopology) -> Void,
-                       activity: @escaping @Sendable () -> Void = {}) async -> Bool {
+                       activity: @escaping @Sendable () -> Void) async -> Bool {
         let (ended, end) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        let delivered = Flag()
+        let delivered = Once()
         let id: UInt64
         do {
             id = try await client.connection.subscribe("backends.open", params: route, notify: { method, params in
@@ -150,11 +145,5 @@ struct MultiplexerFollower: Sendable {
             end.finish()
         }
         return delivered.isSet
-    }
-
-    private final class Flag: Sendable {
-        private let value = Mutex(false)
-        func set() { value.withLock { $0 = true } }
-        var isSet: Bool { value.withLock { $0 } }
     }
 }

@@ -1,4 +1,4 @@
-import SSHEngine
+@testable import SSHEngine
 
 /// An in-memory `TransportLink` for the layers above the transport (Auth/, Connection/): it records what they send
 /// and routes the server's messages through `MessagePolicy` as the real transport does, without any cryptography.
@@ -8,6 +8,8 @@ final class FakeTransportLink: TransportLink {
   var hostKey: HostKey
   var serverExtensions: ServerExtensions?
   var outboundBacklog = 0
+  /// The backlog grows with every payload sent until the test "writes" it (sets it to 0), as the real transport's does.
+  var backlogGrowsOnSend = false
   /// Payloads sent, in order (secret payloads included, copied: tests only).
   private(set) var sent: [[UInt8]] = []
   /// Which entries of `sent` came through `send(secret:)`.
@@ -18,6 +20,7 @@ final class FakeTransportLink: TransportLink {
   var transportPhase: MessagePolicy.TransportPhase = .established
   var firstPacketAfterNewKeys = true
   private(set) var extInfoReceived = 0
+  private var extInfoBeforeSuccess = false
 
   init(sessionID: [UInt8] = [UInt8](repeating: 0x5E, count: 32), hostKey: HostKey? = nil,
        serverExtensions: ServerExtensions? = ServerExtensions()) {
@@ -32,6 +35,7 @@ final class FakeTransportLink: TransportLink {
   func send(_ payload: [UInt8]) throws(SSHError) {
     try check(payload)
     sent.append(payload)
+    if backlogGrowsOnSend { outboundBacklog += payload.count }
   }
 
   func send(secret payload: SecretBytes) throws(SSHError) {
@@ -39,6 +43,7 @@ final class FakeTransportLink: TransportLink {
     try check(copy)
     secretIndices.append(sent.count)
     sent.append(copy)
+    if backlogGrowsOnSend { outboundBacklog += copy.count }
   }
 
   func end(_ error: SSHError) {
@@ -54,22 +59,23 @@ final class FakeTransportLink: TransportLink {
     }
     let context = MessagePolicy.Context(
       transport: transportPhase, service: service, firstPacketAfterNewKeys: firstPacketAfterNewKeys,
-      extInfoReceived: extInfoReceived)
+      extInfoReceived: extInfoReceived, extInfoBeforeSuccess: extInfoBeforeSuccess)
     firstPacketAfterNewKeys = false
     switch try MessagePolicy.check(message.number, in: context) {
     case .service:
+      extInfoBeforeSuccess = false
       return message
     case .transport:
-      if message.number == .extInfo { extInfoReceived += 1 }
+      if message.number == .extInfo {
+        extInfoReceived += 1
+        if case .userauth = service { extInfoBeforeSuccess = true }
+      }
       return nil
     }
   }
 
   private func check(_ payload: [UInt8]) throws(SSHError) {
     guard endedWith == nil else { throw .closed(.alreadyEnded) }
-    guard let number = payload.first,
-      number == MessageNumber.serviceRequest.rawValue || (50...79).contains(number) || (90...127).contains(number),
-      payload.count <= Limits.packetLength - 64
-    else { throw .usage(.invalidArgument("a message the layers above may not send")) }
+    try ClientTransport.checkUpperPayload(first: payload.first, count: payload.count)
   }
 }

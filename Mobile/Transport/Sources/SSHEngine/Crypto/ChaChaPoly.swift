@@ -35,7 +35,7 @@ struct ChaChaPolyKeys {
   }
 
   /// Poly1305 over `authenticated` with the one-time key from K_2's block 0.
-  func tag(_ main: ChaCha20, over authenticated: ArraySlice<UInt8>) -> [UInt8] {
+  static func tag(_ main: ChaCha20, over authenticated: some ContiguousBytes) -> [UInt8] {
     withUnsafeTemporaryAllocation(byteCount: ChaCha20.blockSize, alignment: 16) { block in
       main.block(counter: 0, into: block)
       defer { SecretBytes.wipe(block) }
@@ -69,8 +69,8 @@ final class ChaChaPolyOpener: PacketOpener {
     let length = try packetBody(packet, length: try packetLength(packet, sequence: sequence), tagBytes: 16)
     var main = try keys.cipher(header: false, sequence: sequence)
     defer { main.wipe() }
-    let expected = keys.tag(main, over: packet[0..<4 + length])
-    guard Poly1305.tagsEqual(expected, packet[(4 + length)...]) else {
+    let expected = ChaChaPolyKeys.tag(main, over: packet[0..<4 + length])
+    guard ConstantTime.equal(expected, packet[(4 + length)...]) else {
       throw .protocolViolation(.packet(.integrity))
     }
     var plaintext = Array(packet[4..<4 + length])
@@ -103,7 +103,7 @@ final class ChaChaPolySealer: PacketSealer {
       header.xor(UnsafeMutableRawBufferPointer(rebasing: raw[0..<4]), counter: 0)
       main.xor(UnsafeMutableRawBufferPointer(rebasing: raw[4...]), counter: 1)
     }
-    wire.append(contentsOf: keys.tag(main, over: wire[...]))
+    wire.append(contentsOf: ChaChaPolyKeys.tag(main, over: wire[...]))
     return wire
   }
 }

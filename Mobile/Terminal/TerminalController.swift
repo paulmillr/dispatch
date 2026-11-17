@@ -109,17 +109,26 @@ final class TerminalController {
 
     /// The segment is shown: the terminal is attached (a no-op when the presence already is), at the view's grid:
     /// before its first layout the attachment waits for it, so the first screen is never drawn for another size.
-    func appear() {
-        // With a hardware keyboard on an iPad the terminal takes the keys as soon as it shows, as a Mac's selected tab
-        // does; no software keyboard comes up unasked (the hardware one hides it).
-        if idiom == .pad, hardwareKeyboard.attached {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.hostView.window != nil, !self.hostView.isFirstResponder else { return }
-                _ = self.hostView.becomeFirstResponder()
-            }
-        }
+    /// `focused`: its pane is the focused one of the iPad's detail column (`PadPanes`), as it always is elsewhere.
+    func appear(focused: Bool = true) {
+        if focused { takeKeys() }
         guard !presence.attached else { return }
         if hostView.hasSize { presence.start() } else { hostView.onSized = { [weak self] in self?.presence.start() } }
+    }
+
+    /// With a hardware keyboard on an iPad the terminal takes the keys as soon as it shows (or its pane takes the
+    /// focus), as a Mac's selected tab does; no software keyboard comes up unasked (the hardware one hides it).
+    func takeKeys() {
+        guard idiom == .pad, hardwareKeyboard.attached else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.hostView.window != nil, !self.hostView.isFirstResponder else { return }
+            _ = self.hostView.becomeFirstResponder()
+        }
+    }
+
+    /// Its pane gave the focus to another (`PadPanes`): the keys go there, not on into this terminal.
+    func giveKeys() {
+        if hostView.isFirstResponder { _ = hostView.resignFirstResponder() }
     }
 
     /// The segment went away: an own presence stops observing; a shared one stays for Chat.

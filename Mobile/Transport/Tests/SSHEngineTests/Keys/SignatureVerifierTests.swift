@@ -24,9 +24,11 @@ final class SignatureVerifierTests: XCTestCase {
   private func assertInvalid(_ signature: [UInt8], key: PublicKeyBlob, algorithm: SignatureAlgorithm,
                              over data: [UInt8]? = nil, _ message: String = "", file: StaticString = #filePath,
                              line: UInt = #line) {
-    XCTAssertThrows(SSHError.protocolViolation(.keyExchange(.invalidSignature)), file: file, line: line) {
-      () throws(SSHError) in
+    do {
       try verifier.verify(signatureBlob: signature, over: data ?? self.data, key: key, algorithm: algorithm)
+      XCTFail("accepted: \(message)", file: file, line: line)
+    } catch {
+      XCTAssertEqual(error, .protocolViolation(.keyExchange(.invalidSignature)), message, file: file, line: line)
     }
   }
 

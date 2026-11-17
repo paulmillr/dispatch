@@ -481,7 +481,7 @@ final class SwiftEngineChannelTests: XCTestCase {
       fake.exec = { _, _ throws(SSHError) in throw thrown }
       let events = RecordedChannel()
       // Held to the end: releasing it closes the connection, which would race the open (the next test forces both orders).
-      let session = SwiftEngineSession(fake, parked: nil)
+      let session = SwiftEngineSession(fake)
       session.exec("true", events: events)
       await wait(events.calls, "opened") { !$0.isEmpty }
       XCTAssertEqual(events.calls.value, [.opened(.failure(expected))])
@@ -497,7 +497,7 @@ final class SwiftEngineChannelTests: XCTestCase {
       let fake = ScriptedSession()
       fake.shell = { _, _, _ throws(SSHError) in throw thrown }
       let events = RecordedChannel()
-      let session = SwiftEngineSession(fake, parked: nil)
+      let session = SwiftEngineSession(fake)
       let control = session.shell(term: "vt100", columns: 80, rows: 24, events: events)
       await wait(events.calls, "opened") { !$0.isEmpty }
       XCTAssertEqual(events.calls.value, [.opened(.failure(expected))])
@@ -508,7 +508,7 @@ final class SwiftEngineChannelTests: XCTestCase {
     // Through the wrapper: a refused terminal throws what a refused exec does.
     let fake = ScriptedSession()
     fake.shell = { _, _, _ throws(SSHError) in throw .requestRefused(.ptyRequest) }
-    let session = SwiftEngineSession(fake, parked: nil)
+    let session = SwiftEngineSession(fake)
     do {
       _ = try await SSHShell.start(term: "xterm", columns: 80, rows: 24, on: session)
       XCTFail("a refused terminal opened")
@@ -535,7 +535,7 @@ final class SwiftEngineChannelTests: XCTestCase {
       fake.exec = { _, _ throws(SSHError) in try await open() }
       fake.shell = { _, _, _ throws(SSHError) in try await open() }
       let events = RecordedChannel()
-      var session: SwiftEngineSession? = SwiftEngineSession(fake, parked: nil)
+      var session: SwiftEngineSession? = SwiftEngineSession(fake)
       if shell {
         _ = session?.shell(term: "vt100", columns: 80, rows: 24, events: events)
       } else {
@@ -561,7 +561,7 @@ final class SwiftEngineChannelTests: XCTestCase {
         ran.change { $0 = true }
         throw refusal
       }
-      let second = SwiftEngineSession(ended, parked: nil)
+      let second = SwiftEngineSession(ended)
       ended.end(.closed(.connectionLost))
       let lost = RecordedChannel()
       if shell {
@@ -589,7 +589,7 @@ final class SwiftEngineChannelTests: XCTestCase {
       return ScriptedShell(core)
     }
     let events = RecordedChannel()
-    let resized = SwiftEngineSession(fake, parked: nil)
+    let resized = SwiftEngineSession(fake)
     let control = resized.shell(term: "xterm-256color", columns: 0, rows: 24, events: events)
     control.resize(columns: 100, rows: 30)
     control.resize(columns: 120, rows: 40)

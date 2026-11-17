@@ -78,7 +78,7 @@ final class PacketProtectionTests: XCTestCase {
       }
       // The wrong sequence number fails it too, except AES-GCM, whose nonce is its own counter.
       let opener = try PacketProtection.opener(cipher: cipher, mac: mac, keys: Self.keys(cipher, mac, seed: 4))
-      if cipher.isAESGCM {
+      if [CipherAlgorithm.aes256GCM, .aes128GCM].contains(cipher) {
         XCTAssertNoThrow(try opener.open(wire, sequence: 8))
       } else {
         _ = try? opener.packetLength(Array(wire.prefix(opener.lengthPrefixBytes)), sequence: 8)
@@ -148,7 +148,7 @@ final class PacketProtectionTests: XCTestCase {
   /// over many blocks (a second, Apple-internal cross-check of the mode and its counter).
   func testAESCTRMatchesGCMsKeystream() throws {
     let random = SeededRandom(seed: 41)
-    for keyBytes in [16, 24, 32] where keyBytes != 24 {
+    for keyBytes in [16, 32] {
       let key = try random.bytes(keyBytes)
       let nonce = try random.bytes(12)
       let plaintext = try random.bytes(16 * 70)

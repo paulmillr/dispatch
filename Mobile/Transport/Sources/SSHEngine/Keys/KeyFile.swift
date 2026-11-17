@@ -23,7 +23,7 @@ public enum KeyFile {
   static func parse(_ file: SecretBytes, passphrase: SecretBytes?, maximumRounds: Int) throws(SSHError) -> FileKey {
     guard file.count <= Limits.keyFileBytes else { throw KeyFileProblem.tooLarge.error }
     let passphrase = passphrase.flatMap { $0.isEmpty ? nil : $0 }
-    let block = try file.withBytes { (text) throws(SSHError) -> Armor.Block in
+    let block = try withTypedBytes(of: file) { (text) throws(SSHError) -> Armor.Block in
       let start = text.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
       let content = UnsafeRawBufferPointer(rebasing: text[start...])
       let firstLine = content.drop { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D || $0 == 0x0A }

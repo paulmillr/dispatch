@@ -84,7 +84,7 @@ enum SpacesText {
 
     /// A working tab's line with its turn's time: "Running shell command… · 48s" (`TabsStatusText.text`).
     static func line(_ line: String, since: Date, now: Date) -> String {
-        line + " · " + WatchTime.elapsed(now.timeIntervalSince(since))
+        line + " · " + WatchTime.clock(now.timeIntervalSince(since))
     }
 
     /// The phone's status words when it knows nothing more (`MobileComposition.status`), as its Agents rows say them.

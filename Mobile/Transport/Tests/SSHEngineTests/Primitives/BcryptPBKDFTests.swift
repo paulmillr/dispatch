@@ -115,87 +115,50 @@ final class BcryptPBKDFTests: XCTestCase {
 
   // MARK: - ssh-keygen as the oracle
 
-  private static let keygen = "/usr/bin/ssh-keygen"
-  private static let passphrase = "fictional passphrase for a throwaway key"
-
   /// ssh-keygen writes passphrase-protected ed25519 keys at several round counts and ciphers; the key and IV we derive
   /// from the file's salt and rounds must decrypt the private section to matching check integers, the key we asked
   /// for (comment, public key, a seed whose public key is that key) and padding 1, 2, 3, …; a wrong passphrase must not.
   func testDecryptsKeysThatSSHKeygenEncrypted() throws {
-    #if os(macOS)
-    guard FileManager.default.isExecutableFile(atPath: Self.keygen) else {
-      throw XCTSkip("\(Self.keygen) is not available: the ssh-keygen oracle cannot run")
-    }
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sshengine-bcrypt-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-    defer { try? FileManager.default.removeItem(at: directory) }
-
+    let tool = try KeyTool()
+    defer { tool.remove() }
     // nil rounds: ssh-keygen's default.
     let cases: [(rounds: Int?, cipher: String?)] = [(1, nil), (4, nil), (16, nil), (nil, nil), (4, "aes128-ctr"), (4, "aes256-cbc")]
     for (index, (rounds, cipher)) in cases.enumerated() {
-      let path = directory.appendingPathComponent("key\(index)").path
+      let name = "key\(index)"
       let comment = "fictional-key-\(index)@example.invalid"
-      var arguments = ["-q", "-t", "ed25519", "-N", Self.passphrase, "-C", comment, "-f", path]
-      if let rounds { arguments += ["-a", String(rounds)] }
-      if let cipher { arguments += ["-Z", cipher] }
-      try Self.run(Self.keygen, arguments)
-      let file = try Self.parse(String(contentsOfFile: path, encoding: .utf8))
-      if let rounds { XCTAssertEqual(file.rounds, rounds) }
+      try tool.generate(name, type: "ed25519", comment: comment, passphrase: KeyTool.passphrase,
+                        extra: (rounds.map { ["-a", String($0)] } ?? []) + (cipher.map { ["-Z", $0] } ?? []))
+      let file = try OpenSSHParts(KeyArmor.decode(tool.text(name)).body)
+      XCTAssertEqual(file.count, 1)
+      XCTAssertEqual(file.tail, [])
+      var options = TestReader(file.kdfOptions)
+      let salt = try options.string(), written = Int(try options.uint32())
+      if let rounds { XCTAssertEqual(written, rounds) }
       XCTAssertEqual(file.cipher, cipher ?? "aes256-ctr")
       XCTAssertEqual(file.kdf, "bcrypt")
-      XCTAssertEqual(file.salt.count, 16)
+      XCTAssertEqual(salt.count, 16)
 
       let start = Date()
-      let plain = try Self.decrypt(file, passphrase: Array(Self.passphrase.utf8))
+      let plain = try Self.decrypt(file, salt: salt, rounds: written, passphrase: Array(KeyTool.passphrase.utf8))
       let seconds = Date().timeIntervalSince(start)
-      print("BcryptPBKDFTests: ssh-keygen \(file.cipher) at \(file.rounds) rounds: derived and decrypted in "
+      print("BcryptPBKDFTests: ssh-keygen \(file.cipher) at \(written) rounds: derived and decrypted in "
         + String(format: "%.3f s", seconds))
-      try Self.checkPrivateSection(plain, comment: comment, publicKey: file.publicKey)
+      try Self.checkPrivateSection(plain, comment: comment, publicKey: file.publicBlob)
 
-      let wrong = try Self.decrypt(file, passphrase: Array("not the fictional passphrase".utf8))
+      let wrong = try Self.decrypt(file, salt: salt, rounds: written, passphrase: Array(KeyTool.wrongPassphrase.utf8))
       XCTAssertNotEqual(wrong.prefix(4), wrong.dropFirst(4).prefix(4), "a wrong passphrase gave matching check integers")
     }
-    #else
-    throw XCTSkip("ssh-keygen runs on macOS only")
-    #endif
-  }
-
-  private struct KeyFile {
-    var cipher: String
-    var kdf: String
-    var salt: [UInt8]
-    var rounds: Int
-    var publicKey: [UInt8]
-    var encrypted: [UInt8]
-  }
-
-  /// Just enough of PROTOCOL.key's `openssh-key-v1`: magic, cipher, KDF and its options, one public key, the private
-  /// section.
-  private static func parse(_ text: String) throws -> KeyFile {
-    let body = text.split(separator: "\n").filter { !$0.hasPrefix("-----") }.joined()
-    var reader = Reader(try XCTUnwrap(Data(base64Encoded: body)).map { $0 })
-    XCTAssertEqual(try reader.bytes(15), Array("openssh-key-v1\u{0}".utf8))
-    let cipher = try reader.text()
-    let kdf = try reader.text()
-    var options = Reader(try reader.string())
-    let salt = try options.string()
-    let rounds = Int(try options.uint32())
-    XCTAssertEqual(try reader.uint32(), 1)
-    let publicKey = try reader.string()
-    let encrypted = try reader.string()
-    XCTAssertTrue(reader.atEnd)
-    return KeyFile(cipher: cipher, kdf: kdf, salt: salt, rounds: rounds, publicKey: publicKey, encrypted: encrypted)
   }
 
   /// bcrypt_pbkdf(passphrase, salt, rounds) → key | IV, then the file's cipher through CommonCrypto.
-  private static func decrypt(_ file: KeyFile, passphrase: [UInt8]) throws -> [UInt8] {
+  private static func decrypt(_ file: OpenSSHParts, salt: [UInt8], rounds: Int, passphrase: [UInt8]) throws -> [UInt8] {
     let (keySize, mode): (Int, Int) = switch file.cipher {
     case "aes256-ctr": (32, kCCModeCTR)
     case "aes128-ctr": (16, kCCModeCTR)
     case "aes256-cbc": (32, kCCModeCBC)
     default: throw XCTSkip("cipher \(file.cipher) is not covered by this test")
     }
-    let derived = try BcryptPBKDF.derive(password: passphrase, salt: file.salt, rounds: file.rounds, count: keySize + 16)
+    let derived = try BcryptPBKDF.derive(password: passphrase, salt: salt, rounds: rounds, count: keySize + 16)
     let key = Array(derived.prefix(keySize))
     let iv = Array(derived.suffix(16))
     var cryptor: CCCryptorRef?
@@ -204,29 +167,29 @@ final class BcryptPBKDFTests: XCTestCase {
                                          CCModeOptions(mode == kCCModeCTR ? kCCModeOptionCTR_BE : 0), &cryptor)
     XCTAssertEqual(status, CCCryptorStatus(kCCSuccess))
     defer { CCCryptorRelease(cryptor) }
-    var plain = [UInt8](repeating: 0, count: file.encrypted.count)
+    var plain = [UInt8](repeating: 0, count: file.section.count)
     var moved = 0
-    status = CCCryptorUpdate(cryptor, file.encrypted, file.encrypted.count, &plain, plain.count, &moved)
+    status = CCCryptorUpdate(cryptor, file.section, file.section.count, &plain, plain.count, &moved)
     XCTAssertEqual(status, CCCryptorStatus(kCCSuccess))
     XCTAssertEqual(moved, plain.count)
     return plain
   }
 
   private static func checkPrivateSection(_ plain: [UInt8], comment: String, publicKey: [UInt8]) throws {
-    var reader = Reader(plain)
+    var reader = TestReader(plain)
     let check1 = try reader.uint32()
     let check2 = try reader.uint32()
     XCTAssertEqual(check1, check2, "check integers differ: the derived key or IV is wrong")
     guard check1 == check2 else { return }
-    XCTAssertEqual(try reader.text(), "ssh-ed25519")
+    XCTAssertEqual(try reader.string(), Array("ssh-ed25519".utf8))
     let pub = try reader.string()
     let secret = try reader.string()
-    XCTAssertEqual(try reader.text(), comment)
+    XCTAssertEqual(try reader.string(), Array(comment.utf8))
     XCTAssertEqual(secret.count, 64)
     XCTAssertEqual(Array(secret.suffix(32)), pub)
     // The outer public key blob is string "ssh-ed25519" | string key.
-    var outer = Reader(publicKey)
-    XCTAssertEqual(try outer.text(), "ssh-ed25519")
+    var outer = TestReader(publicKey)
+    XCTAssertEqual(try outer.string(), Array("ssh-ed25519".utf8))
     XCTAssertEqual(try outer.string(), pub)
     let seed = try Curve25519.Signing.PrivateKey(rawRepresentation: secret.prefix(32))
     XCTAssertEqual(Array(seed.publicKey.rawRepresentation), pub)
@@ -235,42 +198,4 @@ final class BcryptPBKDFTests: XCTestCase {
     XCTAssertLessThan(padding.count, 16)
     XCTAssertEqual(plain.count % 16, 0)
   }
-
-  /// SSH wire reads (RFC 4251 §5): bytes, big-endian uint32, length-prefixed strings.
-  private struct Reader {
-    let data: [UInt8]
-    var offset = 0
-    init(_ data: [UInt8]) { self.data = data }
-    var atEnd: Bool { offset == data.count }
-
-    mutating func bytes(_ count: Int) throws -> [UInt8] {
-      guard count >= 0, data.count - offset >= count else { throw CocoaError(.coderReadCorrupt) }
-      defer { offset += count }
-      return Array(data[offset..<(offset + count)])
-    }
-
-    mutating func uint32() throws -> UInt32 { try bytes(4).reduce(0) { $0 << 8 | UInt32($1) } }
-    mutating func string() throws -> [UInt8] { try bytes(Int(uint32())) }
-    mutating func text() throws -> String { String(decoding: try string(), as: UTF8.self) }
-  }
-
-  #if os(macOS)
-  private static func run(_ tool: String, _ arguments: [String]) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: tool)
-    process.arguments = arguments
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.nullDevice
-    let errors = Pipe()
-    process.standardError = errors
-    try process.run()
-    let message = errors.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      XCTFail("ssh-keygen \(arguments.filter { $0 != passphrase }) failed (\(process.terminationStatus)): "
-        + String(decoding: message, as: UTF8.self))
-      throw CocoaError(.executableLoad)
-    }
-  }
-  #endif
 }

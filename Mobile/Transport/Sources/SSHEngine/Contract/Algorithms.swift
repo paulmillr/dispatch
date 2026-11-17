@@ -81,8 +81,6 @@ public enum CipherAlgorithm: String, Sendable, Hashable, CaseIterable {
     }
   }
 
-  public var isAESGCM: Bool { self == .aes256GCM || self == .aes128GCM }
-
   /// Key bytes derived for the cipher (ChaCha20-Poly1305: two 32-byte keys, the length key second).
   public var keyBytes: Int {
     switch self {

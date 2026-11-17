@@ -23,7 +23,8 @@ protocol HostLogin: AnyObject, Sendable {
     var shells: any ShellOpener { get }
     func closed() async
     func close() async
-    /// Whether the connection still answers a round trip within `timeout` (after a network change, while plain).
+    /// Whether the connection still answers a round trip within `timeout` (after a network change, while plain; after a
+    /// helper channel that ended without a word).
     func alive(timeout: Duration) async -> Bool
     /// Installs the helper under `root` if needed and starts its `--stdio` session, reporting `.bootstrapping`. A failure
     /// leaves the connection open. `fromCache`: one command that starts the helper only when the host's cache already
@@ -31,11 +32,6 @@ protocol HostLogin: AnyObject, Sendable {
     func bootstrapHelper(binaries: URL, capabilities: String, environment: [String: String], root: HelperBootstrap.Root,
                          fromCache: Bool, phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws
         -> any HelperProcess
-}
-
-extension HostLogin {
-    var lossError: (any Error)? { nil }
-    var credential: Int? { nil }
 }
 
 /// Which keys logged in where (docs/ios.md, Connection). A key that logged in at an endpoint (address, port and user as
@@ -191,8 +187,9 @@ final class SSHLogin: HostLogin {
     @Sendable static func connect(endpoint: SSHEndpoint, credentials: [SSHCredential], trust: any HostKeyTrust,
                                   keepalive: Duration, keepaliveMax: Int,
                                   phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> any HostLogin {
-        SSHLogin(try await SSHHostSession.connect(endpoint: endpoint, credentials: credentials, trust: trust,
-                                                  keepalive: keepalive, keepaliveMax: keepaliveMax, phase: phase))
+        SSHLogin(try await SSHConnection.connect(
+            to: endpoint, credentials: credentials, trust: trust, keepalive: keepalive, keepaliveMax: keepaliveMax,
+            authenticating: { await phase(.authenticating) }))
     }
 
     var isOpen: Bool { connection.isActive }
@@ -220,24 +217,15 @@ final class SSHLogin: HostLogin {
     func alive(timeout: Duration) async -> Bool {
         guard isOpen else { return false }
         let connection = connection
-        let once = Once()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            let asking = Task {
-                let result: Result<Void, any Error>
-                do {
-                    _ = try await connection.run(":", limit: 4_096)
-                    result = .success(())
-                } catch {
-                    result = .failure(error)
-                }
-                let answered = Self.answered(result) && connection.isActive
-                once.run { continuation.resume(returning: answered) }
+        return await answer(within: timeout, or: false) {
+            let result: Result<Void, any Error>
+            do {
+                _ = try await connection.run(":", limit: 4_096)
+                result = .success(())
+            } catch {
+                result = .failure(error)
             }
-            Task {
-                try? await Task.sleep(for: timeout)
-                once.run { continuation.resume(returning: false) }
-                asking.cancel()
-            }
+            return Self.answered(result) && connection.isActive
         }
     }
 

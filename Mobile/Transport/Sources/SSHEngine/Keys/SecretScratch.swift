@@ -2,27 +2,17 @@ import Foundation
 
 /// Helpers for handling a key file's secret bytes without leaving unwiped copies behind.
 extension SecretBytes {
-  /// `withUnsafeBytes` keeping `body`'s typed error (ContiguousBytes' own is `rethrows`, which erases it).
-  func withBytes<R, E: Error>(_ body: (UnsafeRawBufferPointer) throws(E) -> R) throws(E) -> R {
-    try withTypedBytes(of: self, body)
-  }
-
   /// Runs `body` on an array copy of the bytes, then wipes that copy: for the parsers that read arrays (`WireReader`,
   /// `DERReader`). The array, and any reader holding it, must not outlive `body`, or the wipe reaches only a copy.
   func withTemporaryArray<R, E: Error>(_ body: ([UInt8]) throws(E) -> R) throws(E) -> R {
     var array = withUnsafeBytes { [UInt8]($0) }
-    defer { array.withUnsafeMutableBytes { SecretBytes.wipe($0) } }
+    defer { wipeBytes(&array) }
     return try body(array)
   }
 
   /// A copy of `range` of these bytes, in wiped memory of its own.
   func slice(_ range: Range<Int>) -> SecretBytes {
     withUnsafeBytes { SecretBytes(copying: $0[range]) }
-  }
-
-  /// A copy of `range` of `array` (a temporary copy of a secret) in wiped memory.
-  static func copying(_ array: [UInt8], range: Range<Int>) -> SecretBytes {
-    SecretBytes(copying: array[range])
   }
 
   /// The big-endian magnitude zero-padded on the left to `width` bytes; nil when it is longer than `width`.
@@ -36,7 +26,7 @@ extension SecretBytes {
   }
 }
 
-/// `bytes.withUnsafeBytes` keeping `body`'s typed error.
+/// `bytes.withUnsafeBytes` keeping `body`'s typed error (ContiguousBytes' own is `rethrows`, which erases it).
 func withTypedBytes<R, E: Error>(of bytes: some ContiguousBytes,
                                  _ body: (UnsafeRawBufferPointer) throws(E) -> R) throws(E) -> R {
   let result = bytes.withUnsafeBytes { buffer -> Result<R, E> in
@@ -45,13 +35,13 @@ func withTypedBytes<R, E: Error>(of bytes: some ContiguousBytes,
   return try result.get()
 }
 
-/// Zeroes an array that held a secret (its own storage: call it where the array is uniquely referenced).
-func wipe(_ array: inout [UInt8]) {
-  array.withUnsafeMutableBytes { SecretBytes.wipe($0) }
-}
-
-func wipe(_ data: inout Data) {
-  data.withUnsafeMutableBytes { SecretBytes.wipe($0) }
+/// `bytes.withUnsafeMutableBytes` keeping `body`'s typed error, as `withTypedBytes`.
+func withTypedMutableBytes<R, E: Error>(of bytes: inout [UInt8],
+                                        _ body: (UnsafeMutableRawBufferPointer) throws(E) -> R) throws(E) -> R {
+  let result = bytes.withUnsafeMutableBytes { buffer -> Result<R, E> in
+    do throws(E) { return .success(try body(buffer)) } catch { return .failure(error) }
+  }
+  return try result.get()
 }
 
 extension WireReader {

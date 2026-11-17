@@ -239,8 +239,9 @@ final class FlowControlTests: XCTestCase {
   /// With a backlog that grows as payloads are sent, the channel sends at most one packet past the limit, then
   /// waits for the driver to write; nothing grows without bound however much the app offers.
   func testSendingStopsAtTheBacklogLimit() {
-    let link = BacklogLink()
-    let harness = ChannelHarness(link: link)
+    let harness = ChannelHarness()
+    let link = harness.link
+    link.backlogGrowsOnSend = true
     let id = harness.exec(remote: 14, window: .max)
     var offered = 0
     var taken = 0
@@ -255,7 +256,7 @@ final class FlowControlTests: XCTestCase {
     // The driver writes; everything taken goes out in turn, and the writer is told.
     var rounds = 0
     repeat {
-      link.drain()
+      link.outboundBacklog = 0
       harness.core.transportDrained()
       harness.drain()
       rounds += 1

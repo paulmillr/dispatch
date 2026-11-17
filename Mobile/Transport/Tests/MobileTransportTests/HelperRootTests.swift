@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 @testable import MobileTransport
 import XCTest
@@ -8,10 +7,6 @@ import XCTest
 /// leaves, and which root comes next.
 final class HelperRootTests: XCTestCase {
   private let digest = String(repeating: "a", count: 64)
-
-  private func sha256(_ text: String) -> String {
-    SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
-  }
 
   private func installed(_ root: HelperBootstrap.Root, runtime: String? = "/run/user/1000") -> HelperBootstrap.Installed {
     HelperBootstrap.Installed(platform: "linux-x86_64", digest: digest, size: 1, root: root, uploaded: true,
@@ -136,13 +131,6 @@ final class HelperRootTests: XCTestCase {
   #if os(macOS)
   // MARK: The scripts on this Mac's /bin/sh
 
-  private func temporary() throws -> URL {
-    let root = URL(fileURLWithPath: "/tmp/hr-" + String(UUID().uuidString.prefix(8)))
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-    addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-    return root
-  }
-
   private func sh(_ script: String, environment: [String: String]) throws -> (status: Int32, output: String) {
     let process = Process(), output = Pipe()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -159,7 +147,7 @@ final class HelperRootTests: XCTestCase {
   /// The probe names the runtime folder only when it is absolute, the account's and 0700, and `dispatch` there is absent
   /// or private and not a link; it writes nothing, and always succeeds, so the platform line is read either way.
   func testRuntimeProbeChecksTheFolder() throws {
-    let root = try temporary(), home = root.appendingPathComponent("home")
+    let root = try temporaryFolder(), home = root.appendingPathComponent("home")
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     let runtime = root.appendingPathComponent("run")
     try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -197,10 +185,10 @@ final class HelperRootTests: XCTestCase {
   /// that is merely not executable by its mode (this Mac's /tmp runs programs, so the noexec case itself cannot be made
   /// here without mounting a file system).
   func testBlockedNamesOnlyAFolderThatCannotRunTheHelper() throws {
-    let root = try temporary(), home = root.appendingPathComponent("home")
+    let root = try temporaryFolder(), home = root.appendingPathComponent("home")
     try FileManager.default.createDirectory(at: home, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     let helper = Data("#!/bin/sh\nexit 0\n".utf8)
-    let digest = SHA256.hash(data: helper).map { String(format: "%02x", $0) }.joined()
+    let digest = sha256(helper)
     let check = SSHBootstrapScript.cachePreamble(digest: digest) + "\n"
       + SSHBootstrapScript.verify(size: helper.count, digest: digest) + " && exit 0\n"
       + SSHBootstrapScript.blocked(size: helper.count, digest: digest) + "\nexit 1"
@@ -225,12 +213,7 @@ final class HelperRootTests: XCTestCase {
 final class HelperRootInstallTests: XCTestCase {
   /// A "helper" that reports where it runs, what it was given, and exits with `status`.
   private func scriptBinaries(_ body: String) throws -> URL {
-    let directory = SSHFixture.shared.root.appendingPathComponent("script-\(UUID().uuidString.prefix(6))")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    for name in ["darwin-arm64", "linux-aarch64", "linux-x86_64"] {
-      try Data(("#!/bin/sh\n# \(UUID().uuidString)\n" + body).utf8).write(to: directory.appendingPathComponent(name))
-    }
-    return directory
+    try SSHFixture.shared.helpers(Data(("#!/bin/sh\n# \(UUID().uuidString)\n" + body).utf8))
   }
 
   private func runtimeFolder() throws -> URL {

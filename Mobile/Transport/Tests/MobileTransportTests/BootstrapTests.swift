@@ -1,6 +1,5 @@
 #if os(macOS)
 // The loopback sshd fixture spawns processes: macOS only (SimulatorTests covers the iPhone build).
-import CryptoKit
 import Foundation
 @testable import MobileTransport
 import XCTest
@@ -13,14 +12,9 @@ final class BootstrapTests: XCTestCase {
     .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("build/helper-rust/bin")
 
   private func dummyBinaries(size: Int) throws -> URL {
-    let directory = SSHFixture.shared.root.appendingPathComponent("dummy-\(UUID().uuidString.prefix(6))")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var bytes = Data(count: size)
     bytes.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, size, $0.baseAddress!) }
-    for name in ["darwin-arm64", "linux-aarch64", "linux-x86_64"] {
-      try bytes.write(to: directory.appendingPathComponent(name))
-    }
-    return directory
+    return try SSHFixture.shared.helpers(bytes)
   }
 
   func testInstallsDummyThenReusesCache() async throws {
@@ -35,7 +29,7 @@ final class BootstrapTests: XCTestCase {
     let attributes = try FileManager.default.attributesOfItem(atPath: installed.path)
     XCTAssertEqual(attributes[.size] as? Int, 3 << 20)
     XCTAssertEqual((attributes[.posixPermissions] as? Int).map { $0 & 0o777 }, 0o700)
-    XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: installed)).map { String(format: "%02x", $0) }.joined(), first.digest)
+    XCTAssertEqual(sha256(try Data(contentsOf: installed)), first.digest)
     let leftovers = try FileManager.default.contentsOfDirectory(atPath: installed.deletingLastPathComponent().path)
     XCTAssertEqual(leftovers, ["dispatch-helper"], "no staging directory is left behind")
     let second = try await HelperBootstrap.install(on: connection, binaries: binaries)
@@ -49,7 +43,7 @@ final class BootstrapTests: XCTestCase {
     let connection = try await fixture.connect()
     defer { Task { await connection.close() } }
     let announced = Data(repeating: 1, count: 4096), sent = Data(repeating: 2, count: 4096)
-    let digest = SHA256.hash(data: announced).map { String(format: "%02x", $0) }.joined()
+    let digest = sha256(announced)
     let result = try await connection.run(posixShell(SSHBootstrapScript.upload(digest: digest, size: sent.count, staging: "upload-test")), input: sent)
     XCTAssertNotEqual(result.status, 0)
     let directory = fixture.home.appendingPathComponent(".dispatch/bin/versions/" + digest)

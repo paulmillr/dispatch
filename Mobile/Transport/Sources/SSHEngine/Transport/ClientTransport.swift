@@ -85,10 +85,9 @@ public final class ClientTransport: TransportCore {
     }
   }
 
-  static let keepaliveName = "keepalive@openssh.com"
   static let keepaliveRequest: [UInt8] = {
     var writer = WireWriter(.globalRequest, capacity: 32)
-    writer.writeName(keepaliveName)
+    writer.writeName("keepalive@openssh.com")
     writer.writeBoolean(true)
     return (try? writer.finish()) ?? []
   }()
@@ -125,6 +124,8 @@ public final class ClientTransport: TransportCore {
   private var extensions: ServerExtensions?
   private var extInfoCount = 0
   private var firstPacketAfterNewKeys = false
+  /// An EXT_INFO came during authentication: the next message for the layers above must be USERAUTH_SUCCESS.
+  private var extInfoBeforeSuccess = false
 
   private var unanswered = 0
   /// The connection phase began: keepalives run (scheduled once there, then per batch of packets).
@@ -152,7 +153,7 @@ public final class ClientTransport: TransportCore {
     keepaliveCountMax = options.keepaliveCountMax
     self.verifier = verifier
     self.random = random
-    clientVersion = Array(VersionExchange.clientLine(Self.softwareVersion).dropLast(2))
+    clientVersion = Array("SSH-2.0-\(Self.softwareVersion)".utf8)
   }
 
   // MARK: TransportLink
@@ -214,18 +215,9 @@ public final class ClientTransport: TransportCore {
     if reexchangeDue { startReexchange() }
     while events.isEmpty && endReason == nil {
       do {
-        if awaitingTrust {
-          if streamEnded { finish(.closed(.connectionLost)) }
-          break
-        }
-        if serverVersion == nil {
-          try readVersion()
-          guard serverVersion != nil else {
-            if streamEnded { finish(.closed(.connectionLost)) }
-            break
-          }
-        }
-        guard let packet = try inbound.next() else {
+        // No packet before the server's version line, nor while the trust callback decides (the header).
+        if !awaitingTrust && serverVersion == nil { try readVersion() }
+        guard !awaitingTrust, serverVersion != nil, let packet = try inbound.next() else {
           if streamEnded {
             finish(.closed(.connectionLost))
           } else if packetsSinceKeepaliveScheduled, let interval = keepaliveInterval, keepalivesStarted {
@@ -329,11 +321,7 @@ public final class ClientTransport: TransportCore {
     case .payload(let payload):
       try sealNow(payload)
     case .secret(let secret):
-      var result: Result<(UInt32, Int), SSHError> = .failure(.closed(.alreadyEnded))
-      secret.withUnsafeBytes { raw in
-        do throws(SSHError) { result = .success(try outbound.seal(raw, random: random)) } catch { result = .failure(error) }
-      }
-      count(outbound: try result.get().1)
+      count(outbound: try outbound.seal(secret, random: random).1)
     case .keepalive:
       let sequence = try sealNow(Self.keepaliveRequest)
       outstandingKeepalives.append(sequence)
@@ -385,10 +373,10 @@ public final class ClientTransport: TransportCore {
   }
 
   /// Starts the re-exchange that is due, once nothing stands in its way: the first exchange is done, none is running,
-  /// and the layers above are in the connection phase.
+  /// and the layers above are in the connection phase. It stays due until an exchange completes (`receiveNewKeys`),
+  /// whichever side started it.
   private func startReexchange() {
     guard reexchangeDue, established, exchange == nil, endReason == nil, service == .connection else { return }
-    reexchangeDue = false
     do { try sendKexInit(initial: false) } catch { finish(error) }
   }
 
@@ -425,7 +413,8 @@ public final class ClientTransport: TransportCore {
     inboundBytes &+= UInt64(packet.wireBytes)
     inboundPackets &+= 1
     let context = MessagePolicy.Context(transport: policyPhase, service: service,
-                                        firstPacketAfterNewKeys: firstPacketAfterNewKeys, extInfoReceived: extInfoCount)
+                                        firstPacketAfterNewKeys: firstPacketAfterNewKeys, extInfoReceived: extInfoCount,
+                                        extInfoBeforeSuccess: extInfoBeforeSuccess)
     let route = try MessagePolicy.check(message.number, in: context)
     if firstPacketAfterNewKeys {
       // RFC 8308 §2.4: now it is known whether the server sent EXT_INFO in its place.
@@ -438,6 +427,7 @@ public final class ClientTransport: TransportCore {
     }
     switch route {
     case .service:
+      extInfoBeforeSuccess = false
       queue(.message(message))
     case .transport:
       try handleTransport(message, sequence: packet.sequence)
@@ -464,8 +454,7 @@ public final class ClientTransport: TransportCore {
       }
     case .unimplemented:
       let number = try message.decode { (reader: inout WireReader) throws(WireError) in try reader.readUInt32() }
-      // Only a keepalive may go unimplemented (a server without global requests may answer so; sshd did before
-      // authentication, when keepalives went then).
+      // Only a keepalive may go unimplemented (a server without global requests may answer so).
       guard let index = outstandingKeepalives.firstIndex(of: number) else {
         throw .protocolViolation(.unimplemented(sequence: number))
       }
@@ -490,16 +479,21 @@ public final class ClientTransport: TransportCore {
   }
 
   private func receiveExtInfo(_ message: InboundMessage) throws(SSHError) {
-    let entries = try message.decode { (reader: inout WireReader) throws(WireError) -> [(String, [UInt8])] in
-      let count = try reader.readCount(limit: Limits.extInfoExtensions, elementBytes: 8)
-      var entries: [(String, [UInt8])] = []
-      for _ in 0..<count { entries.append((try reader.readName(), try reader.readString(limit: Limits.extensionValueBytes))) }
-      return entries
-    }
     var updated = extensions ?? ServerExtensions()
-    for (name, value) in entries { updated.values[name] = value }
+    for (name, value) in try message.decode(Self.extInfoEntries) { updated.values[name] = value }
     extensions = updated
     extInfoCount += 1
+    if case .userauth = service { extInfoBeforeSuccess = true }
+  }
+
+  /// EXT_INFO's fields after its number (RFC 8308 §2.3): the extensions, names and values as sent, in order.
+  static func extInfoEntries(_ reader: inout WireReader) throws(WireError) -> [(String, [UInt8])] {
+    let count = try reader.readCount(limit: Limits.extInfoExtensions, elementBytes: 8)
+    var entries: [(String, [UInt8])] = []
+    for _ in 0..<count {
+      entries.append((try reader.readName(), try reader.readString(limit: Limits.extensionValueBytes)))
+    }
+    return entries
   }
 
   private func refuseGlobalRequest(_ message: InboundMessage) throws(SSHError) {
@@ -515,10 +509,7 @@ public final class ClientTransport: TransportCore {
   private func receiveKexInit(_ payload: [UInt8], sequence: UInt32) throws(SSHError) {
     let server = try KexInit(decoding: payload)
     // The server starts a re-exchange: answer with ours first (RFC 4253 §7.1). It satisfies one of ours that was due.
-    if exchange == nil {
-      reexchangeDue = false
-      try sendKexInit(initial: false)
-    }
+    if exchange == nil { try sendKexInit(initial: false) }
     guard let exchange, exchange.stage == .awaitingKexInit else { throw Self.outOfPhase(.kexInit) }
     if exchange.initial {
       strict = server.keyExchange.contains(KexSignal.strictServer)
@@ -585,6 +576,7 @@ public final class ClientTransport: TransportCore {
     inboundBytes = 0
     inboundPackets = 0
     self.exchange = nil
+    reexchangeDue = false
     if exchange.initial {
       established = true
       firstPacketAfterNewKeys = true
@@ -633,7 +625,7 @@ public final class ClientTransport: TransportCore {
   // MARK: Helpers
 
   /// The layers above may send SERVICE_REQUEST, userauth and channel messages, each fitting one packet.
-  private static func checkUpperPayload(first: UInt8?, count: Int) throws(SSHError) {
+  static func checkUpperPayload(first: UInt8?, count: Int) throws(SSHError) {
     guard let first, first == MessageNumber.serviceRequest.rawValue || (50...79).contains(first)
       || (90...127).contains(first), count <= Limits.packetLength - 64
     else { throw .usage(.invalidArgument("a message the layers above may not send")) }

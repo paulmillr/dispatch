@@ -1001,10 +1001,11 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertGreaterThan(turns.count, 1)
         let kept = MobileChatSession.Kept(transcript: transcript, conversation: "c", earlier: nil, readingPosition: nil,
                                           bytes: transcript.estimatedBytes)
+        // The size as saved (same time, same turns); a share well under it, so the time's digits cannot decide.
         let whole = try XCTUnwrap(ChatHistoryArchive.encode(
-            ChatHistoryArchive.Saved(node: "n", conversation: "c", reachedStart: true, saved: Date(), turns: transcript.saved.turns,
+            ChatHistoryArchive.Saved(node: "n", conversation: "c", reachedStart: true, saved: kept.saved, turns: transcript.saved.turns,
                                      index: transcript.saved.index), limit: .max))
-        let archive = ChatHistoryArchive(directory: directory, chatLimit: whole.count - 1)
+        let archive = ChatHistoryArchive(directory: directory, chatLimit: whole.count * 3 / 4)
         let key = ChatConversationKey(host: host, node: "n")
         archive.save(kept, for: key)
         let maybe = await archive.load(key)

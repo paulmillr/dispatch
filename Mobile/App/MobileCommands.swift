@@ -10,8 +10,10 @@ enum MobileCommand: String, CaseIterable, Identifiable {
     case newTab, newSpace, newChat, newHost
     case renameTab, renameSpace, closeTab, closeSpace, detachSpace
     case find, findNext, findPrevious, clearScreen, attach, toggleSidebar, switchSegment, switchFiles, reviewChanges, commits
+    case splitRight, splitDown, mergePanes
+    case layoutSingle, layoutColumns, layoutRows, layoutTwoAbove, layoutGrid
     case increaseFontSize, decreaseFontSize, resetFontSize
-    case spaces, agents, previousTab, nextTab, nextAttention, previousAttention
+    case spaces, agents, previousTab, nextTab, nextAttention, previousAttention, previousPane, nextPane
     case settings, shortcuts
 
     var id: Self { self }
@@ -35,8 +37,9 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .newTab, .newSpace, .newChat, .newHost, .renameTab, .renameSpace, .closeTab, .closeSpace, .detachSpace: .file
         case .find, .findNext, .findPrevious, .clearScreen, .attach: .edit
         case .toggleSidebar, .switchSegment, .switchFiles, .reviewChanges, .commits, .increaseFontSize, .decreaseFontSize,
-             .resetFontSize: .view
-        case .spaces, .agents, .previousTab, .nextTab, .nextAttention, .previousAttention: .navigate
+             .resetFontSize, .splitRight, .splitDown, .mergePanes, .layoutSingle, .layoutColumns, .layoutRows, .layoutTwoAbove,
+             .layoutGrid: .view
+        case .spaces, .agents, .previousTab, .nextTab, .nextAttention, .previousAttention, .previousPane, .nextPane: .navigate
         case .settings: .app
         case .shortcuts: .help
         }
@@ -64,6 +67,10 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .switchFiles: "Switch Terminal / Files"
         case .reviewChanges: "Review Changes"
         case .commits: "Commits"
+        case .splitRight: "Split Right"
+        case .splitDown: "Split Down"
+        case .mergePanes: "Merge Panes"
+        case .layoutSingle, .layoutColumns, .layoutRows, .layoutTwoAbove, .layoutGrid: layout?.title ?? ""
         case .increaseFontSize: "Increase Font Size"
         case .decreaseFontSize: "Decrease Font Size"
         case .resetFontSize: "Reset Font Size"
@@ -73,6 +80,8 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .nextTab: "Next Tab"
         case .nextAttention: "Next Attention"
         case .previousAttention: "Previous Attention"
+        case .previousPane: "Previous Pane"
+        case .nextPane: "Next Pane"
         case .settings: "Settings…"
         case .shortcuts: "Keyboard Shortcuts"
         }
@@ -98,6 +107,10 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .switchFiles: FilesMode.files.symbol
         case .reviewChanges: FilesMode.review.symbol
         case .commits: FilesMode.commits.symbol
+        case .splitRight: "rectangle.split.2x1"
+        case .splitDown: "rectangle.split.1x2"
+        case .mergePanes: "rectangle"
+        case .layoutSingle, .layoutColumns, .layoutRows, .layoutTwoAbove, .layoutGrid: layout?.symbol ?? "rectangle"
         case .increaseFontSize: "textformat.size.larger"
         case .decreaseFontSize: "textformat.size.smaller"
         case .resetFontSize: "textformat.size"
@@ -107,14 +120,17 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .nextTab: "chevron.right"
         case .nextAttention: "bell.badge"
         case .previousAttention: "bell"
+        case .previousPane: "rectangle.lefthalf.inset.filled"
+        case .nextPane: "rectangle.righthalf.inset.filled"
         case .settings: "gearshape"
         case .shortcuts: "keyboard"
         }
     }
 
-    /// The chord: the Mac's (⌘T, ⌘N, ⌘W, ⇧⌘W, ⌘F ⌘G ⇧⌘G, ⌘K, ⌃⌘S, ⇧⌘C ⇧⌘F ⇧⌘U ⇧⌘L, ⌘+ ⌘- ⌘0, ⌘[ ⌘], ⌘J ⇧⌘J, ⌘, and ⌘/). New Chat takes ⌥⌘N, which the
-    /// Mac leaves free (its ⇧⌘N is New Local Space); ⌘1 and ⌘2 select the tab bar's sections, as iPad apps number
-    /// their sidebar's; Attach Files… takes Mail's ⇧⌘A. Renames, Detach and New Host have none, as on the Mac.
+    /// The chord: the Mac's (⌘T, ⌘N, ⌘W, ⇧⌘W, ⌘F ⌘G ⇧⌘G, ⌘K, ⌃⌘S, ⇧⌘C ⇧⌘F ⇧⌘U ⇧⌘L, ⌘D ⇧⌘D, ⌘+ ⌘- ⌘0, ⌘[ ⌘], ⌥⌘[ ⌥⌘],
+    /// ⌘J ⇧⌘J, ⌘, and ⌘/). New Chat takes ⌥⌘N, which the Mac leaves free (its ⇧⌘N is New Local Space); ⌘1 and ⌘2
+    /// select the tab bar's sections, as iPad apps number their sidebar's; Attach Files… takes Mail's ⇧⌘A. Renames,
+    /// Detach, New Host and Merge Panes have none, as on the Mac.
     var shortcut: KeyboardShortcut? {
         switch self {
         case .newTab: KeyboardShortcut("t")
@@ -139,11 +155,29 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .agents: KeyboardShortcut("2")
         case .previousTab: KeyboardShortcut("[")
         case .nextTab: KeyboardShortcut("]")
+        case .splitRight: KeyboardShortcut("d")
+        case .splitDown: KeyboardShortcut("d", modifiers: [.command, .shift])
+        case .previousPane: KeyboardShortcut("[", modifiers: [.command, .option])
+        case .nextPane: KeyboardShortcut("]", modifiers: [.command, .option])
         case .nextAttention: KeyboardShortcut("j")
         case .previousAttention: KeyboardShortcut("j", modifiers: [.command, .shift])
         case .settings: KeyboardShortcut(",")
         case .shortcuts: KeyboardShortcut("/")
-        case .newHost, .renameTab, .renameSpace, .detachSpace: nil
+        // The layouts have the Mac's ⌃ digits there, which a terminal here keeps.
+        case .newHost, .renameTab, .renameSpace, .detachSpace, .mergePanes, .layoutSingle, .layoutColumns, .layoutRows,
+             .layoutTwoAbove, .layoutGrid: nil
+        }
+    }
+
+    /// The layout a layout item applies (`SpacesNavigator.applyLayout`).
+    var layout: PadLayout? {
+        switch self {
+        case .layoutSingle: .single
+        case .layoutColumns: .columns
+        case .layoutRows: .rows
+        case .layoutTwoAbove: .twoAbove
+        case .layoutGrid: .grid
+        default: nil
         }
     }
 
@@ -175,8 +209,10 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .file: [[.newTab, .newSpace, .newChat, .newHost], [.renameTab, .renameSpace], [.closeTab, .closeSpace, .detachSpace]]
         case .edit: [[.find, .findNext, .findPrevious], [.clearScreen], [.attach]]
         case .view: [[.increaseFontSize, .decreaseFontSize, .resetFontSize],
-                     [.toggleSidebar, .switchSegment, .switchFiles, .reviewChanges, .commits]]
-        case .navigate: [[.spaces, .agents], [.nextAttention, .previousAttention], [.previousTab, .nextTab]]
+                     [.toggleSidebar, .splitRight, .splitDown, .mergePanes, .layoutSingle, .layoutColumns, .layoutRows,
+                      .layoutTwoAbove, .layoutGrid, .switchSegment, .switchFiles, .reviewChanges, .commits]]
+        case .navigate: [[.spaces, .agents], [.nextAttention, .previousAttention], [.previousTab, .nextTab],
+                         [.previousPane, .nextPane]]
         case .help: [[.shortcuts]]
         }
     }
@@ -346,6 +382,13 @@ private struct MobileCommandHost: ViewModifier {
             navigator.showRoot()
         case .previousTab: navigator.stepTab(-1)
         case .nextTab: navigator.stepTab(1)
+        case .splitRight: navigator.splitPane(.columns)
+        case .splitDown: navigator.splitPane(.rows)
+        case .mergePanes: navigator.mergePanes()
+        case .layoutSingle, .layoutColumns, .layoutRows, .layoutTwoAbove, .layoutGrid:
+            if let layout = command.layout { navigator.applyLayout(layout) }
+        case .previousPane: navigator.stepPane(-1)
+        case .nextPane: navigator.stepPane(1)
         case .nextAttention: navigator.attention(1)
         case .previousAttention: navigator.attention(-1)
         case .settings: sheet = .settings

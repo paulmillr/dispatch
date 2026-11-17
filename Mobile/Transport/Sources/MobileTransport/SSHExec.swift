@@ -22,7 +22,7 @@ public final class SSHExec: AsyncSequence, Sendable {
   static func start(_ command: String, on session: any EngineSession) async throws -> SSHExec {
     let state = ExecState()
     session.exec(command, events: state)
-    let fd = try await state.started.value
+    let fd = try await state.started.value.get()
     return SSHExec(state: state, fd: fd)
   }
 
@@ -44,17 +44,12 @@ public final class SSHExec: AsyncSequence, Sendable {
   /// The exit status once the command ended (a signal reports 128). Throws `commandFailed(status: -1, …)` when the
   /// server refused the exec request, `channelClosed` when the channel or connection ended without a status.
   public func exitStatus() async throws -> Int32 {
-    switch await state.exit {
-    case .status(let status): return Int32(bitPattern: status)
-    case .signal: return 128
-    case .lost: throw SSHTransportError.channelClosed
-    case .refused(let message): throw SSHTransportError.commandFailed(status: -1, stderr: message)
-    }
+    try await state.exitStatus(refusal: true)
   }
 
   /// The server's refusal of the exec request (`commandFailed(status: -1, …)`), once the exec ended so; nil otherwise.
   public var refusal: SSHTransportError? {
-    if case .refused(let message)? = state.finished { return .commandFailed(status: -1, stderr: message) }
+    if case .refused(let message)? = state.ended.current { return .commandFailed(status: -1, stderr: message) }
     return nil
   }
 
@@ -79,14 +74,9 @@ public final class SSHExec: AsyncSequence, Sendable {
     let exec: SSHExec
     public mutating func next() async throws -> Output? {
       if let chunk = exec.state.nextStderr() { return .stderr(chunk) }
-      if !exec.state.stdoutEnded, let data = try await exec.descriptor.read() {
-        if !data.isEmpty { return .stdout(data) }
-        exec.state.stdoutEnded = true
-      }
-      // stdout ended: every stderr chunk arrives before the exit callback.
-      _ = await exec.state.exit
-      if let chunk = exec.state.nextStderr() { return .stderr(chunk) }
-      return nil
+      if let data = try await exec.state.output(exec.descriptor) { return .stdout(data) }
+      // stdout ended and the channel too: every stderr chunk arrived before the exit callback.
+      return exec.state.nextStderr().map(Output.stderr)
     }
   }
 
@@ -95,23 +85,17 @@ public final class SSHExec: AsyncSequence, Sendable {
 
 /// An exec's or a shell's channel events from the engine, kept for the exec, its iterator and `exitStatus()`.
 final class ExecState: EngineChannelEvents, @unchecked Sendable {
-  typealias Exit = EngineExit
-
-  let started = Completion<Int32>()
+  /// The caller's end of the socketpair, or why the channel did not open.
+  let started = Once<Result<Int32, SSHTransportError>>()
+  /// How the channel ended.
+  let ended = Once<EngineExit>()
   private let lock = NSLock()
   private var pendingStderr: [Data] = []
   /// Off once the descriptor is handed over: a channel that lives as long as the connection (the helper's) would
   /// otherwise keep every byte the host writes to stderr.
   private var queueing = true
   private var allStderr = Data()
-  private var ending: Exit?
-  private var waiters: [CheckedContinuation<Exit, Never>] = []
-  private var ended = false
-
-  var stdoutEnded: Bool {
-    get { lock.withLock { ended } }
-    set { lock.withLock { ended = newValue } }
-  }
+  private var stdoutEnded = false
 
   var collectedStderr: Data { lock.withLock { allStderr } }
 
@@ -133,31 +117,29 @@ final class ExecState: EngineChannelEvents, @unchecked Sendable {
     lock.withLock { pendingStderr.isEmpty ? nil : pendingStderr.removeFirst() }
   }
 
-  func opened(_ result: Result<Int32, SSHTransportError>) {
-    started.finish(result.mapError { $0 })
-  }
+  func opened(_ result: Result<Int32, SSHTransportError>) { started.set(result) }
 
-  func exited(_ exit: EngineExit) {
-    let waiters = lock.withLock { () -> [CheckedContinuation<Exit, Never>] in
-      ending = exit
-      defer { self.waiters = [] }
-      return self.waiters
+  func exited(_ exit: EngineExit) { ended.set(exit) }
+
+  /// The next chunk `descriptor` reads (the iterators' `next()`); nil once it read end of file, or was closed or handed
+  /// over, and the channel ended.
+  func output(_ descriptor: Descriptor) async throws -> Data? {
+    if !lock.withLock({ stdoutEnded }), let data = try await descriptor.read() {
+      if !data.isEmpty { return data }
+      lock.withLock { stdoutEnded = true }
     }
-    waiters.forEach { $0.resume(returning: exit) }
+    _ = await ended.value
+    return nil
   }
 
-  /// How the channel ended, if it has.
-  var finished: Exit? { lock.withLock { ending } }
-
-  var exit: Exit {
-    get async {
-      await withCheckedContinuation { continuation in
-        let ready = lock.withLock { () -> Exit? in
-          if ending == nil { waiters.append(continuation) }
-          return ending
-        }
-        if let ready { continuation.resume(returning: ready) }
-      }
+  /// How the channel ended as `exitStatus()` reports it: the status (its bit pattern), 128 for a signal; else
+  /// `channelClosed`, or for a refusal `commandFailed(status: -1, <message>)` when `refusal` (an exec's).
+  func exitStatus(refusal: Bool) async throws -> Int32 {
+    switch await ended.value {
+    case .status(let status): return Int32(bitPattern: status)
+    case .signal: return 128
+    case .refused(let message) where refusal: throw SSHTransportError.commandFailed(status: -1, stderr: message)
+    case .lost, .refused: throw SSHTransportError.channelClosed
     }
   }
 }
@@ -257,13 +239,12 @@ final class Descriptor: @unchecked Sendable {
     guard let fd = acquire() else { return nil }
     return try await Blocking.run { [self] () -> Data in
       defer { release() }
-      var buffer = Data(count: 256 * 1024)
-      let count = buffer.withUnsafeMutableBytes { bytes in
+      // A copy of what was read: a slice of the buffer would keep all 256 KiB alive for every chunk the caller holds.
+      return withUnsafeTemporaryAllocation(byteCount: 256 * 1024, alignment: 1) { bytes in
         var count: Int
         repeat { count = Darwin.read(fd, bytes.baseAddress, bytes.count) } while count < 0 && errno == EINTR
-        return count
+        return count > 0 ? Data(bytes: bytes.baseAddress!, count: count) : Data()
       }
-      return count > 0 ? buffer.prefix(count) : Data()
     }
   }
 }

@@ -60,10 +60,6 @@ final class ContractTests: XCTestCase {
       (.channelOpenFailed(.administrativelyProhibited, description: ""), -10), (.requestRefused(.ptyRequest), -10),
     ]
     for (error, code) in cases { XCTAssertEqual(error.dmsCode, code, "\(error)") }
-    XCTAssertEqual(ChannelExit.status(0).dmsKind, 0)
-    XCTAssertEqual(ChannelExit.signal(name: "TERM", coreDumped: false, message: "").dmsKind, 1)
-    XCTAssertEqual(ChannelExit.lost.dmsKind, 2)
-    XCTAssertEqual(ChannelExit.refused.dmsKind, 3)
   }
 
   func testErrorTexts() {

@@ -1,11 +1,6 @@
 import Foundation
 import SSHEngine
 
-/// The Swift engine's connector: the driver over Network.framework (Sources/SSHEngine/Client).
-func swiftEngineConnector() throws(SSHTransportError) -> any SSHConnector {
-  SSHClient.connector()
-}
-
 /// The Swift engine (Sources/SSHEngine) behind the seam (`Engine.swift`), over its facade (`SSHConnector`,
 /// `SSHSession`, `ExecChannel`, `ShellChannel`, `KeyFile`). Every operation runs on a task of its own, detached from
 /// the caller, and ends with its one callback from there: callbacks run on the global executor's threads, never the
@@ -22,22 +17,14 @@ func swiftEngineConnector() throws(SSHTransportError) -> any SSHConnector {
 /// an RSA signer blob is refused without asking; a zero `keepaliveMax` is the engine's largest count (100), not
 /// "never" (`options(_:)`).
 struct SwiftEngine: EngineBackend {
+  /// The driver over Network.framework (`SSHClient.connector()`), or a test's.
   let connector: any SSHConnector
-  /// Tests: told whenever a channel's socket waits for its caller (to read, or to make room).
-  var parked: (@Sendable (SwiftEngineSocketWait) -> Void)?
-
-  init(connector: any SSHConnector, parked: (@Sendable (SwiftEngineSocketWait) -> Void)? = nil) {
-    self.connector = connector
-    self.parked = parked
-  }
-
-  var version: String { "dispatch-mobile-ssh (SSHEngine, Swift)" }
 
   func connect(
     _ options: EngineConnectOptions, events: any EngineSessionEvents,
     connected: @escaping @Sendable (Result<any EngineSession, SSHTransportError>) -> Void
   ) {
-    let connector = connector, parked = parked, engineOptions = Self.options(options)
+    let connector = connector, engineOptions = Self.options(options)
     Task.detached {
       let session: any SSHSession
       do throws(SSHError) {
@@ -46,7 +33,7 @@ struct SwiftEngine: EngineBackend {
         // A failed connect has no session and no `ended()`: `events` is never called again.
         return connected(.failure(error.transportError))
       }
-      connected(.success(SwiftEngineSession(session, parked: parked)))
+      connected(.success(SwiftEngineSession(session)))
       // The one `disconnected`: the facade decides the first reason once.
       events.disconnected(await session.ended().transportError)
     }
@@ -90,9 +77,10 @@ struct SwiftEngine: EngineBackend {
 /// so this closes it explicitly); channels hold no reference to it.
 final class SwiftEngineSession: EngineSession, Sendable {
   let session: any SSHSession
+  /// Tests: told whenever a channel's socket waits for its caller (to read, or to make room).
   private let parked: (@Sendable (SwiftEngineSocketWait) -> Void)?
 
-  init(_ session: any SSHSession, parked: (@Sendable (SwiftEngineSocketWait) -> Void)?) {
+  init(_ session: any SSHSession, parked: (@Sendable (SwiftEngineSocketWait) -> Void)? = nil) {
     self.session = session
     self.parked = parked
   }
@@ -250,42 +238,13 @@ final class SwiftEngineKey: EngineKey {
 /// is not asked at all when the task was cancelled first); a later answer does nothing.
 enum SwiftEngineQuestion {
   static func ask<Answer: Sendable>(withdrawn: Answer, _ send: (@escaping @Sendable (Answer) -> Void) -> Void) async -> Answer {
-    let slot = Slot<Answer>()
+    let slot = Once<Answer>()
     return await withTaskCancellationHandler {
       if Task.isCancelled { return withdrawn }
-      send { slot.fill($0) }
+      send { slot.set($0) }
       return await slot.value
     } onCancel: {
-      slot.fill(withdrawn)
-    }
-  }
-
-  private final class Slot<Answer: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    /// Empty until answered (or withdrawn); then the first answer, for good.
-    private var answer: [Answer] = []
-    private var waiter: CheckedContinuation<Answer, Never>?
-
-    func fill(_ value: Answer) {
-      let waiter = lock.withLock { () -> CheckedContinuation<Answer, Never>? in
-        guard answer.isEmpty else { return nil }
-        answer = [value]
-        defer { self.waiter = nil }
-        return self.waiter
-      }
-      waiter?.resume(returning: value)
-    }
-
-    var value: Answer {
-      get async {
-        await withCheckedContinuation { continuation in
-          let ready = lock.withLock { () -> [Answer] in
-            if answer.isEmpty { waiter = continuation }
-            return answer
-          }
-          if let first = ready.first { continuation.resume(returning: first) }
-        }
-      }
+      slot.set(withdrawn)
     }
   }
 }

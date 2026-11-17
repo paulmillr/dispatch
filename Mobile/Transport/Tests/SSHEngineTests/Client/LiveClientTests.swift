@@ -145,7 +145,7 @@ final class LiveClientTests: XCTestCase {
     let session = try await session()
     let data = Self.pseudoRandom(16 << 20, seed: 1)
     let (output, exit) = try await run(session, "shasum -a 256", input: data)
-    XCTAssertEqual(String(decoding: output.stdout.prefix(64), as: UTF8.self), Self.hex(SHA256.hash(data: data)))
+    XCTAssertEqual(String(decoding: output.stdout.prefix(64), as: UTF8.self), sha256Hex(data))
     XCTAssertEqual(exit, .status(0))
     await session.close()
   }
@@ -156,7 +156,7 @@ final class LiveClientTests: XCTestCase {
     let command = "f=$HOME/down.$$; head -c 16777216 /dev/urandom > $f && shasum -a 256 < $f >&2 && cat $f; rm -f $f"
     let (output, exit) = try await run(session, command)
     XCTAssertEqual(output.stdout.count, 16 << 20)
-    XCTAssertEqual(String(decoding: output.stderr.prefix(64), as: UTF8.self), Self.hex(SHA256.hash(data: output.stdout)))
+    XCTAssertEqual(String(decoding: output.stderr.prefix(64), as: UTF8.self), sha256Hex(output.stdout))
     XCTAssertEqual(exit, .status(0))
     let stats = await session.driver.stats
     XCTAssertLessThanOrEqual(stats.maximumBufferedOutput, Int(Limits.channelWindow))
@@ -196,7 +196,7 @@ final class LiveClientTests: XCTestCase {
     let session = try await session()
     let data = Self.pseudoRandom(8 << 20, seed: 3)
     let (output, exit) = try await run(session, "sleep 1; shasum -a 256", input: data)
-    XCTAssertEqual(String(decoding: output.stdout.prefix(64), as: UTF8.self), Self.hex(SHA256.hash(data: data)))
+    XCTAssertEqual(String(decoding: output.stdout.prefix(64), as: UTF8.self), sha256Hex(data))
     XCTAssertEqual(exit, .status(0))
     let stats = await session.driver.stats
     XCTAssertLessThanOrEqual(stats.maximumBacklog, Limits.outboundBacklogBytes + 64 * 1024)
@@ -382,8 +382,6 @@ final class LiveClientTests: XCTestCase {
     }
     return bytes
   }
-
-  static func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }
 }
 
 /// Against sshd too, each needing a daemon or a network of its own: re-exchanges under load (sshd's `RekeyLimit`, and

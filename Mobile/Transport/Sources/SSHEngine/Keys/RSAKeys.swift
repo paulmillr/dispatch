@@ -35,7 +35,7 @@ enum RSAKeys {
     }
     let der = DERWriter.sequenceOfIntegers([[UInt8](), n, e, d, p, q, dP, dQ, iqmp])
     do {
-      return try der.withBytes { (bytes) throws(SSHError) in try privateKey(pkcs1: bytes) }
+      return try withTypedBytes(of: der) { (bytes) throws(SSHError) in try privateKey(pkcs1: bytes) }
     } catch {
       throw KeyFileProblem.mismatchedHalves.error
     }

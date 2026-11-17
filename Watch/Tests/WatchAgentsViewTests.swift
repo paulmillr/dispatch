@@ -72,7 +72,12 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertEqual(AgentsRow.accessibilityLabel(row, host: studio, now: now),
                        "Sidebar theme toggle, studio, Working for 48s, Tests pass, now the docs, Run · 4 steps")
         row.workingSince = now.addingTimeInterval(-242)
-        XCTAssertEqual(AgentsRow.elapsed(row, now: now), "4m 2s")
+        XCTAssertEqual(AgentsRow.elapsed(row, now: now), "4m", "no seconds past a minute")
+        row.workingSince = now.addingTimeInterval(-754)
+        XCTAssertEqual(AgentsRow.elapsed(row, now: now), "12m")
+        XCTAssertEqual(WatchTime.clock(59), "59s")
+        XCTAssertEqual(WatchTime.clock(3_900), "1h 5m")
+        XCTAssertEqual(WatchTime.elapsed(754), "12m 34s", "a finished turn keeps them")
         row.step = nil
         row.workingSince = nil
         XCTAssertEqual(AgentsRow.line(row, now: now), "Working…")
@@ -227,7 +232,7 @@ final class WatchAgentsViewTests: XCTestCase {
 
     func testTheWorkingLineReadsAsThePhones() {
         XCTAssertEqual(ThreadWorkingRow.text(activity: "thinking", since: now.addingTimeInterval(-48), now: now), "thinking 48s")
-        XCTAssertEqual(ThreadWorkingRow.text(activity: nil, since: now.addingTimeInterval(-242), now: now), "Working 4m 2s")
+        XCTAssertEqual(ThreadWorkingRow.text(activity: nil, since: now.addingTimeInterval(-242), now: now), "Working 4m")
         XCTAssertEqual(ThreadWorkingRow.text(activity: "", since: nil, now: now), "Working")
     }
 

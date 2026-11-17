@@ -93,23 +93,15 @@ enum KeyFileCipher: String, CaseIterable {
     }
     var plain: Data
     do { plain = try AES.GCM.open(box, using: SymmetricKey(data: key)) } catch { throw SSHError.wrongPassphrase }
-    defer { wipe(&plain) }
+    defer { wipeBytes(&plain) }
     return SecretBytes(copying: plain)
   }
 
   private func chachaPoly(_ section: SecretBytes, tag: [UInt8], key: UnsafeRawBufferPointer) throws(SSHError) -> SecretBytes {
-    var cipher: ChaCha20
-    do { cipher = try ChaCha20(key: UnsafeRawBufferPointer(rebasing: key[0..<32]), nonce: [UInt8](repeating: 0, count: 8)) } catch {
-      throw KeyFileProblem.damaged.error
-    }
+    // The packet cipher's main key (the first 32 bytes) at sequence 0: the tag first, then the section from block 1.
+    var cipher = try ChaChaPolyKeys(SecretBytes(copying: key)).cipher(header: false, sequence: 0)
     defer { cipher.wipe() }
-    // Block 0's first 32 bytes are the Poly1305 key; the section is encrypted from block 1 on.
-    var block = cipher.block(counter: 0)
-    defer { wipe(&block) }
-    let expected = block.withUnsafeBytes { block in
-      section.withUnsafeBytes { Poly1305.authenticate($0, key: UnsafeRawBufferPointer(rebasing: block[0..<32])) }
-    }
-    guard Poly1305.tagsEqual(expected, tag) else { throw .wrongPassphrase }
+    guard ConstantTime.equal(ChaChaPolyKeys.tag(cipher, over: section), tag) else { throw .wrongPassphrase }
     return SecretBytes(count: section.count) { (output: UnsafeMutableRawBufferPointer) in
       section.withUnsafeBytes { output.copyMemory(from: $0) }
       cipher.xor(output, counter: 1)

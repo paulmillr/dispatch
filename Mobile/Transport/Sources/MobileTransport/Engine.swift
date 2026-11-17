@@ -1,4 +1,6 @@
 import Foundation
+import SSHEngine
+import Synchronization
 
 // The seam between the package's public API and the SSH engine under it. `SSHConnection`, `SSHExec`, `SSHShell` and
 // `SSHKey` talk only to the protocols below; `SwiftEngine.swift` implements them over Sources/SSHEngine, and, in a build
@@ -30,46 +32,19 @@ public enum SSHTransportEngine: String, Sendable, Hashable, CaseIterable {
   /// process), so `DISPATCH_RUSSH=1 DISPATCH_SSH_ENGINE=russh swift test` runs every test on russh
   /// (`TEST_RUNNER_DISPATCH_SSH_ENGINE` under xcodebuild). Release builds ignore it.
   public static var preferred: SSHTransportEngine {
-    get { EnginePreference.shared.value }
-    set { EnginePreference.shared.value = newValue }
+    get { current.withLock { $0 } }
+    set { current.withLock { $0 = newValue } }
   }
 
-  /// The engine `DISPATCH_SSH_ENGINE` names in a Debug build, nil when it is unset (and always in Release builds):
-  /// what `preferred` starts as, and what an app's own choice of engine yields to.
-  public static var environmentChoice: SSHTransportEngine? { EnginePreference.environment }
+  private static let current = Mutex(environmentChoice ?? standard)
 
-  /// The engine behind this choice: the one place an engine is plugged in.
-  var backend: any EngineBackend {
-    get throws {
-      switch self {
-      case .swift:
-        // SwiftEngine.swift: the adapter over Sources/SSHEngine's facade.
-        return SwiftEngine(connector: try swiftEngineConnector())
-      #if DISPATCH_RUSSH
-      case .russh:
-        return RusshEngine.shared
-      #endif
-      }
-    }
-  }
-}
-
-private final class EnginePreference: @unchecked Sendable {
-  static let shared = EnginePreference()
-  private let lock = NSLock()
-  private var current = EnginePreference.environment ?? .standard
-
-  var value: SSHTransportEngine {
-    get { lock.withLock { current } }
-    set { lock.withLock { current = newValue } }
-  }
-
-  /// `DISPATCH_SSH_ENGINE`, read once (Debug builds only).
-  static let environment: SSHTransportEngine? = {
+  /// The engine `DISPATCH_SSH_ENGINE` names in a Debug build, read once, nil when it is unset (and always in Release
+  /// builds): what `preferred` starts as, and what an app's own choice of engine yields to.
+  public static let environmentChoice: SSHTransportEngine? = {
     #if DEBUG
     if let name = ProcessInfo.processInfo.environment["DISPATCH_SSH_ENGINE"], !name.isEmpty {
       guard let engine = SSHTransportEngine(rawValue: name) else {
-        preconditionFailure("DISPATCH_SSH_ENGINE=\(name): expected one of \(SSHTransportEngine.allCases.map(\.rawValue))"
+        preconditionFailure("DISPATCH_SSH_ENGINE=\(name): expected one of \(allCases.map(\.rawValue))"
                             + (name == "russh" ? " (russh is built in only with DISPATCH_RUSSH=1)" : ""))
       }
       return engine
@@ -77,6 +52,19 @@ private final class EnginePreference: @unchecked Sendable {
     #endif
     return nil
   }()
+
+  /// The engine behind this choice: the one place an engine is plugged in.
+  var backend: any EngineBackend {
+    switch self {
+    case .swift:
+      // SwiftEngine.swift: the adapter over Sources/SSHEngine's facade, on its driver.
+      SwiftEngine(connector: SSHClient.connector())
+    #if DISPATCH_RUSSH
+    case .russh:
+      RusshEngine.shared
+    #endif
+    }
+  }
 }
 
 // MARK: - The engine
@@ -88,7 +76,7 @@ private final class EnginePreference: @unchecked Sendable {
 ///   kept. Callbacks run on the engine's threads, never the caller's actor, and may run before the starting call
 ///   returned, even inside it (russh: its tokio runtime's two `dispatch-ssh` workers, shared by every session; a call
 ///   with arguments it cannot use, such as a signer's blob it cannot parse, ends inside the call). The wrappers bridge
-///   every result through `Completion` and locks, so either is fine; a callback must not block (a question is answered
+///   every result through `Once` and locks, so either is fine; a callback must not block (a question is answered
 ///   later through its `answer`).
 /// - **Questions** (host key, keyboard-interactive prompts, signatures) carry an `answer` the wrappers call exactly once,
 ///   from any thread, whenever the app has decided; they never leave one unanswered. The engine waits for it without a
@@ -97,7 +85,8 @@ private final class EnginePreference: @unchecked Sendable {
 ///   to abandon one but closing the session (or, for a channel, its socket). Cancelling the Swift task of
 ///   `SSHConnection.connect` makes the wrappers withdraw the open questions, which then answer at once: during the
 ///   handshake nothing changes until `connected`, after which the wrappers close the session before any login; with
-///   the host key question open it answers false (the connect fails); a signature or prompt answers nil (that login
+///   the host key question open, or asked after, it answers false (the connect fails; one asked after is not put to
+///   the app, nor is a later signature or prompt); a signature or prompt answers nil (that login
 ///   ends with `cancelled`, a direct one reported `withdrawn`); a password or file-key login waits for the server's
 ///   answer, and then the wrappers close the session.
 /// - **Deadlines** are only these: the handshake's (`connect`), a direct login's answer (10 s) and RSA's wait for
@@ -106,9 +95,6 @@ private final class EnginePreference: @unchecked Sendable {
 /// - **Errors** are `SSHTransportError` values, as named per member. russh's codes map as `RusshEngine.error` shows
 ///   (`DISPATCH_RUSSH` builds).
 protocol EngineBackend: Sendable {
-  /// Free text for diagnostics; nothing parses it (russh: `dispatch-mobile-ssh <crate version> (russh 0.65.0)`).
-  var version: String { get }
-
   /// Connects to `options.host`:`options.port`, runs the version exchange and the first key exchange, and asks
   /// `events.hostKey` whether to trust the server's key. `connected` runs exactly once: `.success` once that key
   /// exchange completed with a trusted key (nothing logged in yet), else `.failure`, after which `events` is never
@@ -415,30 +401,34 @@ enum Engine {
   }
 }
 
-/// One-shot result slot for an operation's final callback.
-final class Completion<Value: Sendable>: @unchecked Sendable {
+/// A value set once, from any thread: the first `set` wins and later ones do nothing; every wait, before or after,
+/// gets that value. An operation's last callback (as a `Result`), an answer, how a channel or connection ended.
+final class Once<Value: Sendable>: @unchecked Sendable {
   private let lock = NSLock()
-  private var continuation: CheckedContinuation<Value, any Error>?
-  private var result: Result<Value, any Error>?
+  private var stored: Value?
+  private var waiters: [CheckedContinuation<Value, Never>] = []
 
-  func finish(_ result: Result<Value, any Error>) {
-    let continuation = lock.withLock { () -> CheckedContinuation<Value, any Error>? in
-      guard self.result == nil else { return nil }
-      self.result = result
-      defer { self.continuation = nil }
-      return self.continuation
+  func set(_ value: Value) {
+    let waiters = lock.withLock { () -> [CheckedContinuation<Value, Never>] in
+      guard stored == nil else { return [] }
+      stored = value
+      defer { self.waiters = [] }
+      return self.waiters
     }
-    continuation?.resume(with: result)
+    waiters.forEach { $0.resume(returning: value) }
   }
 
+  /// The value, once set.
+  var current: Value? { lock.withLock { stored } }
+
   var value: Value {
-    get async throws {
-      try await withCheckedThrowingContinuation { continuation in
-        let ready = lock.withLock { () -> Result<Value, any Error>? in
-          if result == nil { self.continuation = continuation }
-          return result
+    get async {
+      await withCheckedContinuation { continuation in
+        let ready = lock.withLock { () -> Value? in
+          if stored == nil { waiters.append(continuation) }
+          return stored
         }
-        if let ready { continuation.resume(with: ready) }
+        if let ready { continuation.resume(returning: ready) }
       }
     }
   }

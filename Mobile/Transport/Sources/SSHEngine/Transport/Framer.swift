@@ -1,3 +1,5 @@
+import Foundation
+
 /// The inbound half of the binary packet protocol (RFC 4253 §6): a buffer of the stream's bytes, the direction's
 /// `PacketOpener`, and the sequence number. For each packet it reads the length (decrypting what the family needs),
 /// checks it against `Limits.packetLength`, the minimum and the alignment before waiting for more, then opens the whole
@@ -120,31 +122,21 @@ struct OutboundFramer {
     guard let field = UInt32(exactly: length) else { throw .usage(.invalidArgument("a payload too large for a packet")) }
     var packet = [UInt8](repeating: 0, count: 4 + length)
     defer { wipeBytes(&packet) }
-    var failure: SSHError?
-    packet.withUnsafeMutableBytes { raw in
+    try withTypedMutableBytes(of: &packet) { (raw) throws(SSHError) in
       raw.storeBytes(of: field.bigEndian, toByteOffset: 0, as: UInt32.self)
       raw[4] = UInt8(padding)
       if let source = payload.baseAddress, let target = raw.baseAddress, payload.count > 0 {
         (target + 5).copyMemory(from: source, byteCount: payload.count)
       }
-      do throws(SSHError) {
-        try random.fill(UnsafeMutableRawBufferPointer(rebasing: raw[(5 + payload.count)...]))
-      } catch {
-        failure = error
-      }
+      try random.fill(UnsafeMutableRawBufferPointer(rebasing: raw[(5 + payload.count)...]))
     }
-    if let failure { throw failure }
     let wire = try sealer.seal(packet, sequence: sequence)
     output.append(contentsOf: wire)
     nextSequence += 1
     return (sequence, wire.count)
   }
 
-  mutating func seal(_ payload: [UInt8], random: any RandomSource) throws(SSHError) -> (UInt32, Int) {
-    var result: Result<(UInt32, Int), SSHError> = .failure(.closed(.alreadyEnded))
-    payload.withUnsafeBytes { raw in
-      do throws(SSHError) { result = .success(try seal(raw, random: random)) } catch { result = .failure(error) }
-    }
-    return try result.get()
+  mutating func seal(_ payload: some ContiguousBytes, random: any RandomSource) throws(SSHError) -> (UInt32, Int) {
+    try withTypedBytes(of: payload) { (raw) throws(SSHError) in try seal(raw, random: random) }
   }
 }

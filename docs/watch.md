@@ -173,7 +173,7 @@ naming its mockup) follow it.
   "Offline", as the phone's Offline section; a connecting host's stay. A row says what the phone's Agents row says
   (`WatchSnapshotBuilder.conversation` reads `MobileComposition.status`, as `AgentRow` does): its name is the row's
   (a renamed tab's name first, else the agent's title, else the tab's; `title` is no longer sent), with a muted row's
-  bell beside it; working, what the agent last said in the turn (else its prompt) over the step by its kind's symbol
+  bell beside it; working, what the agent last said in the turn (else its prompt, “in quotes”, so it never reads as the agent's) over the step by its kind's symbol
   and count ("Run · 4 steps · 2 agents", else "Working…"), from the open thread or, for a row the phone has not opened,
   the host's list; the caption's time then counts the turn in amber. Needing you, what it asks on two lines in primary;
   idle, the last message on one. The caption is "host · space" in grey (colour is the dot's and the working time's).
@@ -303,7 +303,7 @@ the thread's route: Queue and Steer now on a working one; `stop` is Stop's confi
   be tapped from `simctl`; the debug hooks and the UI tests stand in.
 - **Clocks in lists.** Never wrap a `List` in a `TimelineView` when a row has one of its own (or is an empty
   `TimelineView`): the list then lays out continuously, about 75 % of a core with a static snapshot. Each row keeps its
-  own clock (`AgentsScreen`), and every clock counting seconds starts its `TimelineView` at `Ticks.anchor` (the
+  own clock (`AgentsScreen`); a running clock (an agent's time, the thread's working line, a tab's line) shows seconds only in its first minute, then whole minutes ("4m", "1h 5m": `WatchTime.clock`; a finished turn keeps them, `elapsed`), and every clock counting seconds starts its `TimelineView` at `Ticks.anchor` (the
   launch's whole second, `Watch/Shared/Ticks.swift`, the phone's too), so all of them on screen change on the same
   tick. Check list performance by CPU in the simulator ([benchmarks](benchmarks.md#cpu-of-iphone-and-watch-views-in-the-simulator)).
 - **Refused after Stop.** Stop (`chat.stop`) leaves the interrupted prompt in Claude Code's input, and the next

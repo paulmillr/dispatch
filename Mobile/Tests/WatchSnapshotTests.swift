@@ -136,6 +136,14 @@ final class WatchSnapshotTests: XCTestCase {
         XCTAssertEqual(AgentRow.progressSymbol(status), "apple.terminal")
         XCTAssertEqual(AgentRow.progress(TabsStatus(text: "working")), "Working…")
         XCTAssertNil(AgentRow.progressSymbol(TabsStatus(text: "working")))
+
+        // Before the agent has written in the turn, the user's prompt, in quotes so it is not taken for the agent's.
+        XCTAssertEqual(WatchSnapshotBuilder.note(TabsStatus(text: "working", asked: "Rewrite the SSH transport in Swift")),
+                       "“Rewrite the SSH transport in Swift”")
+        XCTAssertEqual(WatchSnapshotBuilder.note(TabsStatus(text: "working", note: "Tests pass", asked: "Rewrite it")), "Tests pass")
+        let long = WatchSnapshotBuilder.note(TabsStatus(text: "working", asked: String(repeating: "word ", count: 80)))
+        XCTAssertEqual(long?.last, "”", "cut before the closing quote")
+        XCTAssertNil(WatchSnapshotBuilder.note(nil))
     }
 
     /// The redesign's fields: a row's name, the hosts' statistics from the stats source (the phone's store; here

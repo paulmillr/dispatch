@@ -87,6 +87,16 @@ extension SpacesNavigator {
         }
         if !attentionTabs.isEmpty { enabled.formUnion([.nextAttention, .previousAttention]) }
         if sidebarHides && canToggleSidebar { enabled.insert(.toggleSidebar) }
+        // Panes (`SpacesNavigator+Panes`): a split where the focused pane has the room and its space takes a tab.
+        if panesApply, let ref = splitPath.tab, let tab = model.tab(ref), let space = model.space(tab.space),
+           model.workspace(ref.host)?.canAddTab(to: space) == true {
+            if canSplitPane(.columns) { enabled.insert(.splitRight) }
+            if canSplitPane(.rows) { enabled.insert(.splitDown) }
+        }
+        if panesApply && panes.isSplit { enabled.formUnion([.mergePanes, .previousPane, .nextPane]) }
+        for command in MobileCommand.allCases {
+            if let layout = command.layout, canApplyLayout(layout), layout != .single || panes.isSplit { enabled.insert(command) }
+        }
         return enabled
     }
 

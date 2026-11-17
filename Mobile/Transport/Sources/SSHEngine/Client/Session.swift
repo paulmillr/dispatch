@@ -54,13 +54,13 @@ final class ClientSession: SSHSession {
   }
 
   func exec(_ command: String) async throws(SSHError) -> any ExecChannel {
-    let (handle, _) = try await driver.open(.exec, command: command)
-    return ClientExecChannel(driver: driver, handle: handle)
+    ClientExecChannel(driver: driver, handle: try await driver.openExec(command))
   }
 
   func shell(term: String, size: TerminalSize) async throws(SSHError) -> any ShellChannel {
-    let (handle, mailbox) = try await driver.open(.shell, term: term, size: size)
-    return ClientShellChannel(driver: driver, handle: handle, mailbox: mailbox ?? ShellMailbox())
+    let mailbox = ShellMailbox()
+    let handle = try await driver.openShell(term: term, size: size, mailbox: mailbox)
+    return ClientShellChannel(driver: driver, handle: handle, mailbox: mailbox)
   }
 
   func close() async { await driver.close() }
@@ -118,10 +118,7 @@ final class ClientShellChannel: ShellChannel {
     Task { await driver.applyResize(handle) }
   }
 
-  func close() async {
-    mailbox.markClosed()
-    await driver.closeChannel(handle)
-  }
+  func close() async { await driver.closeChannel(handle) }
 
   func exit() async -> ChannelExit { await driver.exit(handle) }
 }

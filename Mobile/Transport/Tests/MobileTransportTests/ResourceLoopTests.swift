@@ -79,12 +79,12 @@ final class ResourceLoopTests: XCTestCase {
     let fixture = try Self.lenientFixture()
     defer { fixture.stop() }
     let signing = Curve25519.Signing.PrivateKey()
-    let line = "ssh-ed25519 " + Self.ed25519Blob(signing).base64EncodedString()
-    try fixture.authorize(line)
+    let blob = publicKeyBlob(SSHKey(ed25519: signing))
+    try fixture.authorize("ssh-ed25519 " + blob.base64EncodedString())
     try await loop("cut while the login's signature is made") { _ in
       let relay = try CutRelay(to: fixture.port, port: Self.relayPort)
       defer { relay.stop() }
-      let key = SSHKey(kind: .ed25519, publicKeyBlob: Self.ed25519Blob(signing), hardwareBacked: false) { data in
+      let key = SSHKey(kind: .ed25519, publicKeyBlob: blob, hardwareBacked: false) { data in
         relay.cut()
         return try signing.signature(for: data)
       }
@@ -261,14 +261,6 @@ final class ResourceLoopTests: XCTestCase {
     let summary = output.split(separator: "\n").first { $0.contains("leaks for") }.map(String.init)
     return summary ?? "leaks: " + String(output.suffix(400))
   }
-
-  static func ed25519Blob(_ key: Curve25519.Signing.PrivateKey) -> Data {
-    func string(_ bytes: Data) -> Data {
-      var count = UInt32(bytes.count).bigEndian
-      return Data(bytes: &count, count: 4) + bytes
-    }
-    return string(Data("ssh-ed25519".utf8)) + string(key.publicKey.rawRepresentation)
-  }
 }
 
 /// Trusts the fixture's key after cutting the relay: the connection is gone while the client waits for the answer.
@@ -299,10 +291,7 @@ final class CutRelay: @unchecked Sendable {
     let listener = socket(AF_INET, SOCK_STREAM, 0)
     var reuse: Int32 = 1
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-    var address = sockaddr_in()
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    address.sin_port = in_port_t(wanted.bigEndian)
+    var address = loopback(port: Int(wanted))
     var length = socklen_t(MemoryLayout<sockaddr_in>.size)
     let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, length) } }
     guard bound == 0, listen(listener, 16) == 0 else {
@@ -352,10 +341,7 @@ final class CutRelay: @unchecked Sendable {
 
   private static func connect(_ port: Int) -> Int32 {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
-    var address = sockaddr_in()
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    address.sin_port = in_port_t(UInt16(port).bigEndian)
+    var address = loopback(port: port)
     let result = withUnsafePointer(to: &address) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
     }

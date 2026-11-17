@@ -182,8 +182,7 @@ final class HostileKeyFileTests: XCTestCase {
       ("unequal check integers", file(OpenSSHParts.section(fields, check: (7, 8)))),
       ("padding 2, 3, ...", file(OpenSSHParts.section(fields, comment: "fictional!", padding: [2, 3, 4, 5, 6, 7]))),
       ("unaligned", file(unaligned + (unaligned.count % 8 == 0 ? [1] : []))),
-      ("padding of 16", file(OpenSSHParts.section(fields, comment: "",
-                                                  padding: (1...16).map { UInt8($0) } + [UInt8](repeating: 0, count: 0)))),
+      ("padding of 16", file(OpenSSHParts.section(fields, comment: "", padding: (1...16).map { UInt8($0) }))),
       ("trailing after the section", file(OpenSSHParts.section(fields), tail: [0])),
       ("no comment", file(Raw.u32(7) + Raw.u32(7) + fields)),
     ]

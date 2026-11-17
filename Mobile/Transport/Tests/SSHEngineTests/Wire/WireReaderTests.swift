@@ -1,26 +1,26 @@
-import SSHEngine
 import XCTest
+@testable import SSHEngine
 
 /// The reader against hand-built RFC 4251 encodings, including hostile ones: truncated values, lengths past the end
 /// or over the limit, huge counts, non-minimal and negative mpints, invalid names and text.
 final class WireReaderTests: XCTestCase {
+  private typealias T = PrimitiveTestSupport
+
   func testFixedSizeValues() throws {
-    var reader = WireReader([0x07, 0x01, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 1, 2, 3, 4, 5, 6, 7, 8, 0x14])
+    var reader = WireReader([0x07, 0x01, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x14])
     XCTAssertEqual(try reader.readByte(), 7)
     XCTAssertEqual(try reader.readBoolean(), true)
     XCTAssertEqual(try reader.readBoolean(), false)
     XCTAssertEqual(try reader.readUInt32(), 0xDEAD_BEEF)
-    XCTAssertEqual(try reader.readUInt64(), 0x0102_0304_0506_0708)
     XCTAssertEqual(try reader.readMessageNumber(), .kexInit)
     XCTAssertTrue(reader.isAtEnd)
     XCTAssertThrows(WireError.truncated) { () throws(WireError) in try reader.readByte() }
   }
 
   func testTruncatedFixedValuesLeaveThePositionAlone() {
-    for length in 0..<8 {
+    for length in 0..<4 {
       var reader = WireReader([UInt8](repeating: 0xFF, count: length))
-      if length < 4 { XCTAssertThrows(WireError.truncated) { () throws(WireError) in try reader.readUInt32() } }
-      XCTAssertThrows(WireError.truncated) { () throws(WireError) in try reader.readUInt64() }
+      XCTAssertThrows(WireError.truncated) { () throws(WireError) in try reader.readUInt32() }
       XCTAssertEqual(reader.offset, 0)
     }
   }
@@ -103,17 +103,7 @@ final class WireReaderTests: XCTestCase {
     let prompt: [UInt8] = Array("Kennwort f".utf8) + [0xFC] + Array("r:".utf8)
     let message = InboundMessage(payload: [60] + Raw.string("") + Raw.string([0xC4, 0x6E]) + Raw.string("de-DE")
       + Raw.u32(1) + Raw.string(prompt) + [0])!
-    let challenge = try message.decode { (reader: inout WireReader) throws(WireError) in
-      let name = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-      let instruction = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-      _ = try reader.readDisplayText(limit: Limits.languageTagBytes)
-      let count = try reader.readCount(limit: Limits.keyboardInteractivePrompts, elementBytes: 5)
-      var prompts: [KeyboardInteractiveChallenge.Prompt] = []
-      for _ in 0..<count {
-        prompts.append(.init(text: try reader.readDisplayText(limit: Limits.authenticationTextBytes), echo: try reader.readBoolean()))
-      }
-      return KeyboardInteractiveChallenge(name: name, instruction: instruction, prompts: prompts)
-    }
+    let challenge = try message.decode(UserauthCore.challenge)
     XCTAssertEqual(challenge.instruction, "\u{FFFD}n")
     XCTAssertEqual(challenge.prompts, [.init(text: "Kennwort f\u{FFFD}r:", echo: false)])
     XCTAssertEqual(DisplayText.sanitize(Array(challenge.prompts[0].text.utf8)), "Kennwort f r:")
@@ -157,8 +147,8 @@ final class WireReaderTests: XCTestCase {
     let cases: [([UInt8], [UInt8])] = [
       // RFC 4251 §5's examples (the non-negative ones): 0, 9a378f9b2e332a7, 80.
       ([], []),
-      (Raw.hex("09 a3 78 f9 b2 e3 32 a7"), Raw.hex("09 a3 78 f9 b2 e3 32 a7")),
-      (Raw.hex("00 80"), [0x80]),
+      (T.bytes("09 a3 78 f9 b2 e3 32 a7"), T.bytes("09 a3 78 f9 b2 e3 32 a7")),
+      (T.bytes("00 80"), [0x80]),
       ([0x7F], [0x7F]),
       ([0x00, 0xFF, 0x00], [0xFF, 0x00]),
     ]
@@ -175,7 +165,7 @@ final class WireReaderTests: XCTestCase {
       XCTAssertEqual(reader.offset, 0)
     }
     // RFC 4251 §5's negative examples: -1234 (ed cc), -deadbeef (ff 21 52 41 11), and a bare ff.
-    for wire in [Raw.hex("ed cc"), Raw.hex("ff 21 52 41 11"), [0xFF], [0x80]] {
+    for wire in [T.bytes("ed cc"), T.bytes("ff 21 52 41 11"), [0xFF], [0x80]] {
       var reader = WireReader(Raw.string(wire))
       XCTAssertThrows(WireError.negativeMPInt) { () throws(WireError) in try reader.readMPInt(limit: 16) }
     }

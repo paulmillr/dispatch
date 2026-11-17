@@ -46,8 +46,6 @@ public final class ClientCore {
   public private(set) var isEstablished = false
   /// The login succeeded: channels may open.
   public var isAuthenticated: Bool { auth?.isAuthenticated ?? false }
-  /// A login attempt started and not yet finished.
-  public var isAuthenticating: Bool { auth?.isAttemptInProgress ?? false }
   /// The trusted host key; meaningful once `.established` was emitted.
   public var hostKey: HostKey { transport.hostKey }
   /// The first exchange's hash; empty before it.
@@ -60,13 +58,8 @@ public final class ClientCore {
   /// (window adjusts, refusals, keepalive replies) can push the backlog this far, and a server that does so faster
   /// than it reads must not grow the client's memory.
   public var readsPaused: Bool { transport.outboundBacklog > 2 * Limits.outboundBacklogBytes }
-  /// Channels holding a number (open, opening, or closed by us and waiting for the server's close).
-  public var channelCount: Int { connection?.channelCount ?? 0 }
   /// The upper layers' phase, as the transport's policy checks the next packet against it.
-  public var servicePhase: MessagePolicy.ServicePhase {
-    guard let auth else { return .serviceNotRequested }
-    return auth.servicePhase
-  }
+  public var servicePhase: MessagePolicy.ServicePhase { auth?.servicePhase ?? .serviceNotRequested }
 
   // MARK: The stream and the clock
 
@@ -152,35 +145,23 @@ public final class ClientCore {
 
   /// The signature for `.sign(question, ...)` (a `SignatureBlob`).
   public func signed(_ question: AuthQuestion, signature: [UInt8]) {
-    guard endedWith == nil, let auth else { return }
-    auth.signed(question, signature: signature)
-    drainAuth()
-    pump()
+    withAuth { $0.signed(question, signature: signature) }
   }
 
   /// The signer did not sign (`cancelled` when declined): the attempt ends with `error`, the session stays usable.
   public func signingFailed(_ question: AuthQuestion, error: SSHError) {
-    guard endedWith == nil, let auth else { return }
-    auth.signingFailed(question, error: error)
-    drainAuth()
-    pump()
+    withAuth { $0.signingFailed(question, error: error) }
   }
 
   /// The answers for `.prompt(question, ...)`, or nil to cancel.
   public func answered(_ question: AuthQuestion, with answers: [SecretBytes]?) {
-    guard endedWith == nil, let auth else { return }
-    auth.answered(question, with: answers)
-    drainAuth()
-    pump()
+    withAuth { $0.answered(question, with: answers) }
   }
 
   /// The attempt's task was cancelled (`UserauthCore.cancel`): before its request is on the wire the attempt ends
   /// with `cancelled` and the session stays usable; once it waits for the server's answer the connection ends.
   public func cancelAuthentication() {
-    guard endedWith == nil, let auth else { return }
-    auth.cancel()
-    drainAuth()
-    pump()
+    withAuth { $0.cancel() }
   }
 
   // MARK: Channels
@@ -216,26 +197,17 @@ public final class ClientCore {
 
   /// The app read `count` bytes of the channel's output: the window is granted back as it reads.
   public func consumed(_ count: Int, on id: ChannelID) {
-    guard endedWith == nil, let connection else { return }
-    connection.consumed(count, on: id)
-    drainConnection()
-    pump()
+    withConnection { $0.consumed(count, on: id) }
   }
 
   /// EOF after what the channel took (an exec's end of input).
   public func finishInput(_ id: ChannelID) {
-    guard endedWith == nil, let connection else { return }
-    connection.finishInput(id)
-    drainConnection()
-    pump()
+    withConnection { $0.finishInput(id) }
   }
 
   /// Closes the channel; its app side ends at once (`.closed` or `.openFailed(cancelled)`).
   public func closeChannel(_ id: ChannelID) {
-    guard endedWith == nil, let connection else { return }
-    connection.close(id)
-    drainConnection()
-    pump()
+    withConnection { $0.close(id) }
   }
 
   /// A `window-change` for a shell (the latest wins; none for the size in effect).
@@ -263,14 +235,10 @@ public final class ClientCore {
   // MARK: Test hooks
 
   /// The transport's re-exchange thresholds (tests lower them to make the client start re-exchanges under load).
-  func setRekeyThresholds(bytes: UInt64? = nil, packets: UInt64? = nil, interval: Duration? = nil) {
+  func setRekeyThresholds(bytes: UInt64?, interval: Duration?) {
     if let bytes { transport.thresholds.bytes = bytes }
-    if let packets { transport.thresholds.packets = packets }
     if let interval { transport.thresholds.interval = interval }
   }
-
-  /// Keepalives sent and not answered yet.
-  var keepalivesOutstanding: Int { transport.keepalivesOutstanding }
 
   /// The algorithms of the last exchange (tests check what a real server negotiated).
   var negotiated: NegotiatedAlgorithms? { transport.negotiated }
@@ -279,6 +247,24 @@ public final class ClientCore {
   var inboundBuffered: Int { transport.inboundBuffered }
 
   // MARK: Wiring
+
+  /// Hands an answer or a cancellation to the auth core (ignored before the first exchange and after the end), then
+  /// drains it and polls the transport.
+  private func withAuth(_ body: (UserauthCore) -> Void) {
+    guard endedWith == nil, let auth else { return }
+    body(auth)
+    drainAuth()
+    pump()
+  }
+
+  /// Hands one of the app's calls to the connection core (ignored before the login and after the end), then drains it
+  /// and polls the transport.
+  private func withConnection(_ body: (ConnectionCore) -> Void) {
+    guard endedWith == nil, let connection else { return }
+    body(connection)
+    drainConnection()
+    pump()
+  }
 
   private func openableConnection() throws(SSHError) -> ConnectionCore {
     guard endedWith == nil else { throw .closed(.alreadyEnded) }

@@ -144,7 +144,7 @@ struct ThreadWorkingRow: View {
     static func text(activity: String?, since: Date?, now: Date) -> String {
         let word = activity?.isEmpty == false ? activity! : "Working"
         guard let since else { return word }
-        return word + " " + WatchTime.elapsed(now.timeIntervalSince(since))
+        return word + " " + WatchTime.clock(now.timeIntervalSince(since))
     }
 
     static let stopHint = "Stops the agent; queued messages wait until Resume"

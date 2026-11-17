@@ -46,14 +46,6 @@ public final class SecretBytes: @unchecked Sendable, ContiguousBytes, CustomStri
     try body(UnsafeRawBufferPointer(storage))
   }
 
-  /// Constant-time comparison (time depends only on the lengths).
-  public func constantTimeEquals(_ other: SecretBytes) -> Bool {
-    guard count == other.count else { return false }
-    var difference: UInt8 = 0
-    for index in 0..<count { difference |= storage[index] ^ other.storage[index] }
-    return difference == 0
-  }
-
   public var description: String { "SecretBytes(\(count) bytes)" }
 
   /// Zeroes `buffer` in a way the optimizer keeps.
@@ -61,4 +53,14 @@ public final class SecretBytes: @unchecked Sendable, ContiguousBytes, CustomStri
     guard let base = buffer.baseAddress, buffer.count > 0 else { return }
     _ = memset_s(base, buffer.count, 0, buffer.count)
   }
+}
+
+/// Zeroes an array's bytes in place (a plaintext packet, a decrypted block, a derived key) in a way the optimizer
+/// keeps. The array's own storage: call it where the array is uniquely referenced.
+func wipeBytes(_ bytes: inout [UInt8]) {
+  bytes.withUnsafeMutableBytes { SecretBytes.wipe($0) }
+}
+
+func wipeBytes(_ data: inout Data) {
+  data.withUnsafeMutableBytes { SecretBytes.wipe($0) }
 }

@@ -1,5 +1,5 @@
-import SSHEngine
 import XCTest
+@testable import SSHEngine
 
 /// "Never crashes": a deterministic mutation loop over valid encodings of what a server sends (KEXINIT, EXT_INFO,
 /// USERAUTH_FAILURE, INFO_REQUEST, host key and signature blobs, ECDSA signatures), fed to every decoder and to the
@@ -89,42 +89,21 @@ final class MutationTests: XCTestCase {
         // Typed: anything but a WireError would not compile. Any case is fine; reaching here without a trap is.
       }
     }
+    do throws(SSHError) {
+      let kexInit = try KexInit(decoding: input)
+      XCTAssertEqual(try? kexInit.encoded(), input, "KEXINIT round trip")
+      accepted += 1
+    } catch {}
     attempt { (reader: inout WireReader) throws(WireError) in
       _ = try reader.readMessageNumber()
-      _ = try reader.readBytes(count: 16)
-      var lists: [[String]] = []
-      for _ in 0..<10 { lists.append(try reader.readNameList()) }
-      _ = try reader.readBoolean()
-      _ = try reader.readUInt32()
-      return lists
-    } check: { lists in
-      var writer = WireWriter()
-      writer.write(MessageNumber(input[0]))
-      writer.writeBytes(input[1..<17])
-      for list in lists { writer.writeNameList(list) }
-      writer.writeBytes(input.suffix(5))
-      XCTAssertEqual(try? writer.finish(), input, "KEXINIT round trip")
-    }
-    attempt { (reader: inout WireReader) throws(WireError) in
-      _ = try reader.readMessageNumber()
-      let count = try reader.readCount(limit: Limits.extInfoExtensions, elementBytes: 8)
-      var values: [(String, [UInt8])] = []
-      for _ in 0..<count { values.append((try reader.readName(), try reader.readString(limit: Limits.extensionValueBytes))) }
-      return values
+      return try ClientTransport.extInfoEntries(&reader)
     }
     attempt { (reader: inout WireReader) throws(WireError) in
       (try reader.readMessageNumber(), try reader.readNameList(), try reader.readBoolean())
     }
     attempt { (reader: inout WireReader) throws(WireError) in
       _ = try reader.readMessageNumber()
-      _ = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-      _ = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-      _ = try reader.readDisplayText(limit: Limits.languageTagBytes)
-      let count = try reader.readCount(limit: Limits.keyboardInteractivePrompts, elementBytes: 5)
-      for _ in 0..<count {
-        _ = try reader.readDisplayText(limit: Limits.authenticationTextBytes)
-        _ = try reader.readBoolean()
-      }
+      return try UserauthCore.challenge(&reader)
     }
     attempt { (reader: inout WireReader) throws(WireError) in
       (try reader.readMessageNumber(), try reader.readText(limit: Limits.authenticationTextBytes))

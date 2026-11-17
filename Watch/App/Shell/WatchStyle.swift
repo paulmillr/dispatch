@@ -62,6 +62,15 @@ enum WatchTime {
         if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
         return "\(seconds / 3600)h \(seconds / 60 % 60)m"
     }
+
+    /// A clock that runs (an agent working, its thread's working line): seconds for its first minute only, then whole
+    /// minutes ("4m", "1h 5m"); a glance at the wrist needs no ticking second (the phone keeps them for ten minutes,
+    /// `ChatTranscript.clock`). A finished turn keeps `elapsed`.
+    static func clock(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        if seconds >= 60, seconds < 3600 { return "\(seconds / 60)m" }
+        return elapsed(interval)
+    }
 }
 
 /// A host's mark (the phone's `HostGlyph` in a tinted disc, as `MobileRow` draws it): the system's glyph (apple.logo for

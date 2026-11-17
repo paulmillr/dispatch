@@ -114,7 +114,8 @@ final class LiveSSHD: @unchecked Sendable {
         "MACs " + MACAlgorithm.allCases.map(\.rawValue).joined(separator: ","),
         "LogLevel \(logLevel)",
       ] + options.extra).joined(separator: "\n").appending("\n").write(to: config, atomically: true, encoding: .utf8)
-      version = (try? Self.output("/usr/sbin/sshd", ["-V"])) ?? "sshd"
+      let sshdVersion = try? runProcess("/usr/sbin/sshd", ["-V"]).output
+      version = sshdVersion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "sshd"
       daemon = Process()
       daemon.executableURL = URL(fileURLWithPath: "/usr/sbin/sshd")
       daemon.arguments = ["-D", "-e", "-f", config.path]
@@ -227,39 +228,12 @@ final class LiveSSHD: @unchecked Sendable {
   // MARK: Processes and sockets
 
   private static func run(_ path: String, _ arguments: [String]) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: path)
-    process.arguments = arguments
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    try process.run()
-    while process.isRunning { usleep(5_000) }
-    guard process.terminationStatus == 0 else { throw Failure("\(path) failed: \(process.terminationStatus)") }
-  }
-
-  private static func output(_ path: String, _ arguments: [String]) throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: path)
-    process.arguments = arguments
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
-    try process.run()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    while process.isRunning { usleep(5_000) }
-    return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    let status = try runProcess(path, arguments).status
+    guard status == 0 else { throw Failure("\(path) failed: \(status)") }
   }
 
   static func command(of pid: Int32) -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/ps")
-    process.arguments = ["-ww", "-o", "command=", "-p", String(pid)]
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    try? process.run()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    while process.isRunning { usleep(5_000) }
-    return String(decoding: data, as: UTF8.self)
+    (try? runProcess("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)]).output) ?? ""
   }
 
   private static func loopback(port: Int = 0) -> sockaddr_in {
@@ -405,5 +379,21 @@ final class SocketDriver {
     guard case .message(let message) = event else { throw LiveSSHD.Failure("no message: \(event)") }
     return message
   }
+}
+
+/// Runs `path` with `arguments` to its end (no input): its exit status and what it wrote, stdout and stderr together.
+/// Polls for the exit rather than running a run loop, so it works on any thread.
+func runProcess(_ path: String, _ arguments: [String]) throws -> (status: Int32, output: String) {
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: path)
+  process.arguments = arguments
+  let pipe = Pipe()
+  process.standardOutput = pipe
+  process.standardError = pipe
+  process.standardInput = FileHandle.nullDevice
+  try process.run()
+  let data = pipe.fileHandleForReading.readDataToEndOfFile()
+  while process.isRunning { usleep(5_000) }
+  return (process.terminationStatus, String(decoding: data, as: UTF8.self))
 }
 #endif

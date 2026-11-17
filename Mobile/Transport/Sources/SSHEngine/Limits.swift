@@ -24,8 +24,9 @@ public enum Limits {
   public static let minimumPadding = 4
   /// Rekey after this many bytes in either direction under one set of keys (1 GiB, far inside every cipher's limit).
   public static let rekeyBytes: UInt64 = 1 << 30
-  /// Rekey after this many packets in either direction, so a sequence number never wraps (OpenSSH: 2^31). A wrap
-  /// ends the connection.
+  /// Rekey after this many packets in either direction (OpenSSH: 2^31). Under strict key exchange each rekey sets the
+  /// sequence numbers back to 0, so they never wrap; without it they run on, and a wrap (2^32 packets one way over
+  /// the connection's life) ends the connection.
   public static let rekeyPackets: UInt64 = 1 << 31
   /// Rekey after this long under one set of keys (russh's default, which the app has used).
   public static let rekeyInterval: Duration = .seconds(3600)

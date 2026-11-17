@@ -166,7 +166,7 @@ struct AgentsRow: View {
     @ViewBuilder private var time: some View {
         if Self.working(conversation), let since = conversation.workingSince {
             TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
-                Text(WatchTime.elapsed(context.date.timeIntervalSince(since)))
+                Text(WatchTime.clock(context.date.timeIntervalSince(since)))
                     .monospacedDigit()
                     .foregroundStyle(conversation.stale ? Color.secondary : AgentsColor.working)
             }
@@ -205,7 +205,7 @@ struct AgentsRow: View {
     /// The ticking time of a working row: "48s", "4m 2s".
     static func elapsed(_ conversation: WatchConversation, now: Date) -> String? {
         guard working(conversation), let since = conversation.workingSince else { return nil }
-        return WatchTime.elapsed(now.timeIntervalSince(since))
+        return WatchTime.clock(now.timeIntervalSince(since))
     }
 
     /// VoiceOver: the name, the agent, the detail, muted, the time, "Needs you" or "Working" (for how long), then what

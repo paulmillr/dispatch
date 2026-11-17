@@ -18,7 +18,7 @@ final class MobileCommandsTests: XCTestCase {
     /// terminal keeps Esc, Tab, Control, Option, arrows and function keys, and the app keeps ⌘.
     func testEveryChordHasCommandAndTheTerminalKeepsTheRest() throws {
         let chords = MobileCommand.allCases.compactMap(\.shortcut)
-        XCTAssertEqual(chords.count, 26)
+        XCTAssertEqual(chords.count, 30)
         for chord in chords { XCTAssertTrue(chord.modifiers.contains(.command), "\(chord.key.character)") }
         let names = MobileCommand.allCases.compactMap(\.chord)
         XCTAssertEqual(Set(names).count, names.count, "\(names)")
@@ -32,6 +32,10 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertEqual(MobileCommand.switchFiles.chord, "⇧⌘F", "The Mac's Switch Terminal / Files")
         XCTAssertEqual(MobileCommand.reviewChanges.chord, "⇧⌘U", "The Mac's Review Changes")
         XCTAssertEqual(MobileCommand.commits.chord, "⇧⌘L", "The Mac's Commits")
+        XCTAssertEqual(MobileCommand.splitRight.chord, "⌘D", "The Mac's Split Right")
+        XCTAssertEqual(MobileCommand.splitDown.chord, "⇧⌘D", "The Mac's Split Down")
+        XCTAssertNil(MobileCommand.mergePanes.chord, "As the Mac's, no key")
+        XCTAssertEqual(MobileCommand.nextPane.chord, "⌥⌘]", "The Mac's Next Pane")
         XCTAssertEqual(MobileCommand.toggleSidebarAlias.key, "\\")
         XCTAssertEqual(MobileCommand.toggleSidebarAlias.modifiers, .command)
 
@@ -50,10 +54,13 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertEqual(MobileCommand.groups(.edit).joined().map(\.title),
                        ["Find…", "Find Next", "Find Previous", "Clear Screen", "Attach Files…"])
         XCTAssertEqual(MobileCommand.groups(.view).joined().map(\.title),
-                       ["Increase Font Size", "Decrease Font Size", "Reset Font Size", "Toggle Sidebar", "Switch Terminal / Chat",
-                        "Switch Terminal / Files", "Review Changes", "Commits"])
+                       ["Increase Font Size", "Decrease Font Size", "Reset Font Size", "Toggle Sidebar", "Split Right",
+                        "Split Down", "Merge Panes", "Single", "Side by Side", "Stacked", "Two Above One", "Grid",
+                        "Switch Terminal / Chat", "Switch Terminal / Files", "Review Changes",
+                        "Commits"])
         XCTAssertEqual(MobileCommand.groups(.navigate).joined().map(\.title),
-                       ["Spaces", "Agents", "Next Attention", "Previous Attention", "Previous Tab", "Next Tab"])
+                       ["Spaces", "Agents", "Next Attention", "Previous Attention", "Previous Tab", "Next Tab",
+                        "Previous Pane", "Next Pane"])
         let listed = MobileCommand.Menu.allCases.flatMap { menu in MobileCommand.groups(menu).joined().map { ($0, menu) } }
         XCTAssertEqual(listed.count, MobileCommand.allCases.count)
         for (command, menu) in listed { XCTAssertEqual(command.menu, menu, "\(command)") }
