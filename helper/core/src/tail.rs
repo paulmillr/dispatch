@@ -55,6 +55,8 @@ pub type Classify = Box<dyn FnMut(&[u8]) -> Line>;
 struct Found {
     time_ms: Option<i64>,
     answer: Option<(String, Option<i64>)>,
+    /// A timed line older than the answer was seen: its time is the first write's (`scan`).
+    settled: bool,
     ended: Option<i64>,
     started: Option<i64>,
     title: Option<String>,
@@ -75,8 +77,22 @@ impl Found {
             if self.ended.is_none() && self.answer.is_none() {
                 self.ended = line.ended;
             }
+            let answer = line.answer.and_then(|(text, time)| Overview::cut(&text).map(|text| (text, time)));
             if self.answer.is_none() {
-                self.answer = line.answer.and_then(|(text, time)| Overview::cut(&text).map(|text| (text, time)));
+                self.answer = answer;
+            } else if !self.settled {
+                // One message written twice in a row (Codex: item_completed, then its response_item a few
+                // milliseconds later) answered when first written, as the page keeps its first time: else
+                // a thread read through its page stays unread against this row's later time.
+                match (&mut self.answer, answer) {
+                    (Some((text, time)), Some((older, at))) if *text == older => {
+                        if at.is_some() {
+                            *time = at;
+                        }
+                    }
+                    (_, older) if older.is_some() || line.time_ms.is_some() => self.settled = true,
+                    _ => {}
+                }
             }
             self.started = self.started.or(line.started);
             if self.title.is_none() {
@@ -86,10 +102,20 @@ impl Found {
     }
     /// `newer` (lines after these) over these.
     fn under(self, newer: Found) -> Found {
+        // The newer lines' answer, written twice across the two reads: its time is the first write's
+        // when that write is the newest timed line of these (`scan`).
+        let (answer, settled) = match (newer.answer, self.answer) {
+            (Some((text, time)), Some((older, at))) if !newer.settled && text == older && at.is_some() && at == self.time_ms => {
+                (Some((text, at.or(time))), true)
+            }
+            (Some(answer), _) => (Some(answer), newer.settled || self.time_ms.is_some()),
+            (None, older) => (older, self.settled),
+        };
         Found {
             time_ms: newer.time_ms.or(self.time_ms),
             ended: newer.ended.or(self.ended),
-            answer: newer.answer.or(self.answer),
+            answer,
+            settled,
             started: newer.started.or(self.started),
             title: newer.title.or(self.title),
         }

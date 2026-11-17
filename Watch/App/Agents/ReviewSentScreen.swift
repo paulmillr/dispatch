@@ -42,7 +42,7 @@ struct ReviewSentContent: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
             content(now: context.date)
         }
     }

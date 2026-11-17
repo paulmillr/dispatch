@@ -126,7 +126,7 @@ struct ChatApprovalView: View {
                 }
             }
             if approval.pending.pending {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
+                TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                     ChatCaption(text: "Waiting · " + ChatTurnSummary.elapsed(context.date.timeIntervalSince(approval.arrived)))
                 }
                 ChatChips(choices: MobileChatSession.choices(for: approval.interaction), morph: reduceMotion ? nil : replies) { choice in

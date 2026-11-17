@@ -288,9 +288,6 @@ struct ChatWorkingRow: View {
                     }
                 }
                 .lineLimit(1)
-                // The line has the first claim on the row: the room after it (and its tap) takes what is left, and the
-                // steps' count wraps before the clock does.
-                .layoutPriority(1)
                 .frame(minHeight: 44)
                 // A tap on the line unfolds the row, as a click on the Mac's Thinking opens its activity.
                 .contentShape(Rectangle())
@@ -303,6 +300,10 @@ struct ChatWorkingRow: View {
                                                    current: tools.last?.kind.label, waiting: waiting))
                 .accessibilityHint(expanded ? "Hides the usage and steps" : "Shows the usage and steps")
                 .accessibilityAction { expanded.toggle() }
+                // The line has the first claim on the row: the room after it (and its tap) takes what is left, and the
+                // steps' count drops its word before the label or the clock is cut. Last in the chain: the row reads a priority
+                // only from its child's outermost view, and `ChatWorkingAccessibility` wraps the line in a timeline.
+                .layoutPriority(1)
                 if canStop {
                     // Beside the clock, quiet as the chevron. Held 3 s it stops; a touch brings up the capsule that
                     // says so, which fills while it is held.
@@ -346,15 +347,18 @@ struct ChatWorkingRow: View {
                         ChatAgentsBadge(count: session.subagents.count)
                     }
                     if !expanded, !tools.isEmpty {
-                        // Folded, the count; open, the log's own line counts (`ChatStepWindow`).
-                        Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .layoutPriority(1)
-                            .accessibilityHidden(true)
+                        // Folded, the count; open, the log's own line counts (`ChatStepWindow`). Never broken between
+                        // the number and the word: where "12 steps" does not fit (large text), the number alone.
+                        ViewThatFits(in: .horizontal) {
+                            Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
+                            Text("\(tools.count)")
+                        }
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                        .accessibilityHidden(true)
                     }
                 }
                 .frame(minHeight: 44)
@@ -993,7 +997,7 @@ struct ChatElapsed: View {
     @ReduceMotion private var reduceMotion
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
             Text(Self.text(since.map { context.date.timeIntervalSince($0) } ?? 0, reduceMotion: reduceMotion))
                 .monospacedDigit()
                 // "1m 16s" never breaks between its parts.

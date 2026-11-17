@@ -35,6 +35,9 @@ struct DispatchWatchApp: App {
         .backgroundTask(.watchConnectivity) {
             await model.receivePending()
         }
+        // One scene per category the phone posts (`WatchNotification.categories`): each gets the app's long look.
         WKNotificationScene(controller: WatchNotificationController.self, category: WatchNotification.category)
+        WKNotificationScene(controller: WatchNotificationController.self, category: WatchNotification.finished)
+        WKNotificationScene(controller: WatchNotificationController.self, category: WatchNotification.stopped)
     }
 }

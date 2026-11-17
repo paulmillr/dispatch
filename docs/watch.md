@@ -104,7 +104,7 @@ request and hold is logged under subsystem `yachts.dispatch.mobile`, category `W
 | --- | --- | --- |
 | `hello` | none; the snapshot as built now | `snapshot` |
 | `refresh` | holds (background) or `retryNow()`s (foreground) the hosts with Chat on, never a plain SSH host; with a host it is the user's Connect and lifts the phone's Disconnect | `snapshot` |
-| `thread` | holds the host; `ChatConversations.session(for:)`; waits for a verified, loaded session, else answers with what the phone holds | `thread` |
+| `thread` | holds the host; `ChatConversations.session(for:)`; waits for a verified, loaded session, else answers with what the phone holds (for a host not reached, after reading its saved copy, Keep history on this iPhone: unreadable while the phone is locked, class B) | `thread` |
 | `answer` | the pending approval, question form or side question by interaction id (waited for up to 2 s after a reopen), answered through `MobileChatSession` | `thread` |
 | `send` | `MobileChatSession.send(text:steer:)`, the composer's routing without touching the phone's drafts; a host that is down queues on the phone; a prompt the agent refuses stays in the phone's queue, paused (Limits, Refused after Stop) | `thread` |
 | `stop`, `resume`, `queue.remove`, `queue.sendNow` | the session's own actions, with the phone's own permission checks; `queue.sendNow` on a paused or uncertain device row is the queue card's Send (`resendQueued`) | `thread` |
@@ -169,11 +169,19 @@ naming its mockup) follow it.
   older than 10 min while reachable. A locked phone alone shows nothing (its password hosts still connect). Per host,
   `blocked` says what only the phone can do; rows of a host not live dim as on the phone.
 - **Agents and Spaces** are the phone's lists in the phone's order with the phone's dots and badge; previews are one
-  flattened line. An Agents row's leading column is its dot alone; its name takes up to two lines, its state line two
-  while it works or needs you and one for an idle row's preview. Where an agent's mark shows (a tab row, the thread's
-  header, an approval) it is the phone's one monochrome bubble for every agent. Two pushes (hosts and spaces, then a
-  space's tabs, then a tab) rather than one indented list. An agent's tab opens its thread; any other tab shows its
-  facts and "Terminal on your iPhone". Each host's Spaces section (no screen of its own) opens with its statistics card
+  flattened line. Agents' rows of hosts not reached now (offline, or unknown to the snapshot) go apart at the end under
+  "Offline", as the phone's Offline section; a connecting host's stay. A row says what the phone's Agents row says
+  (`WatchSnapshotBuilder.conversation` reads `MobileComposition.status`, as `AgentRow` does): its name is the row's
+  (a renamed tab's name first, else the agent's title, else the tab's; `title` is no longer sent), with a muted row's
+  bell beside it; working, what the agent last said in the turn (else its prompt) over the step by its kind's symbol
+  and count ("Run · 4 steps · 2 agents", else "Working…"), from the open thread or, for a row the phone has not opened,
+  the host's list; the caption's time then counts the turn in amber. Needing you, what it asks on two lines in primary;
+  idle, the last message on one. The caption is "host · space" in grey (colour is the dot's and the working time's).
+  Kept the watch's own, unlike the phone: the leading column is the dot alone, not the phone's moving thinking glyph
+  (it would redraw the list for as long as an agent works), and the name takes up to two lines. Where an agent's mark shows (a tab row, an approval) it is the phone's one monochrome bubble for every agent. Two pushes (hosts and spaces, then a
+  space's tabs, then a tab) rather than one indented list. An agent's tab opens its thread; any other tab shows its facts and "Terminal on your iPhone". A tab's line is the
+  phone's (`TabsTabLine`), and while its agent works it counts the turn ("Running shell command… · 48s",
+  `WatchTab.workingSince`); each tab row keeps its own clocks (Clocks in lists). Each host's Spaces section (no screen of its own) opens with its statistics card
   (`HostStatsCard`): the phone's strip (CPU %, memory used, disk free, red where the phone flags them high) and the
   15-minute CPU sparkline with its peak, dimmed when the phone marks the numbers stale, dimmed without the sparkline
   while the host is offline; then what blocks the host or "Offline since", Connect (`refresh` with that host) while
@@ -181,14 +189,16 @@ naming its mockup) follow it.
   pushed over it): behind Agents it keeps what it showed when it was left and reads the model afresh when it comes back,
   so the snapshots working agents bring cost it nothing. The phone sends the same snapshots either way (the Host widget
   needs them).
-- **Thread.** A page holds the phone's thread rows: the messages, Claude's or Pi's thinking as an agent bubble of its
+- **Thread.** A page holds the phone's thread rows: the messages (a reply's quote, `ChatReplyQuote`, as a card on
+  top of the user's bubble, `WatchItem.quote`), Claude's or Pi's thinking as an agent bubble of its
   own until its turn ends on a reply (`ChatThinkingFold`), notices (repeats folded with a count as on the phone, the
   item timed by the newest); no tools (an ended turn's caption counts its steps), and the watch hides those an older phone still sends.
   It opens at the newest turn (the one the user's newest message started, by its turn id: the summary card and what
   waits); the page's earlier turns wait behind an "Earlier · N" row that expands in place, and "Earlier messages are
   on your iPhone" shows once they do. The split stays where it was when the screen opened, so a message sent from it
-  does not put the answer just read behind "Earlier". While the agent works the header says the host's CPU after the
-  model ("Claude Code · opus-5.5", a chip symbol, "34%"): the machine or the agent. Opening fetches a page (40 items)
+  does not put the answer just read behind "Earlier". Under the title the header says where the chat runs as the phone's header does ("studio · dispatch": the host, then the
+  folder's name unless the title is it; `ThreadScreen.place`), never the agent and its model, which the phone shows only
+  in an empty chat's intro, nor the host's statistics (Spaces' host card has them). Opening fetches a page (40 items)
   and caches it; the cached page shows while a newer one loads, and a page goes when the snapshot no longer lists its
   conversation. A page on screen reloads when its row moves past it;
   one off screen reloads on its next open. A thread opened before the phone was reachable loads once it is; launch
@@ -258,8 +268,10 @@ naming its mockup) follow it.
   opens Spaces at the host's section (`dispatch-watch://host?host=…`). The phone transfers no Host entry: it follows what the
   watch app receives. Untested: a face carrying either and a real background wake (simctl can configure neither).
 - **Notifications.** Background refresh's notifications reach the watch as iOS forwards any iPhone notification;
-  `WatchAppDelegate` registers category `agent` (no actions: a refresh holds no interaction, and an approval belongs
-  to a live subscription), and a tap routes through `WatchRouter` to the thread, on a cold launch too. Untested: a
+  `WatchAppDelegate` registers the phone's three categories (`WatchNotification.categories`: `agent` needs you,
+  `agent.finished`, `agent.stopped`; no actions: a refresh holds no
+  interaction, and an approval belongs to a live subscription), each with a `WKNotificationScene` of its own, and a
+  tap routes through `WatchRouter` to the thread, on a cold launch too. Untested: a
   forwarded notification and its tap (a simulator cannot forward); the route itself is tested.
 - **Not on the watch.** Hosts, keys, trust and login sheets, Settings, New chat, New space, New tab, the terminal, the
   diff viewer, message details, the model and effort picker, mute and close, editing queued messages, the phone's
@@ -277,8 +289,8 @@ the thread's route: Queue and Steer now on a working one; `stop` is Stop's confi
 ### Limits
 
 - **Sizes** (`WatchLimits`). WatchConnectivity refuses a payload over about 64 KiB. The snapshot is fitted to 32 KiB:
-  texts clipped (previews, steps and asks 120 characters, names and titles 200), then the hosts' CPU lines dropped and
-  steps cut to 40, then rows left out a tenth at a time, least useful first (terminal tabs, idle conversations,
+  texts clipped (previews, steps, notes and asks 120 characters, names and titles 200), then the hosts' CPU lines
+  dropped and steps, notes and asks cut to 40, then rows left out a tenth at a time, least useful first (terminal tabs, idle conversations,
   anything that does not need the user); `truncated` says so and the watch shows "Some rows are on your iPhone". 5
   hosts × 6 conversations at their longest is about 25 KB, nothing cut. Replies are fitted to 48 KiB (item text 1,000
   characters, oldest items first).
@@ -291,7 +303,9 @@ the thread's route: Queue and Steer now on a working one; `stop` is Stop's confi
   be tapped from `simctl`; the debug hooks and the UI tests stand in.
 - **Clocks in lists.** Never wrap a `List` in a `TimelineView` when a row has one of its own (or is an empty
   `TimelineView`): the list then lays out continuously, about 75 % of a core with a static snapshot. Each row keeps its
-  own clock (`AgentsScreen`). Check list performance by CPU in the simulator ([benchmarks](benchmarks.md#cpu-of-iphone-and-watch-views-in-the-simulator)).
+  own clock (`AgentsScreen`), and every clock counting seconds starts its `TimelineView` at `Ticks.anchor` (the
+  launch's whole second, `Watch/Shared/Ticks.swift`, the phone's too), so all of them on screen change on the same
+  tick. Check list performance by CPU in the simulator ([benchmarks](benchmarks.md#cpu-of-iphone-and-watch-views-in-the-simulator)).
 - **Refused after Stop.** Stop (`chat.stop`) leaves the interrupted prompt in Claude Code's input, and the next
   `chat.send` is refused as "not ready for input" until it is cleared (in Terminal; the helper does not clear it). A
   message from the watch has no draft on the phone to come back to, so `MobileChatSession.send(text:steer:)` keeps a

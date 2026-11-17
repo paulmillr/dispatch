@@ -52,7 +52,15 @@ final class WatchProtocolTests: XCTestCase {
         XCTAssertEqual(host.stats?.history.filter { $0 == nil }.count, 4, "the gap stays a gap")
         XCTAssertEqual(host.stats?.warnings, [.disk])
         XCTAssertEqual(host.stats?.peak, 82)
-        XCTAssertEqual(decoded.conversations[0].step, "Editing Sidebar.tsx")
+        XCTAssertEqual(decoded.conversations[0].step, "Patch · 4 steps")
+        XCTAssertEqual(decoded.conversations[0].stepSymbol, "pencil.line")
+        XCTAssertEqual(decoded.conversations[0].note, "Added a ThemeToggle to the sidebar header and wired it to useTheme.")
+        // An older phone's row (no note, no symbol, the step's words) still decodes.
+        var older = snapshot
+        older.conversations[0].stepSymbol = nil
+        older.conversations[0].note = nil
+        older.conversations[0].step = "Editing Sidebar.tsx"
+        XCTAssertEqual(try WatchCodec.decode(WatchSnapshot.self, from: WatchCodec.encode(older)).conversations[0].step, "Editing Sidebar.tsx")
         XCTAssertEqual(decoded.conversations[1].waitingText, "Allow cargo test --workspace?")
         XCTAssertEqual(decoded.reviews.map(\.comments), [3])
         let thread = try XCTUnwrap(WatchFixtures.mockupThreads(now: now)[WatchFixtures.sidebar])

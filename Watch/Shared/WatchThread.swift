@@ -173,10 +173,13 @@ struct WatchItem: Codable, Equatable, Sendable, Identifiable {
     /// The same turn's summary, structured, for "5 steps in 1m 26s · 4 files +61 −9" (a newer phone's; an older one sends
     /// only `caption`).
     var summary: WatchTurnSummary?
+    /// A user message that replies to one of the agent's (`ChatReplyQuote`): the quoted words, shown as a card on top
+    /// of the bubble, and `text` the user's own. An older phone sends the quote flattened into `text`.
+    var quote: String?
 
     init(id: String, kind: WatchItemKind, text: String, time: Date? = nil, turn: String? = nil, tool: String? = nil,
          detail: String? = nil, failed: Bool = false, running: Bool = false, caption: String? = nil,
-         summary: WatchTurnSummary? = nil) {
+         summary: WatchTurnSummary? = nil, quote: String? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -188,6 +191,7 @@ struct WatchItem: Codable, Equatable, Sendable, Identifiable {
         self.running = running
         self.caption = caption
         self.summary = summary
+        self.quote = quote
     }
 }
 

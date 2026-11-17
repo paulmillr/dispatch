@@ -172,7 +172,7 @@ struct ChatGoalSheet: View {
                         if goal.status != "active" && goal.status != "paused" {
                             row("Status", goal.statusLabel.capitalized)
                         }
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                        TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                             row("Time", Self.time(goal, since: session.goalUpdatedAt, now: context.date))
                         }
                         row("Tokens", Self.tokens(goal))
@@ -640,7 +640,7 @@ struct ChatReadingFootnote: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                 HStack(spacing: 6) {
                     Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(Color.dispatchPink)
                     Text("Reading aloud · " + MobileVoiceConversation.clock(context.date.timeIntervalSince(since)))
@@ -754,7 +754,7 @@ struct ChatShellsSheet: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                    TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                         Text(ChatTurnSummary.elapsed(context.date.timeIntervalSince(shell.started)))
                             .monospacedDigit().foregroundStyle(.secondary)
                     }
@@ -883,7 +883,7 @@ struct ChatLoadingLine: View {
             : "Opening conversation…"
         ProgressView {
             if let since = session.loadingSince {
-                TimelineView(.periodic(from: since, by: 1)) { context in
+                TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                     Text(Self.text(stage, elapsed: context.date.timeIntervalSince(since)))
                 }
             } else {

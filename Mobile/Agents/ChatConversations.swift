@@ -457,6 +457,9 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
     /// What threads showed, saved on the phone (`ChatHistoryArchive`): a chat with nothing in `transcripts` opens on it.
     /// Nil keeps nothing on disk (tests, the samples, live test runs).
     @ObservationIgnored var archive: ChatHistoryArchive?
+    /// Conversations whose saved copy is being read for a new session (`make`): the watch's thread request waits for it,
+    /// so an offline host's page carries what the phone shows (`WatchRequestServer`).
+    @ObservationIgnored private(set) var readingArchive: Set<ChatConversationKey> = []
     /// Sessions the Agents list opened ahead of a tap and nobody has asked for yet (the type's comment, Warm).
     @ObservationIgnored private(set) var warm: [ChatConversationKey: MobileChatSession] = [:]
     /// The Agents list's first rows, in the order it shows them, while it is on screen (`agentsListShown`).
@@ -769,8 +772,10 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
             // Nothing in memory and the host not reached now (offline, or still connecting): the copy saved on the
             // phone, read off the main thread, for a session still waiting for its host (`seed` takes it only before
             // `chat.open`) and the conversation the topology binds. A reached host's history comes at once instead.
-            Task { [weak session] in
-                guard let kept = await archive.load(key), let session, session.transcript.isEmpty else { return }
+            readingArchive.insert(key)
+            Task { [weak self, weak session] in
+                defer { self?.readingArchive.remove(key) }
+                guard let kept = await archive.load(key), let self, let session, session.transcript.isEmpty else { return }
                 let node = self.hosts[key.host]?.topology?.nodes.first { $0.key == key.node && $0.kind == .terminal }
                 guard kept.conversation == node?.agent?.session else { return }
                 session.seed(kept)

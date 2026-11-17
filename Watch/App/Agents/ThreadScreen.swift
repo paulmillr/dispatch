@@ -3,7 +3,7 @@ import SwiftUI
 /// One conversation: items, pending approvals/questions, queue, composer. Calls model.open(key)/close(key) on
 /// appear/disappear.
 ///
-/// One list, oldest at the top: the header (agent, model, why input waits, the phone's notes), the page's items, the
+/// One list, oldest at the top: the header (host · folder, why input waits, the phone's notes), the page's items, the
 /// working line (Stop at its end), failures, then what waits for the user (approval cards with their chips, question
 /// cards), the queue and the composer (Reply, Open on iPhone). It opens scrolled to the first request, else to the newest item.
 struct ThreadScreen: View {
@@ -128,7 +128,10 @@ struct ThreadScreen: View {
         let primary = Self.primaryAction(thread)
         return ScrollViewReader { proxy in
             List {
-                ThreadHeader(thread: thread, agent: agent, cpu: model.host(key.host).flatMap(ThreadHeader.cpu))
+                ThreadHeader(thread: thread, place: Self.place(host: model.host(key.host), conversation: model.conversation(key),
+                                                               tab: model.conversation(key).flatMap { conversation in
+                                                                   conversation.tab.flatMap { model.tab(host: key.host, key: $0) }
+                                                               }))
                     .modifier(BareRow())
                 let turns = Self.turns(thread, from: newestFrom)
                 if !turns.earlier.isEmpty, !showEarlier {
@@ -546,31 +549,28 @@ struct ThreadSummaryCard: View {
     }
 }
 
-/// The thread's top: the agent's glyph with the agent and model ("Claude Code · opus-5.5", then the host's CPU, a chip
-/// symbol and "34%", while the agent works), why input waits (paused, offline, attaching), and the phone's notes.
+extension ThreadScreen {
+    /// The line under the chat's title, as the phone's header says it (X9b): the host, then the folder's name unless the
+    /// title already is it (an automatic name), else the host alone. Never the agent or its model: the phone shows those
+    /// only in an empty chat's intro and in message details.
+    static func place(host: WatchHost?, conversation: WatchConversation?, tab: WatchTab?) -> String? {
+        let folder = SpacesText.folder(tab?.folder, besides: conversation?.displayTitle)
+        let parts = [host?.name, folder].compactMap { $0?.isEmpty == false ? $0 : nil }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The thread's top: where it runs, as the phone's header ("studio · dispatch"), why input waits (paused, offline,
+/// attaching), and the phone's notes.
 struct ThreadHeader: View {
     let thread: WatchThread
-    /// The agent's key or label, for the glyph.
-    var agent: String?
-    /// The host's CPU %, said after the model while the agent works (is it the machine or the agent?).
-    var cpu: Double? = nil
+    /// "mba2 · app": the phone's header line under the chat's title (`TabScreenHeader.folderSubtitle`).
+    var place: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if let detail = Self.detail(thread) {
-                HStack(spacing: 5) {
-                    AgentGlyph(agent: agent ?? thread.agent, size: 12)
-                    Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                    if let load = Self.load(thread, cpu: cpu) {
-                        Label(load, systemImage: "cpu")
-                            .labelStyle(ThreadHeaderLoadStyle())
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .accessibilityLabel("Host CPU " + load.dropLast() + " percent")
-                    }
-                }
+            if let place {
+                Text(place).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             if let status = Self.status(thread) {
                 Text(status).font(.footnote).foregroundStyle(AgentsColor.working)
@@ -583,23 +583,6 @@ struct ThreadHeader: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "34%" (after the chip's symbol) while the agent works and the host has a current reading.
-    static func load(_ thread: WatchThread, cpu: Double?) -> String? {
-        guard thread.working, let cpu else { return nil }
-        return "\(Int(cpu.rounded()))%"
-    }
-
-    /// The host's CPU for the header: a connected host's current reading only.
-    static func cpu(_ host: WatchHost) -> Double? {
-        guard host.state == .connected, let stats = host.stats, !stats.stale else { return nil }
-        return stats.cpu
-    }
-
-    static func detail(_ thread: WatchThread) -> String? {
-        let parts = [thread.agent, thread.model].compactMap { $0?.isEmpty == false ? $0 : nil }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
     /// Why the conversation does not take input now, in the phone's words where it sent them.
     static func status(_ thread: WatchThread) -> String? {
         let reason = thread.reason?.isEmpty == false ? thread.reason : nil
@@ -609,16 +592,6 @@ struct ThreadHeader: View {
         case .paused: return reason ?? "Paused"
         case .offline: return reason ?? "Offline"
         case .unknown: return reason
-        }
-    }
-}
-
-/// The header's CPU: the chip symbol tight before the number.
-struct ThreadHeaderLoadStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 2) {
-            configuration.icon.imageScale(.small)
-            configuration.title
         }
     }
 }

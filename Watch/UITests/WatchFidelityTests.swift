@@ -39,7 +39,7 @@ final class WatchFidelityTests: XCTestCase {
 
     func testK1AgentsList() throws {
         let app = launch(["-DispatchWatchScripted", "mockup"])
-        XCTAssertTrue(element(app, labelContaining: "Editing Sidebar.tsx").waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(element(app, labelContaining: "Patch · 4 steps").waitForExistence(timeout: 15), app.debugDescription)
         XCTAssertTrue(element(app, labelContaining: "Allow cargo test --workspace?").exists)
         try save("K1")
     }
@@ -48,7 +48,7 @@ final class WatchFidelityTests: XCTestCase {
     func testK1bAgentsListScrolled() throws {
         let app = launch(["-DispatchWatchScripted", "mockup"])
         let last = element(app, labelContaining: "Docs site migration")
-        XCTAssertTrue(element(app, labelContaining: "Editing Sidebar.tsx").waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(element(app, labelContaining: "Patch · 4 steps").waitForExistence(timeout: 15), app.debugDescription)
         for _ in 0..<3 { XCUIDevice.shared.rotateDigitalCrown(delta: 0.5) }
         XCTAssertTrue(last.waitForExistence(timeout: 5) && last.isHittable, app.debugDescription)
         try save("K1b")
@@ -105,6 +105,6 @@ final class WatchFidelityTests: XCTestCase {
         XCTAssertTrue(element(app, labelContaining: "Undo for 8 s").exists)
         try save("K8")
         app.buttons["Undo"].tap()
-        XCTAssertTrue(element(app, labelContaining: "Editing Sidebar.tsx").waitForExistence(timeout: 10), "the card closes after Undo")
+        XCTAssertTrue(element(app, labelContaining: "Patch · 4 steps").waitForExistence(timeout: 10), "the card closes after Undo")
     }
 }

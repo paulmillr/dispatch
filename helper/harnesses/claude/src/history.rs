@@ -87,7 +87,32 @@ pub struct Parser {
     bash: VecDeque<(String, Option<String>, Option<String>, i64)>,
     /// Recent calls that stop a background task (`TaskStop`, earlier `KillShell`): call id → the task it names.
     stops: VecDeque<(String, Option<String>)>,
+    /// Subagents the transcript says run, oldest first (`Launched`): `Claude::current` adds those no
+    /// SubagentStart reached this helper for.
+    pub launched: Vec<Launched>,
 }
+
+/// A subagent the transcript says runs: an Agent call (earlier Task) with no result yet (a foreground
+/// agent), or one whose result launched it in the background (`toolUseResult.status` "async_launched",
+/// naming its `agentId`) until its task notification or a successful stop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launched {
+    /// The call that started it.
+    pub call: String,
+    /// Its agent id, once its result named one.
+    pub agent: Option<String>,
+    /// The call's `subagent_type` ("general-purpose", Claude's default, when it names none; "agent"
+    /// when the call lies before the page).
+    pub kind: String,
+    /// The call's `description`, else its result's.
+    pub name: Option<String>,
+    pub started_ms: Option<u64>,
+}
+
+/// Longest task name kept from a call, in characters (as `subagents::NAME`).
+const AGENT_NAME: usize = 200;
+/// Most agents the transcript keeps running at once; the oldest goes past it.
+const AGENTS: usize = 64;
 impl Parser {
     pub fn new(session: String) -> Self {
         Self {
@@ -107,6 +132,7 @@ impl Parser {
             page: None,
             bash: VecDeque::new(),
             stops: VecDeque::new(),
+            launched: Vec::new(),
         }
     }
     /// A queued task notification (`queue-operation` enqueue, written when the task ends): its text.
@@ -116,16 +142,87 @@ impl Parser {
             .flatten()
             .filter(|s| s.contains("<task-notification>"))
     }
-    /// A task notification ends every shell it names (`<task-id>`).
+    /// A task notification ends every shell and background agent it names (`<task-id>`, an agent's
+    /// also by its `<tool-use-id>`).
     fn notified(&mut self, s: &str) {
-        if !s.contains("<task-notification>") || self.state.shells.is_empty() {
+        if !s.contains("<task-notification>") || (self.state.shells.is_empty() && self.launched.is_empty()) {
             return;
         }
-        let mut rest = s;
-        while let Some((_, after)) = rest.split_once("<task-id>") {
-            let Some((id, after)) = after.split_once("</task-id>") else { break };
-            self.state.shells.retain(|shell| shell.id != id.trim());
-            rest = after;
+        for (open, close) in [("<task-id>", "</task-id>"), ("<tool-use-id>", "</tool-use-id>")] {
+            let mut rest = s;
+            while let Some((_, after)) = rest.split_once(open) {
+                let Some((id, after)) = after.split_once(close) else { break };
+                let id = id.trim();
+                self.state.shells.retain(|shell| shell.id != id);
+                self.launched.retain(|agent| agent.agent.as_deref() != Some(id) && agent.call != id);
+                rest = after;
+            }
+        }
+    }
+    /// An Agent call (earlier Task): a foreground agent runs until its result.
+    fn called(&mut self, call: &str, input: Option<Value<'_>>, time: i64) {
+        if self.launched.iter().any(|agent| agent.call == call) {
+            return;
+        }
+        let field = |key| input.and_then(|i| text(i, key)).map(str::trim).filter(|s| !s.is_empty());
+        if self.launched.len() == AGENTS {
+            self.launched.remove(0);
+        }
+        self.launched.push(Launched {
+            call: call.into(),
+            agent: None,
+            kind: field("subagent_type").unwrap_or("general-purpose").into(),
+            name: field("description").map(|s| s.chars().take(AGENT_NAME).collect()),
+            started_ms: u64::try_from(time).ok().filter(|ms| *ms > 0),
+        });
+    }
+    /// An Agent call's result: launched in the background (`async_launched`, naming its `agentId`, in
+    /// `toolUseResult` or the result's text) it runs on under that id, else it ended. A launch whose
+    /// call lies before the page runs from the result's time.
+    fn agent_result(&mut self, root: Value<'_>, block: Value<'_>, call: &str, single: bool, time: i64) {
+        let result = root.get("toolUseResult").filter(|_| single);
+        let launched = result.and_then(|r| text(r, "status")) == Some("async_launched");
+        let position = self.launched.iter().position(|a| a.call == call);
+        // The result's text names the launch only for a call known to be an agent's.
+        let output = position.map(|_| content(block.get("content"))).unwrap_or_default();
+        let agent = result
+            .filter(|_| launched)
+            .and_then(|r| text(r, "agentId"))
+            .map(str::to_owned)
+            .or_else(|| {
+                output
+                    .contains("Async agent launched")
+                    .then(|| output.lines().find_map(|l| l.trim().strip_prefix("agentId:")?.split_whitespace().next().map(str::to_owned)))
+                    .flatten()
+            })
+            .filter(|id| !id.is_empty());
+        match (agent, position) {
+            (Some(id), Some(at)) => {
+                let entry = &mut self.launched[at];
+                entry.agent = Some(id);
+                if entry.name.is_none() {
+                    entry.name = result.and_then(|r| text(r, "description")).map(|s| s.trim().chars().take(AGENT_NAME).collect());
+                }
+            }
+            (Some(id), None) => {
+                if self.launched.iter().any(|a| a.agent.as_deref() == Some(id.as_str())) {
+                    return;
+                }
+                if self.launched.len() == AGENTS {
+                    self.launched.remove(0);
+                }
+                self.launched.push(Launched {
+                    call: call.into(),
+                    agent: Some(id),
+                    kind: "agent".into(),
+                    name: result.and_then(|r| text(r, "description")).map(|s| s.trim().chars().take(AGENT_NAME).collect()),
+                    started_ms: u64::try_from(time).ok().filter(|ms| *ms > 0),
+                });
+            }
+            (None, Some(at)) => {
+                self.launched.remove(at);
+            }
+            (None, None) => {}
         }
     }
     /// A stop call's result (`TaskStop`, earlier `KillShell`): Claude queues no task notification for a shell it
@@ -143,6 +240,7 @@ impl Parser {
             .or(named);
         if let Some(task) = task {
             self.state.shells.retain(|shell| shell.id != task.trim());
+            self.launched.retain(|agent| agent.agent.as_deref() != Some(task.trim()));
         }
     }
     /// A Bash result naming a `backgroundTaskId` (run in the background, or sent there when it
@@ -627,6 +725,7 @@ impl Parser {
                     if results.len() == 1 {
                         self.backgrounded(root, call, record.time_ms.unwrap_or(0));
                     }
+                    self.agent_result(root, **block, call, results.len() == 1, record.time_ms.unwrap_or(0));
                     let failed = block.get("is_error").and_then(|v| v.boolean()) == Some(true);
                     self.stopped(root, call, failed);
                     out.push(Record {
@@ -726,6 +825,9 @@ impl Parser {
                                 }
                                 let time = record.time_ms.unwrap_or(0);
                                 self.bash.push_back((call.into(), field("description"), field("command"), time));
+                            }
+                            if matches!(name, "Agent" | "Task") {
+                                self.called(call, b.get("input"), record.time_ms.unwrap_or(0));
                             }
                             if matches!(name, "TaskStop" | "KillShell" | "KillBash") {
                                 let input = b.get("input");
@@ -1107,5 +1209,70 @@ mod tests {
         // Another task's notification leaves it running.
         parser.feed(queued("other").as_bytes()).unwrap();
         assert_eq!(parser.state.shells.len(), 1);
+    }
+
+    /// An Agent call, then its result (Claude Code 2.1.4xx: a background launch's `toolUseResult` is
+    /// `{isAsync, status: "async_launched", agentId, description, prompt, outputFile, …}`).
+    fn agent(call: &str, input: &str, result: &str, text: &str) -> String {
+        format!(
+            r#"{{"parentUuid":"p0","isSidechain":false,"type":"assistant","message":{{"role":"assistant","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"{call}","name":"Agent","input":{input}}}],"stop_reason":"tool_use"}},"uuid":"a-{call}","timestamp":"2026-10-20T12:30:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n"
+            + &format!(
+                r#"{{"parentUuid":"a-{call}","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{call}","content":[{{"type":"text","text":"{text}"}}]}}]}},"toolUseResult":{result},"uuid":"r-{call}","timestamp":"2026-10-20T12:30:02.000Z","sessionId":"{SESSION}"}}"#
+            )
+            + "\n"
+    }
+
+    fn launched(parser: &Parser) -> Vec<(String, Option<&str>, &str, Option<&str>)> {
+        parser.launched.iter().map(|a| (a.call.clone(), a.agent.as_deref(), a.kind.as_str(), a.name.as_deref())).collect()
+    }
+
+    /// A background agent runs from its call until its task notification, under the id its launch names.
+    #[test]
+    fn a_background_agent_runs_until_its_notification_is_queued() {
+        let mut parser = Parser::new(SESSION.into());
+        let input = r#"{"description":"Review the wire layer","prompt":"Read it.","subagent_type":"general-purpose","run_in_background":true}"#;
+        let result = r#"{"isAsync":true,"status":"async_launched","agentId":"ab9c014c","description":"Review the wire layer"}"#;
+        parser.feed(agent("toolu_1", input, result, r"Async agent launched successfully.\nagentId: ab9c014c (internal ID)").as_bytes()).unwrap();
+        assert_eq!(launched(&parser), [("toolu_1".to_owned(), Some("ab9c014c"), "general-purpose", Some("Review the wire layer"))]);
+        assert_eq!(parser.launched[0].started_ms, Some(time("2026-10-20T12:30:00.000Z") as u64), "timed from its call");
+        parser.feed(queued("other").as_bytes()).unwrap();
+        assert_eq!(parser.launched.len(), 1);
+        parser.feed(queued("ab9c014c").as_bytes()).unwrap();
+        assert!(parser.launched.is_empty());
+    }
+
+    /// A foreground agent runs while its call waits for its result; any other result ends it. One the
+    /// result's text alone names as launched (several results in one record) runs on.
+    #[test]
+    fn a_foreground_agent_runs_until_its_result() {
+        let mut parser = Parser::new(SESSION.into());
+        let call = format!(
+            r#"{{"parentUuid":"p0","isSidechain":false,"type":"assistant","message":{{"role":"assistant","model":"claude-opus-5-5","content":[{{"type":"tool_use","id":"toolu_2","name":"Task","input":{{"description":"Find the callers"}}}}],"stop_reason":"tool_use"}},"uuid":"a-2","timestamp":"2026-10-20T12:31:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n";
+        parser.feed(call.as_bytes()).unwrap();
+        assert_eq!(launched(&parser), [("toolu_2".to_owned(), None, "general-purpose", Some("Find the callers"))]);
+        let done = r#"{"status":"completed","agentId":"af00","content":[{"type":"text","text":"Three callers."}]}"#;
+        parser.feed(agent("toolu_2", r#"{"description":"Find the callers"}"#, done, "Three callers.").as_bytes()).unwrap();
+        assert!(parser.launched.is_empty());
+        let input = r#"{"description":"Watch the build"}"#;
+        parser.feed(agent("toolu_3", input, r#"{}"#, r"Async agent launched successfully.\nagentId: ac11 (internal ID)").as_bytes()).unwrap();
+        assert_eq!(launched(&parser), [("toolu_3".to_owned(), Some("ac11"), "general-purpose", Some("Watch the build"))]);
+    }
+
+    /// A background agent whose call lies before the page runs from its launch's result, named by it;
+    /// a successful stop naming it ends it.
+    #[test]
+    fn a_background_agent_whose_call_lies_before_the_page_runs_until_stopped() {
+        let mut parser = Parser::new(SESSION.into());
+        let result = format!(
+            r#"{{"parentUuid":"a0","isSidechain":false,"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_8","content":"Async agent launched successfully."}}]}},"toolUseResult":{{"isAsync":true,"status":"async_launched","agentId":"ad22","description":"Profile the reader"}},"uuid":"r8","timestamp":"2026-10-20T12:33:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n";
+        parser.feed(result.as_bytes()).unwrap();
+        assert_eq!(launched(&parser), [("toolu_8".to_owned(), Some("ad22"), "agent", Some("Profile the reader"))]);
+        assert_eq!(parser.launched[0].started_ms, Some(time("2026-10-20T12:33:00.000Z") as u64));
+        let stop = r#"{"message":"Successfully stopped task: ad22","task_id":"ad22","task_type":"local_agent"}"#;
+        parser.feed(tool("toolu_9", "TaskStop", r#"{"task_id":"ad22"}"#, stop, false).as_bytes()).unwrap();
+        assert!(parser.launched.is_empty());
     }
 }

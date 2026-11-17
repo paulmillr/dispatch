@@ -202,6 +202,7 @@
 		4ED5C12D77C9E850D89849AF /* Dictation in Frameworks */ = {isa = PBXBuildFile; productRef = AD7B993C729B0E0A6D640031 /* Dictation */; };
 		4F070D7390F044A857C46B5D /* Link.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC692F2C825F08B87DF72A92 /* Link.swift */; };
 		4FDE6EBDAC55061CFABA4CBD /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5221E2AE9F5FCE3731E787C0 /* AVKit.framework */; };
+		5009A22C081EF1C13EF83F93 /* Ticks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E8678CCC163B832878F2910 /* Ticks.swift */; };
 		508E71C16B88313F3CDC577D /* KittyCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B4FD71B86856ACFCAB8291 /* KittyCommand.swift */; };
 		509069F455C070FFD6734BFF /* TerminalTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B55AA35ECF44AD2ABAE78A1E /* TerminalTestSupport.swift */; };
 		50ACBDB3E78A768BC2C1F142 /* MobileChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CF21A99651A5D7D0A042156 /* MobileChrome.swift */; };
@@ -243,6 +244,7 @@
 		63D744CB5E56E9854307383A /* MobileRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E12DEAC2FDBB8A09A9BF17 /* MobileRow.swift */; };
 		63E1CBD3E1BDAB6A5ACC6EBC /* MobileComposition.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6504B0E6C3E92C8FC92A4E0 /* MobileComposition.swift */; };
 		64D4041B9B03FB2E38289822 /* HostScreensTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80ED7DF469518136AA80DC21 /* HostScreensTests.swift */; };
+		655D80FDA75C66D0FF0CC9D2 /* Ticks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E8678CCC163B832878F2910 /* Ticks.swift */; };
 		6576D00831B4E11141A8822C /* ToolPresentationCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF088ACD27D0C197B9BA7227 /* ToolPresentationCache.swift */; };
 		6577B96EA38B5675E8450BFD /* ChatLinkBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92BF3F0E478AA9FDEDABD574 /* ChatLinkBanner.swift */; };
 		66F701DD59FA5BB5545C0DBE /* TerminalCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2775FB4792B79D9F1A173A02 /* TerminalCatalogTests.swift */; };
@@ -372,6 +374,7 @@
 		9784E78FCFC4B29D842A723B /* MobileCommandsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B4C21FBC00DE9BCB9442B4 /* MobileCommandsTests.swift */; };
 		995A8C1318B3D4104B7FF2A2 /* TerminalRendererPrewarmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E561B67A35F57D58E8C97D08 /* TerminalRendererPrewarmTests.swift */; };
 		9990DC0D113966F4DD5A142A /* WatchShellTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC64E943200F44656902B374 /* WatchShellTests.swift */; };
+		99932567B1198C04D704A3D0 /* Ticks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E8678CCC163B832878F2910 /* Ticks.swift */; };
 		9A0DCFA6C7AF1EE50312255B /* MetalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87AE1BF2ABB1A6F707D84D2 /* MetalRenderer.swift */; };
 		9A2F496688D9BBCCECBAEA3A /* MobileLandscapeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 745AA387AEC4AA63881AA5F3 /* MobileLandscapeTests.swift */; };
 		9ACCF1D38E8B77A79D8E795B /* WatchHapticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA6EA95256BC9C907B7C234D /* WatchHapticsTests.swift */; };
@@ -858,6 +861,7 @@
 		4CD0E564EF235E675046E4BB /* AppearanceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceUITests.swift; sourceTree = "<group>"; };
 		4D46602B4A6ECC51B4911252 /* MobileSectionHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSectionHeader.swift; sourceTree = "<group>"; };
 		4D58D7D84D570B32B249C76B /* ReviewSentScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSentScreen.swift; sourceTree = "<group>"; };
+		4E8678CCC163B832878F2910 /* Ticks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ticks.swift; sourceTree = "<group>"; };
 		50E12DEAC2FDBB8A09A9BF17 /* MobileRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRow.swift; sourceTree = "<group>"; };
 		5175209EBB98178837E2DEF6 /* MobileChatAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileChatAttachments.swift; sourceTree = "<group>"; };
 		51FECC36A1D11D327FC7852F /* TerminalChecksumTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalChecksumTests.swift; sourceTree = "<group>"; };
@@ -2119,6 +2123,7 @@
 		D64FE3083ACA0FF0F2DCD5AE /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				4E8678CCC163B832878F2910 /* Ticks.swift */,
 				A75FF11AAF6A25BD16999BBD /* WatchCodec.swift */,
 				47D4981FF291162CD1BD4D65 /* WatchComplicationEntry.swift */,
 				D2B07FDCAE7003350DF44ADE /* WatchProtocol.swift */,
@@ -3061,6 +3066,7 @@
 				FCE86F16E96F0FA5BF542D09 /* TextContrast.swift in Sources */,
 				3213C451B2B1EDCA91E61E36 /* TextOccurrences.swift in Sources */,
 				E1983BBD7D48E3A0F69BB238 /* ThemeColorMath.swift in Sources */,
+				99932567B1198C04D704A3D0 /* Ticks.swift in Sources */,
 				9AEAD56E7B3FA752163C40AA /* ToolCommandPresentation.swift in Sources */,
 				0069070A174DEF16F16876F3 /* ToolCommandWords.swift in Sources */,
 				354C409318C9B5BAAC8EA9B4 /* ToolDocument.swift in Sources */,
@@ -3121,6 +3127,7 @@
 				0ECBEBF01F18631D6A755D08 /* HostWidget.swift in Sources */,
 				B5805E35806236DB26CB67C4 /* NeedsYouWidget.swift in Sources */,
 				C0A173F633802AFF991867C0 /* Sparkline.swift in Sources */,
+				655D80FDA75C66D0FF0CC9D2 /* Ticks.swift in Sources */,
 				4C5890C2019F7E83271E5BFE /* WatchCodec.swift in Sources */,
 				4D71E859280FF9DBFCAA67D2 /* WatchComplication.swift in Sources */,
 				96D44B9371A65F24E7F4FF88 /* WatchComplicationEntry.swift in Sources */,
@@ -3371,6 +3378,7 @@
 				3A5214E1FC0A4179A1C44418 /* ThreadItems.swift in Sources */,
 				E5B7523AD1F76C576F77586A /* ThreadRequests.swift in Sources */,
 				7B9613172E60AA733CB85800 /* ThreadScreen.swift in Sources */,
+				5009A22C081EF1C13EF83F93 /* Ticks.swift in Sources */,
 				A998B307891121EE4740E92B /* WatchChrome.swift in Sources */,
 				16291568B0CDAA4E96D4C1C7 /* WatchCodec.swift in Sources */,
 				706D1609828B95CDB6C0C14C /* WatchComplication.swift in Sources */,

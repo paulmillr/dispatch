@@ -325,3 +325,45 @@ fn unsafe_ids_run_without_files() {
     assert!(world.io.watches.is_empty(), "no path is made from an id that leaves the folder");
     assert_eq!(world.agents()[0].tokens, None);
 }
+
+fn shown(id: &str, kind: &str, started: Option<u64>) -> Agent {
+    Agent { id: id.into(), kind: kind.into(), name: None, tokens: None, started_ms: started }
+}
+
+fn launched(call: &str, agent: Option<&str>, kind: &str, started: Option<u64>) -> crate::history::Launched {
+    crate::history::Launched {
+        call: call.into(),
+        agent: agent.map(str::to_owned),
+        kind: kind.into(),
+        name: Some(format!("task {call}")),
+        started_ms: started,
+    }
+}
+
+/// A chat shows the hooks' agents and those the transcript says run that no SubagentStart reached
+/// this helper for (one started before the helper: a phone's, after it reconnected), oldest first;
+/// never the same agent twice, and none from before the agent's process.
+#[test]
+fn transcript_agents_fill_in_what_the_hooks_missed() {
+    let hooks = vec![
+        (shown("a2", "general-purpose", Some(2_000)), Some("toolu_2".to_owned())),
+        (shown("a3", "Explore", None), None),
+    ];
+    let transcript = [
+        // Before this helper: no hook named it.
+        launched("toolu_1", Some("a1"), "general-purpose", Some(1_000)),
+        // The hooks' a2, by its id and by its call.
+        launched("toolu_2", Some("a2"), "general-purpose", Some(2_000)),
+        // A foreground call of the kind of a hook agent whose meta is not read yet: that one.
+        launched("toolu_3", None, "Explore", Some(3_000)),
+        // A foreground call no hook agent can be.
+        launched("toolu_4", None, "Plan", Some(4_000)),
+        // A resumed conversation's, from before the process.
+        launched("toolu_0", Some("a0"), "general-purpose", Some(500)),
+    ];
+    let agents = merged(hooks, &transcript, Some(900));
+    let ids: Vec<_> = agents.iter().map(|a| (a.id.as_str(), a.kind.as_str())).collect();
+    assert_eq!(ids, [("a1", "general-purpose"), ("a2", "general-purpose"), ("toolu_4", "Plan"), ("a3", "Explore")]);
+    assert_eq!(agents[0].name.as_deref(), Some("task toolu_1"));
+    assert_eq!(agents[0].tokens, None, "its tokens are the hooks' to read");
+}

@@ -35,7 +35,7 @@ enum WatchCodec {
     // MARK: Fitting under the limits
 
     /// The snapshot as the phone sends it: texts clipped (`WatchLimits`); over `budget`, the hosts' CPU lines go, then the
-    /// rows' steps and requests are cut to `WatchLimits.short`; then, while the encoding still exceeds it, rows left out a
+    /// rows' steps, notes and requests are cut to `WatchLimits.short`; then, while the encoding still exceeds it, rows left out a
     /// tenth at a time, least useful on a wrist first: terminal tabs, then idle conversations and their tabs,
     /// then anything that does not need the user, oldest first in each; `truncated` set.
     static func fit(_ snapshot: WatchSnapshot, budget: Int = WatchLimits.snapshotBytes - WatchLimits.envelope) -> WatchSnapshot {
@@ -52,6 +52,7 @@ enum WatchCodec {
             fitted.conversations[index].name = WatchText.clip(fitted.conversations[index].name, to: WatchLimits.line)
             fitted.conversations[index].title = fitted.conversations[index].title.map { WatchText.clip($0, to: WatchLimits.line) }
             fitted.conversations[index].step = fitted.conversations[index].step.map { WatchText.clip($0, to: WatchLimits.preview) }
+            fitted.conversations[index].note = fitted.conversations[index].note.map(WatchText.preview)
             fitted.conversations[index].waitingText = fitted.conversations[index].waitingText.map(WatchText.preview)
         }
         for index in fitted.reviews.indices {
@@ -71,6 +72,7 @@ enum WatchCodec {
         if size(fitted) > budget {
             for index in fitted.conversations.indices {
                 fitted.conversations[index].step = fitted.conversations[index].step.map { WatchText.clip($0, to: WatchLimits.short) }
+                fitted.conversations[index].note = fitted.conversations[index].note.map { WatchText.clip($0, to: WatchLimits.short) }
                 fitted.conversations[index].waitingText = fitted.conversations[index].waitingText.map { WatchText.clip($0, to: WatchLimits.short) }
             }
         }
@@ -120,6 +122,7 @@ enum WatchCodec {
             let item = fitted.items[index]
             fitted.items[index].text = WatchText.clip(item.text, to: item.kind == .tool ? WatchLimits.line : WatchLimits.itemText)
             fitted.items[index].detail = item.detail.map { WatchText.clip($0, to: WatchLimits.line) }
+            fitted.items[index].quote = item.quote.map { WatchText.clip($0, to: WatchLimits.line) }
         }
         for index in fitted.approvals.indices {
             fitted.approvals[index].detail = fitted.approvals[index].detail.map { WatchText.clip($0, to: WatchLimits.detail) }
@@ -196,8 +199,17 @@ enum WatchText {
 enum WatchNotification {
     static let hostKey = "host"
     static let nodeKey = "node"
-    /// `RefreshNotification.categoryIdentifier`: the watch's notification scene registers for it.
+    /// `RefreshNotification.categoryIdentifier`: an agent needs you.
     static let category = "agent"
+    /// `RefreshNotification.finishedCategory`, `stoppedCategory`: an agent finished, or stopped.
+    static let finished = "agent.finished", stopped = "agent.stopped"
+    /// Every category the phone posts, with what a notification says while previews are hidden (Settings,
+    /// Notifications, Show Previews; the phone's only, watchOS has no placeholder). The phone registers these
+    /// (`RefreshNotification.categories`) and the watch app the same, each with a notification scene of its own, so all
+    /// three have the app's long look.
+    static let categories: [(identifier: String, placeholder: String)] = [
+        (category, "An agent needs you"), (finished, "An agent finished"), (stopped, "An agent stopped"),
+    ]
 
     static func key(_ userInfo: [AnyHashable: Any]) -> WatchConversationKey? {
         guard let host = userInfo[hostKey] as? String, UUID(uuidString: host) != nil,

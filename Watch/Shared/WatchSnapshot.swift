@@ -227,13 +227,21 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
     var lastActivity: Date?
     /// Last-known data (`ChatConversation.stale`): the row dims its time.
     var stale: Bool
-    /// The conversation's own title (`MobileChatSession.title`, else `ChatConversationSummary.title`), when the agent
-    /// named it: the watch's row and thread title (`displayTitle`); `name`, the row's automatic name, otherwise.
+    /// No longer sent: phones before the row's name took a renamed tab's name sent the agent's own title here, which
+    /// the watch put over `name`. The watch titles a row by `name` alone, as the phone does.
     var title: String?
-    /// While working: the current step as the phone's working row names it ("Editing Sidebar.tsx", "Running cargo
-    /// test"), else the agent's activity word; nil when the phone has not opened the conversation.
+    /// While working: the step as the phone's Agents row says it, "Run · 4 steps" (the step's kind and the steps since
+    /// the agent last wrote, then its running subagents, " · 2 agents"), else "Running shell command…" or "Working".
+    /// Phones before `note` sent the step's words here ("Editing Sidebar.tsx").
     var step: String?
-    /// When the running turn started (the phone's working clock), for "· 48s".
+    /// The step's kind as a symbol (`ChatStep.Kind.symbol`: "apple.terminal", "pencil.line"), shown before `step`;
+    /// nil when `step` is words.
+    var stepSymbol: String?
+    /// While working: what the agent last said in this turn, else the turn's prompt (`TabsStatus.note`, `asked`), the
+    /// line over the step; also for a row whose thread the phone has not opened (the host's list's newest message).
+    var note: String?
+    /// When the running turn started (the phone's working clock, `TabsStatus.since`), for the row's ticking time; also
+    /// for a row whose thread the phone has not opened, when the host's list saw the turn begin.
     var workingSince: Date?
     /// While it needs you: what it asks ("Allow cargo test --workspace?", the question's text), else its attention line.
     var waitingText: String?
@@ -241,7 +249,7 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
     init(host: String, node: String, name: String, space: String? = nil, tab: String? = nil, agent: String? = nil,
          preview: String? = nil, attention: String? = nil, dot: WatchDot? = nil, needsYou: Bool = false, busy: Bool = false,
          muted: Bool = false, lastActivity: Date? = nil, stale: Bool = false, title: String? = nil, step: String? = nil,
-         workingSince: Date? = nil, waitingText: String? = nil) {
+         stepSymbol: String? = nil, note: String? = nil, workingSince: Date? = nil, waitingText: String? = nil) {
         self.host = host
         self.node = node
         self.name = name
@@ -258,6 +266,8 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
         self.stale = stale
         self.title = title
         self.step = step
+        self.stepSymbol = stepSymbol
+        self.note = note
         self.workingSince = workingSince
         self.waitingText = waitingText
     }
@@ -265,8 +275,9 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
     var key: WatchConversationKey { WatchConversationKey(host: host, node: node) }
     var id: WatchConversationKey { key }
 
-    /// What the watch titles it by: the conversation's own title, else the row's name (the tab's).
-    var displayTitle: String { title?.isEmpty == false ? title! : name }
+    /// What the watch titles it by: the row's name as the phone's Agents row and chat header show it (a renamed tab's
+    /// name, else the agent's title, else the tab's), never `title` over it.
+    var displayTitle: String { name }
 }
 
 /// One space (`MobileSpace`, `SpacesSpaceRow`): a tmux session or a herdr workspace.
@@ -326,15 +337,19 @@ struct WatchTab: Codable, Equatable, Sendable, Identifiable {
     /// The agent pane's topology key (`MobileTab.agentPane.key`): tapping the tab opens this conversation's thread.
     var conversation: String?
     var urgency: WatchUrgency?
-    /// Line two of the row (`TabsTabLine.line` of `MobileComposition.status`'s words: "Editing Sidebar.tsx", "Allow cargo
-    /// test --workspace?", the last message; never a ticking time), clipped to `WatchLimits.line`.
+    /// Line two of the row (`TabsTabLine.line` of `MobileComposition.status`'s words: "Running shell command…", what the
+    /// agent last said while it works, "Allow cargo test --workspace?", the last message; never a ticking time), clipped
+    /// to `WatchLimits.line`.
     var status: String?
+    /// While its agent works, when the turn started (`TabsStatus.since`): the watch counts "· 48s" after `status`, as
+    /// the phone's tab row does.
+    var workingSince: Date?
     /// Its time (`MobileTabs.activity(of:)`).
     var activity: Date?
 
     init(host: String, space: String, key: String, name: String, program: String? = nil, folder: String? = nil,
          chat: Bool = false, agent: String? = nil, conversation: String? = nil, urgency: WatchUrgency? = nil,
-         status: String? = nil, activity: Date? = nil) {
+         status: String? = nil, workingSince: Date? = nil, activity: Date? = nil) {
         self.host = host
         self.space = space
         self.key = key
@@ -346,6 +361,7 @@ struct WatchTab: Codable, Equatable, Sendable, Identifiable {
         self.conversation = conversation
         self.urgency = urgency
         self.status = status
+        self.workingSince = workingSince
         self.activity = activity
     }
 

@@ -522,7 +522,8 @@ struct SpacesAgentLauncher {
 
 /// P2's tab row: the state dot (blue needs you or unseen, amber working), the agent's mark or a terminal, the title as
 /// the Mac strip names it, the time and a chevron; under it what the tab is doing (the question or approval in the
-/// primary colour while it waits). The tab shown last is "open" to VoiceOver only. Edit mode (P2d) drops the dot and
+/// primary colour while it waits). While its agent works, as an Agents row: the time column counts the turn in amber
+/// (`TabsTurnClock`) and the line is what the agent last said in the turn, else its step (`AgentProgressLine`). The tab shown last is "open" to VoiceOver only. Edit mode (P2d) drops the dot and
 /// the time for the list's controls, and the title becomes a field that renames the tab (`rename`).
 struct SpaceTabRow: View {
     let entry: TabsEntry
@@ -557,7 +558,14 @@ struct SpaceTabRow: View {
                         Text(entry.label).font(.headline).lineLimit(1).truncationMode(.tail)
                     }
                     Spacer(minLength: 2)
-                    if !editing, let time = TabsTime.label(entry.activity, now: now) {
+                    if !editing, let since = working {
+                        TabsTurnClock(since: since, stale: entry.host.stale)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .layoutPriority(1)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { timeWidth?($0) }
+                    } else if !editing, let time = TabsTime.label(entry.activity, now: now) {
                         Text(time)
                             .font(.subheadline)
                             .foregroundStyle(entry.host.stale ? .tertiary : .secondary)
@@ -568,10 +576,17 @@ struct SpaceTabRow: View {
                     }
                 }
                 if let line {
-                    TabsStatusText(status: line)
-                        .font(.subheadline)
-                        .foregroundStyle(entry.urgency == .needsYou ? Color.primary : .secondary)
-                        .lineLimit(1)
+                    Group {
+                        if working != nil {
+                            // The time is the column's: the line says what the agent said, else its step.
+                            if let note = line.note { Text(note) } else { AgentProgressLine(status: line) }
+                        } else {
+                            TabsStatusText(status: line)
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(entry.urgency == .needsYou ? Color.primary : .secondary)
+                    .lineLimit(1)
                 }
             }
         }
@@ -584,6 +599,9 @@ struct SpaceTabRow: View {
 
     @Environment(\.tabsShownTab) private var shown
     @Environment(\.tabsRowTimeWidth) private var timeWidth
+
+    /// The turn's start while the tab's agent works: the time column counts it.
+    private var working: Date? { entry.urgency == .working ? line?.since : nil }
 
     /// "Needs you, Allow cargo test --workspace?, 2:51 AM", "open, ~/src/app".
     static func value(entry: TabsEntry, line: TabsStatus?, open: Bool, now: Date) -> String {
@@ -726,8 +744,8 @@ struct SpaceTabNameField: View {
 /// A tab's one-line state where the space and folder are said elsewhere (the watch's tab rows): an ended shell's end,
 /// what its agent is doing (from Chat), else the program running when the name is not already it; a bare shell has none.
 enum TabsTabLine {
-    /// The words only: the watch counts a working agent's time from its rows' `workingSince`, so the snapshot does not
-    /// change every second.
+    /// The words only: the watch counts a working agent's time from the tab's `WatchTab.workingSince`, so the snapshot
+    /// does not change every second.
     @MainActor static func line(_ tab: MobileTab, label: String, status: @MainActor (UUID, UInt64) -> TabsStatus?) -> String? {
         if let shell = tab.shell { return shell.summary }
         if let pane = tab.agentPane, let line = status(tab.ref.host, pane.id) { return line.note ?? line.text }
@@ -757,7 +775,7 @@ struct TabsStatusText: View {
 
     @ViewBuilder private func line(_ text: String) -> some View {
         if let since = status.since {
-            TimelineView(.periodic(from: since, by: 1)) { context in
+            TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                 Text(Self.text(text, since: since, now: context.date))
             }
         } else {

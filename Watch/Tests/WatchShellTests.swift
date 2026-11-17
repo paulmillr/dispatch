@@ -138,9 +138,11 @@ final class WatchShellTests: XCTestCase {
         XCTAssertNil(WatchNotifications.key(argument: WatchFixtures.lab))
     }
 
-    func testTheNotificationCategoryIsThePhones() {
-        XCTAssertEqual(WatchNotifications.category.identifier, "agent")
-        XCTAssertTrue(WatchNotifications.category.actions.isEmpty)
+    /// All three of the phone's categories (needs you, finished, stopped), none with actions.
+    func testTheNotificationCategoriesAreThePhones() {
+        let categories = WatchNotifications.categories
+        XCTAssertEqual(Set(categories.map(\.identifier)), ["agent", "agent.finished", "agent.stopped"])
+        XCTAssertTrue(categories.allSatisfy { $0.actions.isEmpty })
     }
 
     func testDebugShowArgumentsOpenSpacesScreens() {

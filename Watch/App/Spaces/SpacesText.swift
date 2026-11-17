@@ -77,10 +77,18 @@ enum SpacesText {
     /// The tab's line two, as the phone's row (`SpacesTabRow.line`): what its agent is doing, else the program when the
     /// name is not already it; a bare shell has none.
     static func line(_ tab: WatchTab) -> String? {
-        if let status = tab.status, !status.isEmpty { return status }
+        if let status = tab.status, !status.isEmpty { return fallbacks[status] ?? status }
         if let program = tab.program, program != tab.name { return program }
         return nil
     }
+
+    /// A working tab's line with its turn's time: "Running shell command… · 48s" (`TabsStatusText.text`).
+    static func line(_ line: String, since: Date, now: Date) -> String {
+        line + " · " + WatchTime.elapsed(now.timeIntervalSince(since))
+    }
+
+    /// The phone's status words when it knows nothing more (`MobileComposition.status`), as its Agents rows say them.
+    static let fallbacks = ["working": "Working", "needs you": "Needs you"]
 
     /// The row's glyph, as the phone's tab rows draw it (`AgentGlyph`): the Chat segment's capsule for a chat tab, the
     /// terminal for any other. Drawn with `Image(symbol:)`.

@@ -102,6 +102,11 @@ final class WatchSpacesViewTests: XCTestCase {
         XCTAssertEqual(SpacesText.line(WatchTab(host: lab, space: "s", key: "t", name: "train", program: "python")), "python")
         XCTAssertNil(SpacesText.line(WatchTab(host: lab, space: "s", key: "t", name: "zsh", program: "zsh")))
         XCTAssertNil(SpacesText.line(WatchTab(host: lab, space: "s", key: "t", name: "zsh", status: "")))
+        // The phone's fallback words read as its rows say them; a working agent's line counts its turn.
+        XCTAssertEqual(SpacesText.line(WatchTab(host: lab, space: "s", key: "t", name: "claude", status: "working")), "Working")
+        let since = Date(timeIntervalSince1970: 1_792_000_000)
+        XCTAssertEqual(SpacesText.line("Running shell command…", since: since, now: since.addingTimeInterval(48)),
+                       "Running shell command… · 48s")
     }
 
     /// An agent's tab opens its thread; any other tab (a chat tab whose agent pane is unknown too) its own screen.

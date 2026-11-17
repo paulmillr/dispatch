@@ -95,14 +95,14 @@ final class WatchRouter {
 }
 
 /// The phone's agent notifications on the watch (docs/watch.md, Behaviour, Notifications). iOS forwards them while the
-/// phone is locked and the watch worn; the watch app registers category `agent` (`WatchNotification.category`, no
-/// actions: an approval belongs to a live subscription), and a tap whose `userInfo` names a conversation opens its
-/// thread through `WatchRouter`.
+/// phone is locked and the watch worn; the watch app registers the phone's categories (`WatchNotification.categories`:
+/// needs you, finished, stopped; no actions: an approval belongs to a live subscription), and a tap whose `userInfo`
+/// names a conversation opens its thread through `WatchRouter`.
 final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.setNotificationCategories([WatchNotifications.category])
+        center.setNotificationCategories(WatchNotifications.categories)
         #if DEBUG
         WatchNotifications.debugHooks(arguments: ProcessInfo.processInfo.arguments)
         #endif
@@ -122,8 +122,11 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
 }
 
 enum WatchNotifications {
-    static var category: UNNotificationCategory {
-        UNNotificationCategory(identifier: WatchNotification.category, actions: [], intentIdentifiers: [])
+    /// The phone's categories (`RefreshNotification.categories`). watchOS has no hidden-preview placeholder.
+    static var categories: Set<UNNotificationCategory> {
+        Set(WatchNotification.categories.map { identifier, _ in
+            UNNotificationCategory(identifier: identifier, actions: [], intentIdentifiers: [])
+        })
     }
 
     /// `host/node` (a debug argument's form) as a conversation key; the host must be a UUID, as `WatchNotification.key`

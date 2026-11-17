@@ -34,7 +34,7 @@ struct ChatLinkBanner: View {
                     Text(title).font(.footnote.weight(.semibold)).fittingLine()
                     Spacer(minLength: 4)
                     if case .reconnecting(_, let since, _) = link {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                        TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                             Text(ChatTurnSummary.elapsed(context.date.timeIntervalSince(since)))
                                 .monospacedDigit()
                                 .foregroundStyle(Self.amber.opacity(0.7))

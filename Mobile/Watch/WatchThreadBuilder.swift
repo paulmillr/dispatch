@@ -56,7 +56,8 @@ enum WatchThreadBuilder {
                 }
                 switch item.kind {
                 case .user:
-                    result.append(WatchItem(id: id, kind: .user, text: Self.userText(item), time: time, turn: turn.id))
+                    result.append(WatchItem(id: id, kind: .user, text: Self.userText(item), time: time, turn: turn.id,
+                                            quote: Self.quote(item)))
                 case .assistant:
                     if index == lastAgent, turn.ended != nil {
                         let summary = ChatTurnSummary(turn)
@@ -74,7 +75,7 @@ enum WatchThreadBuilder {
             }
         }
         if let prompt = session.optimisticPrompt {
-            result.append(WatchItem(id: prompt.id, kind: .user, text: Self.userText(prompt)))
+            result.append(WatchItem(id: prompt.id, kind: .user, text: Self.userText(prompt), quote: Self.quote(prompt)))
         }
         return folded(result)
     }
@@ -108,13 +109,19 @@ enum WatchThreadBuilder {
                                 deletions: deletions)
     }
 
-    /// A user message's text; one with attachments starts with a line that names them ("📎 2 images"): the watch shows
-    /// text only.
+    /// A user message's text without a reply's quote (`quote`); one with attachments starts with a line that names them
+    /// ("📎 2 images"): the watch shows text only.
     static func userText(_ item: ChatItem) -> String {
-        let text = WatchText.plain(item.text)
+        let text = WatchText.plain(ChatReplyQuote.split(item.text)?.body ?? item.text)
         guard !item.attachments.isEmpty else { return text }
         let line = "📎 " + ChatAttachmentSummary.text(item.attachments)
         return text.isEmpty ? line : line + "\n" + text
+    }
+
+    /// The words a reply quotes (`ChatReplyQuote.split`: its leading "> " lines), shown as a card on the bubble as the
+    /// phone shows it; `userText` is then the rest.
+    static func quote(_ item: ChatItem) -> String? {
+        ChatReplyQuote.split(item.text).map { WatchText.preview($0.quote) }
     }
 
     /// Verified is live; detached is offline with the host's problem (or `offline`, the phone's own reason).

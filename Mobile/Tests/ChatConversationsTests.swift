@@ -979,7 +979,9 @@ final class ChatConversationsTests: XCTestCase {
         relaunched.archive = reread
         relaunched.update(snapshot(bound, link: .disconnected))
         let offline = relaunched.session(for: key)
+        XCTAssertTrue(relaunched.readingArchive.contains(key), "being read: a watch's thread request waits for it")
         try await TestSupport.eventually { offline.seeded }
+        try await TestSupport.eventually { !relaunched.readingArchive.contains(key) }
         XCTAssertEqual(offline.transcript.rows.map(\.id), rows.map(\.id), "what it showed")
         XCTAssertNotNil(offline.savedAt)
         relaunched.remove(host: host)

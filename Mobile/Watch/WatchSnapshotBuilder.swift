@@ -107,26 +107,22 @@ struct WatchSnapshotBuilder {
 
     // MARK: Agents
 
+    /// A row as the phone's Agents row says it (`AgentRow`): working, what the agent last said (else its prompt) over the
+    /// step's kind and count, timed from the turn's start; from the open thread, else from the host's list
+    /// (`MobileComposition.status`), so a row the phone has not opened still says what it can. The name is the row's
+    /// (a renamed tab's name first); `title` is not sent.
     func conversation(_ row: ChatConversation) -> WatchConversation {
         let summary = row.summary
         let session = composition.conversations.sessions[row.key]
-        let working = session.map { $0.phase == .verified && $0.working } ?? false
+        let status = row.urgency == .running ? MobileComposition.status(row, session: session, detail: false) : nil
         return WatchConversation(
             host: row.key.host.uuidString, node: row.key.node, name: row.name, space: row.space,
             tab: composition.tab(for: row.key)?.key, agent: agent(row.key, binding: row.binding),
             preview: summary.preview.map(WatchText.preview), attention: summary.attention, dot: row.dot.map(WatchDot.init),
             needsYou: summary.needsYou, busy: summary.busy, muted: row.muted, lastActivity: summary.lastActivity, stale: row.stale,
-            title: session?.title ?? summary.title, step: working ? session.flatMap { Self.step($0, directory: row.cwd) } : nil,
-            workingSince: working ? session.flatMap(Self.started) : nil,
+            step: status.map(AgentRow.progress), stepSymbol: status.flatMap(AgentRow.progressSymbol),
+            note: status.flatMap { $0.note ?? $0.asked }.map(WatchText.preview), workingSince: status?.since,
             waitingText: session.flatMap(Self.waiting) ?? (summary.needsYou ? summary.attention : nil))
-    }
-
-    /// What the agent is doing now, as the phone's working row shows it: the open turn's running step (else its latest),
-    /// "Editing Sidebar.tsx"; else the agent's activity word.
-    static func step(_ session: MobileChatSession, directory: String?) -> String? {
-        let steps = session.transcript.openTurn.map { ChatStep.steps($0, directory: directory, reasoning: false) } ?? []
-        if let step = steps.last(where: \.running) ?? steps.last { return phrase(step) }
-        return session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() }
     }
 
     /// "Editing Sidebar.tsx", "Reading README.md", "Running cargo test", "Searching fn drain": the step's kind as a verb and
@@ -184,14 +180,6 @@ struct WatchSnapshotBuilder {
             return "Allow a tool call?"
         }
         return text
-    }
-
-    /// When the running turn started: the prompt this phone sent, else the turn's start, else when the agent began
-    /// working (`ChatWorkingRow`'s clock).
-    static func started(_ session: MobileChatSession) -> Date? {
-        if let sent = session.submittedAt { return sent }
-        if let turn = session.transcript.openTurn, turn.started.timeIntervalSince1970 > 0 { return turn.started }
-        return session.workingSince
     }
 
     /// What a waiting agent asks: its first pending approval ("Allow cargo test --workspace?" for a command, file, URL
@@ -253,7 +241,9 @@ struct WatchSnapshotBuilder {
                                     program: tab.program, folder: workspace.host.abbreviate(tab.cwd), chat: tab.isChat,
                                     agent: pane.flatMap { agent(ChatConversationKey(host: workspace.id, node: $0.key), binding: $0.agent) },
                                     conversation: pane?.key, urgency: model.urgency(of: tab).map(WatchUrgency.init),
-                                    status: TabsTabLine.line(tab, label: label, status: model.status), activity: model.activity(of: tab))
+                                    status: TabsTabLine.line(tab, label: label, status: model.status),
+                                    workingSince: tab.shell == nil ? pane.flatMap { model.status(workspace.id, $0.id)?.since } : nil,
+                                    activity: model.activity(of: tab))
                 }
             }
         }

@@ -58,16 +58,16 @@ struct RefreshNotification: Equatable, Sendable {
 
 extension RefreshNotification {
     /// The categories, one per event: with previews hidden (Settings, Notifications, Show Previews), the lock screen
-    /// shows only the placeholder, neither the agent's last line nor the tab and host. `agent` (needs you) is the
-    /// category the watch's long look registers.
+    /// shows only the placeholder, neither the agent's last line nor the tab and host. Shared with the watch
+    /// (`WatchNotification.categories`), whose long look registers all three.
     static var categories: Set<UNNotificationCategory> {
-        Set([(categoryIdentifier, "An agent needs you"), (finishedCategory, "An agent finished"),
-             (stoppedCategory, "An agent stopped")].map { identifier, placeholder in
+        Set(WatchNotification.categories.map { identifier, placeholder in
             UNNotificationCategory(identifier: identifier, actions: [], intentIdentifiers: [],
                                    hiddenPreviewsBodyPlaceholder: placeholder, options: [])
         })
     }
-    static let categoryIdentifier = "agent", finishedCategory = "agent.finished", stoppedCategory = "agent.stopped"
+    static let categoryIdentifier = WatchNotification.category, finishedCategory = WatchNotification.finished,
+               stoppedCategory = WatchNotification.stopped
 
     var category: String {
         switch event {

@@ -226,7 +226,9 @@ final class WatchRequestServer {
             return .failure(Self.noConversation)
         }
         let session = conversations.session(for: chat)
-        await until(deadline) { Self.settled(session, host: host) }
+        // A host not reached: the copy saved on the phone is read off the main thread first (Keep history on this
+        // iPhone), so the page holds what the phone's thread shows rather than nothing.
+        await until(deadline) { Self.settled(session, host: host) && !conversations.readingArchive.contains(chat) }
         // Input waits for the terminal to attach (the composer queues meanwhile): a moment, not the budget.
         if session.phase == .verified {
             await until(min(deadline, ContinuousClock.now.advanced(by: grace))) { session.terminalAttached }

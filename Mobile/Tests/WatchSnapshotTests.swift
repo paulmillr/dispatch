@@ -106,7 +106,39 @@ final class WatchSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded, snapshot)
     }
 
-    /// The redesign's fields: a row's own title, the hosts' statistics from the stats source (the phone's store; here
+    /// A working row the phone has not opened says what the host's list saw, as the phone's Agents row: the agent's
+    /// newest words in the turn and the turn's start, "Working…" for the step; an open thread's step by its kind and count.
+    func testAWorkingRowSaysWhatThePhonesRowSays() async throws {
+        let (app, studio, _) = try await Self.fixture(self)
+        let started = Date(timeIntervalSince1970: 1_800_000_900)
+        var row = ChatConversation(key: ChatConversationKey(host: studio.id, node: "p:x"), terminal: 7, hostName: "studio", name: "claude",
+                                   space: "app", spaceNode: nil, cwd: nil,
+                                   binding: HelperTopology.Binding(session: "s", transcript: nil, pid: nil, start: nil, executable: nil),
+                                   summary: ChatConversationSummary(busy: true), urgency: PaneUrgency(waiting: false, working: true, unread: false),
+                                   muted: false, unread: false)
+        row.workingNote = "Tests pass, now the docs"
+        row.workingSince = started
+        let working = WatchSnapshotBuilder(composition: app).conversation(row)
+        XCTAssertEqual(working.note, "Tests pass, now the docs")
+        XCTAssertEqual(working.workingSince, started)
+        XCTAssertEqual(working.step, "Working…")
+        XCTAssertNil(working.stepSymbol)
+        XCTAssertNil(working.title)
+
+        row.urgency = PaneUrgency(waiting: false, working: false, unread: false)
+        let idle = WatchSnapshotBuilder(composition: app).conversation(row)
+        XCTAssertNil(idle.note)
+        XCTAssertNil(idle.workingSince)
+        XCTAssertNil(idle.step)
+
+        let status = TabsStatus(text: "Running shell command…", kind: .run, steps: 4, agents: 2)
+        XCTAssertEqual(AgentRow.progress(status), "Run · 4 steps · 2 agents")
+        XCTAssertEqual(AgentRow.progressSymbol(status), "apple.terminal")
+        XCTAssertEqual(AgentRow.progress(TabsStatus(text: "working")), "Working…")
+        XCTAssertNil(AgentRow.progressSymbol(TabsStatus(text: "working")))
+    }
+
+    /// The redesign's fields: a row's name, the hosts' statistics from the stats source (the phone's store; here
     /// the sample's), the latency of a connected host and since when one is offline, the reviews whose Undo is open.
     func testRowsTitlesHostStatisticsAndReviews() async throws {
         let (app, studio, lab) = try await Self.fixture(self)
@@ -120,7 +152,8 @@ final class WatchSnapshotTests: XCTestCase {
                      comments: 3, files: 2, window: 8) { true }
         let snapshot = WatchSnapshotBuilder(composition: app, stats: stats, reviews: reviews).build(at: now)
 
-        XCTAssertEqual(snapshot.conversations[0].title, "Billing migration", "the conversation's own title")
+        XCTAssertEqual(snapshot.conversations[0].name, "Billing migration", "an unrenamed tab is named by its agent's title")
+        XCTAssertNil(snapshot.conversations[0].title, "not sent: the watch titles a row by its name, as the phone")
         XCTAssertNil(snapshot.conversations[1].title)
         XCTAssertNil(snapshot.conversations[0].step, "not working")
         XCTAssertNil(snapshot.conversations[0].waitingText, "no session open and no attention line: the watch says Needs you")

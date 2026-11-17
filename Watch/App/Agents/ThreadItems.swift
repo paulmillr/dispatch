@@ -12,7 +12,17 @@ struct ThreadItemRow: View {
         Group {
             switch item.kind {
             case .user:
-                ThreadBubble(side: .user) { Text(item.text) }
+                ThreadBubble(side: .user) {
+                    // A reply: its quote as a card on top, the user's words under it (the phone's Y1b).
+                    if let quote = item.quote {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ThreadQuoteCard(quote: quote)
+                            Text(item.text)
+                        }
+                    } else {
+                        Text(item.text)
+                    }
+                }
             case .agent:
                 VStack(alignment: .leading, spacing: 2) {
                     ThreadBubble(side: .agent) { Text(item.text) }
@@ -37,11 +47,30 @@ struct ThreadItemRow: View {
 
     static func accessibilityLabel(_ item: WatchItem, agent: String?) -> String {
         switch item.kind {
-        case .user: return "You: " + item.text
+        case .user:
+            let quote = item.quote.map { "Replying to \($0): " } ?? ""
+            return "You: " + quote + item.text
         case .agent: return [(agent ?? "Agent") + ": " + item.text, item.caption].compactMap { $0 }.joined(separator: ", ")
         case .thinking: return (agent ?? "Agent") + ": " + item.text
         case .tool, .notice, .unknown: return item.text
         }
+    }
+}
+
+/// A reply's quote on top of the user's bubble, as the phone's `ChatReplyQuoteCard` at watch size: a bar, the quoted
+/// words on two lines, a faint fill of the bubble's text colour.
+struct ThreadQuoteCard: View {
+    let quote: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 5) {
+            Capsule().fill(.foreground.opacity(0.55)).frame(width: 2)
+            Text(quote).font(.caption2).lineLimit(2).opacity(0.8)
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(.foreground.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -83,7 +112,7 @@ struct ThreadWorkingRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
+            TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
                 HStack(spacing: 6) {
                     Image(systemName: "circle.fill")
                         .font(.system(size: 7))

@@ -10,23 +10,25 @@ struct SpaceScreen: View {
     private var space: WatchSection.Space? { section?.spaces.first { $0.space.key == route.space } }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            List {
-                if let section, let space {
-                    Section {
-                        ForEach(space.tabs) { tab in
+        List {
+            if let section, let space {
+                Section {
+                    ForEach(space.tabs) { tab in
+                        // Each row keeps its own clock (docs/watch.md, Clocks in lists): a working agent's tab ticks
+                        // its seconds inside the row, which a clock around the List would relay out at full CPU.
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
                             SpaceTabLink(tab: tab, stale: section.host.stale, now: context.date)
                         }
-                        if space.tabs.isEmpty {
-                            Text(SpacesText.noTabs).font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
-                        }
-                    } header: {
-                        SpaceHeader(host: section.host, space: space.space)
                     }
-                } else {
-                    // The space closed (or the host left the phone) while it was on screen.
-                    Text("This space has closed.").font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
+                    if space.tabs.isEmpty {
+                        Text(SpacesText.noTabs).font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
+                    }
+                } header: {
+                    SpaceHeader(host: section.host, space: space.space)
                 }
+            } else {
+                // The space closed (or the host left the phone) while it was on screen.
+                Text("This space has closed.").font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
             }
         }
         .navigationTitle(space?.space.name ?? "Space")
@@ -65,7 +67,7 @@ struct SpaceTabLink: View {
     }
 }
 
-/// A tab: gutter dot, kind glyph, name (two lines), its line two, the time.
+/// A tab: gutter dot, kind glyph, name (two lines), its line two (with its agent's turn time while it works), the time.
 struct SpaceTabRow: View {
     let tab: WatchTab
     let stale: Bool
@@ -90,7 +92,13 @@ struct SpaceTabRow: View {
                             .fixedSize()
                     }
                 }
-                if let line = SpacesText.line(tab) {
+                if let since = tab.workingSince, let line = SpacesText.line(tab) {
+                    // While its agent works: "Running shell command… · 48s", as the phone's tab row.
+                    TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
+                        Text(SpacesText.line(line, since: since, now: context.date))
+                            .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                } else if let line = SpacesText.line(tab) {
                     Text(line).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 }
             }

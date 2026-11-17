@@ -625,14 +625,14 @@ final class MobileComposition {
                          features: Set(session.hello?.features ?? []), live: session.topologyIsLive)
     }
 
-    /// A chat tab's line in Spaces (P2, P3) and the watch's tab rows: while the agent works, its current step and when
-    /// its turn started (the rows count "· 48s" from it; the watch's agent rows send the same `step` and
-    /// `workingSince`); while it waits, the approval or question ("Allow cargo test --workspace?", as the watch's
-    /// `waitingText`); once done, its last message. The model stays in the chat; the agent is the row's mark. Reads
-    /// the session's cached step (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row.
-    /// `detail` false (Agents and Spaces): the step by its kind only ("Running shell command…"), never the command or
-    /// file (the watch's tab rows too; its agent rows keep the step's words). While working, `note` is what the agent last said in the turn: the open
-    /// thread's, else the host's list's newest message when it is newer than the turn's start (`ChatConversation`).
+    /// A chat tab's line in Spaces (P2, P3), Agents' rows and the watch's rows: while the agent works, its current step
+    /// and when its turn started (the rows count "· 48s" from it, the watch's from `workingSince`); while it waits, the
+    /// approval or question ("Allow cargo test --workspace?", as the watch's `waitingText`); once done, its last
+    /// message. The model stays in the chat; the agent is the row's mark. Reads the session's cached step
+    /// (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row. `detail` false (Agents,
+    /// Spaces and the watch): the step by its kind only ("Running shell command…"), never the command or file. While
+    /// working, `note` is what the agent last said in the turn: the open thread's, else the host's list's newest message
+    /// when it is newer than the turn's start (`ChatConversation`).
     static func status(_ row: ChatConversation, session: MobileChatSession?, detail: Bool = true) -> TabsStatus? {
         if let session, session.phase == .verified {
             if session.waitingForUser { return TabsStatus(text: WatchSnapshotBuilder.waiting(session) ?? "needs you") }

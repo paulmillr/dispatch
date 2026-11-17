@@ -24,6 +24,8 @@ pub(super) struct Subagent {
     id: String,
     kind: String,
     name: Option<String>,
+    /// The call that started it (its meta's "toolUseId"), so the transcript's record of it is this one.
+    call: Option<String>,
     /// Meta reads that found no name; at MISSES the meta file is not asked for again.
     misses: u8,
     started_ms: Option<u64>,
@@ -46,6 +48,7 @@ impl Subagent {
             id: id.to_owned(),
             kind: kind.to_owned(),
             name: None,
+            call: None,
             misses: 0,
             started_ms: None,
             calls: BTreeMap::new(),
@@ -98,6 +101,45 @@ fn name(bytes: &[u8]) -> Option<String> {
     (!description.is_empty()).then(|| description.chars().take(NAME).collect())
 }
 
+/// The call that started the agent, in a meta file: its "toolUseId".
+fn call(bytes: &[u8]) -> Option<String> {
+    let document = Json::parse(bytes).ok()?;
+    text(document.root(), "toolUseId").map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
+/// The running agents a chat shows: the hooks' (SubagentStart until SubagentStop), then those the
+/// transcript says run that no hook reached this helper for (a helper started after their
+/// SubagentStart: a phone's, after it reconnected), oldest first. A transcript agent is the hooks'
+/// when its agent id is one of theirs or its call is one a hook agent's meta names; a foreground call
+/// waiting for its result is taken for a hook agent of its kind whose call is not read yet. One that
+/// started before the agent's process (`since`, a resumed conversation's) ended with that process.
+pub(super) fn merged(hooks: Vec<(Agent, Option<String>)>, launched: &[crate::history::Launched], since: Option<u64>) -> Vec<Agent> {
+    let unread: Vec<&str> = hooks.iter().filter(|(_, call)| call.is_none()).map(|(agent, _)| agent.kind.as_str()).collect();
+    let mut agents: Vec<Agent> = Vec::with_capacity(hooks.len() + launched.len());
+    let mut extra = Vec::new();
+    for entry in launched {
+        let hooked = hooks.iter().any(|(agent, call)| {
+            entry.agent.as_deref() == Some(agent.id.as_str()) || call.as_deref() == Some(entry.call.as_str())
+        }) || (entry.agent.is_none() && unread.contains(&entry.kind.as_str()));
+        let before = since.is_some_and(|since| entry.started_ms.is_some_and(|ms| ms < since));
+        if hooked || before {
+            continue;
+        }
+        extra.push(Agent {
+            id: entry.agent.clone().unwrap_or_else(|| entry.call.clone()),
+            kind: entry.kind.clone(),
+            name: entry.name.clone(),
+            tokens: None,
+            started_ms: entry.started_ms,
+        });
+    }
+    agents.extend(hooks.into_iter().map(|(agent, _)| agent));
+    agents.extend(extra);
+    // Oldest first; an agent whose start is not known yet stays where it is among those after.
+    agents.sort_by_key(|agent| agent.started_ms.unwrap_or(u64::MAX));
+    agents
+}
+
 /// An agent id Claude could name a file with: nothing that leaves the subagents folder.
 fn safe(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -122,8 +164,16 @@ pub(super) struct Subagents {
 }
 
 impl Subagents {
+    #[cfg(test)]
     pub(super) fn agents(&self, session: &str) -> Vec<Agent> {
         self.running.get(session).map(|agents| agents.iter().map(Subagent::agent).collect()).unwrap_or_default()
+    }
+    /// The hooks' agents with the call each one's meta names (None until read).
+    pub(super) fn hooked(&self, session: &str) -> Vec<(Agent, Option<String>)> {
+        self.running
+            .get(session)
+            .map(|agents| agents.iter().map(|a| (a.agent(), a.call.clone())).collect())
+            .unwrap_or_default()
     }
     fn agent(&mut self, session: &str, id: &str) -> Option<&mut Subagent> {
         self.running.get_mut(session)?.iter_mut().find(|a| a.id == id)
@@ -318,11 +368,15 @@ impl Claude {
             }
             Step::Meta => {
                 // Not written yet: the transcript's next change asks again.
-                let named = match result {
-                    Ok(Output::Read { bytes, .. }) => name(&bytes),
-                    _ => None,
+                let (named, called) = match result {
+                    Ok(Output::Read { bytes, .. }) => (name(&bytes), call(&bytes)),
+                    _ => (None, None),
                 };
-                let changed = named.is_some();
+                // A call learned can take a transcript agent shown beside it away (`merged`).
+                let changed = named.is_some() || (called.is_some() && agent.call != called);
+                if called.is_some() {
+                    agent.call = called;
+                }
                 if named.is_none() {
                     agent.misses += 1;
                 }

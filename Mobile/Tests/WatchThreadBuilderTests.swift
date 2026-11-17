@@ -68,8 +68,8 @@ final class WatchThreadBuilderTests: XCTestCase {
         }
     }
 
-    /// What a row says while the agent works (K1): the open turn's step as a verb and what it acts on; the agent's
-    /// activity word without one; while it waits, its approval's command.
+    /// The open turn's step as a verb and what it acts on (Spaces' detail line); while the agent waits, its approval's
+    /// command.
     func testTheRowsStepAndQuestionComeFromTheSession() async throws {
         let helper = ScriptedHelper()
         let chat = try await opened(helper, records: ChatFixture.records("claude-thread"))
@@ -85,8 +85,7 @@ final class WatchThreadBuilderTests: XCTestCase {
 
         let busy = ScriptedHelper()
         let working = try await opened(busy, records: [], state: ChatFixture.state(busy: true, activity: "reading files"))
-        XCTAssertEqual(WatchSnapshotBuilder.step(working, directory: nil), "Reading files")
-        XCTAssertNotNil(WatchSnapshotBuilder.started(working))
+        XCTAssertEqual(working.currentStep ?? working.activity, "reading files")
         let id = try XCTUnwrap(busy.subscription("chat.open"))
         busy.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval(options: ["Allow", "Deny"])])
         try await TestSupport.eventually { working.approvals.count == 1 }
@@ -127,7 +126,8 @@ final class WatchThreadBuilderTests: XCTestCase {
                                    muted: false, unread: false)
         let status = try XCTUnwrap(MobileComposition.status(row, session: working))
         XCTAssertEqual(status.text, "Reading files", "the words: no time in them")
-        XCTAssertEqual(status.since, WatchSnapshotBuilder.started(working), "counted from the watch's workingSince")
+        XCTAssertEqual(status.since, working.submittedAt ?? working.openTurnStarted ?? working.workingSince,
+                       "counted from the turn's start, as the watch's workingSince")
         let since = try XCTUnwrap(status.since)
         XCTAssertEqual(TabsStatusText.text(status, now: since.addingTimeInterval(48)), "Reading files · 48s")
         XCTAssertEqual(TabsStatusText.text(status, now: since.addingTimeInterval(49)), "Reading files · 49s", "ticks")
@@ -141,6 +141,17 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(WatchSnapshotBuilder.gist(.run, title: "rm -f /srv/app/cache"), "Running shell command…")
         XCTAssertEqual(WatchSnapshotBuilder.gist(.read, title: "Sources/a.swift"), "Reading file…")
         XCTAssertEqual(WatchSnapshotBuilder.gist(.read, title: "a.swift, b.swift"), "Reading files…")
+    }
+
+    /// A reply's leading quote is its own field, shown as a card on the bubble as the phone shows it; the text is the
+    /// user's words alone. A message that only starts with "> " lines and nothing after stays as it is.
+    func testAReplysQuoteIsApartFromTheUsersWords() {
+        let reply = ChatItem(id: "u", kind: .user, text: ChatReplyQuote.compose(quote: "Tests pass.", text: "Now **the docs**"))
+        XCTAssertEqual(WatchThreadBuilder.quote(reply), "Tests pass.")
+        XCTAssertEqual(WatchThreadBuilder.userText(reply), "Now the docs")
+        let plain = ChatItem(id: "p", kind: .user, text: "> just a quote")
+        XCTAssertNil(WatchThreadBuilder.quote(plain))
+        XCTAssertEqual(WatchThreadBuilder.userText(plain), "just a quote")
     }
 
     /// The newest `limit` items; `earlier` when more exist, here or on the host. The page survives the wire and fits a

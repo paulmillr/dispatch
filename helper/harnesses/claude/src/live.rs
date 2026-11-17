@@ -11,7 +11,10 @@ impl Claude {
             return Err(error("state", "Claude state is not loaded"));
         }
         let mut state = cache.map(|c| c.parser.state.clone()).unwrap_or_default();
-        state.agents = self.subagents.agents(&binding.session);
+        // The hooks' agents, and those the transcript says run that no SubagentStart reached this helper for.
+        let launched = cache.map(|c| c.parser.launched.as_slice()).unwrap_or_default();
+        let since = registration.and_then(|r| r.started_ms);
+        state.agents = subagents::merged(self.subagents.hooked(&binding.session), launched, since);
         if let Some(registration) = registration {
             // A resumed transcript's shells that never ended died with the process that ran them.
             if let Some(started) = registration.started_ms {

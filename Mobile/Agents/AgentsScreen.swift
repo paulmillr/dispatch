@@ -470,11 +470,7 @@ struct AgentRow: View {
     /// The turn's elapsed time while it runs (amber, every second), else when it last changed.
     @ViewBuilder private var time: some View {
         if let since = running {
-            TimelineView(.periodic(from: since, by: 1)) { context in
-                Text(TabsTime.elapsed(context.date.timeIntervalSince(since)))
-                    .monospacedDigit()
-                    .foregroundStyle(row.stale ? Color.secondary : Color.stateWorking)
-            }
+            TabsTurnClock(since: since, stale: row.stale)
         } else if let time = TabsTime.label(row.summary.lastActivity, now: now) {
             Text(time).foregroundStyle(.secondary)
         }
@@ -498,19 +494,22 @@ struct AgentRow: View {
     /// The step inline, in the line above's colour: its kind's symbol, then "Run · 12 steps" (the steps
     /// since the agent last wrote), else the step in words; its running subagents after. No badge: the log's badges are
     /// as wide as the widest word to line up their rows, which a row here has none to line up with.
-    private func progress(_ status: TabsStatus) -> some View {
-        HStack(spacing: 5) {
-            if let kind = status.kind, status.steps > 0 {
-                Image(systemName: kind.symbol)
-                    .font(.caption.weight(.semibold))
-                    .accessibilityHidden(true)
-                Text(kind.label + " · " + Self.count(status.steps, "step")
-                     + (status.agents > 0 ? " · " + Self.count(status.agents, "agent") : ""))
-            } else {
-                Text(Self.capitalized(status.text) + (status.agents > 0 ? " · " + Self.count(status.agents, "agent") : ""))
-            }
-        }
-        .lineLimit(1)
+    private func progress(_ status: TabsStatus) -> some View { AgentProgressLine(status: status) }
+
+    /// The step line's words: "Run · 12 steps · 2 agents", else the step in words ("Running shell command…"). The
+    /// watch's Agents rows say the same (`WatchConversation.step`).
+    static func progress(_ status: TabsStatus) -> String {
+        let agents = status.agents > 0 ? " · " + count(status.agents, "agent") : ""
+        if let kind = status.kind, status.steps > 0 { return kind.label + " · " + count(status.steps, "step") + agents }
+        // Busy with no step known yet (the list's own word, or a thread not read): "Working…", as a step reads.
+        if status.text.caseInsensitiveCompare("working") == .orderedSame { return "Working…" + agents }
+        return capitalized(status.text) + agents
+    }
+
+    /// The step's kind's symbol beside `progress`, when it names the kind.
+    static func progressSymbol(_ status: TabsStatus) -> String? {
+        guard let kind = status.kind, status.steps > 0 else { return nil }
+        return kind.symbol
     }
 
     static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
@@ -769,6 +768,39 @@ private struct AgentsGroupCircle: ViewModifier {
                 .hoverEffect(.highlight)
         } else {
             content
+        }
+    }
+}
+
+/// A working agent's step on one line, as Agents' rows and Spaces' tab rows say it: its kind's symbol, then
+/// "Run · 12 steps · 2 agents", else the step in words (`AgentRow.progress`).
+struct AgentProgressLine: View {
+    let status: TabsStatus
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let symbol = AgentRow.progressSymbol(status) {
+                Image(systemName: symbol)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
+            }
+            Text(AgentRow.progress(status))
+        }
+        .lineLimit(1)
+    }
+}
+
+/// A working agent's turn in a row's time column: its elapsed time in amber, counted each second ("40s", "2m");
+/// grey while the row is not live.
+struct TabsTurnClock: View {
+    let since: Date
+    var stale = false
+
+    var body: some View {
+        TimelineView(.periodic(from: Ticks.anchor, by: 1)) { context in
+            Text(TabsTime.elapsed(context.date.timeIntervalSince(since)))
+                .monospacedDigit()
+                .foregroundStyle(stale ? Color.secondary : Color.stateWorking)
         }
     }
 }

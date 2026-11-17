@@ -335,3 +335,23 @@ fn the_reply_is_the_answer_or_a_later_turn_end() {
     let mut world = World::new("older", "e 5\na 10 Done.\nr 15\n");
     assert_eq!(world.get().reply_ms, Some(10));
 }
+
+/// One message written twice in a row (Codex: item_completed, then its response_item milliseconds
+/// later) answers when first written, as the thread's page keeps its first time: a thread read
+/// through its page is seen through the row's reply. Within one read, and across two (the second
+/// write appended after a read); an earlier message of the same words past a timed line is another.
+#[test]
+fn a_message_written_twice_answers_when_first_written() {
+    let text = filler(3, 100, 1) + "a 835 Implemented it.\na 838 Implemented it.\nr\ne 800\n";
+    let mut world = World::new("twice", &text);
+    let overview = world.get();
+    assert_eq!((overview.preview.as_deref(), overview.reply_ms), (Some("Implemented it."), Some(835)));
+
+    let mut world = World::new("twice-appended", &(filler(3, 100, 1) + "a 935 Done.\n"));
+    assert_eq!(world.get().reply_ms, Some(935));
+    world.append("a 938 Done.\ne 900\n");
+    assert_eq!(world.get().reply_ms, Some(935));
+
+    let mut world = World::new("said-again", &(filler(3, 100, 1) + "a 10 Done.\nr 20\na 30 Done.\n"));
+    assert_eq!(world.get().reply_ms, Some(30));
+}

@@ -13,15 +13,34 @@ final class WatchAgentsViewTests: XCTestCase {
 
     // MARK: Agents rows
 
-    func testARowSaysItsHostAndSpaceAndMutedAsThePhoneDoes() {
+    /// "host · space"; muted is the bell beside the name (and VoiceOver's "Muted"), not a word in the caption.
+    func testARowSaysItsHostAndSpaceAsThePhoneDoes() {
         var row = WatchConversation(host: studio.id, node: "n1", name: "Fix the build", space: "dispatch")
         XCTAssertEqual(AgentsRow.subtitle(row, host: studio), "studio · dispatch")
         XCTAssertEqual(AgentsRow.subtitle(row, host: nil), "dispatch")
         row.space = nil
         row.muted = true
-        XCTAssertEqual(AgentsRow.subtitle(row, host: studio), "studio · muted")
-        row.muted = false
+        XCTAssertEqual(AgentsRow.subtitle(row, host: studio), "studio")
+        XCTAssertTrue(AgentsRow.accessibilityLabel(row, host: studio, now: now).contains("Muted"))
         XCTAssertNil(AgentsRow.subtitle(row, host: nil))
+    }
+
+    /// The row's name is the phone's (a renamed tab's name first), never the agent's own title over it.
+    func testARowIsNamedAsThePhoneNamesIt() {
+        let row = WatchConversation(host: studio.id, node: "n1", name: "billing", title: "Billing migration")
+        XCTAssertEqual(row.displayTitle, "billing")
+    }
+
+    /// Rows of hosts not reached now go apart at the end, in the phone's order; a connecting host's stay.
+    func testOfflineHostsRowsGoApart() {
+        let lab = WatchHost(id: WatchFixtures.lab, name: "lab", order: 1, state: .offline)
+        var connecting = studio
+        connecting.state = .connecting
+        let rows = [WatchConversation(host: lab.id, node: "a", name: "a"), WatchConversation(host: studio.id, node: "b", name: "b"),
+                    WatchConversation(host: "gone", node: "c", name: "c"), WatchConversation(host: studio.id, node: "d", name: "d")]
+        let sections = AgentsScreen.sections(rows, hosts: [connecting, lab])
+        XCTAssertEqual(sections.reached.map(\.node), ["b", "d"])
+        XCTAssertEqual(sections.offline.map(\.node), ["a", "c"])
     }
 
     /// Done: the last message (else the attention line). Needs you: what it asks, else its attention line, else the
@@ -42,16 +61,22 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertNil(AgentsRow.line(row, now: now))
     }
 
-    /// Working: the current step and how long the turn has run (K1's "Editing Sidebar.tsx · 48s"), else "Working".
+    /// Working, as the phone's row (A1): the step ("Run · 4 steps", else "Working…") under what the agent last said, and
+    /// the turn's time where the row's time goes.
     func testAWorkingRowSaysItsStepAndElapsedTime() {
         var row = WatchConversation(host: studio.id, node: "n1", name: "Sidebar theme toggle", preview: "Earlier answer.", busy: true,
-                                    step: "Editing Sidebar.tsx", workingSince: now.addingTimeInterval(-48))
-        XCTAssertEqual(AgentsRow.line(row, now: now), "Editing Sidebar.tsx · 48s")
+                                    step: "Run · 4 steps", stepSymbol: "apple.terminal", note: "Tests pass, now the docs",
+                                    workingSince: now.addingTimeInterval(-48))
+        XCTAssertEqual(AgentsRow.line(row, now: now), "Run · 4 steps")
+        XCTAssertEqual(AgentsRow.elapsed(row, now: now), "48s")
+        XCTAssertEqual(AgentsRow.accessibilityLabel(row, host: studio, now: now),
+                       "Sidebar theme toggle, studio, Working for 48s, Tests pass, now the docs, Run · 4 steps")
         row.workingSince = now.addingTimeInterval(-242)
-        XCTAssertEqual(AgentsRow.line(row, now: now), "Editing Sidebar.tsx · 4m 2s")
+        XCTAssertEqual(AgentsRow.elapsed(row, now: now), "4m 2s")
         row.step = nil
         row.workingSince = nil
-        XCTAssertEqual(AgentsRow.line(row, now: now), "Working")
+        XCTAssertEqual(AgentsRow.line(row, now: now), "Working…")
+        XCTAssertNil(AgentsRow.elapsed(row, now: now))
         // What it asks wins over its step.
         row.needsYou = true
         row.waitingText = "Which schedule?"
@@ -179,32 +204,12 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertEqual(ThreadScreen.primaryAction(thread), .none)
     }
 
-    /// While the agent works the header says the host's CPU after the model: is it the machine or the agent?
-    func testTheHeaderSaysTheHostsCPUWhileTheAgentWorks() {
-        var thread = WatchThread(key: WatchFixtures.working, generated: now, title: "t", agent: "Codex", model: "gpt-5.5", working: true)
-        XCTAssertEqual(ThreadHeader.load(thread, cpu: 33.6), "34%")
-        XCTAssertNil(ThreadHeader.load(thread, cpu: nil))
-        thread.working = false
-        XCTAssertNil(ThreadHeader.load(thread, cpu: 34))
-        var host = WatchHost(id: WatchFixtures.studio, name: "studio", order: 0, state: .connected,
-                             stats: WatchHostStats(cpu: 41, history: [], sampled: now))
-        XCTAssertEqual(ThreadHeader.cpu(host), 41)
-        host.stats?.stale = true
-        XCTAssertNil(ThreadHeader.cpu(host), "not current")
-        host.stats?.stale = false
-        host.state = .offline
-        XCTAssertNil(ThreadHeader.cpu(host))
-        host.state = .connected
-        host.stats = nil
-        XCTAssertNil(ThreadHeader.cpu(host))
-    }
-
-    /// An idle row's preview takes one line; working and needs-you rows keep two.
+    /// An idle row's preview takes one line (a working row has a line each for its note and step); needs-you rows two.
     func testAnIdleRowsPreviewTakesOneLine() {
         var row = WatchConversation(host: studio.id, node: "n1", name: "Fix the build", preview: "Done.")
         XCTAssertEqual(AgentsRow.lineLimit(row), 1)
         row.busy = true
-        XCTAssertEqual(AgentsRow.lineLimit(row), 2)
+        XCTAssertEqual(AgentsRow.lineLimit(row), 1)
         row.busy = false
         row.needsYou = true
         XCTAssertEqual(AgentsRow.lineLimit(row), 2)
@@ -212,6 +217,8 @@ final class WatchAgentsViewTests: XCTestCase {
 
     func testItemsSayWhoSpeaks() {
         XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "1", kind: .user, text: "Go"), agent: "Codex"), "You: Go")
+        XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "1", kind: .user, text: "Go", quote: "Tests pass."), agent: "Codex"),
+                       "You: Replying to Tests pass.: Go")
         XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "2", kind: .agent, text: "Done.", caption: "2 steps · 4s"), agent: "Codex"),
                        "Codex: Done., 2 steps · 4s")
         XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "3", kind: .thinking, text: "Hmm"), agent: "Claude Code"),
@@ -226,7 +233,6 @@ final class WatchAgentsViewTests: XCTestCase {
 
     func testTheHeaderSaysWhyInputWaits() {
         var thread = WatchThread(key: WatchFixtures.approval, generated: now, title: "t", agent: "Claude Code", model: "opus-5.5")
-        XCTAssertEqual(ThreadHeader.detail(thread), "Claude Code · opus-5.5")
         XCTAssertNil(ThreadHeader.status(thread))
         thread.phase = .opening
         XCTAssertEqual(ThreadHeader.status(thread), "Attaching…")
@@ -237,9 +243,19 @@ final class WatchAgentsViewTests: XCTestCase {
         thread.phase = .offline
         thread.reason = nil
         XCTAssertEqual(ThreadHeader.status(thread), "Offline")
-        thread.agent = nil
-        thread.model = nil
-        XCTAssertNil(ThreadHeader.detail(thread))
+    }
+
+    /// The header says where the chat runs, as the phone's: host · folder, the folder left out when the title is it;
+    /// never the agent and its model.
+    func testTheHeaderSaysTheHostAndFolderAsThePhones() {
+        let row = WatchConversation(host: studio.id, node: "n1", name: "Fix the build", space: "dispatch", tab: "t")
+        let tab = WatchTab(host: studio.id, space: "s", key: "t", name: "Fix the build", folder: "~/src/dispatch")
+        XCTAssertEqual(ThreadScreen.place(host: studio, conversation: row, tab: tab), "studio · dispatch")
+        var named = row
+        named.name = "dispatch"
+        XCTAssertEqual(ThreadScreen.place(host: studio, conversation: named, tab: tab), "studio")
+        XCTAssertEqual(ThreadScreen.place(host: studio, conversation: row, tab: nil), "studio")
+        XCTAssertNil(ThreadScreen.place(host: nil, conversation: nil, tab: nil))
     }
 
     /// The watch's failure first, then the phone's own, never twice.
@@ -587,7 +603,7 @@ final class WatchAgentsViewTests: XCTestCase {
             for key in link.threads.keys.sorted(by: { $0.node < $1.node }) {
                 await model.loadThread(key)
                 guard let thread = model.thread(for: key) ?? link.threads[key] else { continue }
-                try render(ThreadDrawing(thread: thread, cpu: model.host(key.host).flatMap(ThreadHeader.cpu)), name: "thread-\(scenario.rawValue)-\(thread.title.prefix(12))", to: shots)
+                try render(ThreadDrawing(thread: thread), name: "thread-\(scenario.rawValue)-\(thread.title.prefix(12))", to: shots)
             }
         }
         if let shots {
@@ -624,13 +640,11 @@ final class WatchAgentsViewTests: XCTestCase {
 /// iPhone).
 private struct ThreadDrawing: View {
     let thread: WatchThread
-    /// The host's CPU for the header.
-    var cpu: Double?
 
     var body: some View {
         let (queued, sending) = ThreadComposer.split(thread.queue)
         VStack(alignment: .leading, spacing: 6) {
-            ThreadHeader(thread: thread, cpu: cpu)
+            ThreadHeader(thread: thread, place: "studio · dispatch")
             let turns = ThreadScreen.turns(thread)
             if !turns.earlier.isEmpty {
                 Label(ThreadScreen.earlierTitle(turns.earlier.count), systemImage: "chevron.up")

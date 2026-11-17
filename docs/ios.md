@@ -669,9 +669,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is
   newer than the row's newest record when the list first saw it busy, a mark in the host's clock), else the turn's
   prompt, then the step inline in the line's grey (its kind's symbol, "Run · 12 steps": the steps since the agent
-  last wrote), the running subagents after ("· 2 agents"); with no thread open, "Working". Spaces' tab lines and the watch's tab
-  rows keep the step's kind and the elapsed time ("Running shell command… · 48s"), the watch's agent rows the step's
-  words. Otherwise the question or approval in the primary colour while it waits, else the last message, on two
+  last wrote), the running subagents after ("· 2 agents"); with no thread open, "Working…". Spaces' tab rows say it the
+  same way on their one line (`SpaceTabRow`: the turn's time in amber in the time column, then what the agent said in
+  the turn, else the step, `AgentProgressLine`); the switcher's rows (no time column) and the watch's tab rows keep
+  the step's kind and the elapsed time ("Running shell command… · 48s"); the watch's agent rows say what
+  these rows say (`AgentRow.progress`, docs/watch.md). Otherwise the question or approval in the primary colour while it waits, else the last message, on two
   lines, the room for two kept when it is shorter. A row whose data is not live (the cache's, the
   previous connection's until the first `chat.list` over the new one answers, or a read the helper could not complete)
   dims whole, dot included. Chips, Spaces' own (All's symbol one bubble, as Spaces' Agents): All, Needs you (live rows, with the count), Unread (needs you or a result not
@@ -749,7 +751,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   moving; the row then reads "stopping" (no shimmer, no clock) until the agent is idle, a refused stop or one the
   agent still works through 15 s later giving it back. A touch on it raises a "Hold to stop" capsule over the row (`ChatStopHold`, only a sign) that fills as Stop
   is held, empties if it is let go early and goes after 4 s untouched (VoiceOver: a double tap and hold passes the hold
-  through, a double tap shows the capsule, which then stays, and the Stop Now action stops at once). The chevron, or a tap anywhere on the thinking line but Stop (the room before the chevron and the steps' count too), unfolds the
+  through, a double tap shows the capsule, which then stays, and the Stop Now action stops at once). The thinking line and its time have the first claim on the row's width (large text: "4 steps" shortens to "4" before either is cut). The chevron, or a tap anywhere on the thinking line but Stop (the room before the chevron and the steps' count too), unfolds the
   row as a click on the Mac's Thinking opens its activity: a line counting the steps and how many lie above and below,
   with the session's tokens in and out and Pi's cost after them (`ChatUsageText`, as `ChatSessionStats`; nothing with
   the agent's token counter off), and the plan's limits at its end (`ChatLimitsLine`, N4a): the week (the longest
@@ -828,7 +830,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   30 fps, the satellite and the sweep 60, everything 30 in Low Power Mode, where the glint and the light stay off: `MotionRate.decorates`), and nothing runs in the background, while
   the row is scrolled out of sight or while a sheet covers it (`coversLoops`: the thread's own sheets and preview, the
   shell's sheets, a host's stats sheet). The background is followed from its notifications (`applicationState` still
-  reads background when `willEnterForeground` arrives). A row scrolled under the translucent composer counts as shown. As `TimelineView(.animation)` loops they cost about 12% of a core in the app and as
+  reads background when `willEnterForeground` arrives). A row scrolled under the translucent composer counts as shown. Every counter that changes each second (a working agent's time in Agents, Spaces and the thread, an approval's wait, a shell's or the loading line's time, Read Aloud, the reconnect banner) starts its `TimelineView` at one anchor, `Ticks.anchor` (the launch's whole second, shared with the watch), so they all change on the same tick; VoiceOver's spoken time keeps its own ten-second steps from the turn's start. As `TimelineView(.animation)` loops they cost about 12% of a core in the app and as
   much in the render server at 60 Hz. With Reduce Motion they stand still; tests draw a chosen instant
   (`animationDateOverride`) in SwiftUI, the frame the loops show then.
   The thread runs on under the header and the composer (a bottom `safeAreaBar`), with the soft scroll edge at both,
