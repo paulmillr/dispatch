@@ -385,7 +385,7 @@ anything else, a commit the clone has.
    not a public GitHub repository; a site it can fill in), the deploy command, the pinned Xcode and the build user.
    Then it shows the plan (build, sign, record, deploy), the install page's full address and asks
    `ship 0.1.7-20261110.1432 for iPhone? [y/N]` once, before the build: nothing after waits on you.
-2. **Build.** `release/builder.sh --platform ios --cache`, as you or as the build user: an `.xcarchive` built unsigned
+2. **Build.** `release/builder.sh --platform ios --cache`, as you or as the build user (a failed build keeps the tree's own logs, Xcode's included, in `build.logs/` beside its `build.log`, and the log names them there: the tree in `/private/tmp/release-build` is removed as the builder exits): an `.xcarchive` built unsigned
    and signed ad hoc with each target's entitlements (`release/app.sh`). Unlike the Mac build, which starts from nothing
    so that it matches GitHub's, it keeps the tree's `build/` between builds, in
    `/private/tmp/release-build-cache-<user>/ios/` (the build user's alone): the Rust toolchain, the crates, the helpers

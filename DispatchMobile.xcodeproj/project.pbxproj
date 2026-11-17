@@ -167,6 +167,7 @@
 		3FA12613A4ABB21753A75126 /* TerminalPrewarmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 720764219B0B2EA16A67FED6 /* TerminalPrewarmTests.swift */; };
 		407E660BA22356B3F3FBFD86 /* ResilienceNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E71E554B9E22C2990C58C5 /* ResilienceNetworkTests.swift */; };
 		4110B720F913F388BF48E314 /* SecretBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B315747EE6F79E334A041BA /* SecretBytes.swift */; };
+		412CB7DFA0D698DD187C9A31 /* ChatTypingParagraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 311F10E7691B52B59E640440 /* ChatTypingParagraph.swift */; };
 		417404E92E287F0BB93B4C0E /* ChatThreadUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A31DD9A38B73C4894758C4E /* ChatThreadUITests.swift */; };
 		41D22E233F075F567C8FB6B3 /* SSHShellOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE75A672C22653C829E6D9B5 /* SSHShellOpener.swift */; };
 		41D9FD2CC9F3D0B3C79F0292 /* HelperSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC78F76ADFAC285BAC9FFED /* HelperSession.swift */; };
@@ -425,6 +426,7 @@
 		B1FC7DDEEFF038F565B74616 /* TerminalTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 054385B52EF95C4CE28F0060 /* TerminalTheme.swift */; };
 		B2FD2266442178FC199EF7BD /* Surface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 334208E64C1425A2CB14D3C3 /* Surface.swift */; };
 		B307F80970FAEC940F7B6E7F /* NewChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7119256886884AB3DA1CE57 /* NewChatSheet.swift */; };
+		B31FBB7E7233322ECA090D71 /* TerminalFramesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0F47C714FD308452891A5C /* TerminalFramesTests.swift */; };
 		B375B45BF792BDC5ECC6A8B8 /* TerminalPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8561C411B40B4A71213AB721 /* TerminalPresence.swift */; };
 		B3B8E4172099504DB6FF99EE /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F179F94451E67F9B3556D3B /* WorkspaceModels.swift */; };
 		B4217C7344EF15CC567B702B /* ChatThreadWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 742291E3483C5EFF73DFD07A /* ChatThreadWindowTests.swift */; };
@@ -798,6 +800,7 @@
 		2F3929ED8E1E2EA81D5B2CF5 /* TerminalBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalBenchmarkTests.swift; sourceTree = "<group>"; };
 		3016DD433E7300B77A414C95 /* HelperBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperBackend.swift; sourceTree = "<group>"; };
 		311BDF4AE244B3284AA1BB0E /* FileMarkdownReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileMarkdownReader.swift; sourceTree = "<group>"; };
+		311F10E7691B52B59E640440 /* ChatTypingParagraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTypingParagraph.swift; sourceTree = "<group>"; };
 		31F30267AD049D5FCB28CA50 /* MobileComposition+FilesMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MobileComposition+FilesMode.swift"; sourceTree = "<group>"; };
 		3201872808F6654572788AC4 /* HostSessionDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSessionDriver.swift; sourceTree = "<group>"; };
 		32E867BDEF114E9A77AF443A /* FilesWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesWire.swift; sourceTree = "<group>"; };
@@ -1180,6 +1183,7 @@
 		DBFB6C39A38EC0AD11A7D51F /* AgentsStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsStyle.swift; sourceTree = "<group>"; };
 		DCACBA312F4EE0D784D84126 /* SurfaceSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceSearch.swift; sourceTree = "<group>"; };
 		DCDA43BC3A509C731260CD4C /* SSHHostSessionDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHHostSessionDriver.swift; sourceTree = "<group>"; };
+		DD0F47C714FD308452891A5C /* TerminalFramesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalFramesTests.swift; sourceTree = "<group>"; };
 		DDAAC8DF87A218F642A6D31C /* ScriptedWatchLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedWatchLink.swift; sourceTree = "<group>"; };
 		DE6EAAFBF0E9B58B47A601A5 /* ReviewDiffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewDiffTests.swift; sourceTree = "<group>"; };
 		DF2C27BA499AACD9A26AC8E7 /* TransitionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionUITests.swift; sourceTree = "<group>"; };
@@ -1438,6 +1442,7 @@
 				3479775C9CBF6C2FEEBC73F9 /* ChatTerminalPresence.swift */,
 				4B5621E752C9FA6CB49DE945 /* ChatThreadControls.swift */,
 				5C65810B4685F42C0977201B /* ChatThreadView.swift */,
+				311F10E7691B52B59E640440 /* ChatTypingParagraph.swift */,
 				591A46900293A6F2C493C3EB /* ChatWorkingRow.swift */,
 				5175209EBB98178837E2DEF6 /* MobileChatAttachments.swift */,
 				D821162BD913812AD1B4C51F /* MobileChatMarkdown.swift */,
@@ -1543,6 +1548,7 @@
 				EA74795D287F6D64A83088D3 /* TabsWorkspaceTests.swift */,
 				2F3929ED8E1E2EA81D5B2CF5 /* TerminalBenchmarkTests.swift */,
 				4988DBF5082B18D10DD08F32 /* TerminalEmulatorTests.swift */,
+				DD0F47C714FD308452891A5C /* TerminalFramesTests.swift */,
 				0328670197716A86C3099ED7 /* TerminalHostViewTests.swift */,
 				224E6C8BFA87D1C572D4108A /* TerminalIPadTests.swift */,
 				235137D042D84487EAD68CA6 /* TerminalKeyCapsuleTests.swift */,
@@ -2851,6 +2857,7 @@
 				B07A2F097D4321DBDB52A331 /* ChatTranscript.swift in Sources */,
 				0589D0BA68291828364B0EE1 /* ChatTranscriptStore.swift in Sources */,
 				13D24398AEFAA48100D68ACC /* ChatTurnSteps.swift in Sources */,
+				412CB7DFA0D698DD187C9A31 /* ChatTypingParagraph.swift in Sources */,
 				FBBA46945E6449936764CC96 /* ChatTypingReveal.swift in Sources */,
 				A449ED697B640E78E2188635 /* ChatTypography.swift in Sources */,
 				243794CD52D0E2419F0F3772 /* ChatWorkingRow.swift in Sources */,
@@ -3248,6 +3255,7 @@
 				04ED2D464E22C67AEF89C409 /* TerminalCoreTests.swift in Sources */,
 				134CBD4F04C46CC79306D4E2 /* TerminalEmulatorTests.swift in Sources */,
 				330EB2F13219F34591282367 /* TerminalFastPathTests.swift in Sources */,
+				B31FBB7E7233322ECA090D71 /* TerminalFramesTests.swift in Sources */,
 				93C872344FA57929CA6A95E9 /* TerminalHostViewTests.swift in Sources */,
 				FF1D37B9F19C5BE6C112DD22 /* TerminalIPadTests.swift in Sources */,
 				2A9A26A4672A3687564D3FB1 /* TerminalKeyCapsuleTests.swift in Sources */,

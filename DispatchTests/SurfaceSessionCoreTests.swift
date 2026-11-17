@@ -143,6 +143,29 @@ final class SurfaceSessionCoreTests: XCTestCase {
         XCTAssertTrue(demand.fast(at: later + refresh))
     }
 
+    /// A demand with its own input window (the phone's, where a key's echo crosses the link to the host and back)
+    /// keeps output at every refresh that long after input, then paces it again.
+    func testFrameDemandKeepsItsOwnInputWindow() {
+        let demand = FrameDemand(inputWindow: 1)
+        demand.pace(30)
+        let start = 100.0, refresh = 1.0 / 120
+        XCTAssertEqual(demand.frame(at: start), .draw)
+        XCTAssertTrue(demand.request(urgent: true, at: start).hurry)
+        XCTAssertEqual(demand.frame(at: start + refresh), .draw)
+        let echo = start + FrameDemand.inputWindow + 0.2
+        _ = demand.request(urgent: false, at: echo)
+        XCTAssertEqual(demand.frame(at: echo), .draw)
+        _ = demand.request(urgent: false, at: echo + refresh / 2)
+        XCTAssertEqual(demand.frame(at: echo + refresh), .draw, "Past the Mac's quarter second, an echo still draws at once")
+        XCTAssertTrue(demand.fast(at: echo + refresh))
+        let later = start + 1 + refresh
+        XCTAssertFalse(demand.fast(at: later), "After its own window, output goes back to its pace")
+        _ = demand.request(urgent: false, at: later)
+        XCTAssertEqual(demand.frame(at: later), .draw)
+        _ = demand.request(urgent: false, at: later + refresh / 2)
+        XCTAssertEqual(demand.frame(at: later + refresh), .wait)
+    }
+
     func testFrameDemandRelinksAfterADisplayFallsSilent() {
         let demand = FrameDemand()
         XCTAssertTrue(demand.frame())

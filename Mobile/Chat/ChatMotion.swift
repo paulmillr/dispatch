@@ -4,8 +4,8 @@ import UIKit
 /// The frame rate the thread's looping motion (the thinking row, the reconnect banner's dots) asks the compositor for:
 /// the Mac's `MotionRate` (Dispatch/Views/MotionRate.swift) for the phone. The screen's own rate (120 Hz on ProMotion,
 /// `CADisableMinimumFrameDurationOnPhone`), 30 in Low Power Mode; in the background nothing runs at all
-/// (`CompositorView`). A loop asks for less (`glow`, `orbit`, `sweep`): what a frame moves it by decides what its rate
-/// buys. Low Power Mode also stills the loops that only decorate (`decorates`). A change posts `changed`, so a running
+/// (`CompositorView`). A loop asks for less (`glow`, `orbit`, `sweep`), and so do the typed reveal (`typing`) and a
+/// terminal's output (`terminalOutput`): what a frame moves it by decides what its rate buys. Low Power Mode also stills the loops that only decorate (`decorates`). A change posts `changed`, so a running
 /// loop restarts at the new rate, or stops.
 @MainActor
 enum MotionRate {
@@ -20,6 +20,15 @@ enum MotionRate {
     /// The hairline's glint and the light on "thinking" (`ChatThinkingSweep`) cross the row at up to about 400 pt/s, a
     /// soft band 30% of the row wide: at 60 Hz a few points a frame inside a band a hundred wide.
     static let sweep = 60
+    /// The typed reveal (`ChatTypingLink`): the Mac's rate on battery, where the phone nearly always is. Characters
+    /// appear and fade in place, a few a frame, and every frame lays the growing reply out again: the screen's 120
+    /// doubled that work for nothing that travels.
+    static let typing = 60
+    /// Frames a second for a terminal's output alone (a program printing, a spinner, an agent's status line), the Mac's
+    /// on battery (`MotionRate.terminalOutput` there): each frame draws the whole grid on the GPU and composites it
+    /// again. Input and what answers it within `TerminalFrames.inputWindow` draw at the display's rate
+    /// (`FrameDemand`). Low Power Mode changes neither.
+    nonisolated static let terminalOutput = 30
 
     /// `preferredFrameRateRange` for a loop on `screen` now, at most `cap` frames a second.
     static func range(for screen: UIScreen?, upTo cap: Int = .max) -> CAFrameRateRange {

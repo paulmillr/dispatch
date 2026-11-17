@@ -9,7 +9,8 @@
 # /private/tmp/release-build, runs scripts/release/build.sh there, copies the result to OUT and removes the build's
 # files. As you, or with --user as USER, a standard macOS user without keys (scripts/release/signer-setup.sh builder
 # makes one): on the signing machine, that user can read neither the login keychain nor the release settings, so
-# nothing the build runs reaches a key. Its log is OUT.log. Used by release-publish.sh and release/verify.sh
+# nothing the build runs reaches a key. Its log is OUT.log; a failed build also keeps the tree's own logs (Xcode's) in
+# OUT.logs, which OUT.log names (the tree goes at exit). Used by release-publish.sh and release/verify.sh
 # --reproduce (scripts/release/rebuild.sh), and by release/iphone.sh with --cache.
 #
 # --cache (iPhone builds, which nobody rebuilds to compare): the tree's build/ folder, the downloaded toolchains and
@@ -61,6 +62,16 @@ done
 as_builder /usr/bin/true || fail "cannot run commands as $user; run: scripts/release/signer-setup.sh builder $user"
 
 cleanup() { as_builder /bin/rm -rf "$build" "$build-home" "$build-products" "$guest_out" > /dev/null 2>&1 || true; }
+# The tree's own logs (run.py's: Xcode's, the helper's) go with the tree at exit, and the cache drops them: a failed
+# build keeps a copy beside OUT.log, OUT.logs/, and OUT.log names that copy wherever it named the tree's logs.
+kept_logs="$out.logs"
+keep_logs() {
+  rm -rf "$kept_logs"
+  mkdir -p "$kept_logs"
+  as_builder /bin/bash -c 'cd "$1/build/logs" 2> /dev/null && tar -cf - .' _ "$build" 2> /dev/null |
+    tar -xf - -C "$kept_logs" 2> /dev/null || true
+  FROM="$build/build/logs" TO="$kept_logs" perl -pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$log" 2> /dev/null || true
+}
 # The cache: build/ without Xcode's intermediates (the tree's new times rebuild them anyway) and the logs. Kept after a
 # failed build too: what it finished stays good.
 cached=""
@@ -120,7 +131,7 @@ as_builder /usr/bin/env -i HOME=/var/empty USER="$user" LANG=en_US.UTF-8 PATH=/u
   DEVELOPER_DIR="$selected" RELEASE_BUILDER=local /bin/bash -c 'umask 022; cd "$1" && shift && exec scripts/release/build.sh "$@"' \
   _ "$build" "$guest_out" --commit "$commit" --build-number "$number" --variant "$variant" --platform "$platform" \
   ${cached_flag[@]+"${cached_flag[@]}"} >> "$log" 2>&1 ||
-  { stop_watching; tail -40 "$log" >&2; fail "the build as $user failed (log: $log)"; }
+  { stop_watching; keep_logs; tail -40 "$log" >&2; fail "the build as $user failed (log: $log; the build's own logs: $kept_logs)"; }
 stop_watching
 rm -rf "$out.partial"
 mkdir "$out.partial"

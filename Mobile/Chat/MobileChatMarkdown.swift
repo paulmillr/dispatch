@@ -124,9 +124,10 @@ struct MobileChatMarkdownView: View {
 
     var body: some View {
         let contents = shownContents
-        let layout = typing?.layout
-        let frame = typing?.current
-        let count = frame.map { layout?.visibleBlocks($0.shown) ?? 0 } ?? contents.blocks.count
+        // Typing: only the stage is read here, so a frame draws the typing block (`MobileTypingTail`) and nothing else.
+        let stage = typing?.stage
+        let count = min(stage?.count ?? contents.blocks.count, contents.blocks.count)
+        let whole = min(stage?.live ?? count, count)
         let last = contents.blocks.indices.last
         let inline = corner.map { Self.sharesLine($0, blocks: contents.blocks, truncated: contents.truncated, layout: layoutDirection) } ?? false
         let room = inline ? corner?.room : nil
@@ -135,7 +136,9 @@ struct MobileChatMarkdownView: View {
                 // The shown blocks whole, laid out but not drawn and of no height: a bubble that hugs its text is as wide
                 // as what has arrived from the start, and only grows a line at a time as it types.
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(contents.blocks.prefix(count).enumerated()), id: \.offset) { _, block in self.block(block) }
+                    ForEach(Array(contents.blocks.prefix(count).enumerated()), id: \.offset) { _, block in
+                        MobileMarkdownBlock(content: block)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(height: 0, alignment: .top)
@@ -143,13 +146,12 @@ struct MobileChatMarkdownView: View {
                 .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 8) {
-                if let frame, frame.shown == 0 { ChatTypingCaretLine(caret: frame.caret, color: .dispatchPink) }
-                ForEach(Array(contents.blocks.prefix(count).enumerated()), id: \.offset) { index, block in
-                    if let layout, let frame, let cut = layout.cut(block: index, frame: frame) {
-                        self.block(Self.cut(block, cut), typing: cut)
-                    } else {
-                        self.block(block, room: index == last ? room : nil)
-                    }
+                ForEach(Array(contents.blocks.prefix(whole).enumerated()), id: \.offset) { index, block in
+                    MobileMarkdownBlock(content: block, room: index == last ? room : nil, corner: corner)
+                }
+                if let typing {
+                    MobileTypingTail(reveal: typing, blocks: Array(contents.blocks[whole..<count]), first: whole, last: last,
+                                     room: room, corner: corner, caretAlone: count == 0)
                 }
                 if contents.truncated {
                     Text("Rendered preview truncated for safety").font(.footnote).foregroundStyle(.secondary)
@@ -202,23 +204,6 @@ struct MobileChatMarkdownView: View {
     /// the room unmarked.
     static func joined(_ text: AttributedString, room: String) -> AttributedString { text + ChatTurnCorner.room(room) }
 
-    /// A text block's runs, with the room after them: VoiceOver reads the text without it, and the corner as the value.
-    private func runs(_ text: AttributedString, room: String?, typing: ChatTypingCut? = nil) -> some View {
-        Group {
-            if let typing {
-                Self.typed(text, typing)
-            } else if let room {
-                let spoken = corner?.spoken ?? ""
-                Text(room.isEmpty ? text : Self.joined(text, room: room))
-                    .accessibilityLabel(Text(text))
-                    .accessibilityValue(spoken)
-                    .accessibilityHint(spoken.isEmpty ? "" : corner?.hint ?? "")
-            } else {
-                Text(text)
-            }
-        }
-    }
-
     /// A block cut for typing: code to its shown lines, a table to its shown rows (text is cut as it is drawn).
     static func cut(_ content: Content, _ cut: ChatTypingCut) -> Content {
         switch content {
@@ -229,11 +214,105 @@ struct MobileChatMarkdownView: View {
     }
 
     /// A text block's runs while typing: the shown characters, the rest of the word laid out but not drawn, the caret.
+    /// Joined with `+`, not interpolated: an interpolated `Text` is a format string SwiftUI scans again on every frame.
     static func typed(_ text: AttributedString, _ cut: ChatTypingCut) -> some View {
         let parts = ChatTypingLayout.split(text, shown: cut.shown, hidden: cut.hidden)
-        return Text("\(Text(parts.shown))\(Text(ChatTypingLayout.hidden(parts.tail)).customAttribute(ChatTypingHidden()))")
+        return (Text(parts.shown) + Text(ChatTypingLayout.hidden(parts.tail)).customAttribute(ChatTypingHidden()))
             .textRenderer(ChatTypingRenderer(caret: cut.caret ?? 0, color: .dispatchPink))
             .accessibilityLabel(Text(parts.shown))
+    }
+}
+
+/// The blocks of a typing reply that a frame can change (`ChatTypingStage.live` on), and the caret alone on a line
+/// before any shows: the blocks before them are not evaluated, compared or laid out again as it types. The first is the
+/// one typing; those after it show whole (`ChatTypingStage`). A text block types as a `ChatTypingParagraph`, which draws
+/// the frames itself, so no SwiftUI view updates as it types; a code block or table (by line or row) and the caret
+/// alone read the frames here.
+private struct MobileTypingTail: View {
+    let reveal: ChatTypingReveal
+    let blocks: [MobileChatMarkdownView.Content]
+    /// The index of the first of `blocks` in the reply.
+    let first: Int
+    /// The reply's last block, which keeps the corner's room once it shows whole.
+    let last: Int?
+    let room: String?
+    let corner: ChatCorner?
+    /// Nothing shows yet: the caret alone on a line.
+    let caretAlone: Bool
+    @Environment(\.layoutDirection) private var direction
+
+    var body: some View {
+        if caretAlone { MobileTypingCaret(reveal: reveal) }
+        ForEach(Array(blocks.enumerated()), id: \.offset) { offset, block in
+            let index = first + offset
+            if offset > 0 {
+                MobileMarkdownBlock(content: block, room: index == last ? room : nil, corner: corner)
+            } else if case .text(_, let text) = block, reveal.layout.blocks.indices.contains(index),
+                      reveal.layout.blocks[index].isText, ChatTypingParagraph.supports(text, direction: direction) {
+                MobileMarkdownBlock(content: block, paragraph: (reveal, index))
+            } else {
+                MobileTypingFrameBlock(reveal: reveal, index: index, block: block, room: index == last ? room : nil,
+                                       corner: corner)
+            }
+        }
+    }
+}
+
+/// The caret alone on a line, before any of a typing reply shows.
+private struct MobileTypingCaret: View {
+    let reveal: ChatTypingReveal
+    var body: some View { ChatTypingCaretLine(caret: reveal.current.caret, color: .dispatchPink) }
+}
+
+/// A typing block SwiftUI cuts on every frame: a code block by line, a table by row, text a typing paragraph does not
+/// draw (right to left).
+private struct MobileTypingFrameBlock: View {
+    let reveal: ChatTypingReveal
+    let index: Int
+    let block: MobileChatMarkdownView.Content
+    let room: String?
+    let corner: ChatCorner?
+    var body: some View {
+        if let cut = reveal.layout.cut(block: index, frame: reveal.current) {
+            MobileMarkdownBlock(content: MobileChatMarkdownView.cut(block, cut), typing: cut)
+        } else {
+            MobileMarkdownBlock(content: block, room: room, corner: corner)
+        }
+    }
+}
+
+/// One block of an agent message as `MobileChatMarkdownView` draws it: `room` keeps the corner's room after a text
+/// block's runs (`ChatTurnCorner.room`), `typing` cuts it as it types, `paragraph` types a text block's runs as a
+/// `ChatTypingParagraph` (the reveal, and the block's index in its layout).
+struct MobileMarkdownBlock: View {
+    typealias Content = MobileChatMarkdownView.Content
+    let content: Content
+    var room: String? = nil
+    var corner: ChatCorner? = nil
+    var typing: ChatTypingCut? = nil
+    var paragraph: (reveal: ChatTypingReveal, index: Int)? = nil
+    @Environment(\.chatTypography) private var typography
+    @Environment(\.chatPalette) private var palette
+
+    var body: some View { block(content, room: room, typing: typing) }
+
+    /// A text block's runs, with the room after them: VoiceOver reads the text without it, and the corner as the value.
+    private func runs(_ text: AttributedString, room: String?, typing: ChatTypingCut? = nil) -> some View {
+        Group {
+            if let paragraph {
+                ChatTypingParagraph(text: text, reveal: paragraph.reveal, block: paragraph.index)
+            } else if let typing {
+                MobileChatMarkdownView.typed(text, typing)
+            } else if let room {
+                let spoken = corner?.spoken ?? ""
+                Text(room.isEmpty ? text : MobileChatMarkdownView.joined(text, room: room))
+                    .accessibilityLabel(Text(text))
+                    .accessibilityValue(spoken)
+                    .accessibilityHint(spoken.isEmpty ? "" : corner?.hint ?? "")
+            } else {
+                Text(text)
+            }
+        }
     }
 
     @ViewBuilder private func block(_ content: Content, room: String? = nil, typing: ChatTypingCut? = nil) -> some View {
@@ -316,8 +395,10 @@ struct ChatTypingRenderer: TextRenderer {
 }
 
 /// An agent's reply in the thread, typing out while it streams in the live turn (`ChatTypingReveals`); otherwise, and
-/// with Reduce Motion, as `MobileChatMarkdownView` draws it at once. Only the markdown view reads the reveal's frames: a
-/// step draws the reply's text again, nothing around it.
+/// with Reduce Motion, as `MobileChatMarkdownView` draws it at once. Only the typing block reads the reveal's frames
+/// (`MobileTypingTail`): a step draws that block again, nothing around it. The reveal counts as shown only while the
+/// row is within the thread's visible bounds: the thread's stack is not lazy, so a row scrolled away is still in the
+/// view tree, and its reveal would type for no one. Scrolled back, it shows what arrived and types on from there.
 struct MobileTypedMarkdown: View {
     @ReduceMotion private var reduceMotion
     let text: String
@@ -330,12 +411,16 @@ struct MobileTypedMarkdown: View {
     var posts = false
     /// The reveal this view counts as shown (its clock runs only while one does).
     @State private var shown: ChatTypingReveal?
+    @State private var appeared = false
+    @State private var onScreen = true
     var body: some View {
         let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, posts: posts, reduceMotion: reduceMotion)
         MobileChatMarkdownView(text: text, corner: corner, typing: typing)
-            .onAppear { show(typing) }
-            .onDisappear { show(nil) }
-            .onChange(of: typing.map(ObjectIdentifier.init)) { _, _ in show(typing) }
+            .onScreen($onScreen)
+            .onAppear { appeared = true; show(onScreen ? typing : nil) }
+            .onDisappear { appeared = false; show(nil) }
+            .onChange(of: typing.map(ObjectIdentifier.init)) { _, _ in if appeared { show(onScreen ? typing : nil) } }
+            .onChange(of: onScreen) { _, visible in if appeared { show(visible ? typing : nil) } }
     }
     private func show(_ reveal: ChatTypingReveal?) {
         guard shown !== reveal else { return }

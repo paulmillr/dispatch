@@ -400,7 +400,8 @@ struct AgentsGroup: Identifiable {
 /// One conversation, always two lines (A1; three with Settings › Chat › Agent rows, `lines`): the gutter mark, its name
 /// and the time; then one line of what it is doing,
 /// with its host beside it, in grey (none when the list groups by host: the section names it). Working, the mark is the
-/// chat's thinking glyph, the time column counts the turn (amber) and the line is what the agent last said in the turn,
+/// chat's thinking glyph (in Low Power Mode the still amber dot, `mark`), the time column counts the turn (amber) and
+/// the line is what the agent last said in the turn,
 /// else its step (its symbol, kind and the steps since it last wrote) and running subagents, as a Spaces tab row says
 /// it. Otherwise its message or question (in the primary colour while it waits). A row whose data is not live dims
 /// whole, mark included, until its host answers.
@@ -415,6 +416,8 @@ struct AgentRow: View {
     var selected = false
     /// The row's lines, the name's included: 2 or 3 (Settings › Chat › Agent rows).
     var rowLines = 2
+    /// Low Power Mode now (`MotionRate.changed`).
+    @State private var lowPower = MotionRate.lowPower
 
     /// The turn runs and its start is known: the time column counts it.
     private var running: Date? { row.urgency == .running ? status?.since : nil }
@@ -464,11 +467,14 @@ struct AgentRow: View {
         .accessibilityLabel(row.name)
         .accessibilityValue(Self.value(row, status: status, location: location, now: now))
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .onReceive(NotificationCenter.default.publisher(for: MotionRate.changed)) { _ in lowPower = MotionRate.lowPower }
     }
 
     /// Working (live, not muted): the chat's thinking glyph; else the dot (blue needs you or unread, amber working).
+    /// In Low Power Mode a working row keeps the dot too: every glyph is two loops the render server composites each
+    /// frame, a list of working agents has one a row, and the turn's clock beside it still counts.
     @ViewBuilder private var mark: some View {
-        if row.urgency == .running, !row.muted, !row.stale {
+        if row.urgency == .running, !row.muted, !row.stale, !lowPower {
             ChatThinkingGlyph(size: 14)
         } else {
             Circle()

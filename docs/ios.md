@@ -674,7 +674,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   section's footer says its update and problem. A row is always two lines (`AgentRow`; three with Settings › Chat › Agent rows, `MobileSettings.agentRowLinesKey`, where a working agent's reasoning, else what it said, else the prompt in quotes goes over its step, and the message takes two lines): the mark, its name (as the
   Mac names the tab) and the time; then one line, the host's name (grey, as the line) beside it (no host when grouped
   by host; the section's host name takes the colour). Working, the mark is the chat's thinking glyph (still under
-  Reduce Motion), the time column counts the turn in amber (with no thread open, from the list's mark only when it saw
+  Reduce Motion; in Low Power Mode the still amber dot instead, as a Spaces row's: a glyph a row is the list's whole
+  cost while agents work), the time column counts the turn in amber (with no thread open, from the list's mark only when it saw
   the turn begin; else the row's time), and the line is what the agent last said in the turn (`TabsStatus.note`: the
   open thread's newest message, else the host's list's preview when its `reply_ms` is newer than the row's newest
   record when the list first saw it busy, a mark in the host's clock), in italics its reasoning instead when that is
@@ -865,8 +866,22 @@ The policies below are the ones a change must keep; the screens themselves are d
   may neither listen nor speak and conversation mode ends. Composers are
   `ChatEditorTextView`-based, as on the Mac.
   A reply or Pi's thinking streaming into the live turn, or a short Claude Code post, types out as on the Mac (docs/architecture.md, Typed reveal;
-  `MobileTypedMarkdown`): a text renderer draws its caret, and a bubble that hugs its text is as wide as what has
-  arrived from the first frame.
+  `MobileTypedMarkdown`), and a bubble that hugs its text is as wide as what has arrived from the first frame. It
+  types at 60 frames a second, the Mac's rate on battery, not a ProMotion screen's 120 (`MotionRate.typing`; 30 in
+  Low Power Mode). A text block types as a typing paragraph (`ChatTypingParagraph`, a UIKit view): SwiftUI draws the
+  block as it has arrived into an image once per arrival, with a text renderer recording where each character went,
+  and each frame then only moves a Core Animation mask over it and the 2-point caret beside it, from the reveal's
+  display link (`ChatTypingReveal.draws(for:_:)`), with no SwiftUI update at all; SwiftUI lays the view out again only
+  when text arrives or the reveal reaches a new line, so the bubble still grows a line at a time, and with all that
+  has arrived laid out, the word being typed already wraps where it will. The image is the text SwiftUI would draw there (the same
+  environment, fonts, inline code and marks), so the block changes nothing on screen when it is drawn as SwiftUI text
+  again, once typed out and its caret faded (`ChatTypingStage`). While it types, its links do not open and VoiceOver
+  reads what shows. Code blocks (by line), tables (by row), text in a right-to-left script and the caret alone before
+  anything shows are cut by SwiftUI on each frame, as on the Mac. The blocks before the typing one read the reveal's
+  stage alone (`ChatTypingStage`), so a frame never evaluates, compares or lays out the rest of the reply. The
+  reveal counts as shown only while its row is within the thread's visible bounds (the thread's stack is not lazy,
+  so a row scrolled away stays in the view tree): scrolled away it stops, and scrolled back it shows what has
+  arrived and types on from there.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line; the
   presence holds a whole helper reply (64 MiB) unparsed, since overflow ends the attachment. Only a lost stream of the
   current attachment detaches the feed. A run of size changes reaches the server once, 100 ms after the last
@@ -877,6 +892,13 @@ The policies below are the ones a change must keep; the screens themselves are d
   terminal. Search is Ghostty's on the local emulator (`TerminalSearch`), newest match first. The iPad rules
   (software keyboard placement from `keyboardLayoutGuide`, the hardware keyboard taking every key without ⌘,
   pointer selection) are in `TerminalAdaptation` and `TerminalHostView`.
+- **Terminal frames.** Paced as on the Mac (docs/architecture.md, Terminal output is paced; `TerminalFrames`): a
+  change output alone made (a program printing, a spinner, an agent's status line, the cursor's blink) draws at most 30
+  times a second (`MotionRate.terminalOutput`, with or without Low Power Mode), its display link asking the screen for
+  that rate; the user's own actions (`TerminalSession.pump()`: keys, scrolling, a selection, a pinch, a resize) and
+  output for a second after one (`TerminalFrames.inputWindow`: the echo, the program's answer, over the link to the
+  host and back) draw at the next refresh, up to the screen's 120. An idle terminal's link is paused. A frame that
+  added a line brings no second frame (the Mac's scrollbar pump; the phone shows no scroller).
 - **The first terminal.** What every terminal shares is made at launch, off the main thread, not by the first terminal
   or chat inside the SwiftUI update that creates its presence (`TerminalSession.prewarm`, once per process, on a
   dispatch queue: the compile blocks its thread): the renderer's shader library and pipelines (`MetalRenderer.prewarm`:

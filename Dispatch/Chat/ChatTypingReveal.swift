@@ -516,13 +516,42 @@ struct ChatTypingFrame: Equatable {
     var caret: Double
 }
 
+/// Which of a typing message's blocks a frame can change (`ChatTypingReveal.stage`): the first `count` show, and those
+/// before `live` show whole, as they will once the message is complete. Only `live` on can be cut or hold the caret
+/// (`ChatTypingLayout.cut`), so a view draws the blocks before it apart from the frames. Once that block too shows whole
+/// with no caret (typed out and faded, or waiting for more of a code block), `live` is `count`: nothing is typing.
+struct ChatTypingStage: Equatable {
+    /// The blocks showing (`ChatTypingLayout.visibleBlocks`).
+    let count: Int
+    /// The first block a frame can change: the caret's, else the last one showing; 0 while none shows (the caret alone),
+    /// `count` while none is cut.
+    let live: Int
+
+    init(_ layout: ChatTypingLayout, frame: ChatTypingFrame) {
+        count = layout.visibleBlocks(frame.shown)
+        let candidate = min(layout.caretBlock(frame.shown) ?? count, max(0, count - 1))
+        live = count > 0 && layout.cut(block: candidate, frame: frame) == nil ? count : candidate
+    }
+}
+
 /// One live message's reveal: its layout, clock and what it draws. Views read `frame` (observed: they draw again as it
-/// types) and draw `layout` cut at it; the store's display link advances it.
+/// types) and draw `layout` cut at it; the store's display link advances it. A view may read `stage` alone for the
+/// blocks a frame cannot change (the iPhone's does): those then draw again only as a block is added. A view drawing
+/// frames outside SwiftUI (the iPhone's typing paragraph) is told of each one directly (`draws(for:_:)`).
 @MainActor @Observable
 final class ChatTypingReveal {
     let id: String
     /// What it draws; changes as units show and the caret steps, never for a frame that draws the same.
     private(set) var frame: ChatTypingFrame
+    /// `frame` as last set, read where reading `frame` would observe it.
+    @ObservationIgnored private var latest: ChatTypingFrame
+    /// Views drawing the frames themselves, each told of every new frame as it is set.
+    @ObservationIgnored private var drawers: [(owner: ObjectIdentifier, draw: (ChatTypingFrame) -> Void)] = []
+    /// The blocks showing and the first a frame can change: changes as a block is added or the text is parsed again,
+    /// not as one types.
+    private(set) var stage: ChatTypingStage
+    /// `stage` as last set, read where reading `stage` would observe it (a store's `reveal` runs in a view's body).
+    @ObservationIgnored private var staged: ChatTypingStage
     @ObservationIgnored private(set) var layout: ChatTypingLayout
     @ObservationIgnored private(set) var clock: ChatTypingClock
     @ObservationIgnored private(set) var text: String
@@ -550,7 +579,11 @@ final class ChatTypingReveal {
         var clock = ChatTypingClock(position: fromStart ? min(Double(layout.total), 1e-6) : Double(layout.total), at: now)
         clock.advance(to: now, costs: layout.costs, ended: ended)
         self.clock = clock
-        frame = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
+        let frame = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
+        self.frame = frame
+        latest = frame
+        staged = ChatTypingStage(layout, frame: ChatTypingFrame(shown: min(frame.shown, layout.total), caret: frame.caret))
+        stage = staged
     }
 
     /// A whole message posted at once, typed from its start as if it streamed in from `now` (`postedAt`).
@@ -561,9 +594,14 @@ final class ChatTypingReveal {
         layout = ChatTypingLayout(text, ended: true)
         postedAt = now
         clock = ChatTypingClock(position: min(Double(layout.total), 1e-6), at: now)
-        frame = ChatTypingFrame(shown: 0, caret: 1)
+        let start = ChatTypingFrame(shown: 0, caret: 1)
+        frame = start
+        latest = start
+        staged = ChatTypingStage(layout, frame: start)
+        stage = staged
         advance(to: now)
-        frame = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
+        show(ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20))
+        restage()
     }
 
     /// The units of a posted message that have "arrived" by `now`: those whose costs fit in the time since it was
@@ -593,6 +631,29 @@ final class ChatTypingReveal {
 
     /// The units showing and the caret as of the last step, within the current layout.
     var current: ChatTypingFrame { ChatTypingFrame(shown: min(clock.shown, layout.total), caret: frame.caret) }
+    /// `current` without observing the frames: for views drawing them outside SwiftUI (`draws(for:_:)`).
+    var drawnFrame: ChatTypingFrame { ChatTypingFrame(shown: min(latest.shown, layout.total), caret: latest.caret) }
+
+    /// `owner` draws the frames itself: `draw` is called with each new one (within the layout as it was when set). One
+    /// drawer an owner; it stops with `stopsDrawing(for:)`.
+    func draws(for owner: AnyObject, _ draw: @escaping (ChatTypingFrame) -> Void) {
+        let id = ObjectIdentifier(owner)
+        drawers.removeAll { $0.owner == id }
+        drawers.append((id, draw))
+    }
+    func stopsDrawing(for owner: AnyObject) {
+        let id = ObjectIdentifier(owner)
+        drawers.removeAll { $0.owner == id }
+    }
+
+    /// Sets the frame when it changed, and tells the views drawing it.
+    private func show(_ next: ChatTypingFrame) {
+        guard next != latest else { return }
+        latest = next
+        frame = next
+        let drawn = drawnFrame
+        for drawer in drawers { drawer.draw(drawn) }
+    }
 
     /// The message as it is now. A reveal that rested (caught up, faded, past its blink) takes up what is new from
     /// where it shows: the caller schedules the clock again.
@@ -606,6 +667,16 @@ final class ChatTypingReveal {
         layout = ChatTypingLayout(text, ended: ended)
         let arrived = arrived(at: now)
         clock.resume(at: now, available: arrived, ended: ended && arrived == layout.total)
+        restage()
+    }
+
+    /// `stage` for the layout and the units showing now; set only when it changed, so views reading it alone draw
+    /// again only then.
+    private func restage() {
+        let next = ChatTypingStage(layout, frame: drawnFrame)
+        guard next != staged else { return }
+        staged = next
+        stage = next
     }
 
     /// Shows what has arrived at once (a reveal shown again after it left), caught up: it types what comes next. A
@@ -620,15 +691,15 @@ final class ChatTypingReveal {
         clock = ChatTypingClock(position: Double(layout.total), at: since)
         clock.advance(to: since, costs: layout.costs, ended: ended)
         // Its caret too: the one it left with (a typing reveal's solid one) is not this clock's.
-        let next = ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20)
-        if next != frame { frame = next }
+        show(ChatTypingFrame(shown: clock.shown, caret: (clock.caret(at: now) * 20).rounded() / 20))
+        restage()
     }
 
     func step(to now: TimeInterval) {
         advance(to: now)
         let caret = (clock.caret(at: now) * 20).rounded() / 20
-        let next = ChatTypingFrame(shown: clock.shown, caret: caret)
-        if next != frame { frame = next }
+        show(ChatTypingFrame(shown: clock.shown, caret: caret))
+        restage()
     }
 
     /// Shown in a view now.
@@ -897,8 +968,8 @@ final class ChatTypingReveal {
     #endif
 
     /// While one types or fades: on the Mac the motion policy's rate for `screen` (the link's window's; its own on the
-    /// adapter with Dispatch in front, 60 on battery or behind another app, 30 in Low Power Mode), on the phone every
-    /// frame (30 in Low Power Mode); the blink's ten either way.
+    /// adapter with Dispatch in front, 60 on battery or behind another app, 30 in Low Power Mode), on the phone the
+    /// Mac's on battery (`MotionRate.typing`, 60; 30 in Low Power Mode); the blink's ten either way.
     #if canImport(AppKit)
     static func range(_ needs: ChatTypingClock.Needs, on screen: NSScreen? = nil) -> CAFrameRateRange {
         if needs == .blink { return CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) }
@@ -907,7 +978,7 @@ final class ChatTypingReveal {
     #else
     static func range(_ needs: ChatTypingClock.Needs) -> CAFrameRateRange {
         if needs == .blink { return CAFrameRateRange(minimum: 8, maximum: 15, preferred: 10) }
-        return MotionRate.lowPower ? CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30) : .default
+        return MotionRate.range(for: nil, upTo: MotionRate.typing)
     }
     #endif
 

@@ -86,6 +86,33 @@ final class ChatMotionTests: XCTestCase {
         try await TestSupport.eventually { scan.running && shimmer.running }
     }
 
+    /// An Agents row's mark while its agent works: the thinking glyph, and in Low Power Mode the still dot (no loop at
+    /// all); leaving it brings the glyph back.
+    func testAWorkingAgentsRowKeepsAStillDotInLowPowerMode() async throws {
+        let row = ChatConversation(key: ChatConversationKey(host: UUID(), node: "a"), terminal: 1, hostName: "studio",
+                                   name: "Billing webhooks", space: nil, spaceNode: nil, cwd: nil,
+                                   binding: HelperTopology.Binding(session: "a", transcript: nil, pid: nil, start: nil, executable: nil),
+                                   summary: ChatConversationSummary(),
+                                   urgency: PaneUrgency(waiting: false, working: true, unread: false), muted: false, unread: false)
+        XCTAssertEqual(row.dot, .working)
+        let view = AgentRow(row: row, status: TabsStatus(text: "working", since: Date()), location: "studio · app", host: "studio")
+        let window = try show(view.frame(width: 370), size: CGSize(width: 402, height: 200))
+        try await TestSupport.eventually { self.loops(in: window).count == 1 && self.loops(in: window).allSatisfy(\.running) }
+        MotionRate.pin(lowPower: true)
+        defer { MotionRate.pin(lowPower: nil) }
+        try await TestSupport.eventually { self.loops(in: window).isEmpty }
+        MotionRate.pin(lowPower: nil)
+        try await TestSupport.eventually { self.loops(in: window).count == 1 && self.loops(in: window).allSatisfy(\.running) }
+
+        // Shown first in Low Power Mode: the dot from the start.
+        MotionRate.pin(lowPower: true)
+        let low = try show(view.frame(width: 370), size: CGSize(width: 402, height: 200))
+        low.layoutIfNeeded()
+        XCTAssertTrue(loops(in: low).isEmpty)
+        MotionRate.pin(lowPower: nil)
+        try await TestSupport.eventually { self.loops(in: low).count == 1 }
+    }
+
     /// Nothing runs in the background, out of a window or scrolled out of sight; back, the loops run again.
     func testTheLoopsStopWhereNothingShowsThem() async throws {
         let window = try show(Self.all, size: CGSize(width: 402, height: 300))

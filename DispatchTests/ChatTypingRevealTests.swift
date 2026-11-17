@@ -628,8 +628,8 @@ import XCTest
         XCTAssertEqual(again.current.shown, again.layout.total)
     }
 
-    /// Typing and fading follow the motion policy (on the Mac the screen's rate on the adapter, 60 on battery), 30 in
-    /// Low Power Mode; the blink keeps its ten.
+    /// Typing and fading follow the motion policy (on the Mac the screen's rate on the adapter, 60 on battery; on the
+    /// phone 60, never the screen's 120), 30 in Low Power Mode; the blink keeps its ten.
     func testLinkPacesByThePolicyAndAtThirtyInLowPowerMode() {
         MotionRate.pin(lowPower: true)
         defer { MotionRate.pin(lowPower: nil) }
@@ -641,7 +641,7 @@ import XCTest
         let fps = Float(min(NSScreen.main?.maximumFramesPerSecond ?? 60, MotionRate.limit))
         XCTAssertEqual(rates(ChatTypingLink.range(.frames)), [fps, fps, fps])
         #else
-        XCTAssertEqual(rates(ChatTypingLink.range(.frames)), rates(.default))
+        XCTAssertEqual(rates(ChatTypingLink.range(.frames)), [60, 60, 60])
         #endif
     }
 

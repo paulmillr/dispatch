@@ -7,7 +7,11 @@ import QuartzCore
 /// One terminal on the phone: the Term surface fed from a `TerminalFeed`, drawn by TermApple's Metal renderer into
 /// a `CAMetalLayer` on the frames' render thread. The Mac's `Session` (Vendor/Term/Sources/TermApple/Session.swift)
 /// with the pty replaced by the feed: output is parsed on the feed's task; the emulator's replies go back through
-/// the feed as input; the main queue gets the host's work (titles, the scrollbar, the grid for `resize`).
+/// the feed as input; the main queue gets the host's work (titles, the grid for `resize`).
+///
+/// Frames as on the Mac (docs/architecture.md, Terminal output is paced): a change output alone made draws at most
+/// `outputFramesPerSecond` times a second, the host's own actions (`pump()`: keys, scrolling, a selection, a resize)
+/// and output for `TerminalFrames.inputWindow` after one at the next refresh.
 ///
 /// Locks as on the Mac: `lock` (recursive) guards the surface for the feed task, the render thread and the main
 /// queue; `drawLock` guards what frames read besides the terminal (fonts, renderer, config), always taken first.
@@ -55,7 +59,6 @@ final class TerminalSession: @unchecked Sendable {
     /// When the open search last read the terminal (Ghostty's 24 ms search refresh); a frame request is on its way
     /// for a refresh the interval held back (under `lock`).
     private var snapshotCoordinator = SurfaceSnapshotCoordinator()
-    private var lastScrollbar: Scrollbar?
     private let host = TerminalSurfaceHost()
 
     private let lock = NSRecursiveLock()
@@ -64,6 +67,12 @@ final class TerminalSession: @unchecked Sendable {
     private var demand = 0, handoff = 0
     /// Set once in `init` and never replaced: the parse task requests frames from its own thread, also after `close`.
     private var frames: TerminalFrames?
+    /// Frames of output alone (a program printing, a spinner, an agent's status line) at most this many a second; 0:
+    /// the display's rate. The phone's policy is `MotionRate.terminalOutput`.
+    var outputFramesPerSecond: Int {
+        get { frames?.paced ?? 0 }
+        set { frames?.pace(newValue) }
+    }
     /// A main-queue pump is on its way (under `lock`); the grid the host last heard of.
     private var posted = false
     private var grid = (cols: 0, rows: 0)
@@ -148,7 +157,7 @@ final class TerminalSession: @unchecked Sendable {
         layer.maximumDrawableCount = 3
         boldIsBright = configuration.boldIsBright
         apply()
-        frames = TerminalFrames { [weak self] in self?.present() }
+        frames = TerminalFrames(outputFramesPerSecond: MotionRate.terminalOutput) { [weak self] in self?.present() }
     }
 
     deinit { frames?.stop() }
@@ -199,7 +208,7 @@ final class TerminalSession: @unchecked Sendable {
         if !replies.isEmpty { output?(Data(replies)) }
         onParsed?()
         frames?.request()
-        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump() } } }
+        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump(urgent: false) } } }
         yieldToDemand()
     }
 
@@ -214,9 +223,10 @@ final class TerminalSession: @unchecked Sendable {
         frames?.request()
     }
 
-    /// The surface's queued work: replies, its messages for the host, the scrollbar, the grid, a frame. Call after
-    /// changing the surface on the main queue.
-    @MainActor func pump() {
+    /// The surface's queued work: replies, its messages for the host, the grid, a frame. Call after changing the
+    /// surface on the main queue. `urgent`: the host's own action (a key, a scroll, a resize, a selection), drawn at
+    /// the next refresh; false for the work output brought (`FrameDemand`).
+    @MainActor func pump(urgent: Bool = true) {
         var replies: [UInt8] = []
         let changedGrid = locked { () -> TerminalFeedSize? in
             posted = false
@@ -227,7 +237,7 @@ final class TerminalSession: @unchecked Sendable {
         }
         if !replies.isEmpty { output?(Data(replies)) }
         if let changedGrid { onGrid?(changedGrid) }
-        frames?.request()
+        frames?.request(urgent: urgent)
     }
 
     /// The grid and its cell in pixels, for `attach` and `resize` (under `lock`).
@@ -240,7 +250,7 @@ final class TerminalSession: @unchecked Sendable {
 
     /// The terminal's part of a frame, under `lock` (with `drawLock` held): what changed, the search's refresh and
     /// highlights, the rows drawn. Whether a main-queue pump must take the surface's new messages.
-    private func snapshot() -> ([(cp: UInt32, wide: Bool)]?, RenderSize, Scrollbar, Bool) {
+    private func snapshot() -> ([(cp: UInt32, wide: Bool)]?, RenderSize, Bool) {
         let snapshot = snapshotCoordinator.capture(surface, cells: &cells, look: look, blinkVisible: blink.visible,
                                                    state: &state, now: DispatchTime.now().uptimeNanoseconds)
         if let delay = snapshot.searchRefreshDelay {
@@ -252,7 +262,7 @@ final class TerminalSession: @unchecked Sendable {
         }
         let post = !posted && !surface.stream.handler.surface.isEmpty
         if post { posted = true }
-        return (snapshot.preedit, snapshot.size, snapshot.scrollbar, post)
+        return (snapshot.preedit, snapshot.size, post)
     }
 
     /// A frame into the layer's next drawable (render thread). Only the snapshot of the terminal happens under the
@@ -263,12 +273,10 @@ final class TerminalSession: @unchecked Sendable {
         let started = CACurrentMediaTime()
         let size = layer.drawableSize
         guard size.width >= 1, size.height >= 1, let drawable = layer.nextDrawable() else { return }
-        let (preedit, renderSize, bar, post) = demanded { snapshot() }
-        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump() } } }
-        if bar != lastScrollbar {
-            lastScrollbar = bar
-            DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump() } }
-        }
+        let (preedit, renderSize, post) = demanded { snapshot() }
+        // The Mac pumps again when the scrollbar changed, for the scroller it shows: nothing here shows one, and the
+        // pump's frame drew every frame that added a line a second time.
+        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump(urgent: false) } } }
         let c = cells.contents(preedit: preedit, state: &state)
         state.dirty = .false
         var u = FrameUniforms(size: renderSize, cell: SurfaceSessionCore.cell(cells), cols: c.cols, rows: c.rows, background: c.background,
@@ -299,7 +307,7 @@ final class TerminalSession: @unchecked Sendable {
         }
     }
 
-    /// A frame at the next refresh, a whole one.
+    /// A whole frame, at the output's pace (the cursor's blink, a new attachment).
     func refresh() {
         exclusive { state.dirty = .full }
         frames?.request()
@@ -454,10 +462,10 @@ final class TerminalSession: @unchecked Sendable {
         drawLock.lock()
         defer { drawLock.unlock() }
         let (highlights, post) = locked { () -> ([[(x: ClosedRange<Int>, selected: Bool)]], Bool) in
-            let post = snapshot().3
+            let post = snapshot().2
             return (state.highlights, post)
         }
-        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump() } } }
+        if post { DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.pump(urgent: false) } } }
         return highlights
     }
 

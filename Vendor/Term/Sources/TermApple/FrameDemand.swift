@@ -10,16 +10,18 @@ import Foundation
 public final class FrameDemand: @unchecked Sendable {
     /// What a refresh does.
     public enum Refresh: Equatable { case draw, wait, pause }
-    /// How long after input output still draws at every refresh (an echo, the reply to a key).
+    /// How long after input output still draws at every refresh (an echo, the reply to a key): a local program's.
     public static let inputWindow: Double = 0.25
 
+    /// This demand's `inputWindow` (longer where the echo crosses a network).
+    private let window: Double
     private let lock = NSLock()
     private var changed = true, paused = false, shown = true
     /// Output-only frames at most once this many seconds (0: every refresh); times are the display link's.
     private var interval = 0.0
     private var urgentUntil = -Double.infinity, lastDraw = -Double.infinity
 
-    public init() {}
+    public init(inputWindow: Double = FrameDemand.inputWindow) { window = inputWindow }
 
     /// Records a change. Whether a paused display link must be woken.
     public func request() -> Bool { request(urgent: false, at: 0).wake }
@@ -33,7 +35,7 @@ public final class FrameDemand: @unchecked Sendable {
         var hurry = false
         if urgent {
             hurry = interval > 0 && now >= urgentUntil
-            urgentUntil = now + Self.inputWindow
+            urgentUntil = now + window
         }
         return (wake(), hurry)
     }
