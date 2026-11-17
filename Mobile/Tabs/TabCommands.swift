@@ -289,14 +289,16 @@ extension MobileWorkspace {
     /// at a time: on another one, `follow` switches the host to it (its saved preference) once its server runs, so the
     /// new space shows up.
     func createSpace(name: String, directory: String?, on multiplexer: MultiplexerChoice? = nil,
-                     follow: @MainActor (String) -> Void = { _ in }, timeout: Duration = .seconds(10)) async throws -> MobileTab {
+                     follow: @MainActor (String) -> Void = { _ in }, started: @MainActor () -> Void = {},
+                     timeout: Duration = .seconds(10)) async throws -> MobileTab {
         let commands = try commands(nodes: false)
         /// The spaces before: the new one is none of them. After a switch the target's own arrive later, and join it.
         var before = Set(spaces.map(\.ref.key))
         guard let target = multiplexer ?? choice else { throw TabsFailure.noMultiplexer }
         // The backend's id whether its server already runs or starts now; the host session's open of the same route
-        // brings the new space's topology.
+        // brings the new space's topology, at once even while it waits out its backoff for a server (`started`).
         let backend = try await commands.createBackend(target.route)
+        started()
         let switching = target.name != choice?.name
         if switching {
             follow(target.name)

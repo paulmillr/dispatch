@@ -54,10 +54,11 @@ struct HostStatsPresentation {
         return "Offline · last sample \(HostStatsFormat.time(date))"
     }
 
-    /// W7's banner while Low Power Mode slows sampling.
-    var lowPowerBanner: String? {
-        let seconds = HostStatistics.cadence(viewing: true, lowPower: true).components.seconds
-        return phase == .live && stats.lowPower ? "Low Power Mode · sampling every \(seconds) s" : nil
+    /// W7's banner while frugal mode slows sampling, naming why ("Low Power Mode · sampling every 30 s").
+    var frugalBanner: String? {
+        let seconds = HostStatistics.cadence(viewing: true, frugal: true).components.seconds
+        guard phase == .live, let reason = stats.frugal else { return nil }
+        return "\(reason.label) · sampling every \(seconds) s"
     }
 
     /// "alex@studio.local", with the port when it is not SSH's ("alex@studio.local:2222").
@@ -127,7 +128,9 @@ struct HostStatsSheet: View {
                         NavigationStack { content(session) }
                     }
                 }
-                .hostStatsViewing(session.stats)
+                // The process list shows only upright at the large detent: the small detent and the phone's side ask
+                // for none.
+                .hostStatsViewing(session.stats, processes: verticalSizeClass != .compact && large)
                 // Remove host in Edit host closes this sheet too (the session goes: the branch below).
                 .sheet(isPresented: $editing) {
                     NewHostSheet(editing: session.host).tint(.dispatchPink)
@@ -228,7 +231,7 @@ struct HostStatsBody: View {
         let phase = presentation.phase
         let tint = session.host.tint.color
         VStack(spacing: 14) {
-            if expanded, let banner = presentation.lowPowerBanner {
+            if expanded, let banner = presentation.frugalBanner {
                 HostStatsBanner(text: banner, symbol: "battery.25percent", caution: true)
             }
             if expanded, let banner = presentation.offlineBanner {
@@ -245,7 +248,7 @@ struct HostStatsBody: View {
     }
 }
 
-/// W5's offline line and W7's Low Power Mode line.
+/// W5's offline line and W7's frugal mode line.
 struct HostStatsBanner: View {
     let text: String
     let symbol: String
@@ -462,14 +465,30 @@ extension HostSessions {
 }
 
 extension View {
-    /// Asks `stats` for 2 s samples while this view is on screen (`HostStatistics.beginViewing`). Keyed by the store, so
-    /// an edit that replaces the host's session (and its stats) moves the request to the new one.
-    func hostStatsViewing(_ stats: HostStatistics) -> some View {
-        task(id: ObjectIdentifier(stats)) {
-            let token = stats.beginViewing()
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
-            stats.endViewing(token)
-        }
+    /// Asks `stats` for 5 s samples while this view is on screen (`HostStatistics.beginViewing`), with the process list
+    /// while `processes` (what the view shows now). Keyed by the store, so an edit that replaces the host's session (and
+    /// its stats) moves the request to the new one.
+    func hostStatsViewing(_ stats: HostStatistics, processes: Bool = true) -> some View {
+        modifier(HostStatsViewing(stats: stats, processes: processes))
+    }
+}
+
+private struct HostStatsViewing: ViewModifier {
+    let stats: HostStatistics
+    let processes: Bool
+    @State private var token: UUID?
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: ObjectIdentifier(stats)) {
+                let token = stats.beginViewing(processes: processes)
+                self.token = token
+                while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+                stats.endViewing(token)
+            }
+            .onChange(of: processes) { _, shows in
+                if let token { stats.showsProcesses(token, shows) }
+            }
     }
 }
 
@@ -585,7 +604,7 @@ struct HostStatsPopoverContent: View {
             .frame(width: Self.width)
             .frame(minHeight: 480, idealHeight: 628)
             .tint(.dispatchPink)
-            .hostStatsViewing(session.stats)
+            .hostStatsViewing(session.stats, processes: true)
             .sheet(isPresented: $editing) { NewHostSheet(editing: session.host).tint(.dispatchPink) }
         }
     }

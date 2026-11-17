@@ -518,6 +518,7 @@ fn route(helper: &DispatchHelper, observers: &Observers, replies: &Replies, upda
         features: helper.features.clone(),
         follows: helper.follows.clone(),
         activity: helper.activity.clone(),
+        topologies: helper.topologies.clone(),
     }
     .update(update);
 }

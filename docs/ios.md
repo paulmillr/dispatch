@@ -321,18 +321,30 @@ connection up without it: both are [plain SSH](#plain-ssh).
   and the fallback reasons are unchanged; a miss on a connection that went meanwhile is a loss.
 
 - **Traffic.** Everything the phone sends a host on a timer waits for the same clock (`HostTraffic`): 15 s ticks of
-  the wall clock, the stats chart's bars. The stats' samples (`HostStatistics`, 30 s ticks under Low Power Mode), the
-  liveness ping and the branch poll (`SpaceGitFacts`) end their waits on them, so every host's periodic frames leave
-  together: while nothing else flows a cellular radio, which stays up about 10 s after a burst, can idle between ticks in
-  the foreground (with the old 10 s ping beside 15 s stats it never did). A tick the stats sample on sends no `echo`
-  (`HostPulse`): the sample's requests are the helper's frame for that tick and `stats.sample`'s round trip is the
-  latency; a sample that gets no answer (refused before it left, or lost) sends the tick's `echo` itself. Without a
-  sample on a tick (the background's linger, Low Power Mode's other ticks, a stats sheet's 2 s samples, which are off
-  the clock) the ping goes, without waiting for the last ping's answer (it can sit behind a flood of output; the
-  helper reads the request at once). So the helper hears a frame every 15 s (`stdio.liveness`); around a change (a
-  sample cancelled just after the ping skipped its tick, the background, a connection's first tick, up to a second
-  late) a gap can reach about 30 s, under the helper's 45 s. The SSH keepalive (every 15 s of silence, a silent link
-  dead after 60 s: [Transport](#transport)) is the transport's own.
+  the wall clock, the stats chart's bars. The stats' samples (`HostStatistics`), the liveness ping, Agents' `chat.list`
+  poll (`AgentsPoll`), Review's status poll (`ReviewChanges`) and the branch poll (`SpaceGitFacts`) end their waits on
+  them, so every host's periodic frames leave together: while nothing else flows a cellular radio, which stays up about
+  10 s after a burst, can idle between ticks in the foreground (with the old 10 s ping beside 15 s stats it never did).
+  A tick the stats sample on sends no `echo` (`HostPulse`): the sample's requests are the helper's frame for that tick
+  and `stats.sample`'s round trip is the latency; a sample that gets no answer (refused before it left, or lost) sends
+  the tick's `echo` itself. A stats sheet's 5 s samples keep to the clock too (its 5 s marks: every third is a tick,
+  and the sample there stands in for the ping); only a sheet's first, at once, is off it. Under frugal mode (below) the
+  stats sample every other tick and the ping skips the ticks between two samples at most 30 s apart too, so nothing
+  periodic leaves on them. Without a sample on or around a tick (the background's linger, a new cadence's first wait of
+  more than 30 s) the ping goes, without waiting for the last ping's answer (it can sit behind a flood of output; the helper
+  reads the request at once). So the helper hears a frame every 15 s, every 30 s under frugal mode (`stdio.liveness`);
+  a sample cancelled after the ping skipped its tick (a sheet opening, the background, frugal mode changing) sends that
+  tick's `echo` as it is cancelled (`HostPulse.owed`). Around a change (the background, a connection's first tick, up to
+  a second late) a gap can reach about 30 s, under the helper's 45 s. The SSH keepalive (every 15 s of silence, a
+  silent link dead after 60 s: [Transport](#transport)) is the transport's own.
+- **Frugal mode** (`Frugal`, Mobile/App). One phone-wide switch, on in Low Power Mode or while the network path is
+  constrained (Low Data Mode, `NWPath.isConstrained`, read from the composition's `NetworkPathWatcher`): the user's own
+  asks for less. Cellular or a Personal Hotspot alone (`isExpensive`) does not turn it on. Each periodic sender reads
+  it: the stats sample every 30 s on the clock, viewed or not (the sheet's banner names the reason, "Low Data Mode ·
+  sampling every 30 s"); the ping skips the ticks between samples (above); Agents' poll reads only on the minute's
+  ticks; Review's and the branches' polls go every other tick, with the samples; and every host's helper paces the
+  notifications nothing waits for to the same tick (Pacing, Helper protocol). `Frugal.active` and `Frugal.changed`
+  (posted on the main queue) are the API for other senders. What is pre-warmed, kept or drawn does not change with it.
 
 - Lost link or helper: `reconnecting` at once (a silent link is lost once the keepalive gives up, 60 s after the
   server's last packet), backoff 1 s up to 60 s, raced by `retryNow()`
@@ -369,7 +381,11 @@ connection up without it: both are [plain SSH](#plain-ssh).
   asking for more) never go direct.
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs. Automatic prefers running herdr, otherwise tmux; an explicit herdr preference waits
-  for its server without opening it. Discovery and failed follows retry every 2 s. A preference change switches
+  for its server without opening it. Discovery and failed follows retry (`MultiplexerFollower`: `multiplexers.list`,
+  `backends.open`, `backends.list`; the host runs `tmux -V` and a server probe) after 2 s, doubling with each round in
+  a row that finds no server up to 60 s; the backoff starts over after a followed server goes away, and New space (its
+  `backends.create` answered), pull to refresh, foregrounding (`HostSession.rediscover`) and a preference change look at
+  once. A preference change switches
   live without reconnecting; until the new one answers the host's spaces are unknown (`switchingMultiplexer`). The
   exec channel names no herdr socket, so the helper uses herdr's own default, as `herdr` typed in a shell does; only
   variables the login shell's `-c` exports (`.zshenv`) reach it.
@@ -452,7 +468,20 @@ they let the helper do on the host is in [security](security.md#dispatch-for-iph
 - **Agent activity.** The hello names `agents.activity`: the followed backend's `agent.changed` carries a summary
   when a listed agent's state, newest message or turn changes (at most one per terminal per 500 ms), and the phone
   reads the host's `chat.list` again once per burst (`ChatConversations.activityChanged`, 400 ms). Older helpers send
-  none; the 20 s foreground poll covers them.
+  none, and Pi's transcript is not watched: the foreground poll reads such a host every 15 s tick (Agents).
+- **Pacing.** The hello names `notify.pace`, which changes nothing by itself. `HostSession.notificationPace` (nil, the
+  default: off) sends `notify.pace {ms}` to the current helper when it changes and to each new one once ready; the
+  helper then holds the notifications nothing waits for (an agent's activity text or newest answer, pane titles, and
+  the records and state of chats marked with `HelperClient.background(subscription:_:)`) until the phone gets or sends
+  something anyway or the interval ends, so the radio wakes for a batch. Busy and waiting changes, approvals, replies
+  and terminal output are never held. Frugal mode turns it on, at one tick of the shared clock (15 s,
+  `HostSessions.frugalPace`), for every host, and off again when the phone is no longer frugal. A chat session tells
+  its helper its subscription is in the background whenever no thread shows it (a warm or kept session), and in front
+  again when one does (`MobileChatSession.markBackground`, only on a change and in order), so a frugal phone gets the
+  shown thread's records at once and the others' in the paced batches.
+- **Equal topologies.** The helper sends the phone (which names `notify.pace`) no topology equal to the last one a
+  subscription got (other clients, the Mac's, get every one); one an older helper repeats changes nothing on the phone
+  (`HostSession` sets neither `updated` nor calls `changed`).
 - **Plan limits.** The hello names `chat.limits`: the unfolded working row reads the agent's usage windows
   (`ChatLimitsReader`, Chats); a helper that does not accept it gets no read and the row shows no limits.
 - **Reattach by key**, not id: after reconnecting, `backends.open`, find terminals by topology key, then `chat.open`
@@ -593,7 +622,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   its value (other pushed screens keep their labelled pill). Beside it one glass capsule holds the host's glyph on a
   disc of its colour, the tab's title and `host · folder` under it, one line each (a long title truncates; VoiceOver
   reads all of it); a tap opens the tab's one menu (`TabMenuItems`, the landscape rail's and iPad's disc opens the
-  same): on Chat Search, the host's Stats, Side Conversation (read-only; one with changes is the composer's `/side`)
+  same): on Chat Model first (the model and effort the agent reports under it, `opus-5.5 · high` as a fresh chat's
+  intro names them; it opens the model and effort sheet, `ChatSettingsSheet`, while the conversation is verified),
+  then Search, the host's Stats, Side Conversation (read-only; one with changes is the composer's `/side`)
   or the open one, and Manage goal; elsewhere Stats first; the pane picker when the segment can show more than one pane
   (on Chat only the panes running an agent, the shown one checked); the tab's (Rename…, Move to, Close Tab; Detach is
   the rows'). Its first line names the tab and its host in full (`name · host`), which the capsule may cut. The
@@ -695,8 +726,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   row leaves at once with its tab (`MobileWorkspace.closes`) and comes back with it. The empty state says why: no host (Add host),
   connecting, no host reached (each problem, Try Again), Chat off or plain SSH, or no agent running (New chat).
   Rows not open as a thread come from `chat.list`: on every new connection or binding change, the helper's activity
-  push, pull to refresh, the foreground, and every 20 s while the app is in the foreground. A request made while one
-  is on its way runs after it; a failed one keeps the rows, stale. `activity` "waiting" (Claude at a prompt in its
+  push, pull to refresh, the foreground (at once), and the foreground poll on the shared clock (`AgentsPoll`, Traffic):
+  once a minute (every fourth tick) for a host whose helper pushes, every 15 s tick for one whose helper does not
+  (no `agents.activity`) or with a bound Pi agent (`chat.list`'s `key`; the helper does not watch Pi's transcript),
+  only once a minute under frugal mode. The poll catches what the push cannot: Pi, a change of `attention` alone, and a
+  connection kept through the background linger. A request made while one is on its way runs after it; a failed one keeps the rows, stale. `activity` "waiting" (Claude at a prompt in its
   terminal) is needs you; `state_error` and `history_error` keep the row's previous state and message; unread compares
   `reply_ms` (the newest message or turn end), not `time_ms`, with the seen marker, which a shown thread moves through
   its newest record counting its turn's end (`MobileTranscript.lastActivity`), so a thread read through its end is not
@@ -815,7 +849,25 @@ The policies below are the ones a change must keep; the screens themselves are d
   so the rows being read stay put; past the first of them the helper's earlier page is asked for (`chat.page`), never
   on opening. Drawn while not following, they move the scroll view's offset by their height (a finger still
   dragging included); following, the end stays in view. Parsed bubble text is kept per text and font
-  (`MobileChatMarkdownView.contents`). Send's tap sends as the draft goes now; its long press only presents what the tap
+  (`MobileChatMarkdownView.contents`); a reply still streaming, and the part of one typed so far, is kept apart (a few
+  parses at most), so a stream never starts the finished bubbles' cache over.
+  Thread updates: the helper's records apply to the session's transcript as they land (`MobileChatSession.latest`,
+  which its own logic and the step line read), and reach what the thread and the lists draw (`transcript`) at once for
+  a turn's start or end, the user's own message, an approval or question (with everything held before it), a history
+  or earlier page, a step's full output, thinking folding away, a pause, and the thread appearing or following its end
+  again. A record that only streams on (a reply's or thinking's next words, a tool step, its output) waits for the
+  next presentation (`presentSoon`): at most 0.1 s while a thread shows and follows its end, 0.25 s otherwise
+  (scrolled up, or not shown), as the Mac's reading hold (`ChatSession.TranscriptHold.reading`), so a reply streamed
+  in many small records rebuilds the thread a few times a second instead of once per record. It is off while testing
+  (`MobileChatSession.recordsHoldEnabled`, as the typed reveal is: tests read rows as records land); its own tests turn
+  it on per session (`holdsRecords`) and run its timer by hand. The rows are built once per presented revision
+  (`MobileTranscript.rows`, however often a pass reads them) and an ended turn's summary once per change to that turn;
+  a reply's corner is plain strings told once per row and day (`ChatCorner`), so a bubble whose text and corner did not
+  change is not drawn again. A `chat.state` assigns only what changed, and a subagent's token count (about once a second)
+  reaches only the views that show it (the working row's agents): the thread reads how many run
+  (`runningSubagents`); and `currentStep`, which Spaces' and Agents' rows read, is read again only when the open
+  turn, its tool items or its last message change (the steps it counts start after that message); their notes
+  (`currentNote`, `currentThought`, `currentPrompt`) only when the texts they read change. Send's tap sends as the draft goes now; its long press only presents what the tap
   can do: Send; Send now and Queue while the agent works; Queue alone while the tap queues and the agent cannot take it
   into its turn (terminal not attached, not verified, a command waiting for an idle agent: "Send" would promise what
   the tap does not do); "Complete /…" with the slash list up and "Open Terminal" for `/terminal`. Settings › Chat ›
@@ -829,11 +881,12 @@ The policies below are the ones a change must keep; the screens themselves are d
   `TabSegment.initial`; a pick on the tab sticks), and Keep history on this iPhone (`MobileSettings.chatKeepHistoryKey`,
   above). A hardware keyboard's first Esc arms the stop for a second, shown
   above the field; a second Esc stops the agent. There is no Escape setting, and its removed saved choice is ignored. "+" holds Photo or screenshot and File, then one group
-  titled Toggle: Code keys, Mine only and Dialog. The code keys above the field show only once picked there (Code
+  titled Toggle: Code keys and Dialog. The code keys above the field show only once picked there (Code
   keys, checked while on; `MobileSettings.composerCodeKeysKey`, kept app-wide; not offered with a hardware keyboard).
-  Mine only (checked while on, `MobileChatSession.mineOnly`, this conversation's while the app runs) leaves the user's
-  own messages in the thread, the agent's replies and thinking hidden (approvals, questions and the working row stay,
-  and a search sees everything); "Your messages only · Show all" over the composer says so and ends it. Dragging the thread down onto the composer, or on into the keyboard, takes a
+  The search bar (the title menu's Search, ⌘F) has its scope over it, All and Mine (`ChatThreadSearch.mine`): Mine
+  leaves the user's own messages in the thread, the agent's replies and thinking hidden (approvals, questions and the
+  working row stay), and finds only in them; with no query it is how the user reads their own messages alone. Closing
+  the search ends it. Dragging the thread down onto the composer, or on into the keyboard, takes a
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
   light on "thinking": one 2.2 s ease-in-out sweep, leading to trailing, the label lit where and while the glint passes
   over it (`ChatThinkingSweep`, `ChatSweepTrack`). The thread's loops (the ◆'s breathing and satellite, the glint and
@@ -889,7 +942,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   for `terminal.attached`. A program's copy (OSC 52, kitty) is denied behind the helper (no consent surface) and
   allowed from a plain shell; reads are denied for every feed. Reset terminal reattaches a helper terminal (RIS from
   the server's history) and only resets the emulator for a plain shell; it is disabled while Chat sends through the
-  terminal. Search is Ghostty's on the local emulator (`TerminalSearch`), newest match first. The iPad rules
+  terminal. Search is Ghostty's on the local emulator (`TerminalSearch`), newest match first. The focused cursor
+  blinks in 600 ms phases; a cursor that does not blink (hidden, as agents' TUIs keep it, or steady: a program's
+  DECSCUSR, Settings' Blinking cursor off) draws no frame for them (`TerminalSession.blinkTick`). The iPad rules
   (software keyboard placement from `keyboardLayoutGuide`, the hardware keyboard taking every key without ⌘,
   pointer selection) are in `TerminalAdaptation` and `TerminalHostView`.
 - **Terminal frames.** Paced as on the Mac (docs/architecture.md, Terminal output is paced; `TerminalFrames`): a
@@ -931,15 +986,17 @@ The policies below are the ones a change must keep; the screens themselves are d
   action. The host's name shows as a capsule for 2.5 s as it opens (`MobileLandscape.titleDuration`). Under CPU,
   Memory and Disk in a row, CPU and memory share one chart on one 0–100% axis (memory as a share of the host's, its
   line lavender and its fill fainter under CPU's), the gridlines' values inside it and the 15 minutes along the bottom;
-  a drag reads both at a bar's time. The processes stay the upright sheet's; offline or under Low Power Mode the row's
-  end says so, and the numbers dim. Everything the user sets
+  a drag reads both at a bar's time. The processes stay the upright sheet's (none is asked for on the side); offline or
+  under frugal mode the row's end says so, and the numbers dim. Everything the user sets
   is Edit host's (New host's form with the host's Color and, last, Remove host), saved with Save; Files' Change
   integration… opens Edit host directly.
 - **Host stats.** `HostStatistics`, one per `HostSession`: `stats.sample` on every 15 s tick of the shared clock in the
-  foreground (one per chart bar, Traffic), every 2 s while a sheet or popover shows the host, 30 s under Low Power Mode
-  (a bar without its own sample takes the next one, `barHold` 35 s). `stats.processes` (some 100 KB from a busy Mac)
-  only with a viewer's samples, the first at once when the sheet opens; `stats.disks` with a sample at most every 15 s
-  while viewed, every minute otherwise; a sample's requests go out together. Nothing in the background, on plain SSH
+  foreground (one per chart bar, Traffic), every 5 s on the same clock's 5 s marks while a sheet or popover shows the
+  host (the first at once), every 30 s on the clock under frugal mode, viewed or not (a bar without its own sample takes the next one, `barHold` 35 s).
+  `stats.processes` (some 100 KB from a busy Mac) only with the samples of a viewer that shows the list (the sheet's
+  large detent upright, the iPad's popover; not the small detent nor the phone's side, `showsProcesses`), the first at
+  once when it starts showing it; `stats.disks` with a sample at most every 15 s while viewed, every minute otherwise; a
+  sample's requests go out together. Nothing in the background, on plain SSH
   or before something shows the stats. Numbers are `live` only after the connection's own
   first sample; the last sample and 15 minutes of history stay through a drop, stale. Red thresholds are the Mac's
   (CPU 90 %, memory 90 %, disk 80 %). The watch reads `summary(at:)` through `WatchHostStatsFeed`, at most one change

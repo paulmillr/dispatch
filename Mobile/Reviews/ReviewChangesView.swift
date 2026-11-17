@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// H2: the repository's uncommitted changes, STAGED / UNSTAGED / UNTRACKED, each a card of `ReviewChangeRow`s that push
-/// the change's diff. The status is `ReviewChanges`' (read on appear, every 2 s while shown, on foregrounding, on pull
-/// and when an agent's turn ends); a failed read keeps the last list, and while the host is offline (S3) the shell dims
-/// it and nothing is read.
+/// the change's diff. The status is `ReviewChanges`' (read on appear, on the shared clock's 15 s ticks while shown, 30 s
+/// under frugal mode, on foregrounding, on pull and when an agent's turn ends); a failed read keeps the last list, and
+/// while the host is offline (S3) the shell dims it and nothing is read.
 struct ReviewChangesScreen: View {
     let context: ReviewContext
     @Environment(\.scenePhase) private var phase

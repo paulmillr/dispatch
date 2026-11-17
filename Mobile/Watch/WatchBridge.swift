@@ -61,7 +61,7 @@ enum WatchPairing: Equatable, Sendable {
 /// The phone's side of WatchConnectivity (docs/watch.md, The bridge): made and kept by `MobileComposition.app()`. It
 /// activates the session at once (a message that wakes the app reaches only an activated session with its delegate
 /// set), pushes the snapshot whenever what it shows changes, and serves the watch's requests through
-/// `WatchRequestServer`. Nothing is sent while no watch with the app installed is paired.
+/// `WatchRequestServer`. Nothing is built or sent while no watch with the app installed is paired.
 @MainActor
 final class WatchBridge: NSObject {
     let status = WatchBridgeStatus()
@@ -165,10 +165,13 @@ final class WatchBridge: NSObject {
 
     /// Builds the snapshot inside `withObservationTracking`, so the next change of anything it read schedules the next
     /// push, and sends it unless it equals the last one sent. `force`: send even then (the watch app just became
-    /// reachable and gets it as a message at once).
+    /// reachable and gets it as a message at once). Without an activated session and a paired watch with the app
+    /// nothing is built, fitted or observed: the session's callbacks (`activated`, `watchStateChanged`) push again when
+    /// that changes.
     func push(reason: String, force: Bool = false) {
         pending?.cancel()
         pending = nil
+        if let absent = absence { return skip(absent) }
         let snapshot = withObservationTracking { buildSnapshot() } onChange: { [weak self] in
             // Called before the change is made: the build waits for the debounce.
             Task { @MainActor in self?.schedule() }
@@ -213,13 +216,19 @@ final class WatchBridge: NSObject {
         }
     }
 
+    /// Why no snapshot can reach a watch now; nil when one can.
+    private var absence: String? {
+        guard session.activationState == .activated else { return "session not activated" }
+        guard session.isPaired else { return "no watch paired" }
+        guard session.isWatchAppInstalled else { return "watch app not installed" }
+        return nil
+    }
+
     private func send(_ snapshot: WatchSnapshot, reason: String, force: Bool) {
         var comparable = snapshot
         comparable.generated = .distantPast
         if !force, comparable == pushed { return skip("unchanged") }
-        guard session.activationState == .activated else { return skip("session not activated") }
-        guard session.isPaired else { return skip("no watch paired") }
-        guard session.isWatchAppInstalled else { return skip("watch app not installed") }
+        if let absent = absence { return skip(absent) }
         let message: [String: Any]
         do {
             message = try WatchCodec.message(snapshot)

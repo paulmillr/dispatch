@@ -33,6 +33,8 @@ pub(super) struct Client {
     pub stamp: Option<Instant>,
     pub began: Option<(Instant, u64)>,
     pub due: Option<Instant>,
+    /// Lazy notifications held for a batch (feature notify.pace, helper/pacing.rs); off for every other client.
+    pub pacing: super::pacing::Pacing,
 }
 
 /// Feature requests.backlog: the helper keeps reading a client's requests while its output is
@@ -117,6 +119,7 @@ impl Client {
             stamp: None,
             began: None,
             due: None,
+            pacing: Default::default(),
         }
     }
 
@@ -226,7 +229,27 @@ impl Client {
     /// held output of the same stream and terminal. Anything else first releases held output,
     /// keeping the order. `counted`: the client has an output window (terminals.window), so
     /// terminal.output carries its payload size as credit.
+    /// With pacing on (notify.pace) a lazy notification is held instead, and anything else first releases what is
+    /// held (less what it supersedes), so the order is kept.
     pub fn queue(&mut self, kind: wire::Kind, id: u64, body: Vec<u8>, coalesce: Option<Instant>, counted: bool) {
+        if self.pacing.on() {
+            match self.pacing.classify(kind, id, &body) {
+                super::pacing::Class::Later(key) => {
+                    if self.pacing.hold(id, body, key) {
+                        self.unpace();
+                    }
+                    return;
+                }
+                super::pacing::Class::Now(key) => {
+                    self.pacing.supersede(key);
+                    self.unpace();
+                }
+            }
+        }
+        // An answered request ends its subscription: nothing more is told on it.
+        if kind == wire::Kind::Response {
+            self.pacing.end(id);
+        }
         if let Some(now) = coalesce
             && kind == wire::Kind::Notify
             && let Some((terminal, bytes)) = output(&body)
@@ -262,6 +285,51 @@ impl Client {
             let mut message = wire::Message::value(wire::Kind::Notify, held.id, body);
             message.credit = if held.counted { held.bytes.len() as u64 } else { 0 };
             self.messages.push_back(message);
+        }
+    }
+
+    /// Send everything pacing holds now, after held output (which is older: output releases what pacing holds).
+    pub fn unpace(&mut self) {
+        if !self.pacing.holding() {
+            return;
+        }
+        self.release();
+        for (id, body) in self.pacing.take() {
+            self.messages.push_back(wire::Message::value(wire::Kind::Notify, id, body));
+        }
+    }
+
+    /// At `now` (the loop's clock, read only while pacing holds something): what pacing holds goes once due (the
+    /// first held one's time plus the interval); else the time a timer must be set for, when none is set for it yet.
+    pub fn paced(&mut self, now: Instant) -> Option<Instant> {
+        if !self.pacing.holding() {
+            return None;
+        }
+        self.pacing.since.get_or_insert(now);
+        let due = self.pacing.due()?;
+        if now >= due {
+            self.unpace();
+            return None;
+        }
+        if self.pacing.armed.is_some_and(|armed| armed <= due) {
+            return None;
+        }
+        self.pacing.armed = Some(due);
+        Some(due)
+    }
+
+    /// A notify.pace or chat.background request of this client.
+    pub fn pace(&mut self, pace: super::pacing::Pace) {
+        match pace {
+            super::pacing::Pace::Interval(ms) => {
+                if self.pacing.set(ms) {
+                    self.unpace();
+                }
+            }
+            super::pacing::Pace::Background(id, background) => {
+                let open = self.pending.contains(&id);
+                self.pacing.background(id, background, open);
+            }
         }
     }
 
@@ -302,6 +370,7 @@ impl Client {
         self.messages.retain(|message| message.id != id);
         self.output.cancel(id);
         self.forget(id);
+        self.pacing.end(id);
     }
 
     pub fn abort(&mut self, io: &mut dyn Io, request: Option<u64>) {

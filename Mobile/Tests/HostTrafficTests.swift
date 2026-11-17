@@ -5,7 +5,8 @@ import XCTest
 
 /// The phone's periodic traffic on one clock (docs/ios.md, Traffic): the stats' samples, the liveness ping and the
 /// branch poll end their waits on the same 15 s ticks; a tick a sample covers sends no `echo`, yet the helper hears a
-/// frame every tick (`stdio.liveness`); only a viewer's samples ask for the process list.
+/// frame every tick (`stdio.liveness`), every other tick under frugal mode; only a viewer's samples ask for the process
+/// list.
 @MainActor
 final class HostTrafficTests: XCTestCase {
     /// 5 s past a tick of the shared clock.
@@ -40,7 +41,7 @@ final class HostTrafficTests: XCTestCase {
         let helper = Self.demoHelper()
         let stats = HostStatistics()
         stats.now = { [unowned self] in self.clock }
-        stats.readLowPower = { false }
+        stats.readFrugal = { nil }
         stats.sleep = { try await sleeper.sleep($0) }
         stats.pulse = pulse
         return (stats, helper)
@@ -49,7 +50,7 @@ final class HostTrafficTests: XCTestCase {
     func testTheSharedClock() {
         XCTAssertEqual(HostTraffic.interval, SSHHostSessionDriver.livenessPing, "a frame every tick keeps the helper alive")
         XCTAssertEqual(SSHHostSessionDriver().pingInterval, HostTraffic.interval)
-        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: false), HostTraffic.interval)
+        XCTAssertEqual(HostStatistics.cadence(viewing: false, frugal: false), HostTraffic.interval)
         XCTAssertEqual(SpaceGitFacts.branchInterval, HostTraffic.interval)
         let tick = Self.tick
         XCTAssertEqual(HostTraffic.tick(after: tick.addingTimeInterval(-14), minimum: .seconds(1)), tick)
@@ -77,13 +78,13 @@ final class HostTrafficTests: XCTestCase {
         pulse.expect(tick.addingTimeInterval(15))
         XCTAssertTrue(pulse.covers(tick))
         XCTAssertTrue(pulse.covers(tick.addingTimeInterval(15)))
-        // The stats stopped (the background, a sheet's 2 s samples): the next tick is the ping's.
+        // The stats stopped (the background, a viewer's first sample): the next tick is the ping's.
         pulse.expect(nil)
         XCTAssertFalse(pulse.covers(tick.addingTimeInterval(15)))
     }
 
-    /// The stats tell the pulse the tick they sample on; the sample's round trip is the latency. A viewer's samples are
-    /// off the clock: the ping takes the ticks (and the latency) back.
+    /// The stats tell the pulse the tick they sample on; the sample's round trip is the latency. A viewer's first sample
+    /// is off the clock; the rest land on its 5 s marks, every third a tick the ping leaves to them.
     func testTheStatsAnnounceTheirTicks() async throws {
         let sleeper = SteppedSleeper()
         let pulse = HostPulse()
@@ -103,12 +104,21 @@ final class HostTrafficTests: XCTestCase {
 
         let token = stats.beginViewing()
         try await TestSupport.eventually { helper.requests("stats.sample").count == 2 && sleeper.pending == 1 }
-        XCTAssertFalse(pulse.covers(Self.tick.addingTimeInterval(15)), "a viewer's samples are off the clock")
-        XCTAssertEqual(trips.count, 1, "the ping measures while a sheet shows")
+        XCTAssertEqual(trips.count, 1, "a sample off the clock leaves the latency to the ping")
+        XCTAssertEqual(sleeper.durations.last, .seconds(5), "then the clock's next 5 s mark")
+        XCTAssertTrue(pulse.covers(Self.tick.addingTimeInterval(5)))
+        for step in 1...3 {
+            clock = Self.tick.addingTimeInterval(Double(step) * 5)
+            sleeper.step()
+            try await TestSupport.eventually { helper.requests("stats.sample").count == 2 + step && sleeper.pending == 1 }
+        }
+        XCTAssertTrue(pulse.covers(Self.tick.addingTimeInterval(15)), "a viewer's sample on the tick: no ping")
+        XCTAssertEqual(trips.count, 4, "the samples on the clock are the latency")
         stats.endViewing(token)
-        try await TestSupport.eventually { sleeper.pending == 1 && pulse.covers(Self.tick.addingTimeInterval(15)) }
+        try await TestSupport.eventually { sleeper.pending == 1 && pulse.covers(Self.tick.addingTimeInterval(30)) }
+        XCTAssertEqual(sleeper.durations.last, .seconds(15), "back to the 15 s ticks")
         stats.active = false
-        XCTAssertFalse(pulse.covers(Self.tick.addingTimeInterval(15)), "the background samples nothing: the ping keeps the link")
+        XCTAssertFalse(pulse.covers(Self.tick.addingTimeInterval(30)), "the background samples nothing: the ping keeps the link")
     }
 
     /// Only a viewer asks for the process list: its first sample goes at once with it, even right after a tick's sample;
@@ -171,6 +181,87 @@ final class HostTrafficTests: XCTestCase {
         XCTAssertEqual(helper.requests("echo").count, 2, "none on the tick the sample covered")
     }
 
+    /// Frugal mode: the stats sample every other tick and the ping leaves the ticks between to them too, so the helper
+    /// hears the phone every 30 s (its limit is 45 s); a gap over 30 s (a new cadence's first wait) keeps the ping.
+    func testTheFrugalPulseCoversTheTicksBetweenSamples() {
+        let pulse = HostPulse()
+        let tick = Self.tick
+        pulse.sampled(tick)
+        pulse.expect(tick + 30)
+        XCTAssertTrue(pulse.covers(tick + 15), "between two samples 30 s apart")
+        XCTAssertFalse(pulse.owed(at: tick + 15), "the sample it relies on is not due yet")
+        XCTAssertTrue(pulse.covers(tick + 30))
+        // That sample is cancelled (a sheet opens, the background) just after the ping skipped its tick: its frame is owed.
+        XCTAssertTrue(pulse.owed(at: tick + 30.2))
+        XCTAssertFalse(pulse.owed(at: tick + 30.2), "once")
+
+        pulse.expect(tick + 75)
+        XCTAssertFalse(pulse.covers(tick + 45), "45 s between the samples: the ping goes")
+        XCTAssertFalse(pulse.owed(at: tick + 75), "the ping sent its own frame")
+        pulse.expect(tick + 90)
+        XCTAssertTrue(pulse.covers(tick + 90))
+        pulse.sampled(tick + 90)
+        XCTAssertFalse(pulse.owed(at: tick + 90.1), "the sample went")
+    }
+
+    /// Frugal stats sample on the 30 s ticks and tell the pulse, which covers the ticks between; leaving just after the
+    /// ping skipped a sample's tick sends that tick's `echo` from the stats.
+    func testFrugalStatsCoverTheTicksBetweenAndSendACancelledTicksEcho() async throws {
+        let sleeper = SteppedSleeper()
+        let pulse = HostPulse()
+        let helper = Self.echoingDemoHelper()
+        let stats = HostStatistics()
+        stats.now = { [unowned self] in self.clock }
+        stats.readFrugal = { .lowData }
+        stats.sleep = { try await sleeper.sleep($0) }
+        stats.pulse = pulse
+        stats.active = true
+        stats.attach(helper.client)
+        try await TestSupport.eventually { sleeper.pending == 1 }
+        // The first 30 s tick at least 15 s away.
+        let first = Date(timeIntervalSinceReferenceDate: 800_000_040)
+        XCTAssertEqual(sleeper.durations, [.seconds(40)])
+        XCTAssertTrue(pulse.covers(first))
+        clock = first
+        sleeper.step()
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 1 && sleeper.pending == 1 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(30))
+        XCTAssertTrue(pulse.covers(first + 15), "the tick between two samples: no echo")
+        XCTAssertTrue(pulse.covers(first + 30), "the next sample's")
+        XCTAssertTrue(helper.requests("echo").isEmpty)
+        // The app leaves just after the ping skipped that tick: its echo goes now.
+        clock = first + 30.1
+        stats.active = false
+        try await TestSupport.eventually { helper.requests("echo").count == 1 }
+        XCTAssertEqual(helper.requests("stats.sample").count, 1)
+    }
+
+    /// Frugal mode: Low Power Mode or Low Data Mode (a constrained path; cellular alone is not), posted when it changes;
+    /// the polls' cadence doubles under it.
+    func testFrugalModeFollowsThePathAndPostsItsChanges() throws {
+        guard !System.lowPowerMode else { throw XCTSkip("Low Power Mode is on") }
+        Frugal.path(constrained: false)
+        defer { Frugal.unpin(); Frugal.path(constrained: false) }
+        XCTAssertFalse(Frugal.active)
+        let posts = Recorder<Int>()
+        let observer = NotificationCenter.default.addObserver(forName: Frugal.changed, object: nil, queue: nil) { _ in posts.append(1) }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        Frugal.path(constrained: true)
+        XCTAssertEqual(Frugal.reason, .lowData)
+        Frugal.path(constrained: true)
+        XCTAssertEqual(posts.values.count, 1, "only changes post")
+        Frugal.pin(nil)
+        XCTAssertFalse(Frugal.active, "pinned by a test")
+        Frugal.unpin()
+        XCTAssertTrue(Frugal.active)
+        Frugal.path(constrained: false)
+        XCTAssertFalse(Frugal.active)
+        XCTAssertEqual(posts.values.count, 4)
+        XCTAssertEqual(HostTraffic.cadence(.seconds(15), frugal: true), .seconds(30))
+        XCTAssertEqual(HostTraffic.cadence(.seconds(15), frugal: false), .seconds(15))
+        XCTAssertEqual(HostTraffic.cadence(.seconds(60), frugal: true), .seconds(60))
+    }
+
     /// A ping whose answer sits behind output does not hold the next one: each tick sends its own.
     func testAPingDoesNotWaitForTheLastAnswer() async throws {
         let helper = Self.silentHelper()
@@ -198,7 +289,7 @@ final class HostTrafficTests: XCTestCase {
         try await helper.client.connection.configure(limit: 12_000_013, ops: ["hello", "echo", "stats.disks"])
         let stats = HostStatistics()
         stats.now = { [unowned self] in self.clock }
-        stats.readLowPower = { false }
+        stats.readFrugal = { nil }
         stats.sleep = { try await sleeper.sleep($0) }
         stats.pulse = pulse
         var trips = 0

@@ -9,8 +9,8 @@ import Observation
 ///
 /// The root is read once per key, folder and connection (`resolve`): again when the folder changes, when the host's
 /// connection or grant changes (`invalidate`, a new `generation`), or when the last read failed. The branch is polled
-/// every `interval` (15 s, on the shared clock's ticks with the stats' samples and the liveness ping, `HostTraffic`; the
-/// Mac's cadence for the branch names it shows is 10 s) only while something shows it (`watch`: the Files segment, a
+/// every `interval` (15 s, on the shared clock's ticks with the stats' samples and the liveness ping, `HostTraffic`; 30 s
+/// under frugal mode; the Mac's cadence for the branch names it shows is 10 s) only while something shows it (`watch`: the Files segment, a
 /// visible space's branch chip); nothing polls otherwise. One read per key at a time; a read asked meanwhile
 /// runs after it with the latest folder, and the previous facts stay until it answers.
 @MainActor @Observable
@@ -91,7 +91,8 @@ final class SpaceGitFacts {
     func watch(_ key: Key, directory: String) async {
         await resolve(key, directory: directory)
         while !Task.isCancelled {
-            do { try await sleep(HostTraffic.wait(every: interval, from: System.date()).delay) } catch { return }
+            // Under frugal mode every other tick, with the stats' samples.
+            do { try await sleep(HostTraffic.wait(every: HostTraffic.cadence(interval), from: System.date()).delay) } catch { return }
             guard !Task.isCancelled else { return }
             if needsRoot(key, directory) {
                 await readRoot(key, directory)

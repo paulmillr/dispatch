@@ -311,7 +311,7 @@ final class SSHDriverTests: XCTestCase {
                                                        "terminals.coalesce", "launch.names", "stdio.liveness",
                                                        "chat.attachments", "memberships.append",
                                                        "screens.host", "terminals.follow", "sizes.steady", "topology.bound",
-                                                       "agents.activity", "chat.limits"])
+                                                       "agents.activity", "chat.limits", "notify.pace"])
         XCTAssertLessThan(SSHHostSessionDriver.boundWait, SSHHostSessionDriver().firstTopology,
                           "the helper's held first topology arrives within the wait for it")
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)
@@ -384,6 +384,58 @@ final class SSHDriverTests: XCTestCase {
         try await TestSupport.eventually { helper.cancellations.contains(tmux) }
         XCTAssertEqual(followed.values, ["tmux", "herdr"])
         XCTAssertTrue(helper.requests("stats.processes").isEmpty, "running came with the rows")
+    }
+
+    /// While no server runs the follower looks again after 2, 4, 8 … up to 60 s, not every 2 s for good; a ring
+    /// (`HostSession.rediscover`: New space, pull to refresh, foregrounding) looks at once and starts the backoff over,
+    /// as a preference change does.
+    func testTheFollowerBacksOffWhileNoServerRuns() async throws {
+        var rows = rows
+        rows[0].running = false
+        rows[2].running = false
+        nonisolated(unsafe) let listed = rows.map { row -> [String: Any] in
+            var object: [String: Any] = ["mux": row.mux, "name": row.name, "external": row.external]
+            if let running = row.running { object["running"] = running }
+            if let installed = row.installed { object["installed"] = installed }
+            return object
+        }
+        let helper = ScriptedHelper.scripted { request in
+            switch request.method {
+            case "multiplexers.list": .result(listed)
+            case "backends.list": .result([["mux": 0, "key": "tmux", "label": "tmux", "default": true]])
+            case "backends.open": .error(code: "backend_unavailable", message: "no server running")
+            default: nil
+            }
+        }
+        let sleeper = SteppedSleeper()
+        let wake = MultiplexerWake()
+        let preference = FollowPreference(.tmux)
+        var follower = MultiplexerFollower(client: helper.client, rows: rows, backends: backends, preference: preference,
+                                           wake: wake)
+        follower.sleep = { try await sleeper.sleep($0) }
+        let nones = Recorder<Int>()
+        let task = Task { await follower.run(following: { _ in }, topology: { _ in }, none: { nones.append(1) }) }
+        defer { task.cancel() }
+        let expected: [Duration] = [2, 4, 8, 16, 32, 60, 60].map { .seconds($0) }
+        for count in 1...expected.count {
+            try await TestSupport.eventually { sleeper.pending == 1 && sleeper.durations.count == count }
+            if count < expected.count { sleeper.step() }
+        }
+        XCTAssertEqual(sleeper.durations, expected)
+        XCTAssertEqual(helper.requests("backends.open").count, expected.count)
+
+        wake.ring()
+        try await TestSupport.eventually { sleeper.pending == 1 && sleeper.durations.count == expected.count + 1 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(2), "a ring looks at once and starts over")
+        XCTAssertEqual(helper.requests("backends.open").count, expected.count + 1)
+        sleeper.step()
+        try await TestSupport.eventually { sleeper.pending == 1 && sleeper.durations.count == expected.count + 2 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(4))
+        preference.set(.automatic)
+        try await TestSupport.eventually { sleeper.pending == 1 && sleeper.durations.count == expected.count + 3 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(2), "a preference change starts over too")
+        XCTAssertEqual(nones.values.count, expected.count + 3, "every round without a server says so")
+        XCTAssertEqual(MultiplexerFollower.backoff(after: 40, first: .seconds(2), limit: .seconds(60)), .seconds(60))
     }
 
     /// After a network change a connected link must answer `echo` within the timeout, else it is closed and reconnects.

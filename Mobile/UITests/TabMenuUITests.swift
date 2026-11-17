@@ -29,6 +29,11 @@ final class TabMenuUITests: XCTestCase {
         let search = app.buttons["Search"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5), "on Chat, the conversation's items")
         XCTAssertTrue(app.buttons["Stats"].exists, "the host's Stats")
+        // Model first: the conversation's model and effort, opening their sheet.
+        let model = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Model'")).firstMatch
+        XCTAssertTrue(model.exists, "Model")
+        XCTAssertLessThan(model.frame.minY, search.frame.minY, "Model over Search")
+        XCTAssertFalse(app.buttons["Mine only"].exists, "Mine only is the search bar's")
         search.tap()
         XCTAssertTrue(app.textFields["Search"].waitForExistence(timeout: 5), "the search bar opens")
     }

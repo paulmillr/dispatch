@@ -706,6 +706,92 @@ final class HostSessionTests: XCTestCase {
         XCTAssertFalse(calls[0].client === calls[1].client, "Each connection's own client")
     }
 
+    /// A live topology equal to the one shown changes nothing: neither `updated` nor the areas hear of it (helpers since
+    /// the topology dedupe send none; older ones repeated it). A different one does.
+    func testARepeatedTopologyChangesNothing() async throws {
+        let first = HostFixture.topology(), second = HostFixture.topology([.init(name: "web", cwd: "/w", tabs: 1, agents: 0)])
+        let ready = Step.ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:],
+                               topology: first)
+        let driver = steps([ready, .awaitRetry, .event(.topology(first)), .awaitRetry, .event(.topology(second)), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        let updated = Recorder { session.updated }
+        var changes = 0
+        session.changed = { _ in changes += 1 }
+        session.retryNow()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(changes, 0, "the same snapshot again")
+        XCTAssertEqual(updated.seen.count, 1, "updated was not set: \(updated.seen)")
+        session.retryNow()
+        try await TestSupport.eventually { session.topology == second }
+        XCTAssertGreaterThan(changes, 0, "a different snapshot is told")
+        try await TestSupport.eventually { updated.seen.count == 2 }
+    }
+
+    /// `notificationPace` reaches the current helper when it changes and each later one once ready, in order; a helper
+    /// that did not accept `notify.pace` gets nothing. Chat subscriptions are marked through the client.
+    func testNotificationPaceGoesToEveryConnectionThatAcceptsIt() async throws {
+        let paced = ScriptedHelper(), next = ScriptedHelper(), older = ScriptedHelper()
+        let ready = { (helper: ScriptedHelper, features: [String]) in
+            Step.readyWith(client: { helper.client }, hello: ResilienceFixture.hello(features: features),
+                           multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:], topology: HostFixture.topology())
+        }
+        let driver = steps([ready(paced, ["chat.list", "notify.pace"]), .awaitRetry,
+                            .event(.link(.reconnecting(attempt: 1, since: Date()))), .awaitRetry,
+                            ready(next, ["notify.pace"]), .awaitRetry, ready(older, ["chat.list"]), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        session.connect()
+        try await TestSupport.eventually { session.client === paced.client }
+        XCTAssertTrue(paced.requests("notify.pace").isEmpty, "a helper starts unpaced: nothing to send")
+        let pace = { (helper: ScriptedHelper) in helper.requests("notify.pace").map { ($0.params["ms"] as? NSNumber)?.uint64Value } }
+
+        session.notificationPace = .seconds(15)
+        session.notificationPace = nil
+        session.notificationPace = .milliseconds(2_500)
+        session.notificationPace = .milliseconds(2_500)
+        _ = try await paced.wait(for: "notify.pace", count: 3)
+        XCTAssertEqual(pace(paced), [15_000, 0, 2_500], "in order, once per change")
+
+        try await paced.client.background(subscription: 9, true)
+        let marked = try await paced.wait(for: "chat.background")[0]
+        XCTAssertEqual((marked.params["subscription"] as? NSNumber)?.uint64Value, 9)
+        XCTAssertEqual(marked.params["background"] as? Bool, true)
+
+        session.retryNow()
+        try await TestSupport.eventually { if case .reconnecting = session.link { true } else { false } }
+        session.retryNow()
+        try await TestSupport.eventually { session.client === next.client }
+        _ = try await next.wait(for: "notify.pace")
+        XCTAssertEqual(pace(next), [2_500], "the new helper is paced as the last one was")
+
+        session.notificationPace = .seconds(3_600)
+        _ = try await next.wait(for: "notify.pace", count: 2)
+        XCTAssertEqual(pace(next).last, HelperClient.longestPace, "at most what the helper takes")
+
+        session.retryNow()
+        try await TestSupport.eventually { session.client === older.client }
+        session.notificationPace = .seconds(5)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(older.requests("notify.pace").isEmpty, "a helper without the feature is left as it is")
+    }
+
+    /// Frugal mode paces every host's notifications at one tick of the shared clock (`HostSessions.frugalPace`): a
+    /// session made while frugal starts paced, and leaving frugal mode stops pacing every host (docs/ios.md, Frugal mode).
+    func testFrugalModePacesEveryHost() {
+        Frugal.pin(.lowData)
+        defer { Frugal.unpin() }
+        let hosts = registry(steps([.hold]), hosts: [host(), host()])
+        XCTAssertEqual(HostSessions.frugalPace, .seconds(15))
+        XCTAssertEqual(hosts.ordered.map(\.notificationPace), [.seconds(15), .seconds(15)])
+        Frugal.pin(nil)
+        hosts.frugalChanged()
+        XCTAssertEqual(hosts.ordered.map(\.notificationPace), [nil, nil])
+        Frugal.pin(.lowPower)
+        hosts.frugalChanged()
+        XCTAssertEqual(hosts.ordered.map(\.notificationPace), [.seconds(15), .seconds(15)])
+    }
+
     /// The helper runs with the spike's grant plus `git.read` (Files & git), and the New host sheet discloses every capability in it.
     func testHelperGrantMatchesTheSpikeAndTheStatement() {
         XCTAssertEqual(HelperLaunch().command(sha256: "<sha256>"),

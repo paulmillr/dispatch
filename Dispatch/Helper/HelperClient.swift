@@ -325,6 +325,34 @@ final class HelperClient: Sendable {
     let _: Empty = try await connection.request("terminals.follow", params: params)
   }
 
+  /// The `notify.pace` feature (helper/PROTOCOL.md, Features): the hello names it, and the helper lists `notify.pace`
+  /// and `chat.background` in `ops` when it accepted it; without that both throw `permission_denied` before anything
+  /// is sent (`HelperConnection.begin`).
+  static let notifyPace = "notify.pace"
+  /// The longest pacing interval the helper takes (milliseconds); more is `invalid_input`.
+  static let longestPace: UInt64 = 600_000
+
+  /// notify.pace (feature notify.pace): with `milliseconds` above 0 the helper holds this connection's lazy
+  /// notifications (an agent's activity text or newest answer, pane titles, background chats' records and state) and
+  /// sends them, in order, with the next message it sends anyway, when the next request reaches it, or `milliseconds`
+  /// after the first was held, whichever is first; busy and waiting changes, approvals, replies and terminal output are
+  /// never held. 0 turns pacing off and sends what is held. Every connection starts with pacing off.
+  nonisolated(nonsending) func pace(milliseconds: UInt64) async throws {
+    struct Pace: Encodable { let ms: UInt64 }
+    let _: Empty = try await connection.request("notify.pace", params: Pace(ms: milliseconds))
+  }
+
+  /// chat.background (feature notify.pace): `subscription` (the id `HelperConnection.subscribe` returned for a
+  /// `chat.open` on this connection) is in the background: while pacing is on its `chat.records` and `chat.state`
+  /// wait for a paced batch (records are never dropped; held states are superseded by the latest). `false` puts it in
+  /// front again. The mark ends with the subscription; an id that is not an open request of this connection marks
+  /// nothing. It changes nothing while pacing is off.
+  nonisolated(nonsending) func background(subscription: UInt64, _ background: Bool) async throws {
+    struct Background: Encodable { let subscription: UInt64; let background: Bool }
+    let _: Empty = try await connection.request(
+      "chat.background", params: Background(subscription: subscription, background: background))
+  }
+
   nonisolated(nonsending) func publish(_ params: Screen) async throws {
     let _: Empty = try await connection.request("terminals.publish", params: params)
   }

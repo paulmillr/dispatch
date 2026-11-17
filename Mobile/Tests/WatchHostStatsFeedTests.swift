@@ -25,7 +25,7 @@ final class WatchHostStatsFeedTests: XCTestCase {
 
     private func sampling(_ stats: HostStatistics, _ sleeper: SteppedSleeper) {
         stats.now = { [unowned self] in clock }
-        stats.readLowPower = { false }
+        stats.readFrugal = { nil }
         stats.sleep = { try await sleeper.sleep($0) }
     }
 

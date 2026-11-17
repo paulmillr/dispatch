@@ -11,10 +11,13 @@ use std::{
 
 pub(crate) type Replies = Rc<RefCell<VecDeque<(RawFd, wire::Kind, u64, Vec<u8>)>>>;
 pub(crate) type Drains = Rc<RefCell<VecDeque<(RawFd, u64, Done<()>)>>>;
+/// The last topology body sent on each (client, backends.open request).
+pub(crate) type Topologies = Rc<RefCell<BTreeMap<(RawFd, u64), Vec<u8>>>>;
 mod activity;
 mod client;
 mod limits;
 mod observers;
+pub(crate) mod pacing;
 pub(crate) mod installation;
 pub(crate) mod candidate;
 pub(crate) mod login;
@@ -126,6 +129,10 @@ pub struct DispatchHelper {
     pub(crate) liveness: Option<crate::dispatch::features::Liveness>,
     /// terminals.ack requests not yet applied to their client's window: (client, subscription, bytes).
     pub(crate) acks: Vec<(RawFd, u64, u64)>,
+    /// notify.pace and chat.background requests not yet applied to their client's queue (helper/pacing.rs).
+    pub(crate) paces: Vec<(RawFd, pacing::Pace)>,
+    /// The last topology each backends.open subscription was sent: an equal one is not sent again.
+    pub(crate) topologies: Topologies,
     pub(crate) transfers: transfers::Transfers,
     /// Starts a helper without clients that sends the stored queues this one leaves behind
     /// (`dispatch-helper queue-drain …`); None for that helper itself, and where nothing may
@@ -158,6 +165,7 @@ struct Updates<'a> {
     features: crate::dispatch::features::Features,
     follows: crate::dispatch::following::Follows,
     activity: activity::Shared,
+    topologies: Topologies,
 }
 impl Updates<'_> {
     /// A terminal's agent conversation is over: its questions expire and its interactions and
@@ -491,6 +499,8 @@ impl Ui for Updates<'_> {
             }
             _ => None,
         };
+        // A topology equal to the last one a subscription was sent is not sent again (Ui::update, below).
+        let topology = matches!(&update, Update::Topology { .. });
         let output = if matches!(&update, Update::Stderr { .. }) {
             "terminal.stderr"
         } else {
@@ -642,6 +652,17 @@ impl Ui for Updates<'_> {
             ),
         };
         for (fd, id) in recipients {
+            // Only for a client that named notify.pace (the phone, whose radio each frame wakes): the Mac's split
+            // confirms a moved divider by its next topology, even an unchanged one (Workspace.resizeSplit).
+            if topology
+                && crate::dispatch::features::enabled(&self.features, fd, crate::dispatch::features::NOTIFY_PACE)
+            {
+                let mut sent = self.topologies.borrow_mut();
+                if sent.get(&(fd, id)) == Some(&body) {
+                    continue;
+                }
+                sent.insert((fd, id), body.clone());
+            }
             let attached = attached.as_ref().filter(|_| {
                 crate::dispatch::features::enabled(&self.features, fd, crate::dispatch::features::ATTACHMENTS)
             });
@@ -784,6 +805,8 @@ impl DispatchHelper {
             stdio: false,
             liveness: None,
             acks: Vec::new(),
+            paces: Vec::new(),
+            topologies: Default::default(),
             shell: std::env::var_os("SHELL").unwrap_or("/bin/sh".into()).into(),
             remote: false,
             default: None,
@@ -875,6 +898,7 @@ impl DispatchHelper {
                 features: self.features.clone(),
                 follows: self.follows.clone(),
                 activity: self.activity.clone(),
+                topologies: self.topologies.clone(),
             };
             let backends: BTreeSet<_> = self
                 .backends
@@ -1491,6 +1515,11 @@ impl DispatchHelper {
                     matches!(observers.get(fd, request), Some(Scope::Terminal(_) | Scope::Created))
                 });
             }
+            if !self.topologies.borrow().is_empty() {
+                self.topologies
+                    .borrow_mut()
+                    .retain(|&(fd, request), _| matches!(observers.get(fd, request), Some(Scope::Backend(_))));
+            }
             loop {
                 let update = self.updates.borrow_mut().pop_front();
                 let Some(update) = update else { break };
@@ -1524,6 +1553,7 @@ impl DispatchHelper {
                 features: self.features.clone(),
                 follows: self.follows.clone(),
                 activity: self.activity.clone(),
+                topologies: self.topologies.clone(),
                 }
                 .update(update);
             }
@@ -1564,6 +1594,12 @@ impl DispatchHelper {
                 .next(&mut system);
             }
             system.callbacks();
+            // Pacing requests apply before the replies queued since them (helper/pacing.rs).
+            for (fd, pace) in std::mem::take(&mut self.paces) {
+                if let Some(client) = clients.get_mut(&fd) {
+                    client.pace(pace);
+                }
+            }
             let count = replies.borrow().len();
             // The clock is an observed (recorded) operation: read it only when some client
             // asked for coalescing, so other clients' captures stay as they were.
@@ -1589,6 +1625,18 @@ impl DispatchHelper {
                         crate::dispatch::features::TERMINALS_WINDOW,
                     );
                     client.queue(kind, id, body, now.filter(|_| coalesce), counted);
+                }
+            }
+            // Paced notifications go out at their deadline (helper/pacing.rs); the clock is read only while a client
+            // holds some, so no other client's capture changes.
+            if clients.values().any(|client| client.pacing.holding()) {
+                let now = now.unwrap_or_else(|| system.now());
+                for client in clients.values_mut() {
+                    if let Some(due) = client.paced(now) {
+                        let section = Io::section(&mut system, pacing::SECTION);
+                        system.timer(due);
+                        Io::section(&mut system, &section);
+                    }
                 }
             }
             // Acknowledged output reopens its client's window before more is admitted.
@@ -1799,6 +1847,14 @@ impl DispatchHelper {
                 system.section("ui");
                 continue;
             }
+            if section == pacing::SECTION {
+                // Paced notifications past their deadline go out at the top of the loop, which sets the next timer.
+                system.section("ui");
+                for client in clients.values_mut() {
+                    client.pacing.armed = None;
+                }
+                continue;
+            }
             if section == activity::SECTION {
                 // Held agent.changed notifications go out at the top of the loop.
                 system.section("ui");
@@ -1882,6 +1938,7 @@ impl DispatchHelper {
                 features: self.features.clone(),
                 follows: self.follows.clone(),
                 activity: self.activity.clone(),
+                topologies: self.topologies.clone(),
                 };
                 self.multiplexers[index]
                     .borrow_mut()
@@ -1918,6 +1975,7 @@ impl DispatchHelper {
                 features: self.features.clone(),
                 follows: self.follows.clone(),
                 activity: self.activity.clone(),
+                topologies: self.topologies.clone(),
                 };
                 self.harnesses[index]
                     .borrow_mut()
@@ -1948,6 +2006,7 @@ impl DispatchHelper {
                 features: self.features.clone(),
                 follows: self.follows.clone(),
                 activity: self.activity.clone(),
+                topologies: self.topologies.clone(),
                 };
                 self.plugins[index]
                     .borrow_mut()
@@ -2074,6 +2133,10 @@ impl DispatchHelper {
                                 Vec::new()
                             }
                         };
+                        // A paced client's frame: its link is awake, so what pacing holds goes with it.
+                        if !requests.is_empty() {
+                            client.unpace();
+                        }
                         for (header, body) in requests {
                             if header.kind == wire::Kind::Cancel {
                                 self.windows.borrow_mut().retain(|(peer, request), _| {
@@ -2218,6 +2281,7 @@ impl DispatchHelper {
         self.features.borrow_mut().remove(&fd);
         self.publishers.borrow_mut().retain(|(peer, _), _| *peer != fd);
         self.follows.borrow_mut().retain(|(peer, _)| peer != fd);
+        self.topologies.borrow_mut().retain(|(peer, _), _| *peer != fd);
         if self.liveness.as_ref().is_some_and(|l| l.fd == fd) {
             self.liveness = None;
         }
@@ -2392,6 +2456,8 @@ impl DispatchHelper {
                     }
                 };
                 self.limits.subscribe(observers, fd)?;
+                // A new subscription gets its first topology whatever an earlier one of this id was sent.
+                self.topologies.borrow_mut().remove(&(fd, id));
                 observers.push((fd, id, scope));
             }
             let mut request = crate::dispatch::Request {

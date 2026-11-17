@@ -141,6 +141,7 @@ final class AESCTREncryptAndMACOpener: PacketOpener {
     let length = try packetBody(packet, length: try readLength(firstBlock), tagBytes: mac.tagBytes)
     guard 4 + length >= 16 else { throw .protocolViolation(.packet(.lengthOutOfRange)) }
     var plaintext = [UInt8]()
+    defer { wipeBytes(&plaintext) }
     plaintext.reserveCapacity(4 + length)
     plaintext.append(contentsOf: firstBlock)
     plaintext.append(contentsOf: packet[16..<4 + length])
@@ -148,7 +149,6 @@ final class AESCTREncryptAndMACOpener: PacketOpener {
     firstBlock = []
     try stream.apply(&plaintext, from: 16)
     guard mac.verify(packet[(4 + length)...], sequence: sequence, plaintext[...]) else {
-      wipeBytes(&plaintext)
       throw .protocolViolation(.packet(.integrity))
     }
     return Array(plaintext[4...])

@@ -3,8 +3,9 @@ import SwiftUI
 // The tab header as the app ships it (2026-11-10, `TabScreenHeader`, `TabsTitleCapsuleView`), as Messages heads a
 // conversation: Back alone in its glass circle with the needs-you count; beside it one glass capsule holding the host's
 // glyph on a disc of its colour, the tab's title and host · folder under it, one line each; the mode button alone on
-// the right (B7's). A tap on the capsule opens the tab's one menu (`TabMenuItems`): on Chat Search, the host's Stats, Side
-// Conversation; the pane picker when there are several; Rename…, Detach, Close Tab.
+// the right (B7's). A tap on the capsule opens the tab's one menu (`TabMenuItems`): on Chat Model (the model and effort
+// under it), Search, the host's Stats, Side Conversation; the pane picker when there are several; Rename…, Move to,
+// Close Tab (Detach is the rows').
 
 /// The capsule: the host's disc, the title over host · folder.
 struct TitleCapsuleMock: View {
@@ -93,14 +94,16 @@ struct CapsuleMenuScreen: View {
 struct TabMenuMock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            item("Model", "cpu", subtitle: "opus-5.5 · high")
+            divider
             item("Search", "magnifyingglass")
             item("Stats", "gauge.with.dots.needle.33percent")
             item("Side Conversation", "bubble.left.and.text.bubble.right")
             divider
-            Text("Tab").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 2)
+            Text("Billing webhook retries · mba2").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 2)
             item("Rename…", "pencil")
-            divider
-            item("Detach", "eject")
+            item("Move to", "rectangle.portrait.and.arrow.right", chevron: true)
             item("Close Tab", "xmark")
         }
         .padding(.vertical, 10)
@@ -113,14 +116,20 @@ struct TabMenuMock: View {
         Rectangle().fill(Color.primary.opacity(0.12)).frame(height: 0.5).padding(.horizontal, 20).padding(.vertical, 6)
     }
 
-    private func item(_ title: String, _ symbol: String) -> some View {
+    private func item(_ title: String, _ symbol: String, subtitle: String? = nil, chevron: Bool = false) -> some View {
         HStack(spacing: 14) {
             Image(systemName: symbol).font(.body).frame(width: 22)
-            Text(title).font(.body)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.body)
+                if let subtitle { Text(subtitle).font(.subheadline).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 0)
+            if chevron { Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.secondary) }
         }
         .foregroundStyle(Color.primary)
         .padding(.horizontal, 20)
         .frame(minHeight: 44)
+        .padding(.vertical, subtitle == nil ? 0 : 4)
     }
 }
 

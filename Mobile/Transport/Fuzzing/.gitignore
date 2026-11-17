@@ -1,0 +1,7 @@
+/.build/
+/Artifacts/
+crash-*
+leak-*
+oom-*
+slow-unit-*
+timeout-*

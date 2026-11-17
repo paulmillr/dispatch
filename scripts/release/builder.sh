@@ -131,7 +131,13 @@ as_builder /usr/bin/env -i HOME=/var/empty USER="$user" LANG=en_US.UTF-8 PATH=/u
   DEVELOPER_DIR="$selected" RELEASE_BUILDER=local /bin/bash -c 'umask 022; cd "$1" && shift && exec scripts/release/build.sh "$@"' \
   _ "$build" "$guest_out" --commit "$commit" --build-number "$number" --variant "$variant" --platform "$platform" \
   ${cached_flag[@]+"${cached_flag[@]}"} >> "$log" 2>&1 ||
-  { stop_watching; keep_logs; tail -40 "$log" >&2; fail "the build as $user failed (log: $log; the build's own logs: $kept_logs)"; }
+  {
+    stop_watching
+    keep_logs
+    tail -40 "$log" >&2
+    # One path: the tree's own log when the build named it ("Full log: …", kept in OUT.logs), else this one.
+    if grep -q 'Full log: ' "$log"; then fail "the build as $user failed"; else fail "the build as $user failed (log: $log)"; fi
+  }
 stop_watching
 rm -rf "$out.partial"
 mkdir "$out.partial"

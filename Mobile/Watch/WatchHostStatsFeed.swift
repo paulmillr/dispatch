@@ -2,9 +2,9 @@ import Foundation
 import Observation
 
 /// The watch's host statistics from the phone's own stores (docs/watch.md, Seams): each host's
-/// `HostStatistics.summary(at:)` (Mobile/Stats) as `WatchHostStats`. The stores sample every 2 to 15 s; the snapshot
+/// `HostStatistics.summary(at:)` (Mobile/Stats) as `WatchHostStats`. The stores sample every 5 to 30 s; the snapshot
 /// reads `published`, which takes new numbers at most once per `interval` (15 s, one bar of the CPU history), so a stats
-/// sheet open on the phone does not push a snapshot every 2 s. A host's numbers appearing or going, or turning stale or
+/// sheet open on the phone does not push a snapshot every 5 s. A host's numbers appearing or going, or turning stale or
 /// current (a drop, the background, a new connection's first sample), are published at once. Where a host has no
 /// reading, `fallback` answers (Debug's scripted hosts, whose helpers send no stats: `WatchSampleStats`).
 @MainActor @Observable

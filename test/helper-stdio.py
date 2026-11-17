@@ -1972,6 +1972,69 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 fixture.host.sh('rm -f "$1"', fixture.tmux_socket)
         run(self.closing(case()))
 
+    # -- 15. notify.pace ---------------------------------------------------------------------------
+    def test_15_notify_pace(self):
+        """notify.pace: a topology that changes only a pane title waits for the client's next frame (and goes before
+        that request's reply) or for the deadline; a structural change goes at once; 0 turns pacing off."""
+        async def case():
+            fixture = self.fixture
+            session = await fixture.connect('ssh', 'pace')
+            # No liveness pinger: its echo would release what is held.
+            names = [f for f in FEATURES if f != 'stdio.liveness'] + ['notify.pace']
+            hello, _ = await self.hello(session, features=names)
+            self.assertIn('notify.pace', hello['features'])
+            self.assertIn('notify.pace', hello['ops'])
+            self.assertIn('chat.background', hello['ops'])
+            backend, _ = await self.opened(session, TMUX, 'tmux', create=True)
+            space = next(n['id'] for n in session.nodes(backend) if n['kind'] == 'workspace')
+            work = fixture.root / 'work-pace'
+            fixture.host.mkdir(work)
+            terminal = await session.request('terminals.create', {'mux': TMUX, 'parent': space, 'cwd': str(work)},
+                                             timeout=30)
+            await session.until(lambda: self.node(session, backend, terminal), what='new window')
+            pane = self.node(session, backend, terminal)['key'].rsplit(':', 1)[1]
+            # The shell settles (its prompt may set a title) before titles are set from outside.
+            await asyncio.sleep(2)
+
+            def title():
+                return (self.node(session, backend, terminal) or {}).get('name')
+
+            await session.request('notify.pace', {'ms': 5000})
+            # The first topology since pacing went on has nothing to compare with: it goes at once.
+            fixture.tmux('select-pane', '-t', pane, '-T', 'HS paced zero')
+            await session.until(lambda: title() == 'HS paced zero', timeout=5, what='the first paced topology')
+            fixture.tmux('select-pane', '-t', pane, '-T', 'HS paced one')
+            # tmux reports subscribed formats about once a second.
+            await asyncio.sleep(2.5)
+            self.assertNotEqual(title(), 'HS paced one', 'a pane title alone waits')
+            await session.request('echo', {'ping': 1})
+            self.assertEqual(title(), 'HS paced one', 'released by the request, before its reply')
+
+            fixture.tmux('select-pane', '-t', pane, '-T', 'HS paced two')
+            started = time.monotonic()
+            await session.until(lambda: title() == 'HS paced two', timeout=12, what='the deadline')
+            self.assertGreater(time.monotonic() - started, 3, 'held until the deadline')
+
+            # A new window is structure: at once, with the title it carries.
+            fixture.tmux('select-pane', '-t', pane, '-T', 'HS paced three')
+            await asyncio.sleep(2)
+            created = await session.request('terminals.create', {'mux': TMUX, 'parent': space, 'cwd': str(work)},
+                                            timeout=30)
+            await session.until(lambda: self.node(session, backend, created), timeout=3, what='a new window at once')
+            self.assertEqual(title(), 'HS paced three')
+
+            await session.request('notify.pace', {'ms': 0})
+            fixture.tmux('select-pane', '-t', pane, '-T', 'HS unpaced')
+            await session.until(lambda: title() == 'HS unpaced', timeout=4, what='pacing off')
+            with self.assertRaises(HelperError) as refused:
+                await session.request('notify.pace', {'ms': 600_001})
+            self.assertEqual(refused.exception.code, 'invalid_input')
+            for node in (terminal, created):
+                tab = self.node(session, backend, node)['parent']
+                await session.request('close.request', {'mux': TMUX, 'node': tab, 'policy': 'prompt'})
+            await session.close()
+        run(self.closing(case()))
+
     # -- backpressure: requests during a flood, liveness, the output window ----------------------
     async def flooded(self, session, key, command='yes'):
         """A new tmux window in a server of its own key running `command`, attached; (backend, terminal, attach)."""

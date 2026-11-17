@@ -110,7 +110,7 @@ final class HostStatsSheetTests: XCTestCase {
         for gone in ["Latency", "Helper", "Color", "Forget host"] {
             XCTAssertFalse(labels.contains { $0.hasPrefix(gone) }, "\(gone) is the title's or Edit host's: \(labels)")
         }
-        XCTAssertTrue(session.stats.viewing, "the sheet asks for 2 s samples")
+        XCTAssertTrue(session.stats.viewing, "the sheet asks for 5 s samples")
 
         _ = Self.element("Memory", in: elements)?.accessibilityActivate()
         let window = try XCTUnwrap(windows.last)
@@ -139,8 +139,8 @@ final class HostStatsSheetTests: XCTestCase {
                       "\(String(describing: Self.element("CPU, last 15 minutes", in: elements)?.accessibilityValue))")
     }
 
-    /// While the sheet is open the chart moves with every 2 s sample, not only on the 15 s grid's tick.
-    func testChartFollowsTwoSecondSamples() async throws {
+    /// While the sheet is open the chart moves with every 5 s sample, not only on the 15 s grid's tick.
+    func testChartFollowsTheSheetsSamples() async throws {
         let (sessions, session) = registry(cpus: [70, 80, 95])
         let sleeper = SteppedSleeper()
         session.stats.sleep = { try await sleeper.sleep($0) }
@@ -150,7 +150,9 @@ final class HostStatsSheetTests: XCTestCase {
         _ = try await spoken(sheet, sessions: sessions) { chart($0)?.hasPrefix("now 70%") == true }
         let window = try XCTUnwrap(windows.last)
         try await TestSupport.eventually { sleeper.pending == 1 }
-        XCTAssertEqual(sleeper.durations.last, .seconds(2), "the sheet's cadence")
+        // The clock's next 5 s mark at least 2.5 s away (the real clock's).
+        let wait = try XCTUnwrap(sleeper.durations.last)
+        XCTAssertTrue(wait >= .milliseconds(2400) && wait <= .milliseconds(7500), "the sheet's cadence: \(wait)")
         sleeper.step()
         try await TestSupport.eventually(diagnostic: "\(String(describing: chart(AccessibilityLabelTests.elements(in: window))))") {
             chart(AccessibilityLabelTests.elements(in: window))?.hasPrefix("now 80%") == true
@@ -158,7 +160,7 @@ final class HostStatsSheetTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(StatStripCard.chartDate(.distantPast, stats: session.stats), try XCTUnwrap(session.stats.sample?.date))
     }
 
-    /// An edit that replaces the session (a new address) while the sheet is open moves its 2 s request to the new one.
+    /// An edit that replaces the session (a new address) while the sheet is open moves its 5 s request to the new one.
     func testViewerFollowsAReplacedSession() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected }
@@ -172,7 +174,7 @@ final class HostStatsSheetTests: XCTestCase {
         let replacement = try XCTUnwrap(sessions.session(session.id))
         XCTAssertFalse(replacement === session)
         try await TestSupport.eventually { replacement.stats.viewing && !session.stats.viewing }
-        XCTAssertEqual(replacement.stats.cadence, .seconds(2))
+        XCTAssertEqual(replacement.stats.cadence, .seconds(5))
     }
 
     /// Every Reconnect the user asks for lifts a Disconnect: the multiplexer hint's too.
@@ -269,14 +271,17 @@ final class HostStatsSheetTests: XCTestCase {
         XCTAssertFalse(HostSummary(session: session).offersPlainSSH, "plain by choice: no reason, no action")
     }
 
-    /// W7: Low Power Mode samples every 30 s, and the sheet says so.
+    /// W7: Low Power Mode samples every 30 s, and the sheet says so; frugal mode under Low Data Mode says why too.
     func testLowPowerBanner() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected }
-        session.stats.readLowPower = { true }
-        session.stats.powerStateChanged()
+        session.stats.readFrugal = { .lowData }
+        session.stats.frugalChanged()
+        XCTAssertEqual(HostStatsPresentation(session: session).frugalBanner, "Low Data Mode · sampling every 30 s")
+        session.stats.readFrugal = { .lowPower }
+        session.stats.frugalChanged()
         XCTAssertEqual(session.stats.cadence, .seconds(30))
-        XCTAssertEqual(HostStatsPresentation(session: session).lowPowerBanner, "Low Power Mode · sampling every 30 s")
+        XCTAssertEqual(HostStatsPresentation(session: session).frugalBanner, "Low Power Mode · sampling every 30 s")
         let labels = Self.labels(try await spoken(HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large)),
                                                   sessions: sessions) { Self.labels($0).contains("Disconnect") })
         XCTAssertTrue(labels.contains("Low Power Mode · sampling every 30 s"), "\(labels)")

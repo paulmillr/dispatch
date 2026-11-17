@@ -96,6 +96,17 @@ final class HostSession: Identifiable {
     private(set) var updated: Date?
     /// Set when the server's key differs from the trusted one: a hard stop until the user removes it and retries.
     private(set) var hostKeyMismatch: HostKeyOffer?
+    /// How long this host's helper may hold the notifications nothing waits for (helper/PROTOCOL.md, Features:
+    /// `notify.pace`): an agent's activity text or newest answer, pane titles, and the records and state of chats marked
+    /// background (`HelperClient.background(subscription:_:)`). They then reach the phone with whatever it gets or sends
+    /// next (a reply, terminal output, a turn starting or ending, an approval, the 15 s tick's request) or after this
+    /// long, so its radio wakes for a batch. nil (the default) sends everything at once. Applied to the current
+    /// connection when it changes and to each new one once ready (a helper starts unpaced); a helper that did not
+    /// accept `notify.pace` is left as it is. At most `HelperClient.longestPace` milliseconds, at least 1. No policy
+    /// sets it yet.
+    var notificationPace: Duration? {
+        didSet { if notificationPace != oldValue { applyPace() } }
+    }
     /// This iPhone has no usable network (`NetworkPathWatcher`, through `HostSessions.networkPath`).
     var networkUnavailable = false {
         didSet { if networkUnavailable != oldValue { changed?(self) } }
@@ -116,6 +127,8 @@ final class HostSession: Identifiable {
     @ObservationIgnored private let context: (HostSession) -> HostSessionContext
     /// The stats' ticks, which the driver's liveness ping skips (`HostTraffic`).
     @ObservationIgnored private let pulse = HostPulse()
+    /// Wakes the driver's multiplexer follower from its backoff (`rediscover`).
+    @ObservationIgnored private let wake = MultiplexerWake()
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var retry: AsyncStream<Void>.Continuation?
     /// The running driver's multiplexer preference (`HostSessionContext.preferences`).
@@ -129,6 +142,8 @@ final class HostSession: Identifiable {
     /// connection goes away; the link is already `.connected` while it runs.
     @ObservationIgnored var postConnect: [HostPostConnectStep] = []
     @ObservationIgnored private var postConnectTask: Task<Void, Never>?
+    /// The latest `notify.pace` request; each waits for the one before, so the helper gets them in order.
+    @ObservationIgnored private var paceTask: Task<Void, Never>?
     /// Called on the main actor when a connection's client goes away (a drop, a reconnect, disconnect): what used it
     /// stops (`TerminalPresences.stopAll(host:)`) and reattaches after the next `.ready`.
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)?
@@ -178,7 +193,8 @@ final class HostSession: Identifiable {
         let base = context(self)
         let context = HostSessionContext(launch: base.launch, verifyHostKey: base.verifyHostKey, key: base.key,
                                          password: base.password, retries: retries, keyboardInteractive: base.keyboardInteractive,
-                                         keyAvailable: base.keyAvailable, preferences: preferences, pulse: pulse)
+                                         keyAvailable: base.keyAvailable, preferences: preferences, pulse: pulse,
+                                         rediscover: wake)
         let events = driver.run(host, context: context)
         task = Task { [weak self] in
             for await event in events {
@@ -217,6 +233,13 @@ final class HostSession: Identifiable {
         }
         guard hostKeyMismatch == nil else { return }
         connect()
+    }
+
+    /// The host's multiplexer server may have just started (New space made one, or the user pulled to refresh or came
+    /// back to the app): a connection waiting out its backoff for a server looks for it again at once
+    /// (`MultiplexerFollower`). Nothing while no connection runs.
+    func rediscover() {
+        wake.ring()
     }
 
     /// Disconnect in the host's stats (also while connecting or reconnecting: it stops the retries): the connection
@@ -281,7 +304,9 @@ final class HostSession: Identifiable {
     }
 
     private func apply(_ event: HostSessionEvent) {
-        defer { changed?(self) }
+        // An event that changed nothing the areas read (a repeated topology) tells no one.
+        var quiet = false
+        defer { if !quiet { changed?(self) } }
         switch event {
         case .link(let next):
             // `.connected` only arrives with `.ready`: a client, a hello and the multiplexers in the same update.
@@ -301,6 +326,9 @@ final class HostSession: Identifiable {
             self.multiplexers = multiplexers.filter { $0.name != "native" }
             multiplexerVersions = versions
             startBindingGrace()
+            // A new helper starts unpaced.
+            paceTask = nil
+            if notificationPace != nil { applyPace() }
             if let topology { take(topology) }
             // Without a first snapshot the one kept is the cache's or the last helper's: stale until a live one comes.
             if topologyIsLive != (topology != nil) { topologyIsLive = topology != nil }
@@ -340,6 +368,12 @@ final class HostSession: Identifiable {
         case .topology(let snapshot):
             // A snapshot still in flight when the link dropped is not this (absent) connection's.
             guard client != nil else { return }
+            // The live snapshot again (an older helper repeats unchanged topologies): nothing changed, so neither
+            // `updated` nor the areas hear of it.
+            if topologyIsLive, !switchingMultiplexer, snapshot == (reported ?? topology) {
+                quiet = true
+                return
+            }
             updated = System.date()
             take(snapshot)
             if !topologyIsLive { topologyIsLive = true }
@@ -382,6 +416,22 @@ final class HostSession: Identifiable {
         if case .failed = link {} else { link = .disconnected }
         drop()
         changed?(self)
+    }
+
+    /// Sends `notificationPace` to the current helper, after any earlier pace request of this connection.
+    private func applyPace() {
+        guard let client, features.contains(HelperClient.notifyPace) else { return }
+        let milliseconds = notificationPace.map { pace -> UInt64 in
+            let (seconds, attoseconds) = pace.components
+            let total = min(max(0, seconds), 1_000_000) * 1000 + max(0, attoseconds) / 1_000_000_000_000_000
+            return UInt64(min(max(total, 1), Int64(HelperClient.longestPace)))
+        } ?? 0
+        let previous = paceTask
+        paceTask = Task {
+            await previous?.value
+            // A failure (the connection went) leaves nothing to undo: the next helper starts unpaced.
+            try? await client.pace(milliseconds: milliseconds)
+        }
     }
 
     /// A live snapshot: within `bindingGrace` of `ready`, with the bindings the kept snapshot showed.
@@ -436,6 +486,7 @@ final class HostSession: Identifiable {
     private func drop() {
         postConnectTask?.cancel()
         postConnectTask = nil
+        paceTask = nil
         bindingGraceTask?.cancel()
         bindingGraceTask = nil
         reported = nil

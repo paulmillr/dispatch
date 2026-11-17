@@ -25,7 +25,12 @@ let package = Package(
   name: "MobileTransport",
   // macOS only runs `swift test` on the Mac; 26 for CryptoKit's ML-KEM (SSHEngine's mlkem768x25519-sha256).
   platforms: [.macOS(.v26), .iOS(.v26)],
-  products: [.library(name: "MobileTransport", targets: ["MobileTransport"])],
+  products: [
+    .library(name: "MobileTransport", targets: ["MobileTransport"]),
+    // Used by the separate Fuzzing/ package. That package is not part of this manifest, so neither `swift build`
+    // nor `swift test` builds a fuzz harness unless it is invoked explicitly from Fuzzing/.
+    .library(name: "SSHEngine", targets: ["SSHEngine"]),
+  ],
   targets: russhTargets + [
     .target(name: "MobileTransport", dependencies: transportDependencies, swiftSettings: transport),
     // The Swift SSH client engine (Sources/SSHEngine/README.md): Apple's frameworks only, no package dependency.

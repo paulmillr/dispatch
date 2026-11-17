@@ -34,6 +34,42 @@ final class ChatSessionTests: XCTestCase {
         }
     }
 
+    /// A helper that accepted `notify.pace` is told the chat's subscription is in the background while no thread shows
+    /// it and in front while one does: in order, once per change (docs/ios.md, Pacing). One without the feature hears
+    /// nothing of it.
+    func testTheSubscriptionIsInTheBackgroundWhileNoThreadShowsIt() async throws {
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = MobileChatSession(key: ChatConversationKey(host: UUID(), node: ChatFixture.node), hostName: "mba2",
+                                     presence: nil, drafts: ChatDraftRepository(store: ChatDraftMemoryStore()),
+                                     outbox: ChatOutbox(store: ChatOutboxMemoryStore()))
+        chat.update(terminal: 7, binding: ChatFixture.topologyBinding)
+        chat.update(link: .connected, client: helper.client, features: [HelperClient.notifyPace])
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        let marks = { helper.requests("chat.background").map {
+            (($0.params["subscription"] as? NSNumber)?.uint64Value, $0.params["background"] as? Bool)
+        } }
+        _ = try await helper.wait(for: "chat.background")
+        XCTAssertEqual(marks().map(\.0), [id])
+        XCTAssertEqual(marks().map(\.1), [true], "opened ahead of any thread: in the background")
+        chat.threadShown(true)
+        chat.threadShown(true)
+        chat.threadShown(false)
+        _ = try await helper.wait(for: "chat.background", count: 2)
+        chat.threadShown(false)
+        _ = try await helper.wait(for: "chat.background", count: 3)
+        XCTAssertEqual(marks().map(\.1), [true, false, true], "once per change, in order: two views, then none")
+
+        let older = ScriptedHelper()
+        script(older)
+        let plain = MobileChatSession.scripted(older)
+        try await TestSupport.eventually { older.subscription("chat.open") != nil }
+        plain.threadShown(true)
+        try await TestSupport.eventually { !older.requests("chat.open").isEmpty }
+        XCTAssertTrue(older.requests("chat.background").isEmpty, "a helper without notify.pace is not told")
+    }
+
     func testOpenPagesTheRealClaudeTranscriptIntoBubblesAndStepCaptions() async throws {
         let helper = ScriptedHelper()
         script(helper)

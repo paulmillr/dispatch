@@ -247,3 +247,14 @@ fn a_probe_that_accepted_the_login_release_offers_it_in_ops() {
     let accepted = [TERMINALS_WINDOW.to_owned(), CHAT_LIST.to_owned(), LOGIN_RELEASE.to_owned()];
     assert_eq!(offered(&accepted, allows), [TERMINALS_ACK, LOGIN_RELEASE], "chat.list needs agent.inspect");
 }
+
+#[test]
+fn pacing_is_a_feature_whose_operations_need_no_grant() {
+    assert!(KNOWN.contains(&NOTIFY_PACE));
+    assert_eq!(operation(NOTIFY_PACE), Some(NOTIFY_PACE));
+    assert_eq!(operation(CHAT_BACKGROUND), Some(NOTIFY_PACE));
+    // Both change only when this client's own notifications are sent: no grant, even with none at all.
+    let grants = Rc::new(RefCell::new(Some(std::collections::BTreeSet::<String>::new())));
+    let allows = |op: &str| crate::helper::login::permits(&grants, crate::helper::login::required(op));
+    assert_eq!(offered(&[NOTIFY_PACE.to_owned()], allows), [NOTIFY_PACE, CHAT_BACKGROUND]);
+}

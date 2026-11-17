@@ -642,4 +642,26 @@ public final class ClientTransport: TransportCore {
     let blob: [UInt8] = [0, 0, 0, 11] + Array("ssh-ed25519".utf8) + [0, 0, 0, 32] + [UInt8](repeating: 0, count: 32)
     do { return try HostKey(algorithm: .ed25519, blob: blob) } catch { preconditionFailure("a constant, valid blob") }
   }()
+
+  #if SSHENGINE_FUZZING
+  /// Installs a completed first exchange with fixed keys. This exists only in the separately compiled fuzz build: it
+  /// lets libFuzzer seal arbitrary payloads under a real packet cipher and reach the post-NEWKEYS message decoders.
+  func fuzzEstablish(inboundKeys: DirectionKeys, outboundKeys: DirectionKeys) throws(SSHError) {
+    guard !started, endReason == nil else { throw .usage(.invalidArgument("the fuzz transport was already started")) }
+    started = true
+    serverVersion = Array("SSH-2.0-SSHEngineFuzzer".utf8)
+    established = true
+    session = [UInt8](repeating: 0x53, count: 32)
+    pin = HostKeyPin(Self.placeholderKey)
+    extensions = ServerExtensions()
+    firstPacketAfterNewKeys = false
+    let direction = NegotiatedAlgorithms.Direction(cipher: .aes128GCM, mac: nil)
+    negotiated = NegotiatedAlgorithms(keyExchange: .curve25519, hostKey: .ed25519,
+                                      clientToServer: direction, serverToClient: direction,
+                                      strictKex: true, serverSendsExtInfo: false)
+    inbound.install(try PacketProtection.opener(cipher: .aes128GCM, mac: nil, keys: inboundKeys))
+    outbound.install(try PacketProtection.sealer(cipher: .aes128GCM, mac: nil, keys: outboundKeys))
+    queue(.established)
+  }
+  #endif
 }

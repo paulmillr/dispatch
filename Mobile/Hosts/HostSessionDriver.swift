@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// A host key the server offered, for trust on first use (plan 3.6).
 struct HostKeyOffer: Equatable, Sendable {
@@ -87,6 +88,30 @@ struct HostSessionContext: Sendable {
     var preferences: AsyncStream<HostRecord.MultiplexerPreference> = AsyncStream { $0.finish() }
     /// The ticks of the shared clock the session's stats sample on: the driver's liveness ping skips them (`HostTraffic`).
     var pulse = HostPulse()
+    /// Rings when the host's multiplexer server may have just started (`HostSession.rediscover`: New space, pull to
+    /// refresh, foregrounding): a follower waiting out its backoff for a server looks again at once.
+    var rediscover = MultiplexerWake()
+}
+
+/// A bell for a waiting `MultiplexerFollower` (`HostSessionContext.rediscover`): each `ring` ends the wait of every
+/// stream taken from `rings()` before it, and a ring while nobody waits is kept for the next wait of each stream.
+final class MultiplexerWake: Sendable {
+    private let waiters = Mutex<[UUID: AsyncStream<Void>.Continuation]>([:])
+
+    init() {}
+
+    func ring() {
+        for waiter in waiters.withLock({ Array($0.values) }) { waiter.yield() }
+    }
+
+    /// Yields once for each later ring (the newest one kept while nobody reads).
+    func rings() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        waiters.withLock { $0[id] = continuation }
+        continuation.onTermination = { [weak self] _ in _ = self?.waiters.withLock { $0.removeValue(forKey: id) } }
+        return stream
+    }
 }
 
 /// Connects one host and keeps it connected (`SSHHostSessionDriver` in Mobile/Transport/Integration implements it over SSH; tests and previews use

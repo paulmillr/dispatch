@@ -146,6 +146,7 @@ impl Bench {
             features: helper.features.clone(),
             follows: helper.follows.clone(),
             activity: helper.activity.clone(),
+            topologies: helper.topologies.clone(),
         }
         .update(update);
     }

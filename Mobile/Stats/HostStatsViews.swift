@@ -31,7 +31,7 @@ struct StatStripCard: View {
             }
             .padding(.vertical, 12)
             // The timeline steps the grid every 15 s while nothing comes in; each sample redraws the chart at its own
-            // time, so the newest bar follows the 2 s samples (a tick older than the sample left it out).
+            // time, so the newest bar follows the 5 s samples (a tick older than the sample left it out).
             TimelineView(.periodic(from: .now, by: HostStatistics.barSpan)) { context in
                 chart(at: Self.chartDate(context.date, stats: stats))
             }

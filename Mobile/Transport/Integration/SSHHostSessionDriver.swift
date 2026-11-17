@@ -26,11 +26,12 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// tmux (the helper's discovery looked at its panes first, at most 1 s, within `firstTopology`). With
     /// `agents.activity` the followed backend's `agent.changed` says when an agent's state, newest message or turn
     /// changed, so Agents reads its rows again (`ChatConversations.activityChanged`) without the thread open. With
-    /// `chat.limits` the unfolded working row reads the agent's plan limits (`ChatLimitsReader`).
+    /// `chat.limits` the unfolded working row reads the agent's plan limits (`ChatLimitsReader`). `notify.pace` changes
+    /// nothing by itself: it lets `HostSession.notificationPace` and `HelperClient.background` pace what the helper sends.
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",
                            "launch.names", "stdio.liveness", ChatAttachment.feature,
                            "memberships.append", HelperSession.screensHost, HelperSession.terminalsFollow, "sizes.steady",
-                           "topology.bound", "agents.activity", HelperSession.chatLimits]
+                           "topology.bound", "agents.activity", HelperSession.chatLimits, HelperClient.notifyPace]
     /// The longest a `topology.bound` helper holds a tmux server's first topology (helper/PROTOCOL.md, `BOUND_WAIT`).
     static let boundWait: Duration = .seconds(1)
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
@@ -43,8 +44,10 @@ struct SSHHostSessionDriver: HostSessionDriver {
     var pingInterval: Duration = HostTraffic.interval
     /// How long `.ready` waits for the first topology, so no row shows a connected host without its spaces.
     var firstTopology: Duration = .seconds(2)
-    /// Between `backends.open` attempts while no multiplexer server runs (New space starts one).
+    /// Between `backends.open` attempts while no multiplexer server runs (New space starts one): the first wait,
+    /// doubled after each attempt that finds none up to `reopenLimit` (`MultiplexerFollower`).
     var reopenDelay: Duration = .seconds(2)
+    var reopenLimit: Duration = .seconds(60)
     /// A keepalive after each `keepalive` of silence from the server; the one falling due while `keepaliveMax` are
     /// unanswered ends the connection, so a silent link counts as lost after (`keepaliveMax` + 1) × `keepalive`
     /// (60 s at 15 s × 3) on either engine.
@@ -123,7 +126,8 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 case .helper(let link):
                     let gate = ReadyGate()
                     live = Task {
-                        await driver.serve(link, preference: preference, gate: gate, pulse: context.pulse, events: events)
+                        await driver.serve(link, preference: preference, gate: gate, pulse: context.pulse,
+                                           wake: context.rediscover, events: events)
                     }
                     let first = await gate.first(timeout: firstTopology)
                     guard !Task.isCancelled else { break }
@@ -330,14 +334,15 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// While connected: the chosen multiplexer's topology (following the host's preference live) and the latency.
     /// Ends when cancelled (the link was lost).
     private func serve(_ link: HelperLink, preference: FollowPreference, gate: ReadyGate, pulse: HostPulse,
-                       events: AsyncStream<HostSessionEvent>.Continuation) async {
+                       wake: MultiplexerWake, events: AsyncStream<HostSessionEvent>.Continuation) async {
         let interval = pingInterval
         let pinging = Task {
             await Self.ping(link.client, every: interval, pulse: pulse) { events.yield(.latency($0)) }
         }
         defer { pinging.cancel() }
         let follower = MultiplexerFollower(client: link.client, rows: link.rows, backends: link.backends,
-                                           preference: preference, reopenDelay: reopenDelay)
+                                           preference: preference, reopenDelay: reopenDelay, reopenLimit: reopenLimit,
+                                           wake: wake)
         await follower.run(following: { events.yield(.following($0)) }, topology: { topology in
             if gate.offer(topology) { events.yield(.topology(topology)) }
         }, activity: { events.yield(.agentActivity) }, none: {

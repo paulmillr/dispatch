@@ -43,6 +43,8 @@ struct ChatConversationSummary: Equatable, Sendable {
     var stateUnknown = false
     /// The helper could not read the transcript this time (`history_error`): no preview or time, which says nothing.
     var readFailed = false
+    /// The agent's harness as `chat.list` names it (`key`: "claude", "codex", "pi"); nil before a list read names it.
+    var harness: String?
 
     /// One field the helper could not read: the row keeps what it had and stays stale until a clean read.
     var partial: Bool { stateUnknown || readFailed }
@@ -59,6 +61,7 @@ struct ChatConversationSummary: Equatable, Sendable {
     func merged(over previous: ChatConversationSummary?) -> ChatConversationSummary {
         guard let previous else { return self }
         var result = self
+        if result.harness == nil { result.harness = previous.harness }
         if stateUnknown {
             result.busy = previous.busy
             result.attention = previous.attention
@@ -167,6 +170,8 @@ struct ChatListOperation: ChatConversationSource {
         var reply_ms: Int64? = nil
         /// Why the transcript could not be read: no preview or time this time, not an empty conversation.
         var history_error: String? = nil
+        /// The harness ("claude", "codex", "pi").
+        var key: String? = nil
 
         var summary: ChatConversationSummary {
             // Claude blocked on a prompt in its terminal reports "waiting", which its registry counts as busy: it waits
@@ -182,11 +187,12 @@ struct ChatListOperation: ChatConversationSource {
             summary.reply = reply_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }
             summary.stateUnknown = state_error != nil
             summary.readFailed = history_error != nil
+            summary.harness = key
             return summary
         }
 
         private enum CodingKeys: String, CodingKey {
-            case terminal, busy, attention, preview, time_ms, waiting, title, activity, state_error, reply_ms, history_error
+            case terminal, busy, attention, preview, time_ms, waiting, title, activity, state_error, reply_ms, history_error, key
         }
     }
 
@@ -680,14 +686,36 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                    uniquingKeysWith: { first, _ in first })
     }
 
-    /// Every connected host's rows, fetched again: pull to refresh, the app coming to the foreground, and the
-    /// composition's timer while the app is open.
+    /// Every connected host's rows, fetched again: pull to refresh and the app coming to the foreground (`AgentsPoll`).
     func refreshAll() async {
         await withTaskGroup(of: Void.self) { group in
             for id in hosts.keys where hosts[id]?.client != nil {
                 group.addTask { await self.refresh(host: id) }
             }
         }
+    }
+
+    /// A tick of the foreground poll (`AgentsPoll`): every connected host's rows on a `quiet` tick (every fourth, once a
+    /// minute), and on the other ticks those of hosts the pushes do not cover (`pollsEveryTick`), unless `frugal`.
+    func poll(quiet: Bool, frugal: Bool) async {
+        await withTaskGroup(of: Void.self) { group in
+            for id in hosts.keys where hosts[id]?.client != nil && (quiet || (!frugal && pollsEveryTick(id))) {
+                group.addTask { await self.refresh(host: id) }
+            }
+        }
+    }
+
+    /// Whether the host's rows are read on every tick of the poll: its helper sends no activity pushes (it did not accept
+    /// `agents.activity`), or one of its bound agents is Pi, whose transcript the helper does not watch (only its
+    /// published state is pushed). The others need the poll only for what a push may miss (a change of `attention`
+    /// alone), once a minute.
+    func pollsEveryTick(_ id: UUID) -> Bool {
+        guard let host = hosts[id] else { return false }
+        guard host.features.contains("agents.activity") else { return true }
+        return host.topology?.nodes.contains { node in
+            node.kind == .terminal && node.agent != nil && !node.detached
+                && summaries[ChatConversationKey(host: id, node: node.key)]?.harness == "pi"
+        } ?? false
     }
 
     /// The host's helper said an agent's state changed (its activity push): its rows are fetched again shortly, once
@@ -1111,7 +1139,8 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                         preview: preview(key, session) ?? summary.preview,
                         finished: session.transcript.turns.last?.ended != nil,
                         lastActivity: session.transcript.lastActivity ?? summary.lastActivity,
-                        waiting: session.waitingForUser, title: session.title ?? summary.title)
+                        waiting: session.waitingForUser, title: session.title ?? summary.title,
+                        harness: session.agentKey ?? summary.harness)
                     // The newest the phone knows: what the row shows once the session is released or the host drops.
                     summaries[key] = summary
                 }

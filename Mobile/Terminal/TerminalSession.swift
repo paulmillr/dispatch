@@ -394,16 +394,21 @@ final class TerminalSession: @unchecked Sendable {
         pump()
     }
 
-    /// The cursor's 600 ms blink phase (main queue timer): shown again for 500 ms after output.
+    /// The cursor's 600 ms blink phase (main queue timer): shown again for 500 ms after output. A cursor that does not
+    /// blink (hidden, as agents' TUIs keep it, or steady: a program's DECSCUSR, Settings' Blinking cursor off) draws the
+    /// same in either phase: no frame is drawn for it.
     @MainActor func blinkTick() {
         let changed = locked { () -> Bool in
-            guard surface.focused else { return false }
+            guard surface.focused, surface.terminal.cursorBlinks else { return false }
             if DispatchTime.now().uptimeNanoseconds &- blink.reset < 500_000_000, blink.visible { return false }
             blink.visible.toggle()
             return true
         }
         if changed { refresh() }
     }
+
+    /// The cursor's blink phase now: shown or not (checks).
+    var blinkVisible: Bool { locked { blink.visible } }
 
     /// A new configuration: colours and options at once; fonts and padding when they changed.
     @MainActor func configure(_ configuration: TerminalConfiguration) {

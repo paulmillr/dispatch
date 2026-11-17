@@ -8,7 +8,14 @@ struct MobileTranscript {
     var turns: [ChatTurn] { transcript.turns }
     /// The turn the latest live start opened (a later prompt may steer it without another start).
     private(set) var activeTurnID: String?
-    private(set) var revision = 0
+    /// Counts changes. Each one starts a new `memo`, so a copy taken before it keeps the rows it showed and never sees
+    /// this one's.
+    private(set) var revision = 0 { didSet { memo = Memo() } }
+    /// The rows of this revision once built (`rows`), shared by copies until one changes.
+    private var memo = Memo()
+    /// Each ended turn's summary by the turn's own revision, shared by every revision and copy of this transcript (a
+    /// summary is the turn's content's, whoever asks).
+    private let summaries = Summaries()
     /// Turns seen ending live whose thinking still shows, until the session lets them fold (`attemptThinkingFold`).
     private(set) var heldThinkingTurns: Set<String> = []
 
@@ -90,6 +97,16 @@ struct MobileTranscript {
         case item(ChatItem, turn: String)
         /// What a native command printed (`output` records, Claude's shell mode): the command's result, not a row.
         case output(String)
+
+        /// The thread shows it at once rather than with the records after it (`MobileChatSession.presentSoon`): a
+        /// turn's start or end, and the user's own message.
+        var presentsAtOnce: Bool {
+            switch self {
+            case .started, .ended: true
+            case .item(let item, _): item.kind == .user
+            case .output: false
+            }
+        }
     }
 
     /// A transcript replaced in place (a Pi tree switch, `replace` records): the history goes, identity stays.
@@ -178,13 +195,52 @@ struct ChatThreadRow: Identifiable, Equatable {
 }
 
 extension MobileTranscript {
+    /// A revision's rows, built once each way (`rows(foldingThinking:)`). Main actor only, as the transcript is.
+    final class Memo: @unchecked Sendable {
+        var folded: [ChatThreadRow]?
+        var unfolded: [ChatThreadRow]?
+    }
+
+    /// Ended turns' summaries by the turn's id and its own revision (`ChatTurn.presentationRevision`, new with any
+    /// change to its items or end): a later revision reuses the summary of every turn that did not change.
+    final class Summaries: @unchecked Sendable {
+        var byTurn: [String: (revision: UUID, summary: ChatTurnSummary)] = [:]
+    }
+
+    /// How many times rows and turn summaries were built (checks: `ChatThreadUpdatesTests`).
+    nonisolated(unsafe) static var rowBuilds = 0
+    nonisolated(unsafe) static var summaryBuilds = 0
+
     /// The thread's rows in order. A turn's caption goes under its last agent message once the turn has ended, and its
-    /// thinking moves to message details' steps once it has ended on a reply (`ChatThinkingFold`).
+    /// thinking moves to message details' steps once it has ended on a reply (`ChatThinkingFold`). Built once per
+    /// revision however often a pass reads them.
     var rows: [ChatThreadRow] { rows(foldingThinking: true) }
 
     /// `foldingThinking` false: every thought stays, where nothing else lists them (a side conversation has no details).
     func rows(foldingThinking: Bool) -> [ChatThreadRow] {
+        if let rows = foldingThinking ? memo.folded : memo.unfolded { return rows }
+        let rows = buildRows(foldingThinking: foldingThinking)
+        if foldingThinking { memo.folded = rows } else { memo.unfolded = rows }
+        return rows
+    }
+
+    /// The turn's summary, kept while the turn is unchanged.
+    private func summary(_ turn: ChatTurn) -> ChatTurnSummary {
+        if let known = summaries.byTurn[turn.id], known.revision == turn.presentationRevision { return known.summary }
+        Self.summaryBuilds += 1
+        let summary = ChatTurnSummary(turn)
+        summaries.byTurn[turn.id] = (turn.presentationRevision, summary)
+        return summary
+    }
+
+    private func buildRows(foldingThinking: Bool) -> [ChatThreadRow] {
+        Self.rowBuilds += 1
         var rows: [ChatThreadRow] = []
+        // Only the turns still here keep a summary.
+        if summaries.byTurn.count > turns.count {
+            let ids = Set(turns.map(\.id))
+            summaries.byTurn = summaries.byTurn.filter { ids.contains($0.key) }
+        }
         for turn in turns {
             let items = turn.items
             let folded = foldingThinking && ChatThinkingFold.folds(items, ended: turn.ended) && !heldThinkingTurns.contains(turn.id)
@@ -196,7 +252,7 @@ extension MobileTranscript {
                 case .user:
                     rows.append(.init(id: id, kind: .user, item: item, turnID: turn.id, time: time))
                 case .assistant:
-                    let summary = index == lastAgent && turn.ended != nil ? ChatTurnSummary(turn) : nil
+                    let summary = index == lastAgent && turn.ended != nil ? self.summary(turn) : nil
                     rows.append(.init(id: id, kind: .agent(summary: summary), item: item, turnID: turn.id, time: time))
                 case .notice:
                     rows.append(.init(id: id, kind: .notice, item: item, turnID: turn.id, time: time))

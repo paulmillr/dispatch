@@ -74,6 +74,9 @@ final class MobileTabs {
     /// (host, multiplexer name) → the host follows that multiplexer from now on (its saved preference, as Edit host
     /// sets it): New space on another multiplexer than the one shown. The composition sets it.
     @ObservationIgnored var follow: @MainActor (UUID, String) -> Void = { _, _ in }
+    /// host → New space's `backends.create` answered, so a multiplexer server runs there now: the host session looks
+    /// for it at once (`HostSession.rediscover`). The composition sets it.
+    @ObservationIgnored var serverStarted: @MainActor (UUID) -> Void = { _ in }
     /// host → its shell tabs (`HostSession.shells`), for New tab, Close tab and Close space in a Shell space. The
     /// composition sets it.
     @ObservationIgnored var shellSessions: @MainActor (UUID) -> ShellSessions? = { _ in nil }
@@ -284,8 +287,9 @@ final class MobileTabs {
         guard let workspace = workspace(host) else { throw TabsFailure.disconnected }
         // Not detected yet (just connected): where the host's spaces are, as `sync` would detect it.
         if workspace.choice == nil { try await workspace.detect(override: detected[host] ?? nil) }
-        let follow = follow
-        return try await workspace.createSpace(name: name, directory: directory, on: multiplexer, follow: { follow(host, $0) })
+        let follow = follow, started = serverStarted
+        return try await workspace.createSpace(name: name, directory: directory, on: multiplexer, follow: { follow(host, $0) },
+                                               started: { started(host) })
     }
 
     /// Adds a workspace directly (previews, tests).

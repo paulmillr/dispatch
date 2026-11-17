@@ -329,6 +329,29 @@ final class ReviewChangesTests: XCTestCase {
         XCTAssertEqual(script.reads, 4)
     }
 
+    /// The watch's reads after the first wait for the shared clock's 15 s ticks (`HostTraffic`, with the stats' samples),
+    /// every other tick under frugal mode.
+    func testTheWatchWaitsForTheSharedClock() async throws {
+        let script = ScriptedStatus()
+        let review = review(script)
+        let changes = review.changes(Self.place)
+        let sleeper = SteppedSleeper()
+        changes.sleep = { try await sleeper.sleep($0) }
+        // 5 s past a tick of the shared clock.
+        changes.now = { Date(timeIntervalSinceReferenceDate: 800_000_000) }
+        changes.frugal = { [unowned self] in self.frugal }
+        let watch = Task { await changes.watch() }
+        defer { watch.cancel() }
+        try await TestSupport.eventually { script.reads == 1 && sleeper.pending == 1 }
+        XCTAssertEqual(sleeper.durations, [.seconds(10)], "the next tick at least 7.5 s away")
+        frugal = true
+        sleeper.step()
+        try await TestSupport.eventually { script.reads == 2 && sleeper.pending == 1 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(40), "frugal: the next 30 s tick at least 15 s away")
+    }
+
+    private var frugal = false
+
     // MARK: Views
 
     private func context(_ review: MobileReview, offline: Bool = false, pushed: @escaping (FilesRoute) -> Void = { _ in }) -> ReviewContext {

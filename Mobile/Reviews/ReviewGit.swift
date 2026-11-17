@@ -357,9 +357,11 @@ final class ReviewGitMemory: @unchecked Sendable {
 ///
 /// One read at a time: a refresh asked during a read runs once more after it (its callers wait for that one). A failed
 /// read keeps the last status (S3 lists it dimmed while the host is offline). Nothing is read while the host has no
-/// reader (offline, no grant). The list's `watch` reads on appear and every `interval` while it shows; the screen
-/// refreshes on foregrounding, and `MobileReview.changed(host:)` refreshes a host's shown lists when an agent's turn
-/// ends.
+/// reader (offline, no grant). The list's `watch` reads on appear and then on the shared clock's 15 s ticks while it
+/// shows (`HostTraffic`; every other tick under frugal mode), with the stats' samples; the screen refreshes on
+/// foregrounding and pull to refresh, and `MobileReview.changed(host:)` refreshes a host's shown lists when an agent's
+/// turn ends (it stops working). Changes an agent makes show at its turn's end; the ticks catch the rest (an edit made
+/// in an editor on the host).
 @MainActor @Observable
 final class ReviewChanges {
     let place: ReviewPlace
@@ -374,8 +376,9 @@ final class ReviewChanges {
     var searching = false
     var query = ""
 
-    /// The watch's cadence (the Mac's files tick).
-    @ObservationIgnored var interval: Duration = .seconds(2)
+    /// The watch's cadence: the shared clock's (`HostTraffic`), at least `HostTraffic.frugalInterval` under frugal mode.
+    @ObservationIgnored var interval: Duration = HostTraffic.interval
+    @ObservationIgnored var frugal: @MainActor () -> Bool = { Frugal.active }
     @ObservationIgnored var sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     @ObservationIgnored var now: @MainActor () -> Date = { System.date() }
     /// Lists showing (their `watch` running): `MobileReview.changed(host:)` refreshes only these.
@@ -409,13 +412,14 @@ final class ReviewChanges {
         await task.value
     }
 
-    /// Reads on appear and every `interval` until the task is cancelled (a view's `.task`).
+    /// Reads on appear and on each tick of `interval` on the shared clock until the task is cancelled (a view's `.task`).
     func watch() async {
         shown += 1
         defer { shown -= 1 }
         await refresh()
         while !Task.isCancelled {
-            do { try await sleep(interval) } catch { return }
+            let every = HostTraffic.cadence(interval, frugal: frugal())
+            do { try await sleep(HostTraffic.wait(every: every, from: now()).delay) } catch { return }
             guard !Task.isCancelled else { return }
             await refresh()
         }

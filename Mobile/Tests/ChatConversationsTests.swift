@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import XCTest
 @testable import DispatchMobile
 
@@ -247,6 +248,99 @@ final class ChatConversationsTests: XCTestCase {
         source.fail(false)
         await conversations.refreshAll()
         XCTAssertFalse(conversations.conversations[0].stale)
+    }
+
+    /// The foreground poll (`AgentsPoll`): a host whose helper pushes its agents' changes is read once a minute (every
+    /// fourth tick), one with a Pi agent (no transcript watch) or without the push every tick; frugal mode reads only on
+    /// the fourth ticks.
+    func testThePollReadsPushingHostsOnceAMinuteAndPiEveryTick() async throws {
+        let harness = Harness()
+        // Sendable: the script runs on the transport's thread, not the main actor.
+        helper.script { @Sendable request in
+            guard request.method == "chat.list" else { return .result(NSNull()) }
+            return .result([["terminal": 3, "key": harness.withLock { $0 }, "busy": false, "preview": "Done.",
+                             "time_ms": 946_719_000_000]])
+        }
+        let conversations = list(Source())
+        var host = snapshot(try topology(agents: [3: "conv-e2e"]))
+        host.features = ["chat.list", "agents.activity"]
+        conversations.update(host)
+        try await TestSupport.eventually {
+            helper.requests("chat.list").count == 1 && conversations.conversations.first?.stale == false
+        }
+        XCTAssertFalse(conversations.pollsEveryTick(self.host), "its helper pushes Claude's changes")
+        await conversations.poll(quiet: false, frugal: false)
+        XCTAssertEqual(helper.requests("chat.list").count, 1, "between the minute's ticks")
+        await conversations.poll(quiet: true, frugal: false)
+        XCTAssertEqual(helper.requests("chat.list").count, 2, "once a minute")
+
+        // Pi: only its published state is pushed, so every tick reads; frugal mode only on the minute's.
+        harness.withLock { $0 = "pi" }
+        await conversations.refreshAll()
+        XCTAssertEqual(conversations.conversations.first?.summary.harness, "pi")
+        XCTAssertTrue(conversations.pollsEveryTick(self.host))
+        await conversations.poll(quiet: false, frugal: false)
+        XCTAssertEqual(helper.requests("chat.list").count, 4)
+        await conversations.poll(quiet: false, frugal: true)
+        XCTAssertEqual(helper.requests("chat.list").count, 4, "frugal: the minute's ticks only")
+        await conversations.poll(quiet: true, frugal: true)
+        XCTAssertEqual(helper.requests("chat.list").count, 5)
+
+        // A helper without the push: every tick.
+        harness.withLock { $0 = "claude" }
+        await conversations.refreshAll()
+        XCTAssertFalse(conversations.pollsEveryTick(self.host))
+        host.features = ["chat.list"]
+        conversations.update(host)
+        XCTAssertTrue(conversations.pollsEveryTick(self.host))
+        await conversations.poll(quiet: false, frugal: false)
+        XCTAssertEqual(helper.requests("chat.list").count, 7)
+    }
+
+    /// The poll's loop: the foreground's read at once, then on the shared clock's ticks, a pushing host's rows on the
+    /// minute's only.
+    func testThePollWaitsForTheSharedClocksTicks() async throws {
+        helper.script { request in
+            guard request.method == "chat.list" else { return .result(NSNull()) }
+            return .result([["terminal": 3, "key": "claude", "busy": false, "preview": "Done.", "time_ms": 946_719_000_000]])
+        }
+        let conversations = list(Source())
+        var host = snapshot(try topology(agents: [3: "conv-e2e"]))
+        host.features = ["chat.list", "agents.activity"]
+        conversations.update(host)
+        try await TestSupport.eventually {
+            helper.requests("chat.list").count == 1 && conversations.conversations.first?.stale == false
+        }
+        let sleeper = SteppedSleeper()
+        let poll = AgentsPoll(conversations: conversations)
+        // 5 s past a tick of the shared clock; 800_000_040 is on the minute.
+        poll.now = { [unowned self] in self.pollClock }
+        poll.sleep = { try await sleeper.sleep($0) }
+        poll.frugal = { false }
+        poll.start()
+        defer { poll.stop() }
+        try await TestSupport.eventually { helper.requests("chat.list").count == 2 && sleeper.pending == 1 }
+        XCTAssertEqual(sleeper.durations, [.seconds(10)], "the foreground's read at once, then the next tick")
+        for (index, tick) in [800_000_010.0, 800_000_025].enumerated() {
+            XCTAssertFalse(AgentsPoll.quiet(Date(timeIntervalSinceReferenceDate: tick)))
+            pollClock = Date(timeIntervalSinceReferenceDate: tick)
+            sleeper.step()
+            try await TestSupport.eventually { sleeper.durations.count == index + 2 && sleeper.pending == 1 }
+            XCTAssertEqual(sleeper.durations.last, .seconds(15))
+        }
+        XCTAssertEqual(helper.requests("chat.list").count, 2, "a pushing host between the minute's ticks")
+        XCTAssertTrue(AgentsPoll.quiet(Date(timeIntervalSinceReferenceDate: 800_000_040)))
+        pollClock = Date(timeIntervalSinceReferenceDate: 800_000_040)
+        sleeper.step()
+        try await TestSupport.eventually { helper.requests("chat.list").count == 3 && sleeper.pending == 1 }
+    }
+
+    private var pollClock = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    /// The harness the scripted `chat.list` names, set by the test while the transport's thread reads it.
+    private final class Harness: Sendable {
+        private let value = Mutex("claude")
+        func withLock<T: Sendable>(_ body: (inout String) -> T) -> T { value.withLock { body(&$0) } }
     }
 
     /// A refresh asked while one is on its way runs again when it ends, instead of being dropped.

@@ -153,6 +153,8 @@ final class HostSessions {
             if active { for session in ordered { session.retryNow() } }
             return
         }
+        // Foregrounding: a host that lingered looks for its multiplexer's server again at once.
+        if active { for session in ordered { session.rediscover() } }
         self.active = active
         // Foreground: every host connects interactively, so no hold is left to expire; background: everything
         // disconnects, holds included, connected hosts after `lingerLength`.
@@ -207,9 +209,21 @@ final class HostSessions {
     /// Connect or the next launch.
     func isParked(_ id: UUID) -> Bool { sessions[id]?.parked ?? false }
 
-    /// Low Power Mode changed: each host's stats take its cadence (`HostStatistics.cadence`).
-    func powerStateChanged() {
-        for session in ordered { session.stats.powerStateChanged() }
+    /// Frugal mode changed (`Frugal.changed`): each host's stats take its cadence (`HostStatistics.cadence`).
+    func frugalChanged() {
+        for session in ordered {
+            session.stats.frugalChanged()
+            Self.pace(session)
+        }
+    }
+
+    /// How long a frugal phone lets its helpers hold the notifications nothing waits for (`HostSession.notificationPace`,
+    /// docs/ios.md, Frugal mode): one of the shared clock's ticks, whose requests release them anyway.
+    static let frugalPace: Duration = HostTraffic.interval
+
+    /// Paces `session`'s notifications while the phone is frugal, and stops pacing them when it is not.
+    static func pace(_ session: HostSession) {
+        session.notificationPace = Frugal.active ? frugalPace : nil
     }
 
     /// A watch request needs this saved host (docs/watch.md, Background). In the background its own session connects
@@ -275,7 +289,10 @@ final class HostSessions {
         let start = System.date()
         let sessions = ordered
         let links = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.link) })
-        for session in sessions { session.retryNow() }
+        for session in sessions {
+            session.retryNow()
+            session.rediscover()
+        }
         let deadline = ContinuousClock.now + timeout
         func answered(_ session: HostSession) -> Bool {
             if let updated = session.updated, updated >= start { return true }
@@ -422,6 +439,7 @@ final class HostSessions {
         guard let saved = store.record(record.id) else { return }
         if let probe, probe.id == record.id {
             probe.stats.active = active
+            Self.pace(probe)
             probe.update(saved)
             sessions[record.id] = probe
         }
@@ -663,6 +681,7 @@ final class HostSessions {
         session.shells.presences = presences
         session.networkUnavailable = networkUnavailable
         session.stats.active = active
+        Self.pace(session)
         session.changed = { [weak self] session in
             guard let self, self.sessions[session.id] === session else { return }
             // Disconnected (backgrounded, or the user's own disconnect): no run is left to take an answer.

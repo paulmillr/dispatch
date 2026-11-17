@@ -91,8 +91,6 @@ struct CodeComposer: View {
     var multiline: Binding<Bool> = .constant(false)
     /// Conversation mode (C5), the mic's VoiceOver action ("+" offers it too); nil: the mic only dictates.
     var converse: (() -> Void)? = nil
-    /// "+" › Mine only: the thread shows the user's messages alone (`MobileChatSession.mineOnly`); nil offers none.
-    var mineOnly: Binding<Bool>? = nil
 
     @State private var editor = CodeEditorModel()
     @State private var keyboard = HardwareKeyboard.shared
@@ -194,9 +192,9 @@ struct CodeComposer: View {
                     Menu {
                         Button("Photo or screenshot", systemImage: "photo") { choosingPhotos = true }.disabled(!attaching)
                         Button("File", systemImage: "doc") { choosingFiles = true }.disabled(!attaching)
-                        // What the composer and thread switch, one group under its title: the code keys, Mine only, then
-                        // Dialog (conversation mode).
-                        if !keyboard.attached || mineOnly != nil || converse != nil {
+                        // What the composer switches, one group under its title: the code keys, then Dialog
+                        // (conversation mode).
+                        if !keyboard.attached || converse != nil {
                             Section("Toggle") {
                                 if !keyboard.attached {
                                     // A hardware keyboard has the keys, and the row never shows with it.
@@ -208,9 +206,6 @@ struct CodeComposer: View {
                                     })) {
                                         Label("Code keys", systemImage: "curlybraces")
                                     }
-                                }
-                                if let mineOnly {
-                                    Toggle(isOn: mineOnly) { Label("Mine only", systemImage: "person.bubble") }
                                 }
                                 if let converse {
                                     Button("Dialog", systemImage: "waveform", action: converse)
@@ -230,7 +225,7 @@ struct CodeComposer: View {
                     .buttonStyle(.plain)
                     .chatSurface(Circle())
                     .accessibilityLabel("Attach")
-                    .accessibilityHint("Photos, files, the code keys" + (mineOnly == nil ? "" : ", your messages only")
+                    .accessibilityHint("Photos, files, the code keys"
                                        + (converse == nil ? "" : " and conversation mode"))
                     VStack(alignment: .trailing, spacing: 6) {
                         HStack(alignment: .bottom, spacing: 6) {

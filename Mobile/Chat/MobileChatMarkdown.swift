@@ -48,6 +48,9 @@ struct MobileChatMarkdownView: View {
     var corner: ChatCorner? = nil
     /// A live reply typing out (`ChatTypingReveal`): its safe part shows, cut where the reveal is, with the caret.
     var typing: ChatTypingReveal? = nil
+    /// The text may still grow (a reply streaming into the live turn): its parses stay out of the finished bubbles'
+    /// cache (`contents(_:code:emphasis:partial:)`).
+    var partial = false
     /// Settings' chat font: inline code and code blocks in the terminal's font.
     @Environment(\.chatTypography) private var typography
     @Environment(\.chatSearchMarks) private var marks
@@ -91,16 +94,21 @@ struct MobileChatMarkdownView: View {
 
     /// `contents` with nothing marked, kept by text and fonts: a thread draws every bubble when it opens and again as
     /// the rows around it change, and parsing, the link checks and highlighting were most of what a bubble cost.
-    static func contents(_ text: String, code: Font?, emphasis: Font?, syntax: CodeSyntax.Colors = .standard)
-        -> (blocks: [Content], truncated: Bool) {
+    /// `partial`: text that may still grow (a streaming reply, the part of one typed so far) is kept apart, a few
+    /// parses at most, so a stream's parse per update never fills the finished bubbles' cache and starts it over.
+    static func contents(_ text: String, code: Font?, emphasis: Font?, syntax: CodeSyntax.Colors = .standard,
+                         partial: Bool = false) -> (blocks: [Content], truncated: Bool) {
         let key = Parsed(text: text, code: code, emphasis: emphasis, syntax: syntax.id)
-        if let parsed = parsed[key] { return parsed }
+        if let parsed = (partial ? partials[key] : parsed[key]) { return parsed }
         var none = ChatSearchMarker(query: "", current: nil)
         let contents = contents(text, code: code, emphasis: emphasis, syntax: syntax, marker: &none)
-        // A streamed message leaves a parse per update behind: the cache starts over rather than tracking use.
-        parsed.insert(contents, for: key, source: text)
+        // Each cache starts over once full rather than tracking use.
+        if partial { partials.insert(contents, for: key, source: text) } else { parsed.insert(contents, for: key, source: text) }
         return contents
     }
+
+    /// How many parses each cache holds (checks).
+    static var cached: (finished: Int, partial: Int) { (parsed.count, partials.count) }
 
     private struct Parsed: Hashable {
         let text: String
@@ -111,12 +119,16 @@ struct MobileChatMarkdownView: View {
     }
     private static var parsed = ChatTextCache<Parsed, (blocks: [Content], truncated: Bool)>(
         limit: .init(count: ChatMarkdownCacheBounds.document.count, bytes: ChatMarkdownCacheBounds.document.bytes))
+    /// A streaming reply's latest parses: its view reads the same text again until more arrives (a corner, a search).
+    private static var partials = ChatTextCache<Parsed, (blocks: [Content], truncated: Bool)>(
+        limit: .init(count: 4, bytes: 4 * ChatMarkdownCacheBounds.document.bytes))
 
     /// The blocks as drawn: marked by an open search, else from the cache. A typing reply's are its safe part's.
     private var shownContents: (blocks: [Content], truncated: Bool) {
         let text = typing?.layout.source ?? text
         guard var marker = ChatSearchMarker(marks, current: current) else {
-            return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, syntax: palette.syntax)
+            return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, syntax: palette.syntax,
+                                 partial: partial || typing != nil)
         }
         return Self.contents(text, code: typography.inlineCode, emphasis: typography.emphasis, syntax: palette.syntax,
                              marker: &marker)
@@ -158,7 +170,7 @@ struct MobileChatMarkdownView: View {
                 }
                 if let corner, !inline, corner.drawn {
                     // Trailing lines of the corner's own.
-                    corner.view(true)
+                    ChatTurnCorner(text: corner.text, wrapped: true)
                         .padding(.top, -4)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(corner.spoken ?? "")
@@ -169,9 +181,9 @@ struct MobileChatMarkdownView: View {
         }
         .foregroundStyle(muted ? palette.muted : palette.ink)
         .overlay(alignment: .bottomTrailing) {
-            if inline, let corner {
+            if inline, let corner, corner.drawn {
                 // 12 points in from the bubble's edge and 7 up (its padding is 14 and 9).
-                corner.view(false)
+                ChatTurnCorner(text: corner.text)
                     .padding(.trailing, -2)
                     .padding(.bottom, -2)
                     .accessibilityHidden(true)
@@ -415,7 +427,7 @@ struct MobileTypedMarkdown: View {
     @State private var onScreen = true
     var body: some View {
         let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, posts: posts, reduceMotion: reduceMotion)
-        MobileChatMarkdownView(text: text, corner: corner, typing: typing)
+        MobileChatMarkdownView(text: text, corner: corner, typing: typing, partial: live && !ended)
             .onScreen($onScreen)
             .onAppear { appeared = true; show(onScreen ? typing : nil) }
             .onDisappear { appeared = false; show(nil) }

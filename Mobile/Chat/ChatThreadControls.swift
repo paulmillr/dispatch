@@ -37,14 +37,22 @@ extension TabsContent {
     }
 }
 
-/// A conversation's menu items: Search, the side conversations (read-only; the open one instead while it
-/// lasts), Manage goal. Conversation mode is the composer's ("+", and a long press on the mic).
+/// A conversation's menu items: Model (the model and effort it runs, opening their sheet), Search, the side
+/// conversations (read-only; the open one instead while it lasts), Manage goal. Conversation mode is the composer's
+/// ("+", and a long press on the mic).
 struct ChatThreadMenuItems: View {
     let session: MobileChatSession
     /// What the tab's menu puts right under Search (the host's Stats, `TabMenuItems`).
     @Environment(\.chatMenuAfterSearch) private var afterSearch
 
     var body: some View {
+        Button { session.choosingSettings = true } label: {
+            Text("Model")
+            Text(Self.model(session))
+            Image(systemName: "cpu")
+        }
+        .disabled(session.phase != .verified)
+        Divider()
         Button("Search", systemImage: "magnifyingglass") { session.search.open() }
         if let afterSearch { afterSearch }
         if session.side != nil {
@@ -57,6 +65,13 @@ struct ChatThreadMenuItems: View {
         if session.goal != nil {
             Button("Manage Goal", systemImage: "flag") { session.managingGoal = true }
         }
+    }
+
+    /// Model's subtitle, as a fresh chat's intro names them: "opus-5.5 · high", or "Model and effort" before the agent
+    /// reports either.
+    static func model(_ session: MobileChatSession) -> String {
+        [session.modelLabel ?? session.model, session.effort].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
+            ?? "Model and effort"
     }
 }
 
@@ -541,13 +556,14 @@ struct ChatTurnCorner: View {
 }
 
 /// What an agent reply says in its corner (S6d, its time) and how its text keeps room for it (`MobileChatMarkdownView`).
-struct ChatCorner {
+/// Plain values, so a bubble whose corner and text are what they were is not drawn again (`MobileTypedMarkdown`).
+struct ChatCorner: Equatable {
     /// What the room is kept for: the widest the corner draws.
     var room: String
     /// The room fits one line of the bubble's text (`ChatCornerMetrics.fits`); else the corner takes lines of its own.
     var fits: Bool
-    /// The corner as drawn: one line over the room, or `wrapped` on trailing lines of its own.
-    var view: (_ wrapped: Bool) -> AnyView
+    /// What the corner draws (`ChatTurnCorner`): one line over the room, or wrapped on trailing lines of its own.
+    var text: String
     /// For VoiceOver, the value of the element the room ends (or the label of the corner's own lines); nil or empty:
     /// nothing to read, and no element.
     var spoken: String?
@@ -557,17 +573,24 @@ struct ChatCorner {
 
     /// An agent reply's corner, told against `now`: the ended turn's summary on its last one (S6d), which ends with
     /// when the turn ended; else when the reply was written ("10:17", `ChatTurnSummary.time`), as a messenger dates
-    /// every message. Nil for a reply read without a time.
+    /// every message. Nil for a reply read without a time. Kept per what it is told from (`Told`).
     @MainActor static func reply(time: Date?, summary: ChatTurnSummary?, now: Date, metrics: ChatCornerMetrics) -> ChatCorner? {
+        let key = Told(time: time, summary: summary, now: now, metrics: metrics)
+        if let told = replies[key] { return told }
+        let corner = telling(time: time, summary: summary, now: now, metrics: metrics)
+        Told.keep(corner, for: key, in: &replies)
+        return corner
+    }
+
+    @MainActor private static func telling(time: Date?, summary: ChatTurnSummary?, now: Date, metrics: ChatCornerMetrics) -> ChatCorner? {
         let calendar = Calendar.autoupdatingCurrent
         if let summary, let text = summary.corner(now: now, calendar: calendar, fits: metrics.fits) {
-            return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+            return ChatCorner(room: text, fits: metrics.fits(text), text: text,
                               spoken: summary.spokenCorner(now: now, calendar: calendar), hint: "Shows the steps")
         }
         guard let time else { return nil }
         let text = ChatTurnSummary.time(time, now: now, calendar: calendar)
-        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
-                          spoken: text)
+        return ChatCorner(room: text, fits: metrics.fits(text), text: text, spoken: text)
     }
 
     /// A reply as Times on swipe shows it: nothing in its corner, and beside the bubble on the swipe its time
@@ -575,12 +598,53 @@ struct ChatCorner {
     /// message's details'). VoiceOver reads the full corner as the bubble's value (`spokenOnly`).
     @MainActor static func swiped(time: Date?, summary: ChatTurnSummary?, now: Date,
                                   metrics: ChatCornerMetrics) -> (corner: ChatCorner?, time: String?) {
+        let key = Told(time: time, summary: summary, now: now, metrics: metrics)
+        if let told = swipes[key] { return told }
         let calendar = Calendar.autoupdatingCurrent
         let when = (time ?? summary?.ended).map { ChatTurnSummary.time($0, now: now, calendar: calendar) }
         let steps = summary.flatMap { $0.steps.isEmpty ? nil : ChatTurnSummary.count($0.steps.count, "step") }
         let shown = [steps, when].compactMap { $0 }.joined(separator: "\n")
-        return (reply(time: time, summary: summary, now: now, metrics: metrics)?.spokenOnly, shown.isEmpty ? nil : shown)
+        let told = (reply(time: time, summary: summary, now: now, metrics: metrics)?.spokenOnly, shown.isEmpty ? nil : shown)
+        Told.keep(told, for: key, in: &swipes)
+        return told
     }
+
+    /// What a corner is told from: the reply's time, what the summary's corner reads of it (its files, counts, reads
+    /// and end), the moment it is told against (the thread's `today`, which changes with the day) and the room's
+    /// width and text size. Every row of a thread asks on every pass; the strings and their widths are made once.
+    private struct Told: Hashable {
+        let time: Date?
+        let ended: Date?
+        let files: [String]
+        let additions: Int
+        let deletions: Int
+        let steps: Int?
+        let reads: [String]?
+        let now: Date
+        let column: CGFloat
+        let size: DynamicTypeSize
+
+        @MainActor init(time: Date?, summary: ChatTurnSummary?, now: Date, metrics: ChatCornerMetrics) {
+            self.time = time
+            ended = summary?.ended
+            files = summary?.files ?? []
+            additions = summary?.additions ?? 0
+            deletions = summary?.deletions ?? 0
+            steps = summary?.steps.count
+            reads = summary?.reads
+            self.now = now
+            column = metrics.column
+            size = metrics.size
+        }
+
+        /// Starts over past 2048 entries rather than tracking use (a thread asks for one day's corners).
+        static func keep<Value>(_ value: Value, for key: Told, in cache: inout [Told: Value]) {
+            if cache.count >= 2048 { cache.removeAll(keepingCapacity: true) }
+            cache[key] = value
+        }
+    }
+    @MainActor private static var replies: [Told: ChatCorner?] = [:]
+    @MainActor private static var swipes: [Told: (corner: ChatCorner?, time: String?)] = [:]
 }
 
 /// The corner's font as UIKit measures it, against the width of the bubble's text: whether a corner can share a line.
@@ -925,27 +989,4 @@ extension EnvironmentValues {
     /// A menu item the conversation's items show right under Search (`ChatThreadMenuItems`): the tab's menu puts the
     /// host's Stats there.
     @Entry var chatMenuAfterSearch: AnyView? = nil
-}
-
-/// Over the composer while "+" › Mine only hides the agent's messages: what the thread shows, and Show all.
-struct ChatMineOnlyBar: View {
-    let showAll: () -> Void
-    @Environment(\.chatPalette) private var palette
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "person.bubble").font(.caption.weight(.semibold))
-            Text("Your messages only").font(.footnote.weight(.semibold))
-            Spacer(minLength: 8)
-            Button("Show all", action: showAll)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(palette.accent)
-                .accessibilityIdentifier("chat-mine-only-show-all")
-        }
-        .foregroundStyle(palette.muted)
-        .padding(.horizontal, 16)
-        .frame(minHeight: 32)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("chat-mine-only")
-    }
 }

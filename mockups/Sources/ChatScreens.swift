@@ -87,14 +87,19 @@ struct Composer: View {
     }
 }
 
-/// C1: search in the conversation. The composer becomes the search field; matches are bolded; arrows step through
-/// them; "Searching earlier messages…" while older pages load.
+/// C1: search in the conversation. The composer becomes the search field, its scope over it (All, Mine: the user's
+/// messages alone); matches are bolded; arrows step through them; "Searching earlier messages…" while older pages load.
 struct ChatSearchScreen: View {
     var body: some View {
         ChatShell {
             Transcript(highlight: "guard")
         } bottom: {
             VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    SearchScopeChip(title: "All", selected: true)
+                    SearchScopeChip(title: "Mine", symbol: "person.bubble", selected: false)
+                    Spacer()
+                }
                 HStack(spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -121,6 +126,23 @@ struct ChatSearchScreen: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 4)
         } overlay: { EmptyView() }
+    }
+}
+
+/// The search's scope chip (`ChatSearchBar.scope`): the chosen one filled in the accent.
+struct SearchScopeChip: View {
+    let title: String
+    var symbol: String? = nil
+    let selected: Bool
+    var body: some View {
+        HStack(spacing: 5) {
+            if let symbol { Image(systemName: symbol).font(.caption.weight(.semibold)) }
+            Text(title).font(.subheadline.weight(.semibold))
+        }
+        .foregroundStyle(selected ? Color.onAccent : Color.primary)
+        .padding(.horizontal, 14).frame(height: 32)
+        .background { if selected { Capsule().fill(Color.dispatchPink) } }
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 

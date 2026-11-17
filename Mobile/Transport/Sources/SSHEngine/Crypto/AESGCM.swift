@@ -55,7 +55,7 @@ final class AESGCMOpener: PacketOpener {
 
   func open(_ packet: [UInt8], sequence: UInt32) throws(SSHError) -> [UInt8] {
     let length = try packetBody(packet, length: try readLength(packet), tagBytes: 16)
-    let plaintext: Data
+    var plaintext: Data
     do {
       let box = try AES.GCM.SealedBox(nonce: try nonce.current(), ciphertext: packet[4..<4 + length],
                                       tag: packet[(4 + length)...])
@@ -64,6 +64,7 @@ final class AESGCMOpener: PacketOpener {
     } catch {
       throw .protocolViolation(.packet(.integrity))
     }
+    defer { wipeBytes(&plaintext) }
     nonce.advance()
     return [UInt8](plaintext)
   }

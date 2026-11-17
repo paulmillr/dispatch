@@ -91,8 +91,11 @@ step() {
   unset RELEASE_PROGRESS_LABEL RELEASE_PROGRESS_TTY
   if [[ $status != 0 ]]; then
     bad "$step_label failed"
-    note "$(tail -15 "$step_log")"
-    note "log: $step_log"
+    # Its last lines and one log: the step's own only when those name none (a build names Xcode's). Home as ~.
+    local step_tail home='~'
+    step_tail="$(tail -15 "$step_log")"
+    note "${step_tail//"$HOME"/$home}"
+    grep -qi 'log: ' <<< "$step_tail" || note "log: ${step_log/#"$HOME"/$home}"
     resume "$(script_name) ${arguments[*]}  (finished steps are skipped)"
     exit 1
   fi

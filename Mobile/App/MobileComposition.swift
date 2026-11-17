@@ -23,7 +23,8 @@ final class MobileComposition {
     var refresh: BackgroundRefresh?
     /// Notifications and the badge while the app is open (`AgentAlerts`); set by `app()`, tests make their own.
     var alerts: AgentAlerts?
-    private var polling: Task<Void, Never>?
+    /// Agents' foreground poll of the hosts' rows (`AgentsPoll`).
+    let polling: AgentsPoll
     var network: NetworkPathWatcher?
     /// The Apple Watch link (docs/watch.md); nil where WatchConnectivity is unsupported.
     var watch: WatchBridge?
@@ -71,6 +72,7 @@ final class MobileComposition {
         conversations = ChatConversations(presence: TerminalChatPresence(presences: presences), markers: markers,
                                           outbox: outbox, drafts: drafts)
         conversations.foreground = hosts.active
+        polling = AgentsPoll(conversations: conversations)
         navigator = SpacesNavigator(model: tabs, memory: splitMemory)
         navigator.gitFacts = gitFacts
         // Shell tabs keep their presences with the rest (plain SSH).
@@ -221,6 +223,7 @@ final class MobileComposition {
             record.multiplexer = preference
             hosts.update(record)
         }
+        tabs.serverStarted = { hosts.session($0)?.rediscover() }
         tabs.needsYouCount = { excluding in
             let here = excluding.flatMap { tabs.tab($0) }.map { tabs.urgency(of: $0) == .needsYou } ?? false
             return max(0, conversations.needsYouCount - (here ? 1 : 0))
@@ -369,31 +372,18 @@ final class MobileComposition {
         alerts?.badge(waiting: AgentAlerts.waiting(counted.map(\.summary)))
     }
 
-    /// While the app is in the foreground every connected host's rows are read again every `pollInterval`: the helper
+    /// While the app is in the foreground the hosts' rows are read again on the shared clock (`AgentsPoll`): the helper
     /// pushes a change when it can (`activityChanged`), and this catches what it cannot.
     private func startPolling() {
-        guard polling == nil, feedsTabs else { return }
-        let conversations = conversations
-        polling = Task { [weak self] in
-            // The foreground's first read: a lingering connection is the same client, which `update` would not refetch.
-            await conversations.refreshAll()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: Self.pollInterval)
-                guard !Task.isCancelled, self != nil else { return }
-                await conversations.refreshAll()
-            }
-        }
+        guard feedsTabs else { return }
+        polling.start()
     }
 
     private func stopPolling() {
-        polling?.cancel()
-        polling = nil
+        polling.stop()
     }
 
     static let agentsFilterKey = "agents.filter"
-
-    /// How often the open app reads every host's rows when no push came.
-    static let pollInterval: Duration = .seconds(20)
 
     /// The live rows of connected hosts go to the cache (offline rows are the cache's own); a row whose terminal no
     /// longer has an agent goes, so the background refresh does not take its last summary for a stop again.
@@ -446,13 +436,18 @@ final class MobileComposition {
             markers: composition.conversations.markers, hosts: { [weak hosts] in hosts?.store.hosts ?? [] },
             source: HostSessionsRefreshSource(hosts: hosts))
         let network = NetworkPathWatcher { [weak hosts] in hosts?.networkChanged() }
-        network.observed = { [weak hosts] path in hosts?.networkPath(satisfied: path.satisfied) }
+        network.observed = { [weak hosts] path in
+            hosts?.networkPath(satisfied: path.satisfied)
+            // A constrained path (Low Data Mode) makes the phone frugal, as Low Power Mode does.
+            Frugal.path(constrained: path.constrained)
+        }
+        Frugal.start()
         network.start()
         composition.network = network
-        // Low Power Mode slows every host's stats sampling (HostStatistics.cadence).
+        // Frugal mode slows every host's stats sampling (HostStatistics.cadence).
         Task { [weak hosts] in
-            for await _ in NotificationCenter.default.notifications(named: Notification.Name.NSProcessInfoPowerStateDidChange) {
-                hosts?.powerStateChanged()
+            for await _ in NotificationCenter.default.notifications(named: Frugal.changed) {
+                hosts?.frugalChanged()
             }
         }
         // Also in the in-memory and scripted modes, so simulator demos push snapshots.

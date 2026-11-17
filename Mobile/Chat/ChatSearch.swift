@@ -17,6 +17,12 @@ final class ChatThreadSearch {
     var query = "" {
         didSet { if query != oldValue { selected = nil; followNewest = true } }
     }
+    /// The bar's Mine chip (All the other): while the search is open the thread shows the user's own messages alone
+    /// (approvals, questions, the working row and queue stay), and the matches are in them; an open search with no
+    /// query is how the user reads their messages alone. Off again as the search closes.
+    var mine = false {
+        didSet { if mine != oldValue { selected = nil; followNewest = true } }
+    }
     private(set) var matches: [Match] = []
     /// Index into `matches` of the one shown (scrolled to, drawn stronger).
     private(set) var selected: Int?
@@ -45,6 +51,7 @@ final class ChatThreadSearch {
 
     func close() {
         visible = false
+        mine = false
         query = ""
         matches = []
         selected = nil
@@ -76,17 +83,23 @@ final class ChatThreadSearch {
         if !Task.isCancelled { status = nil }
     }
 
+    /// What the thread shows of `rows`: the user's messages alone under Mine, else all.
+    func shown(_ rows: [ChatThreadRow]) -> [ChatThreadRow] {
+        guard visible, mine else { return rows }
+        return rows.filter { if case .user = $0.kind { true } else { false } }
+    }
+
     /// Recounts the matches in `rows`; the shown match stays when it is still there (rows paged in above it move it).
     func update(rows: [ChatThreadRow]) {
         guard active else {
             if !matches.isEmpty { matches = [] }
-            selected = nil
+            if selected != nil { selected = nil }
             return
         }
         let query = trimmed
         var found: [Match] = []
         var kept: [String: Runs] = [:]
-        for row in rows {
+        for row in shown(rows) {
             // A row's text as drawn is parsed once while it stays the same (pages and steps reuse it).
             let runs = self.runs[row.id].flatMap { $0.text == row.item.text ? $0 : nil }
                 ?? Runs(text: row.item.text, runs: ChatSearchMarker.runs(of: row))
@@ -196,14 +209,22 @@ struct ChatSearchMarker {
     }
 }
 
-/// C1: the search capsule in the composer's place (field, "2 of 2", clear), the up and down pair and Done, and under them
-/// "Searching earlier messages…" while older history pages in.
+/// C1: the search capsule in the composer's place (field, "2 of 2", clear), the up and down pair and Done, the scope
+/// over them (All, Mine: `ChatThreadSearch.mine`, B9c), and under them "Searching earlier messages…" while older
+/// history pages in.
 struct ChatSearchBar: View {
     @Bindable var search: ChatThreadSearch
     var focus: FocusState<Bool>.Binding
 
     var body: some View {
         VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                scope("All", symbol: nil, mine: false)
+                scope("Mine", symbol: "person.bubble", mine: true)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Search in")
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -274,6 +295,27 @@ struct ChatSearchBar: View {
         .padding(.bottom, 8)
         // The bar's own height whatever the thread does above it (the composer's rule).
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A scope chip: the chosen one filled in the accent.
+    private func scope(_ title: String, symbol: String?, mine: Bool) -> some View {
+        let chosen = search.mine == mine
+        return Button { search.mine = mine } label: {
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.caption.weight(.semibold)).accessibilityHidden(true) }
+                Text(title).font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(chosen ? Color.onAccent : Color.primary)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 32)
+            .background { if chosen { Capsule().fill(Color.dispatchPink) } }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityLabel(mine ? "Your messages" : "All messages")
+        .accessibilityAddTraits(chosen ? .isSelected : [])
+        .accessibilityIdentifier(mine ? "chat-search-mine" : "chat-search-all")
     }
 
     /// Edit › Find… ⌘F, Find Next ⌘G, Find Previous ⇧⌘G on the Chat segment (`MobileCommands`): the chat on screen

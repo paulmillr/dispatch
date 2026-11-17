@@ -171,6 +171,30 @@ final class TerminalEmulatorTests: XCTestCase {
         XCTAssertEqual(session.background, RGB(r: 0, g: 0, b: 0))
     }
 
+    /// The blink timer redraws only a cursor that blinks: a hidden one (agents' TUIs) or a steady one (DECSCUSR) keeps
+    /// its phase and asks for no frame.
+    func testOnlyABlinkingCursorTakesTheBlinkTimersFrames() throws {
+        let session = try TerminalSession.testing(columns: 20, rows: 4)
+        // Output while focused shows the cursor for 500 ms: the screen is set up unfocused (a new surface is focused).
+        session.setFocus(false)
+        session.feed("\u{1B}[?25l")
+        session.setFocus(true)
+        session.blinkTick()
+        XCTAssertTrue(session.blinkVisible, "a hidden cursor: nothing to blink")
+        session.setFocus(false)
+        session.feed("\u{1B}[?25h\u{1B}[2 q")
+        session.setFocus(true)
+        session.blinkTick()
+        XCTAssertTrue(session.blinkVisible, "a steady cursor: nothing to blink")
+        session.setFocus(false)
+        session.feed("\u{1B}[1 q")
+        session.setFocus(true)
+        session.blinkTick()
+        XCTAssertFalse(session.blinkVisible, "a blinking cursor goes out")
+        session.blinkTick()
+        XCTAssertTrue(session.blinkVisible)
+    }
+
     /// A new attachment starts from an empty screen and history: its output repaints everything.
     func testResetClearsScreenAndHistory() throws {
         let session = try TerminalSession.testing(columns: 20, rows: 4)

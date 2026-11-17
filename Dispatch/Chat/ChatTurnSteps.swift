@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One step of a turn as message details list it (the phone's M5f live log and M5b step list, the Mac's message
 /// info): a kind, what it acted on (a path relative to the conversation's directory, or the command) and a short
@@ -286,8 +287,11 @@ struct ChatTurnSummary: Equatable {
         }
     }
 
-    /// The locale's word for yesterday ("Yesterday", "Gestern"), as relative date formatting says it.
+    /// The locale's word for yesterday ("Yesterday", "Gestern"), as relative date formatting says it. Asked once per
+    /// locale, calendar and time zone: a formatter made for every "Yesterday" row cost each pass of a thread.
     static func yesterday(locale: Locale, calendar: Calendar) -> String {
+        let key = locale.identifier + "\u{0}" + "\(calendar.identifier)" + "\u{0}" + calendar.timeZone.identifier
+        if let word = yesterdays.withLock({ $0[key] }) { return word }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
@@ -296,8 +300,11 @@ struct ChatTurnSummary: Equatable {
         formatter.timeStyle = .none
         formatter.doesRelativeDateFormatting = true
         // Relative to the real day: the word is all that is taken.
-        return formatter.string(from: calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date())
+        let word = formatter.string(from: calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date())
+        yesterdays.withLock { $0[key] = word }
+        return word
     }
+    private static let yesterdays = OSAllocatedUnfairLock(initialState: [String: String]())
 
     /// "1 step", "5 steps".
     static func count(_ count: Int, _ noun: String, number: (Int) -> String = { "\($0)" }) -> String {

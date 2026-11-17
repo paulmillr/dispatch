@@ -72,11 +72,45 @@ final class MobileChatSession: Identifiable {
     private(set) var agentLabel: String?
     private(set) var commands: [String] = []
     private(set) var nativeQueue = false
-    // No `oldValue` in the observer: it would copy the transcript on every change made in place.
-    private(set) var transcript = MobileTranscript() {
-        didSet { if transcript.revision != stepRevision { refreshStep() } }
+    /// What the thread and the lists show: `latest` as of its last presentation, at once for anything but a live record
+    /// that only streams on, which reaches it with the next ones (`presentSoon`, docs/ios.md, Thread updates).
+    private(set) var transcript = MobileTranscript()
+    /// The transcript as the helper's records left it, which the session's own logic reads; views read `transcript`.
+    /// No `oldValue` in the observer: it would copy the transcript on every change made in place.
+    @ObservationIgnored private(set) var latest = MobileTranscript() {
+        didSet {
+            refreshStepIfChanged()
+            unpresented = true
+            if !holdingPresentation { present() }
+        }
     }
-    @ObservationIgnored private var stepRevision = -1
+    /// The open turn's tool steps `currentStep` was read from (`refreshStepIfChanged`).
+    @ObservationIgnored private var stepSource: StepSource?
+    /// `latest` changed since `transcript` last took it.
+    @ObservationIgnored private var unpresented = false
+    /// A change being applied decides itself when it is presented (`receive(live:)`).
+    @ObservationIgnored private var holdingPresentation = false
+    /// Counts presentations: one scheduled for an earlier count does nothing.
+    @ObservationIgnored private var presentationTicket = 0
+    @ObservationIgnored private var presentationScheduled = false
+    /// Whether live records that only stream on wait for the next presentation (off while testing, as the typed reveal
+    /// and the Mac's `ChatSession.readingHoldEnabled`: tests read rows as records land; this session's own tests turn
+    /// it on, `holdsRecords`).
+    static var recordsHoldEnabled = !System.testing && System.environment("XCTestConfigurationFilePath") == nil
+        && System.environment("XCTestSessionIdentifier") == nil
+    @ObservationIgnored var holdsRecords = MobileChatSession.recordsHoldEnabled
+    /// The longest such a record waits while the thread shows and follows its end, and otherwise (read further up, not
+    /// shown).
+    static let followingHold: TimeInterval = 0.1
+    static let readingHold: TimeInterval = 0.25
+    /// Runs a presentation after a delay; tests step it by hand.
+    @ObservationIgnored var presentationTimer: (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, run in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { run() } }
+    }
+    /// Thread views showing this session (`ChatThreadView`), and whether the newest follows its end: records then
+    /// present at `followingHold`, else at `readingHold`.
+    @ObservationIgnored private(set) var threadsShown = 0
+    @ObservationIgnored private var threadFollows = true
     /// Live replies typing out as they stream (`ChatTypingReveals`): presentation only, never saved.
     @ObservationIgnored let typing = ChatTypingReveals()
     /// Where the thread was being read when it was last scrolled or left (`ChatThreadView`); nil while it showed its
@@ -84,7 +118,7 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored var readingPosition: ChatReadingPosition? {
         didSet {
             guard readingPosition == nil, oldValue != nil else { return }
-            for turn in transcript.heldThinkingTurns { scheduleThinkingFold(turn, after: 0.3) }
+            for turn in latest.heldThinkingTurns { scheduleThinkingFold(turn, after: 0.3) }
         }
     }
     /// The open turn's current step as a phrase ("Editing Sidebar.tsx"), and when that turn started: Spaces' tab lines
@@ -125,7 +159,12 @@ final class MobileChatSession: Identifiable {
     // The agent's reported state (chat.state).
     private(set) var busy = false
     /// The agent's running subagents (`State.agents`, the Mac's `ChatSubagent`): their task, type, tokens and start.
-    private(set) var subagents: [ChatSubagent] = []
+    private(set) var subagents: [ChatSubagent] = [] {
+        didSet { if runningSubagents != subagents.count { runningSubagents = subagents.count } }
+    }
+    /// How many run: what `working` and the goal's status read, so a subagent's token count (about once a second)
+    /// changes only the views that show it, not the whole thread.
+    private(set) var runningSubagents = 0
     /// Background shells the agent reports running (`State.shells`); they outlive their turn and are no work of its.
     private(set) var shells: [ChatShell] = []
     private(set) var activity: String?
@@ -156,6 +195,8 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored private(set) var openForks: Set<String> = []
     /// The Manage goal sheet (C4b).
     var managingGoal = false
+    /// The model and effort sheet (`ChatSettingsSheet`): the title menu's Model, a fresh chat's intro.
+    var choosingSettings = false
     /// The running shells' sheet shows; it closes with the last shell.
     var showingShells = false
     /// A prompt was sent and the agent has not acknowledged it (no turn start or state since).
@@ -233,7 +274,13 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored private var generation = UUID()
     /// The send `sending` stands for: one that ends after a reconnect started another still clears its own flag only.
     @ObservationIgnored private var sendTicket = 0
-    @ObservationIgnored private var observation: (id: UInt64, client: HelperClient)?
+    @ObservationIgnored private var observation: (id: UInt64, client: HelperClient)? {
+        didSet { if observation?.id != oldValue?.id { toldBackground = nil } }
+    }
+    /// What the helper was last told of this subscription (`markBackground`); nil: nothing yet.
+    @ObservationIgnored private var toldBackground: Bool?
+    /// The last `chat.background` sent: the next waits for it, so the helper hears them in order.
+    @ObservationIgnored private var backgroundRequest: Task<Void, Never>?
     @ObservationIgnored private var retained = false
     @ObservationIgnored private var reconciling = false
     /// Device queue items with a helper operation in flight (a snapshot without them proves nothing yet).
@@ -306,16 +353,66 @@ final class MobileChatSession: Identifiable {
         }
     }
 
+    /// What the step line is read from: the open turn, its start, its tool items as they are now (each item's
+    /// `presentationID` is new with any change to it) and the last message or thought written (the steps since then
+    /// are counted), so a streamed reply word reads no steps.
+    private struct StepSource: Equatable {
+        let turn: String?
+        let started: Date?
+        let tools: [UUID]
+        let written: String?
+    }
+    /// What the notes are read from: the open turn's last message, last reasoning and first prompt, as they are now.
+    private struct NoteSource: Equatable {
+        let turn: String?
+        let said: UUID?
+        let reasoned: UUID?
+        let prompt: UUID?
+    }
+    @ObservationIgnored private var noteSource: NoteSource?
+
+    /// How many times the open turn's steps were read for `currentStep` (checks).
+    @ObservationIgnored private(set) var stepRefreshes = 0
+
+    /// The step line again when the open turn or its tool items changed, its notes when the texts they read did.
+    private func refreshStepIfChanged() {
+        let turn = latest.openTurn
+        let items = turn?.items ?? []
+        let source = StepSource(turn: turn?.id, started: turn?.started,
+                                tools: items.compactMap { $0.kind == .tool ? $0.presentationID : nil },
+                                written: items.last { $0.kind == .assistant || $0.isNarration && !$0.text.isEmpty }?.id)
+        if source != stepSource {
+            stepSource = source
+            refreshStep(turn)
+        }
+        let notes = NoteSource(turn: turn?.id,
+                               said: items.last { $0.kind == .assistant && !$0.text.isEmpty }?.presentationID,
+                               reasoned: items.last { $0.kind == .reasoning && !$0.text.isEmpty }?.presentationID,
+                               prompt: items.first { $0.kind == .user && !$0.text.isEmpty }?.presentationID)
+        if notes != noteSource {
+            noteSource = notes
+            refreshNotes(turn)
+        }
+    }
+
     /// `currentStep` and `openTurnStarted` from the transcript (its running step, else its latest, as the watch's rows).
-    private func refreshStep() {
-        stepRevision = transcript.revision
-        let turn = transcript.openTurn
+    private func refreshStep(_ turn: ChatTurn?) {
+        stepRefreshes += 1
         let steps = turn.map { ChatStep.steps($0, directory: nil, reasoning: false) } ?? []
         let current = steps.last(where: \.running) ?? steps.last
         let step = current.map(WatchSnapshotBuilder.phrase)
         if currentStep != step { currentStep = step }
         let gist = current.map(WatchSnapshotBuilder.gist)
         if currentStepGist != gist { currentStepGist = gist }
+        if currentStepKind != current?.kind { currentStepKind = current?.kind }
+        let count = turn.map { ChatStep.current($0, directory: nil).filter { $0.kind != .think }.count } ?? 0
+        if currentStepCount != count { currentStepCount = count }
+        let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
+        if openTurnStarted != started { openTurnStarted = started }
+    }
+
+    /// The open turn's last message, newer thought and prompt as Spaces' and Agents' rows say them.
+    private func refreshNotes(_ turn: ChatTurn?) {
         let note = turn.flatMap { $0.items.last { $0.kind == .assistant && !$0.text.isEmpty } }
             .flatMap { TabsNote.line($0.text) }
         if currentNote != note { currentNote = note }
@@ -328,15 +425,76 @@ final class MobileChatSession: Identifiable {
         if currentThought != thought { currentThought = thought }
         let prompt = turn.flatMap { $0.items.first { $0.kind == .user && !$0.text.isEmpty } }.flatMap { TabsNote.line($0.text) }
         if currentPrompt != prompt { currentPrompt = prompt }
-        if currentStepKind != current?.kind { currentStepKind = current?.kind }
-        let count = turn.map { ChatStep.current($0, directory: nil).filter { $0.kind != .think }.count } ?? 0
-        if currentStepCount != count { currentStepCount = count }
-        let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
-        if openTurnStarted != started { openTurnStarted = started }
     }
 
+    // MARK: Presenting the transcript
+
+    /// `latest` reaches `transcript` now, with anything held; the conversation list hears of it when it changed outside
+    /// a notification (which tells it anyway).
+    func presentTranscript() {
+        if present() { changed?(self) }
+    }
+
+    /// Whether anything was presented.
+    @discardableResult
+    private func present() -> Bool {
+        presentationTicket += 1
+        presentationScheduled = false
+        guard unpresented else { return false }
+        unpresented = false
+        transcript = latest
+        return true
+    }
+
+    /// A live record that only streams on (a reply's or thinking's next words, a tool step, its output): it reaches the
+    /// thread with the records after it, at most `followingHold` later while the thread shows and follows its end,
+    /// else `readingHold`, so a reply streaming in many small records rebuilds the thread a few times a second
+    /// instead of once per record.
+    private func presentSoon() {
+        guard !presentationScheduled else { return }
+        presentationScheduled = true
+        let ticket = presentationTicket
+        presentationTimer(threadsShown > 0 && threadFollows ? Self.followingHold : Self.readingHold) { [weak self] in
+            guard let self, self.presentationTicket == ticket else { return }
+            self.presentTranscript()
+        }
+    }
+
+    /// A thread view shows this session, or stopped showing it (`ChatThreadView`): one appearing shows what is held.
+    func threadShown(_ shown: Bool) {
+        threadsShown = max(0, threadsShown + (shown ? 1 : -1))
+        if shown { presentTranscript() }
+        markBackground()
+    }
+
+    /// Tells the helper whether this chat's subscription is in the background (no thread shows it: a warm or kept
+    /// session), so that while the phone is frugal its records and state wait for a paced batch
+    /// (`HelperClient.background(subscription:_:)`, `HostSession.notificationPace`); it changes nothing while pacing
+    /// is off. Sent only when the answer changes, and only to a helper that accepted `notify.pace`.
+    private func markBackground() {
+        guard let observation, features.contains(HelperClient.notifyPace) else { return }
+        let background = threadsShown == 0
+        guard background != toldBackground else { return }
+        toldBackground = background
+        let previous = backgroundRequest
+        backgroundRequest = Task {
+            await previous?.value
+            try? await observation.client.background(subscription: observation.id, background)
+        }
+    }
+
+    /// The shown thread follows its end, or stopped (`ChatFollow`): following again shows what is held at once.
+    func threadFollowing(_ follows: Bool) {
+        guard follows != threadFollows else { return }
+        threadFollows = follows
+        if follows { presentTranscript() }
+    }
+
+    /// A presentation waits for its time (checks).
+    var presentationPending: Bool { presentationScheduled && unpresented }
+
     /// The agent is working: the thinking bubble (M5a) shows.
-    var working: Bool { (turnRunning || !subagents.isEmpty) && attention == nil }
+    var working: Bool { (turnRunning || runningSubagents > 0) && attention == nil }
     /// A turn runs or is about to (the Mac's optimistic `busy`); what the conversation list counts as working.
     var turnRunning: Bool { (busy || awaitingAck || starting) && attention == nil }
     var waitingForUser: Bool {
@@ -366,7 +524,7 @@ final class MobileChatSession: Identifiable {
         let generation = UUID()
         self.generation = generation
         phase = .opening
-        if transcript.isEmpty { loadingHistory = true }
+        if latest.isEmpty { loadingHistory = true }
         struct Open: Encodable { let terminal: UInt64 }
         let connection = client.connection
         // Immediately: the request is encoded and handed to the transport in this turn (the subscribe suspends only
@@ -390,6 +548,7 @@ final class MobileChatSession: Identifiable {
                     })
                 guard let self, self.generation == generation else { connection.cancel(id); return }
                 self.observation = (id, client)
+                self.markBackground()
             } catch {
                 guard let self, self.generation == generation else { return }
                 self.fail(error)
@@ -438,8 +597,8 @@ final class MobileChatSession: Identifiable {
 
     /// What this session read, for the conversation's next one; nil with nothing to keep.
     func kept() -> Kept? {
-        guard !transcript.isEmpty, let conversation = conversation ?? seed?.conversation else { return nil }
-        var transcript = transcript
+        guard !latest.isEmpty, let conversation = conversation ?? seed?.conversation else { return nil }
+        var transcript = latest
         transcript.releaseHeldThinking()
         // A copy shown without its host keeps its own time: nothing newer came.
         return Kept(transcript: transcript, conversation: conversation, earlier: earlier, readingPosition: readingPosition,
@@ -450,8 +609,8 @@ final class MobileChatSession: Identifiable {
     /// helper's history decides whether it still stands. Nothing else is taken over: the phase stays as it is (no
     /// input, no paging, no approvals), and the working row, the agent's state and its requests wait for the helper.
     func seed(_ kept: Kept) {
-        guard transcript.isEmpty, phase == .detached, observation == nil else { return }
-        transcript = kept.transcript
+        guard latest.isEmpty, phase == .detached, observation == nil else { return }
+        latest = kept.transcript
         earlier = kept.earlier
         readingPosition = kept.readingPosition
         seed = Seed(conversation: kept.conversation, reachedStart: kept.earlier == nil, saved: kept.saved)
@@ -559,7 +718,9 @@ final class MobileChatSession: Identifiable {
 
     /// Input pauses; requests from the old subscription can no longer be answered.
     private func suspend(reason: String?) {
-        dropTurn = working ? transcript.openTurn?.id : nil
+        // What came before the link went shows with the pause.
+        present()
+        dropTurn = working ? latest.openTurn?.id : nil
         // A side conversation belongs to the connection that started it.
         // A side conversation belongs to the connection that started it: it ends here without a close request over
         // the dead link; its fork is closed through the next connection.
@@ -611,8 +772,8 @@ final class MobileChatSession: Identifiable {
                 guard accepts(records.terminal, records.session) else { return }
                 if records.replace == true {
                     seed = nil; seededLive = []
-                    transcript.clear(); typing.reset()
-                    transcript.apply(records.records, historical: true)
+                    latest.clear(); typing.reset()
+                    latest.apply(records.records, historical: true)
                     earlier = records.earlier
                 } else if seed != nil {
                     seededLive.append(records.records)
@@ -657,12 +818,12 @@ final class MobileChatSession: Identifiable {
             // The kept rows were another conversation's (/clear, a new conversation in the pane, or one not named yet):
             // they go before anything of this one applies.
             seed = nil; seededLive = []
-            transcript = MobileTranscript(); typing.reset()
+            latest = MobileTranscript(); typing.reset()
             earlier = nil
             readingPosition = nil
         } else if let shown = conversation, let named, shown != named {
             // Another conversation in this terminal (/clear, /resume): its own transcript and requests.
-            transcript = MobileTranscript(); typing.reset()
+            latest = MobileTranscript(); typing.reset()
             retireRequests()
             approvals = []
             queue = []
@@ -688,7 +849,7 @@ final class MobileChatSession: Identifiable {
         }
         if !wasVerified, phase == .verified, !defersTerminal { attachTerminal() }
         if history.history_pending {
-            loadingHistory = transcript.isEmpty && named != nil
+            loadingHistory = latest.isEmpty && named != nil
             historyPending = loadingHistory
         } else if let seeded = seed {
             // The same conversation: the kept rows meet the helper's newest page. A page that shares an item with them
@@ -699,14 +860,14 @@ final class MobileChatSession: Identifiable {
             loadingHistory = false
             if history.history_error != nil, history.records.isEmpty {
                 earlier = nil
-            } else if transcript.overlaps(history.records) {
-                transcript.apply(history.records, historical: true, prepare: reconcile)
+            } else if latest.overlaps(history.records) {
+                latest.apply(history.records, historical: true, prepare: reconcile)
                 // The kept cursor is spent (this read began a new one); what reached the start still does.
                 earlier = seeded.reachedStart ? nil : history.earlier
             } else {
-                transcript = MobileTranscript(); typing.reset()
+                latest = MobileTranscript(); typing.reset()
                 readingPosition = nil
-                transcript.apply(history.records, historical: true, prepare: reconcile)
+                latest.apply(history.records, historical: true, prepare: reconcile)
                 earlier = history.earlier
             }
             // What came live during the read, after the page it may repeat (repeats are no-ops).
@@ -715,7 +876,7 @@ final class MobileChatSession: Identifiable {
             for records in live { receive(live: records) }
         } else {
             loadingHistory = false
-            transcript.apply(history.records, historical: true, prepare: reconcile)
+            latest.apply(history.records, historical: true, prepare: reconcile)
             earlier = history.earlier
         }
         if let state = history.state { receive(state: state) }
@@ -727,25 +888,32 @@ final class MobileChatSession: Identifiable {
     }
 
     private func receive(live records: [HelperChat.Record]) {
-        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing, agentKey] row, completed, thought in
+        holdingPresentation = true
+        let applied = latest.apply(records, historical: false, prepare: reconcile) { [typing, agentKey] row, completed, thought in
             typing.arrived(row, agent: agentKey, completed: completed, thought: thought)
         }
+        holdingPresentation = false
+        // A turn's start or end and the user's own message show at once (the working row, the summary, the bubble a
+        // send put up); what only streams on waits for the next presentation.
+        if !holdsRecords || applied.contains(where: \.presentsAtOnce) { present() } else if unpresented { presentSoon() }
         for change in applied {
             switch change {
             case .started:
-                turnEnded = nil
+                if turnEnded != nil { turnEnded = nil }
                 if awaitingAck { starting = true }
-                awaitingAck = false
+                if awaitingAck { awaitingAck = false }
             case .ended(let turn):
-                if turn == transcript.activeTurnID {
+                if turn == latest.activeTurnID {
                     turnEnded = Date()
-                    starting = false; awaitingAck = false; submittedAt = nil
+                    if starting { starting = false }
+                    if awaitingAck { awaitingAck = false }
+                    if submittedAt != nil { submittedAt = nil }
                 }
-                if transcript.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
+                if latest.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
             case .item(let item, let turn):
-                if item.kind == .user, item.rowID != nil { awaitingAck = false }
+                if item.kind == .user, item.rowID != nil, awaitingAck { awaitingAck = false }
                 // A reply recorded after its turn's end lets that turn fold.
-                if item.kind == .assistant, transcript.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
+                if item.kind == .assistant, latest.heldThinkingTurns.contains(turn) { scheduleThinkingFold(turn) }
             case .output(let text):
                 // The pending command's result, as the Mac shows it (`receiveCommandExecution`).
                 commandResult = ChatCommandResult(title: lastCommand ?? "Command",
@@ -772,10 +940,10 @@ final class MobileChatSession: Identifiable {
     /// Lets a held turn's thinking go, with a fade, once it ended on a reply and the reader is at the end. A reader
     /// scrolled up keeps it (the rows would move under them) until they return or the next turn starts.
     func attemptThinkingFold(_ turn: String) {
-        guard transcript.heldThinkingTurns.contains(turn), readingPosition == nil,
-              let ended = transcript.turns.last(where: { $0.id == turn }),
+        guard latest.heldThinkingTurns.contains(turn), readingPosition == nil,
+              let ended = latest.turns.last(where: { $0.id == turn }),
               ChatThinkingFold.folds(ended.items, ended: ended.ended) else { return }
-        withAnimation(.easeOut(duration: 0.25)) { transcript.releaseThinking(turn) }
+        withAnimation(.easeOut(duration: 0.25)) { latest.releaseThinking(turn) }
     }
 
     /// A live user record that repeats the prompt shown while it was sent takes its bubble's place
@@ -790,33 +958,39 @@ final class MobileChatSession: Identifiable {
         return confirmed
     }
 
+    /// Assigns an observed property only a value it does not hold: assigned its own value it still invalidates every
+    /// view that reads it, and `chat.state` comes again with nothing changed (a subagent's tokens, about once a second).
+    private func update<Value: Equatable>(_ property: ReferenceWritableKeyPath<MobileChatSession, Value>, _ value: Value) {
+        if self[keyPath: property] != value { self[keyPath: property] = value }
+    }
+
     private func receive(state: HelperChat.State) {
-        if let version = state.version { self.version = version }
+        if let version = state.version { update(\.version, version) }
         let agents = ChatSubagent.merge(state.agents ?? [], previous: subagents)
         if subagents != agents { subagents = agents }
         let shells = ChatShell.merge(state.shells ?? [], previous: shells)
-        if self.shells != shells { self.shells = shells }
-        if shells.isEmpty { showingShells = false }
-        busy = state.busy
-        if state.busy { awaitingAck = false }
-        starting = false
-        activity = state.activity
+        update(\.shells, shells)
+        if shells.isEmpty { update(\.showingShells, false) }
+        update(\.busy, state.busy)
+        if state.busy { update(\.awaitingAck, false) }
+        update(\.starting, false)
+        update(\.activity, state.activity)
         if let model = state.model {
-            self.model = model
-            effort = state.effort
+            update(\.model, model)
+            update(\.effort, state.effort)
         }
-        attention = state.attention
-        dialog = state.dialog
-        if let title = state.title { self.title = title }
-        compacting = state.compacting
+        update(\.attention, state.attention)
+        update(\.dialog, state.dialog)
+        if let title = state.title { update(\.title, title) }
+        update(\.compacting, state.compacting)
         // Core's State.usage is ChatUsage's object; State.goal the harness's goal, nil without one (the Mac's reading,
         // ChatCoordinator+Helper).
         let usage = state.usage.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatUsage.init)
         if usage != nil, usage != self.usage { self.usage = usage }
         let goal = state.goal.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatGoal.init)
         if goal != self.goal { self.goal = goal; goalUpdatedAt = Date() }
-        if goal == nil { managingGoal = false }
-        if !working { submittedAt = nil }
+        if goal == nil { update(\.managingGoal, false) }
+        if !working { update(\.submittedAt, nil) }
         updateWorkingSince()
         applyPendingSettings()
         drainWhenIdle()
@@ -826,8 +1000,11 @@ final class MobileChatSession: Identifiable {
         if !working, stopping { stopping = false; stopToken = nil }
         if !working {
             if workingSince != nil { stoppedWorking = Date() }
-            workingSince = nil
-        } else if workingSince == nil { workingSince = Date(); stoppedWorking = nil }
+            update(\.workingSince, nil)
+        } else if workingSince == nil {
+            workingSince = Date()
+            update(\.stoppedWorking, nil)
+        }
     }
 
     private func receive(interaction: HelperChat.Interaction, generation: UUID) {
@@ -854,18 +1031,20 @@ final class MobileChatSession: Identifiable {
             }
             return
         }
+        // A card is placed by the turns the thread shows: they show everything held first.
+        present()
         // A native question acknowledges a prompt as a turn would.
-        awaitingAck = false
+        if awaitingAck { awaitingAck = false }
         guard !approvals.contains(where: { $0.interaction.id == interaction.id && $0.pending.pending }),
               !questions.contains(where: { $0.id == interaction.id }) else { return }
         if case .permission(let permission) = interaction.presentation {
             let pending = PendingApproval(key: interaction.key ?? interaction.id, interaction: interaction.id,
-                                          operation: permission.operation, item: interaction.tool(in: transcript.turns),
+                                          operation: permission.operation, item: interaction.tool(in: latest.turns),
                                           turnID: interaction.turn, toolItemID: interaction.record) { [weak self] approval in
                 self?.complete(approval)
             }
             approvals.append(Approval(pending: pending, interaction: interaction, arrived: Date(), generation: generation,
-                                      anchor: transcript.rows.last?.turnID))
+                                      anchor: latest.rows.last?.turnID))
         } else if case .toolQuestions = interaction.presentation {
             let form = ClaudeQuestions(interaction.questions.map { question in
                 ClaudeQuestions.Question(text: question.text, header: question.header,
@@ -878,7 +1057,7 @@ final class MobileChatSession: Identifiable {
                 self?.complete(approval)
             }
             approvals.append(Approval(pending: pending, interaction: interaction, arrived: Date(), generation: generation,
-                                      anchor: transcript.rows.last?.turnID))
+                                      anchor: latest.rows.last?.turnID))
         } else if let conversation, let question = ChatSideQuestion(interaction: interaction, session: conversation) {
             questions.append(question)
         }
@@ -1369,7 +1548,7 @@ final class MobileChatSession: Identifiable {
         queue = snapshot
         var claimed = Set<String>()
         var head = true
-        let undrained = dropTurn != nil && dropTurn == transcript.openTurn?.id && working
+        let undrained = dropTurn != nil && dropTurn == latest.openTurn?.id && working
         for item in queueItems {
             if let typed = item.conversation, let conversation, typed != conversation, item.pauseReason == nil {
                 outbox.update(item.id) {
@@ -1414,7 +1593,7 @@ final class MobileChatSession: Identifiable {
     /// (the same host copies where the record names them), so an attachment-only message is not taken for another.
     private func delivered(_ item: ChatOutboxItem) -> Bool {
         let since = item.created.addingTimeInterval(-300).timeIntervalSince1970 * 1000
-        return transcript.turns.contains { turn in
+        return latest.turns.contains { turn in
             turn.items.contains {
                 AgentInput.records($0, prompt: item.text, attachments: item.attachments) && Double($0.source?.time_ms ?? 0) >= since
             }
@@ -1739,9 +1918,6 @@ final class MobileChatSession: Identifiable {
     /// Reply (Y1, `ChatReplyQuote`): the excerpt of the message answered, over the composer until sent or cancelled;
     /// the send puts it before the draft as one quote line (a command goes without it, the reply kept).
     var replyQuote: String?
-    /// "+" › Mine only: the thread shows the user's own messages, the agent's replies and thinking hidden (approvals,
-    /// questions and the working row stay); for this conversation while the app runs.
-    var mineOnly = false
 
     /// Whether a queued message can be edited in the composer: text only (the helper's queue refuses a change to one
     /// with attachments), and one the helper's queue holds only while the link is verified.
@@ -2033,7 +2209,7 @@ final class MobileChatSession: Identifiable {
     var goalStatus: [String] {
         var parts: [String] = []
         if let goal, goal.timeUsedSeconds > 0 { parts.append(ChatTurnSummary.elapsed(TimeInterval(goal.timeUsedSeconds)) + " on the goal") }
-        if !subagents.isEmpty { parts.append(ChatTurnSummary.count(subagents.count, "subagent")) }
+        if runningSubagents > 0 { parts.append(ChatTurnSummary.count(runningSubagents, "subagent")) }
         if let remaining = usage?.contextRemaining { parts.append("\(Int(((1 - remaining) * 100).rounded()))% context") }
         return parts
     }
@@ -2047,7 +2223,7 @@ final class MobileChatSession: Identifiable {
             defer { self.loadingEarlier = false }
             do {
                 let page: HelperChat.Page = try await call("chat.page", input)
-                self.transcript.apply(page.records, historical: true, earlier: true)
+                self.latest.apply(page.records, historical: true, earlier: true)
                 self.earlier = page.earlier
             } catch { self.earlierError = error.localizedDescription }
         }
@@ -2120,7 +2296,7 @@ final class MobileChatSession: Identifiable {
         var input = route()
         input.record = item.source?.id ?? item.id
         let record: HelperChat.Record = try await call("chat.tools", input)
-        transcript.replaceTool(record)
+        latest.replaceTool(record)
         return record
     }
 

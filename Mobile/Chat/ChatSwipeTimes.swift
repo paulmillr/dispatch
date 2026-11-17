@@ -153,6 +153,6 @@ struct ChatRevealDetail: View {
 extension ChatCorner {
     /// The corner for VoiceOver only: no room in the text and nothing drawn; the swipe's column draws it.
     var spokenOnly: ChatCorner {
-        ChatCorner(room: "", fits: true, view: { _ in AnyView(EmptyView()) }, spoken: spoken, hint: hint, drawn: false)
+        ChatCorner(room: "", fits: true, text: "", spoken: spoken, hint: hint, drawn: false)
     }
 }

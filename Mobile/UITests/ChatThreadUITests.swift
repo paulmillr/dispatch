@@ -324,29 +324,30 @@ final class ChatThreadUITests: XCTestCase {
         }
     }
 
-    /// "+" groups Code keys, Mine only and Dialog under Toggle; Mine only leaves the user's messages in the thread and the
-    /// bar over the composer brings the agent's back.
-    func testMineOnlyHidesTheAgentsMessages() {
-        let app = launch(echo: 1.5)
+    /// The search bar's Mine chip (B9c) leaves the user's messages in the thread and the matches in them; All brings the
+    /// agent's back, and the search's close ends Mine. "+" offers no Mine only.
+    func testSearchsMineChipShowsTheUsersMessagesAlone() {
+        let app = launch(echo: 1.5, demo: "C1")
         let agent = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stripe retries the same event'")).firstMatch
         let mine = app.staticTexts["Make billing webhook retries idempotent."].firstMatch
         XCTAssertTrue(agent.waitForExistence(timeout: 10), "the agent's reply")
-        app.buttons["Attach"].tap()
-        let keys = app.buttons["Code keys"], only = app.buttons["Mine only"], dialog = app.buttons["Dialog"]
-        XCTAssertTrue(only.waitForExistence(timeout: 5), "Mine only")
-        XCTAssertTrue(app.staticTexts["Toggle"].exists, "the group's title")
-        // Between the two (the menu opens up from "+", which lists its first items nearest it).
-        XCTAssertEqual([keys, only, dialog].map(\.frame.minY).sorted()[1], only.frame.minY, "Mine only between Code keys and Dialog")
-        shot("plus-menu")
-        only.tap()
+        let chip = app.buttons["chat-search-mine"], all = app.buttons["chat-search-all"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 5), "the scope over the search bar")
+        XCTAssertTrue(all.isSelected, "All at first")
+        chip.tap()
         XCTAssertTrue(agent.waitForNonExistence(timeout: 5), "the agent's messages hidden")
         XCTAssertTrue(mine.exists, "the user's stay")
-        let bar = app.descendants(matching: .any)["chat-mine-only"]
-        XCTAssertTrue(bar.waitForExistence(timeout: 3), "the bar says so")
-        shot("mine-only")
-        app.buttons["chat-mine-only-show-all"].tap()
-        XCTAssertTrue(agent.waitForExistence(timeout: 5), "Show all brings them back")
-        XCTAssertFalse(bar.exists)
+        XCTAssertTrue(chip.isSelected)
+        shot("search-mine")
+        all.tap()
+        XCTAssertTrue(agent.waitForExistence(timeout: 5), "All brings them back")
+        chip.tap()
+        XCTAssertTrue(agent.waitForNonExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertTrue(agent.waitForExistence(timeout: 5), "closing the search ends Mine")
+        app.buttons["Attach"].tap()
+        XCTAssertTrue(app.buttons["File"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Mine only"].exists, "Mine only is the search's")
     }
 
     /// A user's message's long press has Info, as an agent's has: its details, titled You.

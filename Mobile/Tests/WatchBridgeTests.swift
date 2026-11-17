@@ -92,6 +92,26 @@ final class WatchBridgeTests: XCTestCase {
         XCTAssertEqual(session.activations, 2, "activated again for the next watch")
     }
 
+    /// Without a paired watch that has the app, nothing is built or fitted (nor observed): the session's callbacks start
+    /// it once there is one.
+    func testNothingIsBuiltWithoutAWatch() async throws {
+        let (app, _, _) = try await WatchSnapshotTests.fixture(self)
+        let session = ScriptedWatchSession()
+        let bridge = bridge(app, session: session)
+        XCTAssertNil(bridge.built, "not activated yet")
+        session.activationState = .activated
+        bridge.activated(.activated, error: nil)
+        bridge.push(reason: "test", force: true)
+        XCTAssertNil(bridge.built, "no watch paired")
+        session.isPaired = true
+        bridge.watchStateChanged()
+        XCTAssertNil(bridge.built, "the app is not on the watch")
+        session.isWatchAppInstalled = true
+        bridge.watchStateChanged()
+        XCTAssertNotNil(bridge.built)
+        XCTAssertEqual(session.contexts.count, 1)
+    }
+
     /// The complications' entry goes to the watch (`transferCurrentComplicationUserInfo`) only with a complication on its
     /// face, only when the count or the first line changed, and only while the day's budget lasts.
     func testTransfersTheComplicationOnlyWhenItChangesAndWithinBudget() async throws {

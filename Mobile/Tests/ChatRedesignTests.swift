@@ -200,6 +200,32 @@ final class ChatRedesignTests: XCTestCase {
         XCTAssertNil(runs.first?.foregroundColor)
     }
 
+    /// B9c: Mine shows the user's messages alone and finds only in them; All and the search's close undo it.
+    func testSearchsMineFindsOnlyInTheUsersMessages() async throws {
+        let chat = try await opened(helper(), records: ChatFixture.records("claude-thread"))
+        let search = chat.search, rows = chat.transcript.rows
+        let users = rows.filter { if case .user = $0.kind { true } else { false } }
+        XCTAssertFalse(users.isEmpty)
+        XCTAssertLessThan(users.count, rows.count)
+        search.open()
+        search.query = "guard"
+        search.update(rows: rows)
+        XCTAssertEqual(search.matches.count, 2, "in the answers")
+        XCTAssertEqual(search.shown(rows).count, rows.count, "All shows everything")
+        search.mine = true
+        search.update(rows: rows)
+        XCTAssertEqual(search.shown(rows).map(\.id), users.map(\.id), "Mine: the user's messages alone")
+        XCTAssertTrue(search.matches.allSatisfy { match in users.contains { $0.id == match.row } }, "matches only in them")
+        search.query = ""
+        XCTAssertEqual(search.shown(rows).count, users.count, "with no query too")
+        search.close()
+        XCTAssertFalse(search.mine, "the close ends Mine")
+        XCTAssertEqual(search.shown(rows).count, rows.count)
+        search.open()
+        search.mine = true
+        XCTAssertEqual(search.shown(rows).count, users.count)
+    }
+
     func testSearchPagesInEarlierMessages() async throws {
         let records = try ChatFixture.records("claude-thread")
         let split = try XCTUnwrap(records.firstIndex { $0["turn"] as? String == "p2" })
@@ -867,7 +893,7 @@ extension ChatRedesignTests {
     /// A summary corner as the thread builds it, at `size` in a `width` point column.
     static func summaryCorner(_ text: String, width: CGFloat = 370, size: DynamicTypeSize = .large) -> ChatCorner {
         let metrics = ChatCornerMetrics(column: width, measure: ChatMeasure.standard, size: size)
-        return ChatCorner(room: text, fits: metrics.fits(text), view: { AnyView(ChatTurnCorner(text: text, wrapped: $0)) },
+        return ChatCorner(room: text, fits: metrics.fits(text), text: text,
                           spoken: text)
     }
 

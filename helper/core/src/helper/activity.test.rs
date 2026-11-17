@@ -147,6 +147,7 @@ fn route(helper: &DispatchHelper, observers: &Observers, replies: &Replies, modu
         features: helper.features.clone(),
         follows: helper.follows.clone(),
         activity: helper.activity.clone(),
+        topologies: helper.topologies.clone(),
     }
     .update(update);
 }

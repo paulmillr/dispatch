@@ -78,6 +78,13 @@ pub(crate) const TOPOLOGY_BOUND: &str = "topology.bound";
 /// changes.
 pub(crate) const LOGIN_RELEASE: &str = "login.release";
 
+/// Pacing (helper/pacing.rs): the `notify.pace` operation holds this client's lazy notifications (agent activity, pane
+/// titles, background chats) for a batch, released with its next message or frame or at a deadline; `chat.background`
+/// marks a chat.open subscription whose records and state are lazy. Off until the client asks, so naming the feature
+/// changes nothing by itself.
+pub(crate) const NOTIFY_PACE: &str = "notify.pace";
+pub(crate) const CHAT_BACKGROUND: &str = "chat.background";
+
 /// The features this helper offers.
 pub(crate) const KNOWN: &[&str] = &[
     INTERACTION_OPTIONS,
@@ -100,6 +107,7 @@ pub(crate) const KNOWN: &[&str] = &[
     SIZES_STEADY,
     TOPOLOGY_BOUND,
     AGENTS_ACTIVITY,
+    NOTIFY_PACE,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary
@@ -140,6 +148,8 @@ pub(crate) const OPERATIONS: &[(&str, &str)] = &[
     (TERMINALS_FOLLOW, TERMINALS_FOLLOW),
     (TERMINALS_ACK, TERMINALS_WINDOW),
     (LOGIN_RELEASE, LOGIN_RELEASE),
+    (NOTIFY_PACE, NOTIFY_PACE),
+    (CHAT_BACKGROUND, NOTIFY_PACE),
 ];
 
 /// The feature operations a hello reply adds to `ops`: those of the `accepted` features that the client's grant
@@ -251,6 +261,12 @@ impl Request<'_> {
         if method == LOGIN_RELEASE {
             return self.login_release(params);
         }
+        if method == NOTIFY_PACE {
+            return self.notify_pace(params);
+        }
+        if method == CHAT_BACKGROUND {
+            return self.chat_background(params);
+        }
         Err(Error {
             code: "unsupported",
             message: format!("Unknown operation {method}"),
@@ -293,6 +309,46 @@ impl Request<'_> {
         if let Some(subscription) = subscription {
             self.helper.acks.push((self.fd, subscription, bytes));
         }
+        let done = self.done::<()>(None);
+        deferred(done)(self.io, Ok(()));
+        Ok(())
+    }
+}
+
+impl Request<'_> {
+    /// notify.pace {ms}: hold this client's lazy notifications for at most `ms` (1 to pacing::MAX), released earlier
+    /// with its next message or frame; 0 turns pacing off and sends what is held. Applied before the replies queued
+    /// after it (DispatchHelper::start).
+    pub(crate) fn notify_pace(&mut self, params: &Data<'_>) -> Result<(), Error> {
+        let known = params.object().ok_or_else(|| invalid("params"))?.all(|(key, _)| key == "ms");
+        if !known {
+            return Err(invalid("params"));
+        }
+        let ms = params
+            .get("ms")
+            .and_then(Data::unsigned)
+            .filter(|ms| *ms <= crate::helper::pacing::MAX)
+            .ok_or_else(|| invalid("ms"))?;
+        self.helper.paces.push((self.fd, crate::helper::pacing::Pace::Interval(ms)));
+        let done = self.done::<()>(None);
+        deferred(done)(self.io, Ok(()));
+        Ok(())
+    }
+
+    /// chat.background {subscription, background}: this client's chat.open subscription `subscription` is in the
+    /// background (its chat.records and chat.state wait for a paced batch) or not. A request id that is not one of
+    /// the client's open requests, or that ends, is no subscription: nothing is marked.
+    pub(crate) fn chat_background(&mut self, params: &Data<'_>) -> Result<(), Error> {
+        let known = params
+            .object()
+            .ok_or_else(|| invalid("params"))?
+            .all(|(key, _)| matches!(key, "subscription" | "background"));
+        if !known {
+            return Err(invalid("params"));
+        }
+        let subscription = params.get("subscription").and_then(Data::unsigned).ok_or_else(|| invalid("subscription"))?;
+        let background = params.get("background").and_then(Data::boolean).ok_or_else(|| invalid("background"))?;
+        self.helper.paces.push((self.fd, crate::helper::pacing::Pace::Background(subscription, background)));
         let done = self.done::<()>(None);
         deferred(done)(self.io, Ok(()));
         Ok(())

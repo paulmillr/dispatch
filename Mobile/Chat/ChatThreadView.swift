@@ -29,7 +29,6 @@ struct ChatThreadView: View {
     @State private var workingExpanded = false
     @State private var details: ChatThreadRow?
     @State private var step: ChatStep?
-    @State private var settings = false
     @State private var previewing: ChatAttachment?
     @State private var column: CGFloat = 370
     @FocusState private var focused: Bool
@@ -134,6 +133,9 @@ struct ChatThreadView: View {
         }
         .onAppear {
             visible = true
+            // Records held for the thread show with it; while it shows, they wait less (`MobileChatSession.presentSoon`).
+            session.threadShown(true)
+            let rows = session.transcript.rows
             if !opened {
                 opened = true
                 restoreReading(rows)
@@ -169,6 +171,7 @@ struct ChatThreadView: View {
         .onDisappear {
             rail?.replyShown = false
             visible = false
+            session.threadShown(false)
             saveReading()
             // Leaving the conversation (not pushing a message's details) ends conversation mode, Read Aloud and an edit
             // of a queued message (its draft set aside comes back).
@@ -211,6 +214,10 @@ struct ChatThreadView: View {
             if !Task.isCancelled { settled += 1 }
         }
         .onChange(of: session.search.query) { _, _ in session.search.update(rows: session.transcript.rows) }
+        .onChange(of: session.search.mine) { _, _ in
+            session.search.update(rows: session.transcript.rows)
+            pinFirstShown(self.entries(session.transcript.rows))
+        }
         .onChange(of: session.search.visible) { _, open in
             if open { focused = false; searchFocused = true }
         }
@@ -386,7 +393,7 @@ struct ChatThreadView: View {
     private func presenting(_ thread: some View) -> some View {
         thread
         // A sheet or the preview over the thread: its working row and banner stand still meanwhile.
-        .coversLoops(step != nil || settings || session.managingGoal || session.showingShells || previewing != nil)
+        .coversLoops(step != nil || session.choosingSettings || session.managingGoal || session.showingShells || previewing != nil)
         .navigationDestination(item: $details) { row in
             messageDetails(row)
         }
@@ -398,7 +405,7 @@ struct ChatThreadView: View {
         .sheet(item: $step) { step in
             ChatStepOutputSheet(session: session, step: step, directory: directory)
         }
-        .sheet(isPresented: $settings) {
+        .sheet(isPresented: $session.choosingSettings) {
             ChatSettingsSheet(session: session, memory: memory)
         }
         .sheet(isPresented: $session.managingGoal) {
@@ -480,6 +487,8 @@ struct ChatThreadView: View {
         let result = change(&next)
         follower.model = next
         if next.shown != shownFollow { followShown = next.shown }
+        // Records streaming in wait longer while the end is not followed; following again shows them at once.
+        session.threadFollowing(next.following)
         return result
     }
 
@@ -529,8 +538,6 @@ struct ChatThreadView: View {
                 }
                 if session.queueEdit != nil {
                     ChatQueueEditBar { session.endQueueEdit(save: false) }
-                } else if session.mineOnly, !session.search.active {
-                    ChatMineOnlyBar { session.mineOnly = false }
                 } else if let quote = session.replyQuote {
                     ChatReplyBar(agent: session.agentName, excerpt: quote) { session.replyQuote = nil }
                 } else if let note = session.queueEditNote {
@@ -557,8 +564,7 @@ struct ChatThreadView: View {
                              saving: editing,
                              attachments: attachments,
                              dictationOwner: ObjectIdentifier(session), multiline: multiline,
-                             converse: session.phase == .verified ? { voice.start(session) } : nil,
-                             mineOnly: Binding(get: { session.mineOnly }, set: { session.mineOnly = $0 }))
+                             converse: session.phase == .verified ? { voice.start(session) } : nil)
                 }
             }
         }
@@ -685,7 +691,7 @@ struct ChatThreadView: View {
                 .padding(.top, 40)
         } else if session.transcript.isEmpty, session.optimisticPrompt == nil, session.queueRows.isEmpty, session.approvals.isEmpty {
             if session.link.isConnected {
-                ChatIntro(session: session, space: space, directory: directory, homes: homes) { settings = true }
+                ChatIntro(session: session, space: space, directory: directory, homes: homes) { session.choosingSettings = true }
             } else {
                 // Nothing kept for it on this iPhone: not a new chat, its host is away.
                 Text("\(session.hostName) is not connected. This chat shows once it is.")
@@ -884,8 +890,8 @@ struct ChatThreadView: View {
     /// else after the turn that was last when it arrived, else at the end. A pending one stays last, where it is answered;
     /// a decided one whose turn is not loaded waits for that earlier history instead of sitting at the end.
     private func entries(_ rows: [ChatThreadRow]) -> [Entry] {
-        // Mine only: the user's messages alone, but while searching (a match may be anywhere).
-        let rows = session.mineOnly && !session.search.active ? rows.filter { if case .user = $0.kind { true } else { false } } : rows
+        // The search's Mine: the user's messages alone.
+        let rows = session.search.shown(rows)
         var placed: [String: [MobileChatSession.Approval]] = [:]
         var unplaced: [MobileChatSession.Approval] = []
         let turns = session.transcript.turns

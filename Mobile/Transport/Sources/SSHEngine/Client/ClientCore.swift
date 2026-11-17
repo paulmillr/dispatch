@@ -377,6 +377,19 @@ public final class ClientCore {
     emit(.ended(error))
     endedWith = error
   }
+
+  #if SSHENGINE_FUZZING
+  /// A core immediately after its first NEWKEYS, for the separate post-key-exchange fuzz target.
+  static func fuzzEstablished(random: any RandomSource, inboundKeys: DirectionKeys, outboundKeys: DirectionKeys)
+    throws(SSHError) -> ClientCore
+  {
+    let options = ConnectOptions(host: "fuzzer.invalid", keepaliveInterval: nil)
+    let core = try ClientCore(options: options, verifier: SSHSignatureVerifier(), random: random)
+    try core.transport.fuzzEstablish(inboundKeys: inboundKeys, outboundKeys: outboundKeys)
+    core.pump()
+    return core
+  }
+  #endif
 }
 
 /// What the composed core tells its driver, in order.

@@ -46,23 +46,24 @@ final class SteppedSleeper: @unchecked Sendable {
 @MainActor
 final class HostStatisticsTests: XCTestCase {
     private var clock = Date(timeIntervalSinceReferenceDate: 800_000_000)
-    private var lowPower = false
+    private var frugal: Frugal.Reason?
 
     /// A store on the test's clock and sleeper, its helper answering as the demo's mba2.
     private func store(_ sleeper: SteppedSleeper) -> (HostStatistics, ScriptedHelper) {
         let helper = Self.demoHelper()
         let stats = HostStatistics()
         stats.now = { [unowned self] in self.clock }
-        stats.readLowPower = { [unowned self] in self.lowPower }
+        stats.readFrugal = { [unowned self] in self.frugal }
         stats.sleep = { try await sleeper.sleep($0) }
         return (stats, helper)
     }
 
     func testCadence() {
-        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: false), .seconds(15), "one sample per 15 s bar")
-        XCTAssertEqual(HostStatistics.cadence(viewing: true, lowPower: false), .seconds(2), "a sheet or popover shows it")
-        XCTAssertEqual(HostStatistics.cadence(viewing: true, lowPower: true), .seconds(30), "Low Power Mode wins")
-        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: true), .seconds(30))
+        XCTAssertEqual(HostStatistics.cadence(viewing: false, frugal: false), .seconds(15), "one sample per 15 s bar")
+        XCTAssertEqual(HostStatistics.cadence(viewing: true, frugal: false), .seconds(5), "a sheet or popover shows it")
+        XCTAssertEqual(HostTraffic.interval / HostStatistics.viewedInterval, 3, "a viewer's marks take in every tick")
+        XCTAssertEqual(HostStatistics.cadence(viewing: true, frugal: true), .seconds(30), "frugal mode wins")
+        XCTAssertEqual(HostStatistics.cadence(viewing: false, frugal: true), .seconds(30))
         XCTAssertGreaterThan(HostStatistics.barHold, 30, "Low Power Mode's bars between samples take the later one")
         XCTAssertLessThan(HostStatistics.barHold, 45, "a missed sample is still a gap")
     }
@@ -84,8 +85,8 @@ final class HostStatisticsTests: XCTestCase {
     }
 
     /// No sample before anything shows the stats: the first on the shared clock's tick at least half a cadence after the
-    /// connection came up (`HostTraffic`), without the process list; a viewer samples now, with it, and every 2 s; Low
-    /// Power Mode every 30 s; the disks at most every 15 s while viewed.
+    /// connection came up (`HostTraffic`), without the process list; a viewer samples now, with it, then on the clock's
+    /// 5 s marks; Low Power Mode every 30 s; the disks at most every 15 s while viewed.
     func testCadenceSwitchesWithViewersAndLowPowerMode() async throws {
         let sleeper = SteppedSleeper()
         let (stats, helper) = store(sleeper)
@@ -110,36 +111,71 @@ final class HostStatisticsTests: XCTestCase {
         XCTAssertEqual(stats.disk?.free, UInt64(48 * HostStatsDemo.gib))
         XCTAssertEqual(stats.processes, [])
 
-        // A sheet opens a second later: it samples at once, with the process list, then every 2 s.
+        // A sheet opens a second later: it samples at once, with the process list, then on the clock's 5 s marks (the
+        // first at least 2.5 s away: 4 s on).
         clock += 1
         let token = stats.beginViewing()
         try await TestSupport.eventually { helper.requests("stats.processes").count == 1 && sleeper.pending == 1 }
         XCTAssertEqual(helper.requests("stats.sample").count, 2)
         XCTAssertEqual(stats.top(.cpu).map(\.name), ["node", "cargo", "rust-analyzer"])
         XCTAssertEqual(stats.top(.memory).map(\.name), ["fixture-helper", "postgres", "rust-analyzer"])
-        XCTAssertEqual(sleeper.durations.last, .seconds(2))
-        clock += 2
+        XCTAssertEqual(sleeper.durations.last, .seconds(4))
+        clock += 4
         sleeper.step()
         try await TestSupport.eventually { helper.requests("stats.sample").count == 3 && sleeper.pending == 1 }
         XCTAssertEqual(helper.requests("stats.processes").count, 2)
         XCTAssertEqual(helper.requests("stats.disks").count, 1, "the disks every 15 s only")
-        XCTAssertEqual(sleeper.durations.last, .seconds(2))
+        XCTAssertEqual(sleeper.durations.last, .seconds(5))
 
-        lowPower = true
-        stats.powerStateChanged()
-        XCTAssertTrue(stats.lowPower)
-        try await TestSupport.eventually { sleeper.durations.last == .seconds(30) && sleeper.pending == 1 }
-        clock += 30
+        frugal = .lowPower
+        stats.frugalChanged()
+        XCTAssertEqual(stats.frugal, .lowPower)
+        // Frugal: a viewer's samples go on the clock's 30 s ticks (its process list is fresh), the next 25 s on.
+        try await TestSupport.eventually { sleeper.durations.last == .seconds(25) && sleeper.pending == 1 }
+        clock += 25
         sleeper.step()
         try await TestSupport.eventually { helper.requests("stats.sample").count == 4 && sleeper.pending == 1 }
+        XCTAssertEqual(helper.requests("stats.processes").count, 3, "with the process list")
         XCTAssertEqual(helper.requests("stats.disks").count, 2, "15 s since the last disks")
+        XCTAssertEqual(sleeper.durations.last, .seconds(30), "the next 30 s tick")
 
-        lowPower = false
-        stats.powerStateChanged()
+        frugal = nil
+        stats.frugalChanged()
         stats.endViewing(token)
-        // 3 s past a tick: back on the shared clock, at the first tick at least 7.5 s away.
-        try await TestSupport.eventually { sleeper.durations.last == .seconds(12) && sleeper.pending == 1 }
+        // On a tick: back on the shared clock, at the first tick at least 7.5 s away.
+        try await TestSupport.eventually { sleeper.durations.last == .seconds(15) && sleeper.pending == 1 }
         XCTAssertEqual(stats.history.count, 4)
+    }
+
+    /// Only a viewer that shows the process list asks for it: the sheet's small detent and the phone's side do not; a
+    /// viewer that starts showing it (the large detent) gets it at once, and the samples stop asking when it goes.
+    func testOnlyAViewerShowingTheProcessesAsksForThem() async throws {
+        let sleeper = SteppedSleeper()
+        let (stats, helper) = store(sleeper)
+        stats.active = true
+        stats.attach(helper.client)
+        try await TestSupport.eventually { sleeper.pending == 1 }
+        let token = stats.beginViewing(processes: false)
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 1 && sleeper.pending == 1 }
+        XCTAssertEqual(sleeper.durations.last, .seconds(5), "a viewer's samples, on the clock's 5 s marks")
+        clock += 5
+        sleeper.step()
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 2 && sleeper.pending == 1 }
+        XCTAssertTrue(helper.requests("stats.processes").isEmpty, "the small detent shows no process list")
+
+        clock += 0.5
+        stats.showsProcesses(token, true)
+        try await TestSupport.eventually { helper.requests("stats.processes").count == 1 && sleeper.pending == 1 }
+        XCTAssertEqual(helper.requests("stats.sample").count, 3, "at once, with a sample")
+        XCTAssertFalse(stats.processes.isEmpty)
+
+        stats.showsProcesses(token, false)
+        try await TestSupport.eventually { sleeper.pending == 1 && sleeper.durations.last == .milliseconds(4500) }
+        clock += 4.5
+        sleeper.step()
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 4 && sleeper.pending == 1 }
+        XCTAssertEqual(helper.requests("stats.processes").count, 1, "back to the small detent")
+        stats.endViewing(token)
     }
 
     /// The background, a dropped link and a plain connection sample nothing; the last sample stays, stale.

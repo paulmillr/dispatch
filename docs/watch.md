@@ -81,7 +81,9 @@ from the host's queue store), which survive reconnects. Node ids never cross.
 
 `WatchBridge` (`@MainActor`, made and kept by `MobileComposition.app()`) activates `WCSession.default` synchronously at
 launch (a message that wakes the app is delivered only to an activated session with its delegate set) and again after
-`sessionDidDeactivate`. Nothing is sent while `isPaired && isWatchAppInstalled` is false. Every push, skipped push,
+`sessionDidDeactivate`. Nothing is built, fitted or sent while the session is not activated or `isPaired &&
+isWatchAppInstalled` is false (the build's observation is not armed either); activation and `sessionWatchStateDidChange`
+push again. Every push, skipped push,
 request and hold is logged under subsystem `yachts.dispatch.mobile`, category `Watch`; the watch logs under
 `yachts.dispatch.watch`, category `Link`.
 

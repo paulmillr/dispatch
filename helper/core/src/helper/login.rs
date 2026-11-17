@@ -36,6 +36,8 @@ pub(crate) fn required(method: &str) -> &'static str {
         // the Mac's greeting probe (started with none), like hello: it only names the helper the waiting login checks
         // and runs itself, which the user's own SSH login could do with any exec channel.
         "hello" | "echo" | "permissions.reduce" | "terminals.ack" | "login.release" => "",
+        // notify.pace and chat.background only change when this client's own notifications are sent.
+        "notify.pace" | "chat.background" => "",
         "plugins.reset" => "stats.sample",
         "files.text" => plugin_required("text"),
         "files.read" => plugin_required("read"),

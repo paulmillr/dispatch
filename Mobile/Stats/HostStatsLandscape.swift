@@ -173,8 +173,8 @@ struct HostStatsLandscape: View {
                                 sub: stats.disk?.usedPercent.map { "free · \(HostStatsFormat.percent($0))% used" } ?? "free",
                                 warn: HostStatsFormat.diskHigh(stats.disk?.usedPercent))
             Spacer(minLength: 8)
-            // Offline or under Low Power Mode, the line says so where the chart's span is said.
-            if let banner = presentation.offlineBanner ?? presentation.lowPowerBanner {
+            // Offline or frugal (Low Power Mode, Low Data Mode), the line says so where the chart's span is said.
+            if let banner = presentation.offlineBanner ?? presentation.frugalBanner {
                 Label(banner, systemImage: presentation.offlineBanner != nil ? "wifi.slash" : "battery.25percent")
                     .font(.caption)
                     .foregroundStyle(presentation.offlineBanner != nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.caution))

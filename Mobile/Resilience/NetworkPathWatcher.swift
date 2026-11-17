@@ -1,11 +1,13 @@
 import Foundation
 import Network
 
-/// One reading of the device's network path: whether it is usable, and the interfaces it goes through in the
-/// system's order of preference ("wifi:en0", "cellular:pdp_ip0").
+/// One reading of the device's network path: whether it is usable, the interfaces it goes through in the system's order
+/// of preference ("wifi:en0", "cellular:pdp_ip0"), and whether it is constrained (Low Data Mode), which makes the phone
+/// frugal (`Frugal`).
 struct NetworkPath: Equatable, Sendable {
     var satisfied: Bool
     var interfaces: [String]
+    var constrained = false
 }
 
 /// Where readings come from: `NWPathMonitor` in the app, a test's own pushes in tests.
@@ -22,7 +24,8 @@ final class SystemNetworkPathSource: NetworkPathSource, @unchecked Sendable {
     func start(_ update: @escaping @Sendable (NetworkPath) -> Void) {
         monitor.pathUpdateHandler = { path in
             update(NetworkPath(satisfied: path.status == .satisfied,
-                               interfaces: path.availableInterfaces.map { "\(Self.name($0.type)):\($0.name)" }))
+                               interfaces: path.availableInterfaces.map { "\(Self.name($0.type)):\($0.name)" },
+                               constrained: path.isConstrained))
         }
         monitor.start(queue: queue)
     }

@@ -221,6 +221,10 @@ extension Terminal {
     /// The default background as drawn (reverse video swaps it with the foreground).
     public var drawBackground: RGB { modes.get(.reverseColors) ? colors.foreground.value! : colors.background.value! }
 
+    /// Whether `draw`'s `blinkVisible` changes the cursor drawn: it is visible and blinking (DEC modes 25 and 12). A
+    /// hidden or steady cursor draws the same in either blink phase, so a blink timer has nothing to redraw.
+    public var cursorBlinks: Bool { modes.get(.cursorVisible) && modes.get(.cursorBlinking) }
+
     /// Each viewport row's selected columns (Ghostty's Selection.containedRowCached): the corners
     /// are resolved once, rows go by their screen y (the viewport's rows are consecutive).
     public func selectedColumns() -> (Int) -> ClosedRange<Int>? {
