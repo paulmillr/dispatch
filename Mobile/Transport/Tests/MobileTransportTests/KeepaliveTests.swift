@@ -4,8 +4,11 @@ import Foundation
 import MobileTransport
 import XCTest
 
-/// A silent server (frozen, socket still open, as after a network drop) ends the connection through
-/// russh keepalives, which `HostConnection` then sees as a loss.
+/// A silent server (frozen, socket still open, as after a network drop) ends the connection through the keepalives of
+/// the engine `SSHTransportEngine.preferred` names (the Swift engine, or russh with `DISPATCH_SSH_ENGINE=russh` in a
+/// `DISPATCH_RUSSH` build), which
+/// `HostConnection` then sees as a loss. At 1 s × 2 the end is due 3 s after the server's last packet; the test only
+/// checks it comes within 15 s, and reports the time it took.
 final class KeepaliveTests: XCTestCase {
   func testSilentServerIsADisconnect() async throws {
     let fixture = try SSHFixture()

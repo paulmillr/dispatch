@@ -1,4 +1,3 @@
-import DispatchMobileSSHCore
 import Foundation
 
 /// An interactive login shell on its own session channel with a PTY (`SSHConnection.shell`). Like `SSHExec`, the
@@ -12,30 +11,16 @@ public final class SSHShell: AsyncSequence, Sendable {
 
   private let state: ExecState
   let descriptor: Descriptor
-  private let control: ShellHandle
+  private let control: any EngineShell
 
-  static func start(term: String, columns: Int, rows: Int, on session: SessionHandle) async throws -> SSHShell {
+  static func start(term: String, columns: Int, rows: Int, on session: any EngineSession) async throws -> SSHShell {
     let state = ExecState()
-    let pointer = term.withCString { term in
-      dms_shell_open(session.pointer, term, cells(columns), cells(rows), Engine.retain(state), { context, fd, code, message in
-        let state = Engine.borrow(context, as: ExecState.self)
-        if fd >= 0 {
-          state.started.finish(.success(fd))
-        } else {
-          state.started.finish(.failure(Engine.error(code, message)))
-          // No `exited` follows a failed start: release the context here.
-          _ = Engine.release(context, as: ExecState.self)
-        }
-      }, { context, kind, status, signal in
-        Engine.release(context, as: ExecState.self).exited(kind: kind, status: status, signal: signal.map { String(cString: $0) } ?? "")
-      })
-    }
-    let control = ShellHandle(pointer)
+    let control = session.shell(term: term, columns: cells(columns), rows: cells(rows), events: state)
     let fd = try await state.started.value
     return SSHShell(state: state, fd: fd, control: control)
   }
 
-  private init(state: ExecState, fd: Int32, control: ShellHandle) {
+  private init(state: ExecState, fd: Int32, control: any EngineShell) {
     self.state = state
     descriptor = Descriptor(fd)
     self.control = control
@@ -50,7 +35,7 @@ public final class SSHShell: AsyncSequence, Sendable {
   /// or was closed; the server sends no answer, so a change racing the end is lost silently.
   public func resize(columns: Int, rows: Int) async throws {
     guard descriptor.fd != nil, state.finished == nil else { throw SSHTransportError.channelClosed }
-    dms_shell_resize(control.pointer, cells(columns), cells(rows))
+    control.resize(columns: cells(columns), rows: cells(rows))
   }
 
   /// Status when the shell ended by exit; 128 on a signal; throws `SSHTransportError.channelClosed` when the channel
@@ -93,13 +78,6 @@ extension SSHConnection {
   public func shell(term: String, columns: Int, rows: Int) async throws -> SSHShell {
     try await SSHShell.start(term: term, columns: columns, rows: rows, on: session)
   }
-}
-
-/// The engine's shell handle (for window changes); freed with the shell. Freeing never closes the channel.
-final class ShellHandle: @unchecked Sendable {
-  let pointer: OpaquePointer?
-  init(_ pointer: OpaquePointer?) { self.pointer = pointer }
-  deinit { dms_shell_free(pointer) }
 }
 
 /// A grid dimension for the engine: at least one cell.

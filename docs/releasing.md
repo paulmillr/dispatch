@@ -82,7 +82,7 @@ because source paths end up in the binaries, and it restarts itself in a fixed e
 `HOME`, `/private/tmp/release-build-home`. GitHub's runner otherwise brings Homebrew's tools, rustup and its own
 settings, which the signing machine's build lacks. Then `scripts/release/app.sh`, the app's own part, builds: for
 Dispatch `./build.sh --release`, the Mac app, from `Dispatch.xcodeproj` alone: the iPhone app's package and
-its Rust SSH engine are `DispatchMobile.xcodeproj`'s, so the Mac build neither fetches nor builds them. Then
+its optional Rust SSH engine are `DispatchMobile.xcodeproj`'s, so the Mac build neither fetches nor builds them. Then
 `scripts/release/normalize.py` removes the one thing the app takes from the machine that built it: Xcode writes that
 machine's macOS build, `BuildMachineOSBuild`, into every `Info.plist`, which the ad hoc signature seals, so it removes
 the key and signs those bundles again, ad hoc, keeping their identifiers, entitlements and flags (the release's
@@ -389,7 +389,8 @@ anything else, a commit the clone has.
    and signed ad hoc with each target's entitlements (`release/app.sh`). Unlike the Mac build, which starts from nothing
    so that it matches GitHub's, it keeps the tree's `build/` between builds, in
    `/private/tmp/release-build-cache-<user>/ios/` (the build user's alone): the Rust toolchain, the crates, the helpers
-   (reused while their sources are the same) and the SSH engine's dependencies. The first build after a restart (which
+   (reused while their sources are the same) and, for a build with the optional russh engine (`DISPATCH_RUSSH=1`; the
+   release builds without it), that engine's dependencies. The first build after a restart (which
    empties `/private/tmp`) downloads and compiles all of them; later ones mostly archive the app. Every source file gets
    the current time first, so Cargo never takes an output for another commit's. The step's line shows the phase (tools,
    Xcode archive and its target, ad hoc signatures, zipping), and afterwards how long each took.

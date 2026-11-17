@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The patched russh the iPhone SSH engine builds against: the published crate, checked against its crates.io SHA-256,
+"""The patched russh the iPhone's optional russh engine (DISPATCH_RUSSH=1, docs/ios.md, Transport) builds against: the published crate, checked against its crates.io SHA-256,
 with Dispatch's patch (Mobile/Transport/Core/russh.patch) applied, in build/mobile-ssh/russh (Mobile/Transport/Core's
 Cargo.toml depends on it by path). Only the library is staged: the manifest without its examples, tests, benchmarks and
 dev-dependencies, and src/.

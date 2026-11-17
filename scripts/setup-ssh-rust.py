@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Provision the pinned Rust toolchain (SSH helper, iPhone SSH core) as build/rust.
+"""Provision the pinned Rust toolchain (SSH helper; with DISPATCH_RUSSH=1 also the iPhone's optional russh engine) as
+build/rust.
 
 A complete toolchain of the pinned version already on PATH (rustc, cargo, rustfmt, clippy,
 rust-lld and every helper target) is linked rather than downloaded. Otherwise the pinned
@@ -22,11 +23,17 @@ MANIFEST_SHA256 = LOCK['rust']['manifest']['sha256']
 tools = load_script('setup-build-tools')
 ROOT = Path(__file__).resolve().parent.parent
 PREFIX = ROOT / "build/rust"
-# The helper's three targets (macOS on Apple silicon, Linux arm64 and x86-64), plus the iPhone SSH core's
-# (Mobile/Transport/Core): device and Apple Silicon simulator.
-TARGETS = ("aarch64-apple-darwin",
-           "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl",
-           "aarch64-apple-ios", "aarch64-apple-ios-sim")
+# The helper's three targets (macOS on Apple silicon, Linux arm64 and x86-64), plus, only for a build with the iPhone's
+# optional russh engine (DISPATCH_RUSSH=1, Mobile/Transport/Core), its device and Apple Silicon simulator targets.
+HELPER_TARGETS = ("aarch64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl")
+RUSSH_TARGETS = ("aarch64-apple-ios", "aarch64-apple-ios-sim")
+
+
+def targets(environ=os.environ):
+    return HELPER_TARGETS + (RUSSH_TARGETS if environ.get("DISPATCH_RUSSH") == "1" else ())
+
+
+TARGETS = targets()
 BINARIES = ("rustc", "cargo", "rustfmt", "cargo-clippy")
 
 

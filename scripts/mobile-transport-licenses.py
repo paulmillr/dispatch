@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Write Mobile/ThirdPartyLicenses/MobileTransport/Dependencies.txt: the crates linked into the iPhone SSH engine
-(Mobile/Transport/Core, from its Cargo.lock), with their declared licences and license files reproduced
-verbatim from build/cargo. Needs the crates fetched (python3 scripts/build-mobile-ssh.py --fetch)."""
+"""Write Mobile/Transport/Core/ThirdPartyLicenses/MobileTransport/Dependencies.txt: the crates linked into the iPhone's
+optional russh engine (Mobile/Transport/Core, from its Cargo.lock), with their declared licences and license files
+reproduced verbatim from build/cargo. Only a build with DISPATCH_RUSSH=1 links them, so only such a build bundles the
+file (project-mobile.yml, Bundle licences, as ThirdPartyLicenses/MobileTransport/Dependencies.txt); the default app,
+on the Swift engine alone, ships none of these crates. Needs the crates fetched
+(DISPATCH_RUSSH=1 bash scripts/setup.sh --mobile, or python3 scripts/build-mobile-ssh.py --fetch)."""
 import os
 from pathlib import Path
 import re
@@ -10,7 +13,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parent.parent
 CRATE = ROOT / "Mobile/Transport/Core"
 CARGO_HOME = ROOT / "build/cargo"
-OUTPUT = ROOT / "Mobile/ThirdPartyLicenses/MobileTransport/Dependencies.txt"
+OUTPUT = ROOT / "Mobile/Transport/Core/ThirdPartyLicenses/MobileTransport/Dependencies.txt"
 NOTICE = re.compile(r"^(LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|UNLICENSE)", re.I)
 
 

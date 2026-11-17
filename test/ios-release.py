@@ -14,8 +14,9 @@ once (it must still run after five seconds; a screenshot lands in build/release-
 
 The fast suite cannot run against Release: the tests import the app with @testable (Release has no testability) and
 use the Debug-only demos (ChatDemo, CodeDemo, TabsSample). --with-fast-suite runs it on the same simulator in Debug
-(test/ios.py) after the Release checks. Offline after setup: the helper, the SSH engine and the project generator
-are local (scripts/setup_mobile.py --offline) and the Swift package has no remote dependency.
+(test/ios.py) after the Release checks. Offline after setup: the helper and the project generator are local, the SSH
+engine is Swift (with DISPATCH_RUSSH=1 also russh, from scripts/setup_mobile.py --offline) and the Swift package has
+no remote dependency.
 """
 import argparse
 import gzip

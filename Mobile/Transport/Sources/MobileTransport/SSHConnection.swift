@@ -1,9 +1,8 @@
-import DispatchMobileSSHCore
 import Foundation
 
-/// One authenticated SSH connection to a host (the russh engine). Channels are opened on it; closing it
-/// closes them all. A dropped connection (network loss, keepalive timeout, remote disconnect) is not
-/// revived: `closed()` returns and `HostConnection` makes a new one.
+/// One authenticated SSH connection to a host, on the engine `SSHTransportEngine.preferred` named when it started.
+/// Channels are opened on it; closing it closes them all. A dropped connection (network loss, keepalive timeout, remote
+/// disconnect) is not revived: `closed()` returns and `HostConnection` makes a new one.
 public final class SSHConnection: Sendable {
   public struct Timings: Sendable {
     /// TCP, version exchange and key exchange, without the time the host key decision took.
@@ -18,51 +17,31 @@ public final class SSHConnection: Sendable {
   public let timings: Timings
   /// Which credential logged in: its index in the `credentials` given to `connect`.
   public let credential: Int
-  let session: SessionHandle
+  let session: any EngineSession
   let link: SessionLink
 
   /// Connects, verifies the host key through `trust`, and authenticates with `credentials` in order
   /// (each one the server still allows). Keepalives detect a dead connection after
-  /// `keepalive * keepaliveMax` of silence.
+  /// `keepalive * (keepaliveMax + 1)` of silence.
   public static func connect(
     to endpoint: SSHEndpoint, credentials: [SSHCredential], trust: any HostKeyTrust,
     timeout: Duration = .seconds(15), keepalive: Duration = .seconds(15), keepaliveMax: Int = 3,
     authenticating: (@Sendable () async -> Void)? = nil
   ) async throws -> SSHConnection {
+    let engine = try SSHTransportEngine.preferred.backend
     let clock = ContinuousClock()
     let start = clock.now
     let link = SessionLink(host: endpoint.host, port: endpoint.port, trust: trust, trusted: authenticating)
-    let completion = Completion<SessionHandle>()
-    let callbacks = dms_session_callbacks(
-      context: Engine.retain(link),
-      host_key: { context, key, reply in
-        let link = Engine.borrow(context, as: SessionLink.self)
-        link.decide(key!.pointee, reply: EngineReply(pointer: reply))
-      },
-      disconnected: { context, code, message in
-        Engine.release(context, as: SessionLink.self).ended(Engine.error(code, message))
-      })
-    endpoint.host.withCString { host in
-      var options = dms_connect_options(
-        host: host, port: UInt16(clamping: endpoint.port), timeout_ms: milliseconds(timeout),
-        keepalive_interval_ms: milliseconds(keepalive), keepalive_max: UInt32(max(0, keepaliveMax)))
-      dms_connect(&options, callbacks, Engine.retain(completion)) { context, session, code, message in
-        let completion = Engine.release(context, as: Completion<SessionHandle>.self)
-        if let session {
-          completion.finish(.success(SessionHandle(session)))
-        } else {
-          completion.finish(.failure(Engine.error(code, message)))
-        }
-      }
-    }
+    let completion = Completion<any EngineSession>()
+    let options = EngineConnectOptions(
+      host: endpoint.host, port: endpoint.port, timeout: timeout, keepalive: keepalive, keepaliveMax: keepaliveMax)
+    engine.connect(options, events: link) { completion.finish($0.mapError { $0 }) }
     // Cancelling the connect withdraws the questions it asks (host key, login prompts, signatures): their tasks are
     // not children of this one, so without this a sheet would outlive the connection that asked.
-    let session: SessionHandle
+    let session: any EngineSession
     do {
       session = try await withTaskCancellationHandler { try await completion.value } onCancel: { link.withdraw() }
     } catch {
-      // A failed connect never calls `disconnected`: the session context is ours to drop.
-      Unmanaged.passUnretained(link).release()
       throw link.explain(error)
     }
     let connected = clock.now
@@ -73,7 +52,7 @@ public final class SSHConnection: Sendable {
       } onCancel: { link.withdraw() }
       try Task.checkCancellation()
     } catch {
-      dms_session_close(session.pointer)
+      session.close()
       throw error
     }
     guard let (info, _) = link.decision else { throw SSHTransportError.channelClosed }
@@ -82,7 +61,7 @@ public final class SSHConnection: Sendable {
       timings: Timings(handshake: connected - start - link.deciding, authentication: clock.now - connected))
   }
 
-  private init(endpoint: SSHEndpoint, hostKey: HostKeyInfo, session: SessionHandle, link: SessionLink, credential: Int,
+  private init(endpoint: SSHEndpoint, hostKey: HostKeyInfo, session: any EngineSession, link: SessionLink, credential: Int,
                timings: Timings) {
     self.endpoint = endpoint
     self.hostKey = hostKey
@@ -102,7 +81,7 @@ public final class SSHConnection: Sendable {
   public func closed() async { await link.closed() }
 
   public func close() async {
-    dms_session_close(session.pointer)
+    session.close()
     await link.closed()
   }
 
@@ -138,19 +117,14 @@ public final class SSHConnection: Sendable {
     return SSHCommandResult(status: try await exec.exitStatus(), stdout: stdout, stderr: stderr)
   }
 
-  fileprivate enum Outcome: Sendable {
-    case success
-    case failure(remaining: UInt32)
-  }
-
   /// The index of the credential that logged in.
-  private static func authenticate(_ session: SessionHandle, link: SessionLink, user: String, credentials: [SSHCredential]) async throws -> Int {
-    var remaining: UInt32?
+  private static func authenticate(_ session: any EngineSession, link: SessionLink, user: String, credentials: [SSHCredential]) async throws -> Int {
+    var remaining: EngineMethods?
     for (index, credential) in credentials.enumerated() {
       try Task.checkCancellation()
-      if let remaining, remaining & credential.method == 0 { continue }
+      if let remaining, remaining.isDisjoint(with: credential.method) { continue }
       let answered: (@Sendable (DirectKeyAnswer) -> Void)? = if case .directKey(_, let answered) = credential { answered } else { nil }
-      let outcome: Outcome
+      let outcome: EngineAuthOutcome
       do {
         outcome = try await attempt(credential, session: session, link: link, user: user)
       } catch {
@@ -158,61 +132,45 @@ public final class SSHConnection: Sendable {
         throw error
       }
       switch outcome {
-      case .success:
+      case .loggedIn:
         answered?(.loggedIn)
         return index
-      case .failure(let methods):
+      case .refused(let methods):
         answered?(.refused)
         remaining = methods
       }
     }
-    throw SSHTransportError.authenticationFailed(methods: Engine.methods(remaining ?? 0))
+    throw SSHTransportError.authenticationFailed(methods: (remaining ?? []).names)
   }
 
-  private static func attempt(_ credential: SSHCredential, session: SessionHandle, link: SessionLink, user: String) async throws -> Outcome {
-    let completion = Completion<Outcome>()
-    let done: dms_auth_fn = { context, code, remaining, _, message in
-      let box = Engine.release(context, as: AuthBox.self)
-      if code == DMS_OK {
-        box.completion.finish(.success(.success))
-      } else if code == DMS_AUTH_FAILED {
-        box.completion.finish(.success(.failure(remaining: remaining)))
-      } else {
-        box.completion.finish(.failure(Engine.error(code, message)))
-      }
-    }
+  /// One login. The questions it asks (signatures, prompts) go to the app on tasks `link` withdraws when the connect is
+  /// cancelled; each answers the engine exactly once.
+  private static func attempt(_ credential: SSHCredential, session: any EngineSession, link: SessionLink, user: String) async throws -> EngineAuthOutcome {
+    let completion = Completion<EngineAuthOutcome>()
+    let done: @Sendable (Result<EngineAuthOutcome, SSHTransportError>) -> Void = { completion.finish($0.mapError { $0 }) }
     switch credential {
     case .password(let password):
-      let box = AuthBox(completion, link: link)
-      withCStrings(user, password) { dms_auth_password(session.pointer, $0, $1, Engine.retain(box), done) }
+      session.authenticate(user: user, password: password, done: done)
     case .key(let key), .directKey(let key, _):
       let direct = if case .directKey = credential { true } else { false }
       switch key.backing {
-      case .engine(let handle):
-        let box = AuthBox(completion, link: link, keep: handle)
-        user.withCString { dms_auth_key(session.pointer, $0, handle.pointer, direct, Engine.retain(box), done) }
-      case .signer(let blob, let sign):
-        let box = AuthBox(completion, link: link, sign: sign)
-        blob.withUnsafeBytes { bytes in
-          user.withCString {
-            dms_auth_signer(session.pointer, $0, bytes.bindMemory(to: UInt8.self).baseAddress, blob.count, direct, Engine.retain(box), { context, data, length, reply in
-              let box = Engine.borrow(context, as: AuthBox.self)
-              box.sign(Data(bytes: data!, count: length), reply: EngineReply(pointer: reply))
-            }, done)
+      case .engine(let parsed):
+        session.authenticate(user: user, key: parsed, direct: direct, done: done)
+      case .signer(let blob, let signer):
+        session.authenticate(user: user, signer: blob, direct: direct, sign: { data, answer in
+          link.ask {
+            guard !Task.isCancelled else { return answer(nil) }
+            do { answer(try await signer(data)) } catch { answer(nil) }
           }
-        }
+        }, done: done)
       }
     case .keyboardInteractive(let respond):
-      let box = AuthBox(completion, link: link, respond: respond)
-      user.withCString {
-        dms_auth_keyboard_interactive(session.pointer, $0, Engine.retain(box), { context, name, instruction, prompts, count, reply in
-          let box = Engine.borrow(context, as: AuthBox.self)
-          let challenge = KeyboardInteractiveChallenge(
-            name: name.map { String(cString: $0) } ?? "", instruction: instruction.map { String(cString: $0) } ?? "",
-            prompts: (0..<count).map { KeyboardInteractiveChallenge.Prompt(text: String(cString: prompts![$0].text), echo: prompts![$0].echo) })
-          box.prompt(challenge, reply: EngineReply(pointer: reply))
-        }, done)
-      }
+      session.authenticateKeyboardInteractive(user: user, prompt: { challenge, answer in
+        link.ask {
+          guard !Task.isCancelled else { return answer(nil) }
+          if let answers = await respond(challenge), !Task.isCancelled { answer(answers) } else { answer(nil) }
+        }
+      }, done: done)
     }
     return try await completion.value
   }
@@ -225,15 +183,8 @@ public struct SSHCommandResult: Sendable {
   public var text: String { String(decoding: stdout, as: UTF8.self) }
 }
 
-/// The engine's session; freed (and closed if still open) with the last reference.
-final class SessionHandle: @unchecked Sendable {
-  let pointer: OpaquePointer
-  init(_ pointer: OpaquePointer) { self.pointer = pointer }
-  deinit { dms_session_free(pointer) }
-}
-
 /// Lives as long as the connection: answers host key questions and records how it ended.
-final class SessionLink: @unchecked Sendable {
+final class SessionLink: EngineSessionEvents, @unchecked Sendable {
   private let host: String
   private let port: Int
   private let trust: any HostKeyTrust
@@ -258,10 +209,8 @@ final class SessionLink: @unchecked Sendable {
   var deciding: Duration { lock.withLock { decisionTime } }
   var ending: SSHTransportError? { lock.withLock { end } }
 
-  func decide(_ key: dms_host_key, reply: EngineReply) {
-    let info = HostKeyInfo(
-      host: host, port: port, algorithm: String(cString: key.algorithm), fingerprint: String(cString: key.fingerprint),
-      openSSH: String(cString: key.openssh))
+  func hostKey(_ key: EngineHostKey, answer: @escaping @Sendable (Bool) -> Void) {
+    let info = HostKeyInfo(host: host, port: port, algorithm: key.algorithm, fingerprint: key.fingerprint, openSSH: key.openSSH)
     let trust = trust, trusted = trusted
     ask {
       let start = ContinuousClock.now
@@ -273,7 +222,7 @@ final class SessionLink: @unchecked Sendable {
       // A connect cancelled while the question was open goes no further, whatever the answer.
       let trusting = decision == .trust && !Task.isCancelled
       if trusting { await trusted?() }
-      reply.bool(trusting)
+      answer(trusting)
     }
   }
 
@@ -315,7 +264,7 @@ final class SessionLink: @unchecked Sendable {
     }
   }
 
-  func ended(_ reason: SSHTransportError) {
+  func disconnected(_ reason: SSHTransportError) {
     let waiters = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
       if end == nil { end = reason }
       defer { self.waiters = [] }
@@ -334,42 +283,4 @@ final class SessionLink: @unchecked Sendable {
       if done { continuation.resume() }
     }
   }
-}
-
-/// Context of one authentication attempt.
-private final class AuthBox: @unchecked Sendable {
-  let completion: Completion<SSHConnection.Outcome>
-  private let link: SessionLink
-  private let keep: KeyHandle?
-  private let signer: SSHKey.Signer?
-  private let respond: (@Sendable (KeyboardInteractiveChallenge) async -> [String]?)?
-
-  init(_ completion: Completion<SSHConnection.Outcome>, link: SessionLink, keep: KeyHandle? = nil, sign: SSHKey.Signer? = nil,
-       respond: (@Sendable (KeyboardInteractiveChallenge) async -> [String]?)? = nil) {
-    self.completion = completion
-    self.link = link
-    self.keep = keep
-    signer = sign
-    self.respond = respond
-  }
-
-  func sign(_ data: Data, reply: EngineReply) {
-    guard let signer else { return reply.cancel() }
-    link.ask {
-      guard !Task.isCancelled else { return reply.cancel() }
-      do { reply.bytes(try await signer(data)) } catch { reply.cancel() }
-    }
-  }
-
-  func prompt(_ challenge: KeyboardInteractiveChallenge, reply: EngineReply) {
-    guard let respond else { return reply.cancel() }
-    link.ask {
-      guard !Task.isCancelled else { return reply.cancel() }
-      if let answers = await respond(challenge), !Task.isCancelled { reply.strings(answers) } else { reply.cancel() }
-    }
-  }
-}
-
-private func milliseconds(_ duration: Duration) -> UInt32 {
-  UInt32(clamping: duration.components.seconds * 1000 + duration.components.attoseconds / 1_000_000_000_000_000)
 }

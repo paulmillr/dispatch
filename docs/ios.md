@@ -36,15 +36,27 @@ python3 test/ios-release.py [--simulator NAME]               # Release check, be
   `Dispatch.xcodeproj` (`project.yml`); both include `project-shared.yml` (the base settings, the `Dictation` package
   and the `SSHHelpers` target), and `scripts/generate-project.py` generates both. Only the iPhone project has the
   `MobileTransport` package, so building the Mac app never needs the SSH engine below.
-- **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, for every
-  scheme of `DispatchMobile.xcodeproj`, so the pinned Rust with its iOS targets and
-  `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh --mobile` (which
-  `./build.sh --ios` and `test/run.sh --platform ios` run) does it through `scripts/setup_mobile.py`
-  (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step: the locked crates and russh's
-  crate, which it stages patched into `build/mobile-ssh/russh`); `DISPATCH_SETUP_OFFLINE=1` fails with the command
-  instead. Setup rebuilds the XCFramework whenever its headers differ from `Mobile/Transport/Core/include`, and stages
-  russh whenever `build/mobile-ssh/russh` is missing or stale (offline from the cached crate). Existing checkouts run
-  `python3 scripts/setup-ssh-rust.py` once.
+- **Fresh checkout.** The app's SSH engine is Swift (`MobileTransport`, [Transport](#transport)): a fresh checkout
+  builds and tests the iPhone app with the Mac's setup alone, no Rust for iOS and nothing in `build/mobile-ssh`.
+- **The russh build.** `DISPATCH_RUSSH=1` in the environment builds the app with the older Rust engine as well
+  (russh, [Transport](#transport)), as `DISPATCH_HELPER_PROFILE` picks the helpers' profile: `Mobile/Transport/Package.swift`
+  then adds its binary target and the `DISPATCH_RUSSH` compilation condition, the pre-build step "Build russh engine"
+  runs `scripts/build-mobile-ssh.py`, the bundle gets the crates' licences, and setup prepares it. SwiftPM resolves that
+  binary target before any build script runs, for every scheme of `DispatchMobile.xcodeproj`, so the pinned Rust with
+  its iOS targets and `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first: `DISPATCH_RUSSH=1
+  scripts/setup.sh --mobile` (which `./build.sh --ios` and `test/run.sh --platform ios` run with the same
+  environment) does it through `scripts/setup_mobile.py` (`setup-ssh-rust.py`, which then adds the iOS targets, then
+  `build-mobile-ssh.py --fetch`, the only network step: the locked crates and russh's crate, which it stages patched
+  into `build/mobile-ssh/russh`); `DISPATCH_SETUP_OFFLINE=1` fails with the command instead. Setup rebuilds the
+  XCFramework whenever its headers differ from `Mobile/Transport/Core/include`, and stages russh whenever
+  `build/mobile-ssh/russh` is missing or stale (offline from the cached crate). So: `DISPATCH_RUSSH=1 ./build.sh --ios
+  --run`, `DISPATCH_RUSSH=1 test/run.sh --platform ios`, `cd Mobile/Transport && DISPATCH_RUSSH=1 swift test …`.
+  From the Xcode app, the variable must be in Xcode's own environment, which only a newly started Xcode reads: quit
+  Xcode, run `DISPATCH_RUSSH=1 bash scripts/setup.sh --mobile` once, then `DISPATCH_RUSSH=1 open
+  DispatchMobile.xcodeproj` (an app opened so inherits the shell's environment); back to the default, quit and open
+  it without the variable. If Xcode still shows the other package graph, File › Packages › Reset Package Caches. Use
+  a DerivedData of its own for the russh build (`test/run.sh --platform ios --derived-data build/ios-russh`) so the
+  two configurations do not rebuild each other.
 
 ### Signing and a device
 
@@ -80,7 +92,7 @@ privacy manifest, and that every required-reason API the executable imports is d
 `Mobile/App/PrivacyInfo.xcprivacy`; the same for the embedded watch app. The fast suite cannot run against Release
 (`@testable`, Debug-only demos). `./build.sh --archive` builds Release for any iPhone without signing
 (`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team); the Ad Hoc release signs and exports it
-([releasing.md](releasing.md#iphone)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
+([releasing.md](releasing.md#iphone)). Not applied yet: deduplicating licence texts (1.8 MB; 3.1 MB with russh), `-Osize` for app
 code.
 
 ## Architecture and data flow
@@ -91,7 +103,7 @@ code.
 | `DispatchMobileTests` | Unit tests hosted by the app: `Mobile/Tests` plus the Mac's Foundation-only tests by path. |
 | `DispatchMobileUITests` | XCUITests, own scheme so unit runs never start the app. |
 | `TermMobile`, `TermAppleMobile` | `Vendor/Term` and `TermApple` for iOS, without `Launch`, `Pty`, `Frames`, `Session`, `TerminalView`. Fonts are `TermFonts`: a top-level `Resources` folder breaks an iOS bundle's signature. |
-| `MobileTransport` | Local Swift package (`Mobile/Transport`, see its README) over the Rust SSH engine. |
+| `MobileTransport` | Local Swift package (`Mobile/Transport`, see its README) over the Swift SSH engine; with `DISPATCH_RUSSH=1` also over russh (Rust). |
 | `Dictation` | Local Swift package (`Packages/Dictation`) shared with the Mac; its Whisper engine is `Packages/WhisperEngine`, its Parakeet engine Core ML models it downloads. |
 
 The iOS settings group sets `ARCHS = $(ARCHS_STANDARD)` (the project's native arch is the Mac's arm64e). Zstd is not
@@ -169,45 +181,122 @@ Mac views built on the Mac chat stack are ported, not shared.
 
 ### Transport
 
-The engine is Rust `russh` 0.65.0 (`ring`, `rsa`) with a patch (`Mobile/Transport/Core/russh.patch`: every rekey's
-host key goes through `check_server_key`, [security](security.md#dispatch-for-iphone), and direct public key requests,
-below), behind a hand-written C ABI (`Mobile/Transport/Core`, crate
-`dispatch-mobile-ssh`), built into an XCFramework by `scripts/build-mobile-ssh.py` in a minimal environment so Xcode's
-settings cannot leak into ring's C build. The engine's `Cargo.toml` names russh by path, `build/mobile-ssh/russh`:
-`scripts/vendor-russh.py` stages the published crate there (SHA-256 checked, kept in `build/downloads`) with the patch
-applied, online from `build-mobile-ssh.py --fetch` and offline before every build (again when the patch or the script
-changes; `--check` compares). swift-nio-ssh was rejected (Apple's has no RSA user keys or
-keyboard-interactive; Citadel's fork signs RSA with SHA-1 only, refused by OpenSSH 8.8+), and ring over aws-lc-rs needs
-no cmake. Third-party Rust enters only here; `helper/` stays dependency-free.
+The app's SSH client is the Swift engine, behind one seam (`Mobile/Transport/Sources/MobileTransport/Engine.swift`:
+`EngineBackend`, `EngineSession`, `EngineKey`); `SSHConnection`, `SSHExec`, `SSHShell` and `SSHKey` talk only to it,
+and its doc comments are the contract every engine keeps (callbacks and questions exactly once, the deadlines, the
+errors as `SSHTransportError`, a channel as one end of a socketpair). The contract was written for russh, the Rust
+engine earlier versions ran on, which stays in the repository as an optional build: `DISPATCH_RUSSH=1` (Building and
+running, The russh build) compiles it in beside the Swift engine, behind the same seam. The default build has no
+russh at all: no binary target, no glue, no Rust crates in the bundle. The package README describes both and the
+tests that run on either.
 
-- Private keys sign in Swift (CryptoKit, Secure Enclave) through the external-signer callback and never cross the
-  FFI. File keys are parsed in Rust. RSA signs `rsa-sha2-512/256`, never `ssh-rsa`.
+**The Swift engine** (`Mobile/Transport/Sources/SSHEngine`, whose README is its spec) uses Apple's frameworks only
+(CryptoKit, CommonCrypto, Security, Network.framework for TCP) and no package; ChaCha20, Poly1305, bcrypt_pbkdf and
+RSA's CRT remainders are written by hand ([security](security.md#dispatch-for-iphone)). Its adapter
+(`SwiftEngine.swift`, `SwiftEngineChannels.swift`, `SwiftEngineSocket.swift`, `SwiftEngineErrors.swift`) runs each
+operation on a task of its own and pumps each channel's socketpair with two tasks over dispatch sources.
+
+**russh**, only in a `DISPATCH_RUSSH=1` build, is Rust `russh` 0.65.0 (`ring`, `rsa`) with a patch
+(`Mobile/Transport/Core/russh.patch`: every rekey's host key goes through `check_server_key`,
+[security](security.md#dispatch-for-iphone), and direct public key requests, below), behind a hand-written C ABI
+(`Mobile/Transport/Core`, crate `dispatch-mobile-ssh`; `RusshEngine.swift`, compiled under `#if DISPATCH_RUSSH`),
+built into an XCFramework by `scripts/build-mobile-ssh.py` in a minimal environment so Xcode's settings cannot leak
+into ring's C build. The engine's `Cargo.toml` names russh by path, `build/mobile-ssh/russh`: `scripts/vendor-russh.py`
+stages the published crate there (SHA-256 checked, kept in `build/downloads`) with the patch applied, online from
+`build-mobile-ssh.py --fetch` and offline before every build (again when the patch or the script changes; `--check`
+compares). It was chosen over swift-nio-ssh (Apple's has no RSA user keys or keyboard-interactive; Citadel's fork
+signs RSA with SHA-1 only, refused by OpenSSH 8.8+), with ring over aws-lc-rs for needing no cmake. Third-party Rust
+enters the app only there; `helper/` stays dependency-free. What it adds to a build: the Settings choice (Engine
+choice, below), `DISPATCH_SSH_ENGINE=russh`, and the tests that compare the engines.
+
+- Keychain and Secure Enclave keys sign in Swift (CryptoKit, Secure Enclave) through the seam's signer callback, on
+  either engine; on russh they never cross the FFI. File keys are parsed by the engine in use, russh in Rust, the
+  Swift engine in `SSHEngine/Keys`. RSA signs `rsa-sha2-512/256`, never `ssh-rsa`.
 - **Key logins.** A key goes as SSH clients send it: `SERVICE_REQUEST`, then once the server accepted the userauth
   service a query (is this key acceptable?), then after its `PK_OK` the signed request: three round trips on a new
-  connection. A direct attempt (`SSHCredential.directKey`, `dms_auth_key`/`dms_auth_signer` with `direct`;
-  `Handle::next_publickey_direct` in the patch) sends the signed request without the query (RFC 4252 §7 makes it
-  optional) and, as the connection's first request, right behind `SERVICE_REQUEST`: one round trip. The accept and any
-  `EXT_INFO` then arrive while it is pending. An external signer is asked as the request is written (the bytes hold the
-  session id), before the server said anything about the key; declining sends nothing more for it. RSA's hash still
-  comes from `server-sig-algs`, which the server sends right behind its first `NEWKEYS`, so it costs no round trip. A
-  refused direct attempt is an ordinary failure and the next credential goes on the same connection. One the server
-  never answers is the connection's end and never a failed login, which would be final: `channelClosed` when the
-  connection ended first (russh reports that as a failure with no method left), `timedOut` when no answer came within
-  10 s of the request, a signer's own time not counted, after which the engine closes the connection. Without
-  `direct` the bytes on the wire are those of published russh. Which keys go direct: [Connection](#connection).
-- The host-key callback is answered later (`dms_reply_bool`), so the trust sheet can wait; the handshake deadline
-  pauses meanwhile. Rekeys never ask: each must present the first exchange's key and algorithm, or the connection
-  ends (`disconnected` with `DMS_HOST_KEY_CHANGED`, `SSHTransportError.hostKeyChangedAtRekey`: final, like a
-  mismatch, so the host waits for Connect, whose connection checks the key as usual). `disconnected` fires exactly once.
-- An exec channel is a socketpair fd pumped by Rust with backpressure both ways; `HelperTransport` reads it unchanged.
-  It is handed over as the exec request leaves, without waiting for the server's reply; a refused request is the
-  channel's end (`DMS_EXIT_REFUSED`: `exitStatus()` throws `commandFailed(status: -1, …)`, as the refused start did
-  before). The first bytes written (the `hello`) follow the request as far as the channel's window allows, which with
-  OpenSSH saves nothing: its sshd opens a session channel with a window of zero and grants it only once the command
-  started, so the `hello` leaves a round trip after the request either way.
+  connection. A direct attempt (`SSHCredential.directKey`; russh: `dms_auth_key`/`dms_auth_signer` with `direct`,
+  `Handle::next_publickey_direct` in the patch; Swift: `Credential.publicKey(_, direct: true)`) sends the signed
+  request without the query (RFC 4252 §7 makes it optional) and, as the connection's first request, right behind
+  `SERVICE_REQUEST`: one round trip. The accept and any `EXT_INFO` then arrive while it is pending. An external signer
+  is asked as the request is written (the bytes hold the session id), before the server said anything about the key;
+  declining sends nothing more for it. RSA's hash still comes from `server-sig-algs`, which the server sends right
+  behind its first `NEWKEYS`, so it costs no round trip (russh waits for it up to 3 s; the Swift engine knows at the
+  first packet after `NEWKEYS` whether it came). A refused direct attempt is an ordinary failure and the next
+  credential goes on the same connection. One the server never answers is the connection's end and never a failed
+  login, which would be final: `channelClosed` when the connection ended first (russh reports that as a failure with
+  no method left), `timedOut` when no answer came within 10 s of the request, a signer's own time not counted, after
+  which the engine closes the connection. Without `direct`, russh's bytes on the wire are those of published russh.
+  Which keys go direct: [Connection](#connection).
+- The host-key question is answered later (russh: `dms_reply_bool`), so the trust sheet can wait; the handshake
+  deadline pauses meanwhile. Rekeys never ask: each must present the first exchange's key and algorithm, or the
+  connection ends (`disconnected` with `DMS_HOST_KEY_CHANGED`, `SSHTransportError.hostKeyChangedAtRekey`: final, like
+  a mismatch, so the host waits for Connect, whose connection checks the key as usual). `disconnected` fires exactly
+  once.
+- An exec channel is a socketpair fd the engine pumps with backpressure both ways; `HelperTransport` reads it
+  unchanged. It is handed over as the exec request leaves, without waiting for the server's reply; a refused request
+  is the channel's end (`DMS_EXIT_REFUSED`: `exitStatus()` throws `commandFailed(status: -1, …)`, as the refused start
+  did before). The first bytes written (the `hello`) follow the request as far as the channel's window allows, which
+  with OpenSSH saves nothing: its sshd opens a session channel with a window of zero and grants it only once the
+  command started, so the `hello` leaves a round trip after the request either way.
   A shell channel (plain SSH) is a session channel with a PTY; the package README specifies it.
-- Limits: host certificates refused, user certificates not wired; no x86_64 simulator or Intel Mac slice;
+- **Keepalive.** Once logged in (never before: a server must end a connection that sends one before the login, and
+  Dropbear does), after each 15 s with nothing from the server a `keepalive@openssh.com` request goes, and anything
+  the server sends resets the count. The keepalive that falls due while 3 are unanswered ends the connection instead
+  (`timedOut("the host stopped answering")`), so a link that went silent is declared dead (3 + 1) × 15 s = 60 s after
+  the server's last packet (on the Swift engine up to 3 s later: its keepalive timer may fire up to 0.75 s late each
+  time). Before the key exchange ends the handshake deadline covers a silent server; between it and the login's end
+  neither engine notices one (but a direct login's 10 s).
+- Limits: host certificates refused, user certificates not wired. russh: no x86_64 simulator or Intel Mac slice;
   `panic = "abort"`; release-built even in Debug.
+- **Where the engines differ** (the seam allows each; `SwiftEngine`'s doc comment keeps the list), which is also what
+  changed for the app against earlier versions, which ran on russh. The Swift engine:
+  does not queue logins, channel opens and `close` behind each other (a `close` during a login ends it at once,
+  `channelClosed`); reports a connection that ends while a login waits as `channelClosed` unless it is the server's
+  attempt limit (a DISCONNECT, or a close after an earlier refusal, while a password, keyboard-interactive or queried
+  key request waits: `authenticationFailed(methods: [])`, final for the host, so the app does not reconnect to submit
+  it again), where russh reports every such end that way except a direct login's; asks the host key question only
+  once the server proved it holds the key; answers a keyboard-interactive round with no prompts without asking;
+  refuses an RSA signer key without asking (russh asks, then fails); treats a zero keepalive count as 100, not
+  "never". Algorithms: russh offers its defaults without `ssh-rsa` host signatures; the Swift engine a fixed list
+  (`AlgorithmPolicy`: no finite-field Diffie-Hellman, CBC or SHA-1 MAC), ordered AES-GCM, AES-CTR, ChaCha20-Poly1305
+  and plain MACs before encrypt-then-MAC, and without strict key exchange refuses the modes Terrapin can truncate
+  (ChaCha20-Poly1305, AES-CTR with an `-etm` MAC): a server offering nothing else ("The server's SSH is too old for a
+  safe connection (it offers … without strict key exchange); update the SSH server.", final) is one russh connects
+  to; old Dropbear and OpenSSH with AES-GCM or plain-MAC AES-CTR connect. Key files: what each reads is in [security](security.md#dispatch-for-iphone); one
+  parsed by one engine fails on the other's connections (`invalidKey("the key was parsed by another SSH engine")`).
+  Errors are the same `SSHTransportError` case for the same condition; texts are the same where the seam or russh
+  fixes them (timeouts, a rekey's key change, refused PTY, shell and exec requests) and each engine's own for protocol
+  errors, the OS's network errors and a refused channel open; a key file the Swift engine refuses on purpose is
+  `invalidKey` with what to do, where russh says the key type is unsupported (`unsupportedAuthentication`).
+- **Engine choice.** The app learns which engines there are from `MobileTransport`, at run time: `SSHTransportEngine`'s
+  cases are the engines the build has (`allCases`; `.russh` exists only under `DISPATCH_RUSSH`) and
+  `SSHTransportEngine.standard`, the Swift engine, is the default; the app names no other engine and has no flag of its
+  own. With one engine (the default build) there is nothing to choose: Settings has no SSH engine row, a saved
+  `ssh.engine` (left by a russh build) is ignored, and Remove all data removes it. A russh build shows Settings › Hosts ›
+  SSH engine (`MobileSettings.sshEngine`, `ssh.engine`), which picks the Swift engine (the default) or russh as
+  `SSHTransportEngine.preferred`, at launch before any host connects and at once when changed: new connections and key
+  files use it, open ones keep theirs. In Debug builds `DISPATCH_SSH_ENGINE` (`TEST_RUNNER_DISPATCH_SSH_ENGINE` under
+  xcodebuild; `russh` only in a russh build, any other value stops the process) wins over the saved choice. A file key
+  is parsed by one engine for that engine's connections, so the driver reads it again after a switch (`KeyCache`).
+  Import key checks a file it keeps for the engine (any but an unencrypted Ed25519 key, kept as its seed) with the
+  engine in use (`EngineCheckedKeyParser`): what that engine refuses, or a wrong passphrase, shows there with the
+  engine's text, which says what to do; importing the same key again replaces its stored file. The check runs off the
+  main actor (`KeyStore.importKeyOffMain`; an encrypted file's bcrypt derivation takes up to seconds), Import showing
+  progress meanwhile; Cancel abandons it and nothing is stored.
+- **What russh took and the Swift engine refuses**, so what an app without russh no longer accepts that earlier
+  versions did ([security](security.md#dispatch-for-iphone) has the engine's full lists). Key files Import key takes
+  (OpenSSH files only): RSA keys under 2048 bits (it takes 2048 to 16384) and files encrypted with more than 1024
+  bcrypt rounds, each refused at import with what to do; such a key imported by an earlier version stays in the list
+  and fails its host's login with the same text (`KeyCache`) until it is replaced. Below Import key, the engine's own
+  reader also refuses PuTTY (PPK) files and encrypted legacy PEM files, which russh read, and encrypted PKCS#8 files. Servers: one
+  whose key exchange is only finite-field Diffie-Hellman (russh offered `diffie-hellman-group-exchange-sha256` and
+  groups 14 to 18; no algorithm in common, "The server offers no key exchange algorithm this app accepts; …", final)
+  and one without strict key exchange that offers only
+  ChaCha20-Poly1305 or AES-CTR with an encrypt-then-MAC MAC ("The server's SSH is too old for a safe connection …",
+  final; OpenSSH 7.x built without OpenSSL in practice), both of which russh connected to. The Swift engine also
+  refuses, where the docs record nothing of russh, a server that sends a guessed first key exchange packet and RSA keys
+  over 16384 bits or with an exponent over 8 bytes. Neither engine takes `ssh-rsa` (SHA-1) signatures, CBC
+  ciphers, SHA-1 MACs, DSA or host certificates.
 
 ### Connection
 
@@ -242,11 +331,14 @@ connection up without it: both are [plain SSH](#plain-ssh).
   the clock) the ping goes, without waiting for the last ping's answer (it can sit behind a flood of output; the
   helper reads the request at once). So the helper hears a frame every 15 s (`stdio.liveness`); around a change (a
   sample cancelled just after the ping skipped its tick, the background, a connection's first tick, up to a second
-  late) a gap can reach about 30 s, under the helper's 45 s. The SSH keepalive (15 s × 3) is the transport's own.
+  late) a gap can reach about 30 s, under the helper's 45 s. The SSH keepalive (every 15 s of silence, a silent link
+  dead after 60 s: [Transport](#transport)) is the transport's own.
 
-- Lost link or helper: `reconnecting` at once (keepalive 15 s × 3), backoff 1 s up to 60 s, raced by `retryNow()`
+- Lost link or helper: `reconnecting` at once (a silent link is lost once the keepalive gives up, 60 s after the
+  server's last packet), backoff 1 s up to 60 s, raced by `retryNow()`
   (network change, foregrounding, pull to refresh; on a connected link it probes `echo` within 3 s, `:` on a plain
-  one, and closes a dead one). Refusals (host key, login, missing key) are final; after a host-key mismatch nothing
+  one, and closes a dead one). Refusals (host key, login, missing key, a server offering nothing the engine accepts:
+  `incompatibleServer`, its sentence shown) are final; after a host-key mismatch nothing
   retries until the user acts. A failed attempt 5 minutes or more after the loss ends the retries too (about ten,
   `HostConnection.giveUpAfter`): the host is offline ("Stopped reconnecting after 5 minutes: …") with Connect, and a
   network change, foregrounding or pull to refresh starts a new run. Each connection decides again between the helper
@@ -874,7 +966,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   git's A and D) the green and red of the vision's first bundled light or dark scheme (`ColorVisionTrait`,
   `UIColor.change`), Color scheme lists only the schemes made for it (`ColorVision.bundledSchemes`, shared), and
   turning it on, off or over swaps the terminal's scheme for the vision's on the same side, or `dispatch-black`.
-  Color-code hosts (`hosts.colors`, on) off draws every host gray, as the Mac's `showHostColors`.
+  Color-code hosts (`hosts.colors`, on) off draws every host gray, as the Mac's `showHostColors`. SSH engine (Hosts),
+  only in a build with russh (`DISPATCH_RUSSH=1`; the Swift engine by default, its footnote naming both), is
+  [Transport](#transport)'s engine choice; Remove all data removes the saved choice, in either build.
   Notifications (the app icon's badge always counts the conversations waiting for you), Background refresh, the Apple
   Watch status row. There is no app theme: the chrome and chat take the asset catalog's colours for Appearance, and
   only the terminal has a scheme. Whether Spaces lists the offline hosts is its filter menu's (Show offline hosts),
@@ -1005,7 +1099,13 @@ Found while building the thread and its animations; each cost a debugging sessio
   `DISPATCH_IOS_SIMULATOR="<iPad simulator>"` runs the same cases on an iPad (family-specific cases `XCTSkip` on the
   other). Cases are classified in `test/suites.json` as `DispatchMobileTests/<Class>/<test>` and
   `DispatchMobileScripts/<Class>/<test>` (Python tests of the release tooling); a fast run fails on an unclassified
-  case. `--derived-data PATH` builds elsewhere than `build/ios`, so two runs do not wait on one build database. New
+  case. The cases build and run without russh; `DISPATCH_RUSSH=1 test/run.sh --platform ios` builds the app with it
+  ([Building and running](#building-and-running)), where the cases that need a second engine run too (without it they
+  skip, saying so: `SSHDriverTests.testAKeyFileIsReadAgainOnTheOtherEngine`) and those that check what the build offers
+  check both engines. `TEST_RUNNER_DISPATCH_SSH_ENGINE=russh` (in such a build; or `swift`) runs the cases on that SSH
+  engine whatever the simulator's Settings saved; `SSHDriverTests.testTheSSHEngineThisRunUses` prints the engine and
+  the engines built in (`SSH engine: …` in the log) and proves it with a key file only the Swift engine reads. `--derived-data PATH` builds elsewhere than
+  `build/ios`, so two runs do not wait on one build database. New
   tests go in `Mobile/Tests/<Area>…Tests.swift`; after adding files, run `python3 scripts/generate-project.py` and
   commit `DispatchMobile.xcodeproj/project.pbxproj`.
 - **UI tests.** `xcodebuild -project DispatchMobile.xcodeproj -scheme DispatchMobileUITests
@@ -1035,10 +1135,11 @@ Found while building the thread and its animations; each cost a debugging sessio
   The Linux entry is the Lima VM (`build/host-linux-ssh.json`, [vm_testing](vm_testing.md)).
 - **Helper over stdio.** `python3 test/helper-stdio.py --live [--lima NAME | --remote user@host:port --identity KEY]
   [-k case] [--keep]` runs the helper exactly as the phone does, in a private root. Not in `test/suites.json`.
-- **Transport.** `cargo test` in `Mobile/Transport/Core` (an in-process russh server, and a scripted hostile server
-  for the pre-authentication flaws, rekeys and direct key logins, `tests/hostile.rs`) and `swift test` in
-  `Mobile/Transport` (the login shell and direct logins under the fixture sshd; `HelperRootTests` pin the bootstrap
-  scripts). `SSHDriverTests` cover which keys go direct (`KeyLogins`), what of that is saved and how it follows the saved hosts,
+- **Transport.** `swift test` in `Mobile/Transport` (the Swift engine by layer, the API on it, the login shell and
+  direct logins under the fixture sshd; `HelperRootTests` pin the bootstrap scripts); with `DISPATCH_RUSSH=1` also the
+  russh glue and the tests that compare the engines, and `cargo test` in `Mobile/Transport/Core` (an in-process russh
+  server, and a scripted hostile server for the pre-authentication flaws, rekeys and direct key logins,
+  `tests/hostile.rs`): the package README. `SSHDriverTests` cover which keys go direct (`KeyLogins`), what of that is saved and how it follows the saved hosts,
   without a network.
 - **Dictation.** `swift test` in `Packages/Dictation`, on the Mac; engine cases skip without their models.
 - **Same turn.** That a request leaves in the turn that asked for it (not from a later `Task`) shows by blocking the

@@ -135,13 +135,27 @@ copyright 2017 Facebook Inc. and Marat Dukhan, MIT). Which files, and what chang
 Whisper's model weights (OpenAI, MIT license) are not bundled: Settings downloads them on request from
 https://huggingface.co/ggerganov/whisper.cpp.
 
-## iPhone SSH transport
+## iPhone SSH transport (builds with russh enabled)
 
-Dispatch for iPhone's SSH engine (`Mobile/Transport/Core`, static library `DispatchMobileSSHCore`) links
-russh 0.64.1 (Apache 2.0) and its dependency tree, pinned in `Mobile/Transport/Core/Cargo.lock`: 125 crates
+This section applies only to a Dispatch for iPhone built with the optional russh SSH engine (`DISPATCH_RUSSH=1`,
+docs/ios.md); the default app, on the Swift SSH engine below, contains none of this code. Such a build's russh engine
+(`Mobile/Transport/Core`, static library `DispatchMobileSSHCore`) links
+russh 0.65.0 (Apache 2.0), modified by `Mobile/Transport/Core/russh.patch`, and its dependency tree, pinned in
+`Mobile/Transport/Core/Cargo.lock`: 125 crates
 under MIT, Apache 2.0, BSD-3-Clause, ISC, Unlicense and Unicode-3.0 terms, among them ring 0.17.14
 (Apache 2.0 and ISC, with BoringSSL-derived code), tokio, and the RustCrypto crates (ssh-key, rsa, p256,
 p384, p521, ed25519-dalek, aes, chacha20, bcrypt-pbkdf, Blowfish and others). Their license files are
-reproduced in `Mobile/ThirdPartyLicenses/MobileTransport/Dependencies.txt`, written by
-`scripts/mobile-transport-licenses.py`; the Rust standard library's attribution is the one in
-`ThirdPartyLicenses/RustSSHHelper/`.
+reproduced in `Mobile/Transport/Core/ThirdPartyLicenses/MobileTransport/Dependencies.txt`, written by
+`scripts/mobile-transport-licenses.py` and bundled only with such a build; the Rust standard library's attribution is
+the one in `ThirdPartyLicenses/RustSSHHelper/`.
+
+## iPhone Swift SSH engine
+
+Dispatch for iPhone's Swift SSH engine (`Mobile/Transport/Sources/SSHEngine`) links no third-party code, but two of
+its primitives are Swift ports of OpenBSD's C. `Primitives/BcryptPBKDF.swift` ports `src/lib/libutil/bcrypt_pbkdf.c`
+(revision 1.17), copyright 2013 Ted Unangst, under the ISC license. `Primitives/Blowfish.swift` ports the cipher and
+the key schedules bcrypt_pbkdf uses from `src/lib/libc/crypt/blowfish.c` (revision 1.21), copyright 1997 Niels
+Provos, under a BSD 3-clause license. Their notices, as published, are in
+`Mobile/ThirdPartyLicenses/SSHEngine/bcrypt_pbkdf-ISC.txt` and `Mobile/ThirdPartyLicenses/SSHEngine/Blowfish-BSD.txt`
+and bundled with the iPhone app. Source: https://cvsweb.openbsd.org/src/lib/libutil/bcrypt_pbkdf.c and
+https://cvsweb.openbsd.org/src/lib/libc/crypt/blowfish.c.

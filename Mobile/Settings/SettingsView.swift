@@ -1,9 +1,10 @@
 import Dictation
+import MobileTransport
 import SwiftUI
 
 /// Settings (G1): appearance and the colour scheme, the terminal's font (G2), size, line spacing and contrast, chat's
-/// font (G3) and dictation, notifications (G5) and background refresh, Hosts (host colours, unsafe pastes; a host's own
-/// choices are in Edit host), the Apple Watch, and last Remove all data. Opened from the end of
+/// font (G3) and dictation, notifications (G5) and background refresh, Hosts (host colours, unsafe pastes, the SSH
+/// engine in a build with russh; a host's own choices are in Edit host), the Apple Watch, and last Remove all data. Opened from the end of
 /// Spaces' edit mode, beside Add host, where hosts are managed: the headers of M2a and M3a stay as the mockup draws them.
 struct SettingsView: View {
     let composition: MobileComposition
@@ -174,6 +175,13 @@ struct SettingsView: View {
                             .accessibilityIdentifier("settings-git-branches")
                         Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
                             .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
+                        // Only with an engine to choose: a build with russh (DISPATCH_RUSSH=1) has two.
+                        if MobileSettings.offersSSHEngineChoice {
+                            Picker("SSH engine", selection: $settings.sshEngine) {
+                                ForEach(SSHTransportEngine.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            .accessibilityIdentifier("settings-ssh-engine")
+                        }
                     } header: {
                         Text("Hosts")
                     } footer: {
@@ -183,6 +191,9 @@ struct SettingsView: View {
                             }
                             Text("Show git branches puts each space's branch beside its name in Spaces.")
                             Text("Turn off unsafe pastes to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
+                            if MobileSettings.offersSSHEngineChoice {
+                                Text(Self.sshEngineFooter)
+                            }
                         }
                     }
 
@@ -235,6 +246,17 @@ struct SettingsView: View {
 }
 
 extension SettingsView {
+    /// Under the Hosts section's SSH engine row (docs/ios.md, Settings), shown with the row.
+    static var sshEngineFooter: String {
+        var text = "SSH engine is what new connections run on: the Swift engine, or russh, the engine of earlier versions. Hosts already connected keep theirs until they reconnect."
+        #if DEBUG
+        if let forced = SSHTransportEngine.environmentChoice {
+            text += " DISPATCH_SSH_ENGINE runs this launch on \(forced.title)."
+        }
+        #endif
+        return text
+    }
+
     /// Under the Apple Watch row (docs/watch.md, Consent): uninstalling the watch app is the off switch.
     static func watchFooter(_ pairing: WatchPairing) -> String {
         switch pairing {
@@ -242,6 +264,14 @@ extension SettingsView {
         case .notInstalled: "Install Dispatch from the Watch app on this iPhone to see your agents and answer them from your wrist."
         case .installed: "Your watch shows your agents and spaces. Opening a conversation there connects its host from this iPhone, also in the background; remove Dispatch from the watch to stop that."
         }
+    }
+}
+
+extension SSHTransportEngine {
+    /// Settings' name for the engine: "Swift", or its raw value (`russh`, in a build that has it). The app names no
+    /// engine but the Swift one, so it builds against MobileTransport with or without russh.
+    var title: String {
+        self == .swift ? "Swift" : rawValue
     }
 }
 
@@ -268,10 +298,11 @@ extension MobileComposition {
     /// the review comments
     /// (`reviews.json`), the remembered agents and models (`chat-models.json`) and Spaces' per-host values (recent space, collapsed hosts, space order: `spaces.json`, and
     /// any left in UserDefaults by an older build); background refresh turns off and its notifications and the badge
-    /// go. Appearance, the theme, the fonts and font sizes, the notification switches and Spaces' menu stay. `keepingKeys`: the SSH keys, their Keychain items (private keys and
+    /// go; a saved SSH engine choice goes (the Swift engine again). Appearance, the theme, the fonts and font sizes, the notification switches and Spaces' menu stay. `keepingKeys`: the SSH keys, their Keychain items (private keys and
     /// passphrases) stay too; host passwords still go.
     func removeAllData(keepingKeys: Bool = false) {
         settings.backgroundRefresh = false
+        settings.resetSSHEngine()
         refresh?.schedule()
         refresh?.notifier.removeAll()
         for record in hosts.store.hosts { hosts.remove(record.id) }

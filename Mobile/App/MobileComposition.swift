@@ -408,6 +408,8 @@ final class MobileComposition {
     /// (`-DispatchTabsSample YES`). Live UI test runs (`DISPATCH_MOBILE_STORE=memory`) and the scripted demo keep the
     /// cache in memory.
     static func app(environment: [String: String] = ProcessInfo.processInfo.environment) -> MobileComposition {
+        // Settings › Hosts › SSH engine, before the first host connects.
+        MobileSettings.applyStoredSSHEngine()
         let hosts = HostSessions.app()
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "DispatchTabsSample") {

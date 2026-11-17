@@ -1,5 +1,4 @@
 import CryptoKit
-import DispatchMobileSSHCore
 import Foundation
 
 /// A user key ready to sign. Imported OpenSSH files are parsed and held by the engine (the private
@@ -20,7 +19,8 @@ public struct SSHKey: Sendable {
   public typealias Signer = @Sendable (Data) async throws -> Data
 
   public let kind: Kind
-  /// The OpenSSH public key line (`type base64`), what goes into `authorized_keys`.
+  /// The OpenSSH public key line (`type base64`, then the file's comment for an imported file that has one), what goes
+  /// into `authorized_keys`.
   public let publicKey: String
   /// `SHA256:` fingerprint, as `ssh-keygen -lf` prints it (M8a's key list).
   public let fingerprint: String
@@ -28,13 +28,14 @@ public struct SSHKey: Sendable {
   public let hardwareBacked: Bool
 
   enum Backing: Sendable {
-    case engine(KeyHandle)
+    case engine(any EngineKey)
     case signer(blob: Data, sign: Signer)
   }
   let backing: Backing
 
   /// An OpenSSH private key file (ED25519, ECDSA P-256/384/521, RSA), plain or passphrase-encrypted, or
-  /// a PEM/PKCS#8 file. Parsed and decrypted by the engine.
+  /// a PEM/PKCS#8 file. Parsed and decrypted by the engine `SSHTransportEngine.preferred` names, whose connections
+  /// alone can log in with it.
   public static func openSSH(_ file: Data, passphrase: String? = nil) throws -> SSHKey {
     guard let passphrase else { return try openSSH(file, terminated: nil) }
     var copy = Array(passphrase.utf8CString)
@@ -53,20 +54,10 @@ public struct SSHKey: Sendable {
   }
 
   private static func openSSH(_ file: Data, terminated passphrase: UnsafePointer<CChar>?) throws -> SSHKey {
-    var code: Int32 = 0
-    var message: UnsafeMutablePointer<CChar>?
-    let handle = file.withUnsafeBytes { bytes in
-      dms_key_parse(bytes.bindMemory(to: UInt8.self).baseAddress, file.count, passphrase, &code, &message)
-    }
-    guard let handle else {
-      defer { dms_string_free(message) }
-      throw Engine.error(code, message)
-    }
-    let key = KeyHandle(handle)
-    let algorithm = String(cString: dms_key_algorithm(handle))
+    let key = try SSHTransportEngine.preferred.backend.parseKey(file, passphrase: passphrase)
+    let algorithm = key.algorithm
     guard let kind = Kind(rawValue: algorithm) else { throw SSHTransportError.unsupportedAuthentication(algorithm) }
-    return SSHKey(kind: kind, publicKey: String(cString: dms_key_public_key(handle)),
-                  fingerprint: String(cString: dms_key_fingerprint(handle)), hardwareBacked: false, backing: .engine(key))
+    return SSHKey(kind: kind, publicKey: key.publicKey, fingerprint: key.fingerprint, hardwareBacked: false, backing: .engine(key))
   }
 
   public init(ed25519 key: Curve25519.Signing.PrivateKey) {
@@ -121,13 +112,6 @@ public struct SSHKey: Sendable {
     blob.appendSSHString(key.x963Representation)
     return blob
   }
-}
-
-/// The engine's parsed key; freed with the last SSHKey copy.
-final class KeyHandle: @unchecked Sendable {
-  let pointer: OpaquePointer
-  init(_ pointer: OpaquePointer) { self.pointer = pointer }
-  deinit { dms_key_free(pointer) }
 }
 
 enum SSHFingerprint {

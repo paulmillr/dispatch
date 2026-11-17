@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Build the iPhone SSH engine (Mobile/Transport/Core, russh behind a C ABI) offline into
+"""Build the iPhone's optional russh engine (Mobile/Transport/Core, russh behind a C ABI) offline into
 build/mobile-ssh/DispatchMobileSSHCore.xcframework: static libraries for iOS devices, the Apple Silicon
-simulator and macOS (the package's `swift test`), with the checked-in C header and module map. Xcode's pre-build
-script passes --platform: only the destination's slice is rebuilt, the others stay as last built.
+simulator and macOS (the package's `swift test`), with the checked-in C header and module map. Only a build with
+DISPATCH_RUSSH=1 links it (Mobile/Transport/Package.swift; docs/ios.md, Transport): Xcode's pre-build step runs this
+only then, passing --platform, so only the destination's slice is rebuilt and the others stay as last built. Run by
+hand it builds whatever the variable says.
 
 Crates come from Mobile/Transport/Core/Cargo.lock, fetched once into build/cargo with --fetch (network); russh is
 the published crate with Dispatch's patch, staged into build/mobile-ssh/russh by scripts/vendor-russh.py (downloaded with
@@ -65,7 +67,9 @@ def fetch():
 
 
 def build(profile, platform=None):
-    subprocess.run(["python3", str(ROOT / "scripts/setup-ssh-rust.py"), "--offline"], check=True)
+    # The toolchain with the iOS targets, which setup-ssh-rust.py requires only for this engine.
+    subprocess.run(["python3", str(ROOT / "scripts/setup-ssh-rust.py"), "--offline"], check=True,
+                   env=dict(os.environ, DISPATCH_RUSSH="1"))
     vendored().ensure(offline=True)
     env = environment()
     for target, name, variable, minimum in TARGETS:

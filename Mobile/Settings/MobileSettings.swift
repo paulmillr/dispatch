@@ -1,5 +1,6 @@
 import Dictation
 import Foundation
+import MobileTransport
 import Observation
 
 /// The app's own preferences (Settings), in `UserDefaults`. Per-host choices (Chat, the multiplexer) live in the host's
@@ -58,6 +59,9 @@ final class MobileSettings {
     /// Settings › Hosts › Show git branches (the Mac's): each space's branch beside its name in Spaces, off by default;
     /// the list and Settings read it (`@AppStorage`).
     nonisolated static let gitBranchesKey = "spaces.gitBranches"
+    /// Settings › Hosts › SSH engine (`SSHTransportEngine`'s raw value), the Swift engine by default. Only a build with
+    /// more than one engine (russh built in, `DISPATCH_RUSSH=1`) offers the choice; another ignores what is saved.
+    nonisolated static let sshEngineKey = "ssh.engine"
 
     @ObservationIgnored let defaults: UserDefaults
 
@@ -208,6 +212,51 @@ final class MobileSettings {
         }
     }
 
+    /// The SSH client engine new connections and key files use (`SSHTransportEngine.preferred`): one of the engines
+    /// MobileTransport has (`SSHTransportEngine.allCases`), the Swift engine unless chosen. A change applies at once to
+    /// what starts next; open connections keep the engine they started with.
+    var sshEngine: SSHTransportEngine {
+        didSet {
+            guard sshEngine != oldValue else { return }
+            defaults.set(sshEngine.rawValue, forKey: Self.sshEngineKey)
+            Self.applySSHEngine(sshEngine)
+        }
+    }
+
+    /// Whether there is anything to choose: more than one engine in this build (Settings shows the row only then).
+    nonisolated static var offersSSHEngineChoice: Bool { SSHTransportEngine.allCases.count > 1 }
+
+    /// The choice as saved: the Swift engine (`SSHTransportEngine.standard`) unless another engine of this build was
+    /// chosen. A saved engine this build lacks (russh, saved by a build that had it) counts as no choice.
+    nonisolated static func storedSSHEngine(_ defaults: UserDefaults = .standard) -> SSHTransportEngine {
+        defaults.string(forKey: sshEngineKey).flatMap(SSHTransportEngine.init(rawValue:)) ?? .standard
+    }
+
+    /// Remove all data's part: no saved choice, so the default engine.
+    func resetSSHEngine() {
+        sshEngine = .standard
+        defaults.removeObject(forKey: Self.sshEngineKey)
+    }
+
+    /// The engine a choice runs on: a Debug build's `DISPATCH_SSH_ENGINE` (`TEST_RUNNER_DISPATCH_SSH_ENGINE` under
+    /// xcodebuild) wins over the saved choice, so a test run picks its engine whatever the simulator saved.
+    nonisolated static func effectiveSSHEngine(_ choice: SSHTransportEngine,
+                                               environment: SSHTransportEngine? = SSHTransportEngine.environmentChoice)
+        -> SSHTransportEngine {
+        environment ?? choice
+    }
+
+    /// Makes `choice` (or the environment's) the engine of every connection and key file from now on: at launch, before
+    /// the first host connects, and when Settings changes it.
+    nonisolated static func applySSHEngine(_ choice: SSHTransportEngine) {
+        SSHTransportEngine.preferred = effectiveSSHEngine(choice)
+    }
+
+    /// The saved choice applied (`applySSHEngine`): the launch's first step, before any host connects or key loads.
+    nonisolated static func applyStoredSSHEngine(_ defaults: UserDefaults = .standard) {
+        applySSHEngine(storedSSHEngine(defaults))
+    }
+
     /// Color-code hosts (the Mac's `showHostColors`); off draws every host in neutral grey.
     var showHostColors: Bool {
         didSet {
@@ -270,6 +319,7 @@ final class MobileSettings {
         notificationText = defaults.object(forKey: Self.notificationTextKey) as? Bool ?? true
         colorVision = defaults.string(forKey: Self.colorVisionKey).flatMap(ColorVision.init(rawValue:)) ?? .typical
         showHostColors = defaults.object(forKey: Self.hostColorsKey) as? Bool ?? true
+        sshEngine = Self.storedSSHEngine(defaults)
         // What the shared models read (`didSet` does not run in an initializer).
         TabSegment.agentStart = chatAgentStart
     }

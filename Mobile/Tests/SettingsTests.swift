@@ -245,6 +245,11 @@ final class SettingsTests: XCTestCase {
         _ = outbox.add(ChatOutboxItem(id: UUID(), key: ChatConversationKey(host: studio.id, node: "n"), conversation: "c",
                                       text: "later", created: Date(), state: .waiting))
         app.settings.backgroundRefresh = true
+        let engine = SSHTransportEngine.preferred
+        defer { SSHTransportEngine.preferred = engine }
+        // A choice to forget: russh in a build that has it, else the value a build with russh saved.
+        if let russh = SSHTransportEngine(rawValue: "russh") { app.settings.sshEngine = russh }
+        else { defaults.set("russh", forKey: MobileSettings.sshEngineKey) }
         XCTAssertFalse(vault.accounts.isEmpty)
 
         app.removeAllData()
@@ -260,6 +265,9 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(drafts.buckets.isEmpty)
         XCTAssertTrue(app.tabs.workspaces.isEmpty)
         XCTAssertFalse(app.settings.backgroundRefresh)
+        XCTAssertNil(defaults.string(forKey: MobileSettings.sshEngineKey), "the saved SSH engine goes")
+        XCTAssertEqual(app.settings.sshEngine, .swift)
+        XCTAssertEqual(SSHTransportEngine.preferred, MobileSettings.effectiveSSHEngine(.swift))
         XCTAssertFalse(FileManager.default.fileExists(atPath: modelsFile.path), "chat-models.json")
         XCTAssertNil(memory.lastAgent)
         XCTAssertFalse(FileManager.default.fileExists(atPath: spacesFile.path), "spaces.json")
@@ -296,6 +304,69 @@ final class SettingsTests: XCTestCase {
                                         KeyStore.movingPrefix + KeyStore.privateAccount(key.id)],
                        "only the kept key's secrets: the host password and a secret of no key go")
         XCTAssertNotNil(try vault.secret(for: KeyStore.privateAccount(key.id), reason: ""))
+    }
+}
+
+/// Settings › Hosts › SSH engine (docs/ios.md, Settings): a row only in a build with russh (`DISPATCH_RUSSH=1`). The
+/// app learns which engines there are from MobileTransport (`SSHTransportEngine.allCases`), so these cases run in
+/// either build and check what that build offers.
+extension SettingsTests {
+    /// The Swift engine unless another was chosen; a choice is saved and is at once what new connections and key files
+    /// use (unless the run's `DISPATCH_SSH_ENGINE` names one). Without russh in the build there is nothing to choose
+    /// and a saved russh choice is ignored.
+    func testTheSSHEngineIsSwiftUntilChosenAndSaved() {
+        let engine = SSHTransportEngine.preferred
+        defer { SSHTransportEngine.preferred = engine }
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.sshEngine, .swift)
+        XCTAssertEqual(MobileSettings.storedSSHEngine(store), .swift)
+        XCTAssertEqual(SSHTransportEngine.swift.title, "Swift")
+        store.set("libssh", forKey: MobileSettings.sshEngineKey)
+        XCTAssertEqual(MobileSettings(defaults: store).sshEngine, .swift, "an engine this build does not know: the default")
+        store.removeObject(forKey: MobileSettings.sshEngineKey)
+        if let russh = SSHTransportEngine(rawValue: "russh") {
+            XCTAssertEqual(SSHTransportEngine.allCases, [.swift, russh])
+            XCTAssertTrue(MobileSettings.offersSSHEngineChoice)
+            settings.sshEngine = russh
+            XCTAssertEqual(store.string(forKey: MobileSettings.sshEngineKey), "russh")
+            XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? russh, "new connections take it")
+            XCTAssertEqual(MobileSettings(defaults: store).sshEngine, russh)
+            settings.sshEngine = .swift
+            XCTAssertEqual(store.string(forKey: MobileSettings.sshEngineKey), "swift")
+            XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? .swift)
+            XCTAssertEqual(russh.title, "russh")
+            XCTAssertTrue(SettingsView.sshEngineFooter.contains("the Swift engine, or russh"))
+        } else {
+            XCTAssertEqual(SSHTransportEngine.allCases, [.swift], "russh is built in only with DISPATCH_RUSSH=1")
+            XCTAssertFalse(MobileSettings.offersSSHEngineChoice, "no SSH engine row")
+            store.set("russh", forKey: MobileSettings.sshEngineKey)
+            XCTAssertEqual(MobileSettings(defaults: store).sshEngine, .swift, "a russh choice an earlier build saved")
+            MobileSettings.applyStoredSSHEngine(store)
+            XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? .swift)
+        }
+    }
+
+    /// A Debug run's `DISPATCH_SSH_ENGINE` wins over the saved choice, in every direction the build's engines allow;
+    /// without it the choice stands. The launch applies the saved choice.
+    func testTheEnvironmentsEngineWinsOverTheSavedOne() {
+        for choice in SSHTransportEngine.allCases {
+            XCTAssertEqual(MobileSettings.effectiveSSHEngine(choice, environment: nil), choice)
+            for environment in SSHTransportEngine.allCases {
+                XCTAssertEqual(MobileSettings.effectiveSSHEngine(choice, environment: environment), environment)
+            }
+        }
+        let engine = SSHTransportEngine.preferred
+        defer { SSHTransportEngine.preferred = engine }
+        let store = defaults()
+        for choice in SSHTransportEngine.allCases {
+            store.set(choice.rawValue, forKey: MobileSettings.sshEngineKey)
+            MobileSettings.applyStoredSSHEngine(store)
+            XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? choice)
+        }
+        store.removeObject(forKey: MobileSettings.sshEngineKey)
+        MobileSettings.applyStoredSSHEngine(store)
+        XCTAssertEqual(SSHTransportEngine.preferred, SSHTransportEngine.environmentChoice ?? .swift)
     }
 }
 

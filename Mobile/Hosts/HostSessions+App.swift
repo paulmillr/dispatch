@@ -18,12 +18,14 @@ extension HostSessions {
         // Live UI tests against a fixture sshd (docs/ios.md, Testing): nothing saved, no Face ID.
         if environment["DISPATCH_MOBILE_STORE"] == "memory" {
             let sessions = HostSessions(store: HostStore(url: nil), knownHosts: KnownHostStore(url: nil),
-                                        keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none))
+                                        keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none,
+                                                       parser: EngineCheckedKeyParser()))
             sessions.testHooks(environment)
             return sessions
         }
         #endif
-        let sessions = HostSessions(store: HostStore(), knownHosts: KnownHostStore(), keys: KeyStore(keyProtection: Self.keyProtection),
+        let sessions = HostSessions(store: HostStore(), knownHosts: KnownHostStore(),
+                                    keys: KeyStore(keyProtection: Self.keyProtection, parser: EngineCheckedKeyParser()),
                                     keyLogins: KeyLogins(url: MobileFiles.keyLogins))
         sessions.lingerLength = appLinger
         sessions.backgroundTime = { expired in WatchBridge.applicationBackgroundTask("Hosts linger", expired: expired) }

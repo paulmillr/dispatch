@@ -2296,7 +2296,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = BA261CCB385B61731BC3476E /* Build configuration list for PBXNativeTarget "DispatchMobile" */;
 			buildPhases = (
-				FD0DDF5AC3E7CE829F61346C /* Build SSH engine */,
+				A060E366A5F9056409BAB226 /* Build russh engine */,
 				36920E6167CF08FE3495CE6B /* Install SSH helpers */,
 				38B1AAF15214F738E04FE120 /* Sources */,
 				8934F08076EB04B64A0CB3DD /* Resources */,
@@ -2606,7 +2606,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\ndestination=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ThirdPartyLicenses\"\nmkdir -p \"$destination\"\nrsync -a --delete \"$SRCROOT/ThirdPartyLicenses/\" \"$SRCROOT/Mobile/ThirdPartyLicenses/\" \"$destination/\"\n";
+			shellScript = "set -euo pipefail\ndestination=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ThirdPartyLicenses\"\nmkdir -p \"$destination\"\nrussh=\nif [ \"${DISPATCH_RUSSH:-}\" = 1 ]; then russh=\"$SRCROOT/Mobile/Transport/Core/ThirdPartyLicenses/\"; fi\nrsync -a --delete \"$SRCROOT/ThirdPartyLicenses/\" \"$SRCROOT/Mobile/ThirdPartyLicenses/\" ${russh:+\"$russh\"} \"$destination/\"\n";
+		};
+		A060E366A5F9056409BAB226 /* Build russh engine */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build russh engine";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${DISPATCH_RUSSH:-}\" = 1 ]; then python3 \"$SRCROOT/scripts/build-mobile-ssh.py\" --platform \"$PLATFORM_NAME\"; fi\n";
 		};
 		D022E20D3C90F0F6F87736E0 /* Bundle terminal fonts */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -2766,25 +2785,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "bash \"$SRCROOT/scripts/build-ssh-helper.sh\" --build-only";
-		};
-		FD0DDF5AC3E7CE829F61346C /* Build SSH engine */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Build SSH engine";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "python3 \"$SRCROOT/scripts/build-mobile-ssh.py\" --platform \"$PLATFORM_NAME\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 

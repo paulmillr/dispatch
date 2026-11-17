@@ -30,6 +30,11 @@ public enum SSHTransportError: Error, Sendable, Equatable, LocalizedError {
   /// The TCP connection to `host`:`port` failed (`SSHConnectFailure`).
   case connectFailed(SSHConnectFailure, host: String, port: Int)
   case protocolError(String)
+  /// The server offers nothing this client accepts, so every connection to it fails the same way: no common algorithm
+  /// in a category, or (Swift engine) only modes open to Terrapin's prefix truncation without strict key exchange.
+  /// Final for the host, like a refusal: the text is one sentence that says what to do (`incompatibleServer(_:)`
+  /// builds it for both engines).
+  case incompatibleServer(String)
   case wrongPassphrase
   case timedOut(String)
   case channelClosed
@@ -50,6 +55,7 @@ public enum SSHTransportError: Error, Sendable, Equatable, LocalizedError {
     case .network(let reason): "Network error: \(reason)."
     case .connectFailed(let failure, let host, let port): Self.describe(failure, host: host, port: port)
     case .protocolError(let reason): "SSH error: \(reason)."
+    case .incompatibleServer(let sentence): sentence
     case .wrongPassphrase: "The passphrase is wrong."
     case .timedOut(let what): "Timed out: \(what)."
     case .channelClosed: "The SSH channel closed."
@@ -57,6 +63,19 @@ public enum SSHTransportError: Error, Sendable, Equatable, LocalizedError {
     case .outputLimit(let limit): "Remote output exceeded \(limit) bytes."
     case .bootstrap(let reason): reason
     }
+  }
+
+  /// A server without strict key exchange whose only modes Terrapin can truncate (`mode`: "chacha20-poly1305@openssh.com",
+  /// "aes256-ctr with hmac-sha2-256-etm@openssh.com").
+  static func tooOld(_ mode: String) -> SSHTransportError {
+    .incompatibleServer("The server's SSH is too old for a safe connection (it offers \(mode) without strict key "
+      + "exchange); update the SSH server.")
+  }
+
+  /// No algorithm of `category` ("key exchange", "host key", "cipher", "MAC", "compression") on both sides.
+  static func noCommonAlgorithm(_ category: String) -> SSHTransportError {
+    .incompatibleServer("The server offers no \(category) algorithm this app accepts; update the SSH server or enable "
+      + "a current \(category) algorithm on it.")
   }
 
   /// What failed, and what usually fixes it: Tailscale for its names and addresses, Local Network access for a host

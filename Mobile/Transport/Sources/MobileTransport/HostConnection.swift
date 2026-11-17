@@ -242,7 +242,7 @@ public enum HostConnectionPolicy: Sendable {
     guard let error = error as? SSHTransportError else { return false }
     switch error {
     case .hostKeyRejected, .hostKeyMismatch, .hostKeyChangedAtRekey, .authenticationFailed, .unsupportedAuthentication, .invalidKey,
-      .wrongPassphrase, .bootstrap, .cancelled:
+      .wrongPassphrase, .bootstrap, .cancelled, .incompatibleServer:
       return true
     case .timedOut, .channelClosed, .commandFailed, .outputLimit, .network, .connectFailed, .protocolError:
       return false

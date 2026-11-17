@@ -54,11 +54,11 @@ public struct KeyboardInteractiveChallenge: Sendable {
 }
 
 extension SSHCredential {
-  var method: UInt32 {
+  var method: EngineMethods {
     switch self {
-    case .key, .directKey: 2
-    case .password: 1
-    case .keyboardInteractive: 4
+    case .key, .directKey: .publicKey
+    case .password: .password
+    case .keyboardInteractive: .keyboardInteractive
     }
   }
 }

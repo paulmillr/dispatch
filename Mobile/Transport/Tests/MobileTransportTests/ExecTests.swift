@@ -1,7 +1,9 @@
 #if os(macOS)
 // The loopback sshd fixture spawns processes: macOS only (SimulatorTests covers the iPhone build).
 import Foundation
+#if DISPATCH_RUSSH
 import DispatchMobileSSHCore
+#endif
 @testable import MobileTransport
 import XCTest
 
@@ -94,9 +96,10 @@ final class ExecTests: XCTestCase {
     XCTAssertNil(exec.refusal)
   }
 
-  /// A refused exec request (the engine's `DMS_EXIT_REFUSED`) is the exec's end: `exitStatus()` throws what a refused
-  /// start threw before, `commandFailed(status: -1, …)` with the engine's message, and `refusal` says so. OpenSSH's sshd
-  /// cannot be made to refuse an exec, so the engine's report is fed in directly (the engine tests cover the server side).
+  /// A refused exec request (the seam's `EngineExit.refused`; russh's `DMS_EXIT_REFUSED`) is the exec's end:
+  /// `exitStatus()` throws what a refused start threw before, `commandFailed(status: -1, …)` with the engine's message,
+  /// and `refusal` says so. OpenSSH's sshd cannot be made to refuse an exec, so the engine's report is fed in directly
+  /// (the engine tests cover the server side): russh's code in a `DISPATCH_RUSSH` build, else the seam's value.
   func testARefusedExecEndsWithTheRefusal() async throws {
     var pair: [Int32] = [-1, -1]
     XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
@@ -104,7 +107,11 @@ final class ExecTests: XCTestCase {
     let state = ExecState()
     let exec = SSHExec(state: state, fd: pair[0])
     XCTAssertNil(exec.refusal)
+    #if DISPATCH_RUSSH
     state.exited(kind: DMS_EXIT_REFUSED, status: 0, signal: "the server refused the exec request")
+    #else
+    state.exited(.refused("the server refused the exec request"))
+    #endif
     XCTAssertEqual(exec.refusal, .commandFailed(status: -1, stderr: "the server refused the exec request"))
     do {
       _ = try await exec.exitStatus()

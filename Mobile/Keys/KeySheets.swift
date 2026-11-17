@@ -1,7 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Import key (M8a): an OpenSSH private key from Files or pasted, with a passphrase prompt for encrypted files.
+/// Import key (M8a): an OpenSSH private key from Files or pasted, with a passphrase prompt for encrypted files. The
+/// file is parsed off the main actor (`KeyStore.importKeyOffMain`: an encrypted file's derivation takes from tens of
+/// milliseconds to seconds), with Import shown as progress and the form disabled meanwhile. Cancel (or the sheet going
+/// away otherwise) abandons it: the parse runs to its end and nothing is stored.
 struct ImportKeySheet: View {
     let imported: (KeyRecord) -> Void
     @Environment(HostSessions.self) private var sessions
@@ -14,6 +17,8 @@ struct ImportKeySheet: View {
     @State private var askingPassphrase = false
     @State private var passphrase = ""
     @State private var failure: String?
+    /// The import in progress, if any.
+    @State private var importing: Task<Void, Never>?
 
     private var contents: Data? { file ?? (text.isEmpty ? nil : Data(text.utf8)) }
 
@@ -52,12 +57,22 @@ struct ImportKeySheet: View {
                     Section { Text(failure).foregroundStyle(.red) }
                 }
             }
+            .disabled(importing != nil)
             .navigationTitle("Import key")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        importing?.cancel()
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Import") { run(passphrase: nil) }.disabled(contents == nil)
+                    if importing != nil {
+                        ProgressView().accessibilityLabel("Importing")
+                    } else {
+                        Button("Import") { run(passphrase: nil) }.disabled(contents == nil)
+                    }
                 }
             }
             .fileImporter(isPresented: $choosing, allowedContentTypes: [.data, .text, .item]) { result in
@@ -85,19 +100,28 @@ struct ImportKeySheet: View {
                 Text("This key is protected by a passphrase. It is kept in the Keychain with the key.")
             }
         }
+        .interactiveDismissDisabled(importing != nil)
+        .onDisappear { importing?.cancel() }
     }
 
     private func run(passphrase: String?) {
-        guard let contents else { return }
-        do {
-            let key = try sessions.keys.importKey(contents, label: label, passphrase: passphrase)
-            self.passphrase = ""
-            imported(key)
-            dismiss()
-        } catch OpenSSHKeyError.passphraseRequired {
-            askingPassphrase = true
-        } catch {
-            failure = error.localizedDescription
+        guard let contents, importing == nil else { return }
+        failure = nil
+        let keys = sessions.keys, label = label
+        importing = Task {
+            defer { importing = nil }
+            do {
+                let key = try await keys.importKeyOffMain(contents, label: label, passphrase: passphrase)
+                self.passphrase = ""
+                imported(key)
+                dismiss()
+            } catch is CancellationError {
+                // Abandoned (Cancel, or the sheet went away): nothing was stored, nothing to show.
+            } catch OpenSSHKeyError.passphraseRequired {
+                askingPassphrase = true
+            } catch {
+                failure = error.localizedDescription
+            }
         }
     }
 }

@@ -143,7 +143,8 @@ def main():
     if (args.tests or suite == 'fast') and not xctest:
         return finish(ran, selectors, allowed, cases, suite, 0, None, '', name=name)
 
-    # XcodeGen, the Rust toolchain's iOS targets and the SSH engine's XCFramework, which SwiftPM resolves for every
+    # XcodeGen; with DISPATCH_RUSSH=1 (the optional russh engine, which xcodebuild and the package read from this
+    # environment) also the Rust toolchain's iOS targets and russh's XCFramework, which SwiftPM resolves for every
     # scheme of DispatchMobile.xcodeproj (the watch's too) before any build script. Asks once before any download.
     subprocess.run(['bash', 'scripts/setup.sh', '--mobile'], cwd=ROOT, check=True)
     subprocess.run(['python3', 'scripts/generate-project.py'], cwd=ROOT, check=True)

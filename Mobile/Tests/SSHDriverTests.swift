@@ -34,6 +34,149 @@ final class SSHDriverTests: XCTestCase {
         }
     }
 
+    /// Which SSH engine this run's connections use, and proof that it is the one parsing: a key file only the Swift
+    /// engine reads (ECDSA in PKCS#8 with explicit curve parameters, as `ssh-keygen -m PKCS8` writes it; a throwaway key)
+    /// parses on it and not on russh. `TEST_RUNNER_DISPATCH_SSH_ENGINE=swift|russh` picks it (docs/ios.md, Testing;
+    /// russh only in a `DISPATCH_RUSSH=1` build); without it the launch's saved choice, the Swift engine by default.
+    func testTheSSHEngineThisRunUses() throws {
+        let engine = SSHTransportEngine.preferred
+        let backend = try engine.backend
+        print("SSH engine: \(engine.rawValue) (\(backend.version)); engines built in: "
+              + SSHTransportEngine.allCases.map(\.rawValue).joined(separator: ", ") + "; DISPATCH_SSH_ENGINE: "
+              + (ProcessInfo.processInfo.environment["DISPATCH_SSH_ENGINE"] ?? "unset"))
+        XCTAssertEqual(engine, MobileSettings.effectiveSSHEngine(MobileSettings.storedSSHEngine()), "the launch applied the choice")
+        XCTAssertEqual(SSHTransportEngine.environmentChoice?.rawValue, ProcessInfo.processInfo.environment["DISPATCH_SSH_ENGINE"])
+        let parsed = Result { try SSHKey.openSSH(Data(Self.pkcs8ECDSA.utf8)) }
+        // The app names no engine but the Swift one (it builds with or without russh): any other is russh.
+        if engine == .swift {
+            XCTAssertTrue(backend is SwiftEngine)
+            XCTAssertEqual(try parsed.get().fingerprint, "SHA256:e/qySZHmkbzEALmaghv5sohLk/mpMu143FKsaIf2nrQ")
+        } else {
+            XCTAssertEqual(engine.rawValue, "russh")
+            XCTAssertTrue(backend.version.contains("russh"), backend.version)
+            XCTAssertThrowsError(try parsed.get(), "russh reads no PKCS#8 file with explicit curve parameters")
+        }
+    }
+
+    /// russh, in a build that has it (`DISPATCH_RUSSH=1`); else the case skips, saying so.
+    static func russh() throws -> SSHTransportEngine {
+        guard let russh = SSHTransportEngine(rawValue: "russh") else {
+            throw XCTSkip("needs a second SSH engine: russh is built in only with DISPATCH_RUSSH=1 (docs/ios.md, Transport)")
+        }
+        return russh
+    }
+
+    /// A throwaway key, never used anywhere (`ssh-keygen -t ecdsa -b 256 -m PKCS8`).
+    static let pkcs8ECDSA = """
+    -----BEGIN PRIVATE KEY-----
+    MIIBeQIBADCCAQMGByqGSM49AgEwgfcCAQEwLAYHKoZIzj0BAQIhAP////8AAAAB
+    AAAAAAAAAAAAAAAA////////////////MFsEIP////8AAAABAAAAAAAAAAAAAAAA
+    ///////////////8BCBaxjXYqjqT57PrvVV2mIa8ZR0GsMxTsPY7zjw+J9JgSwMV
+    AMSdNgiG5wSTamZ44ROdJreBn36QBEEEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg
+    9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9QIhAP////8A
+    AAAA//////////+85vqtpxeehPO5ysL8YyVRAgEBBG0wawIBAQQgiGjqjaJcKVJ1
+    TV4cK7zts0GR8lOxVb5xAptiAeV3dZ6hRANCAAR3amRQUNhzv5Ailz5LYkWRjcL2
+    iuhvyIX2IbMRMuDLHs6WrcRn6r2E+8cMyIbkXV9+VJzLvN8yFkK+z3PFOwi8
+    -----END PRIVATE KEY-----
+    """
+
+    /// A throwaway 1024-bit RSA key (`ssh-keygen -t rsa -b 1024`): russh takes it, the Swift engine does not.
+    static let rsa1024File = """
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAlwAAAAdzc2gtcn
+    NhAAAAAwEAAQAAAIEAtGcZMRcyYcWvKFpA08fCF3QvPuGRyn5NwbeK8/CfLVhK/BVhXpK4
+    XcS+VyS9md8WkRXcbDSwvCknu8y7ebbipRYRLwG/XGf4zkKReZPEdMIuCQiY2AvTtTx4LO
+    /V6ZOSS2Q/DtDvugEK66NRMpPK1HGR3ZNFFTyMutVM6L6DLHEAAAIQB8uikQfLopEAAAAH
+    c3NoLXJzYQAAAIEAtGcZMRcyYcWvKFpA08fCF3QvPuGRyn5NwbeK8/CfLVhK/BVhXpK4Xc
+    S+VyS9md8WkRXcbDSwvCknu8y7ebbipRYRLwG/XGf4zkKReZPEdMIuCQiY2AvTtTx4LO/V
+    6ZOSS2Q/DtDvugEK66NRMpPK1HGR3ZNFFTyMutVM6L6DLHEAAAADAQABAAAAgGQSNLU4iu
+    gVgp49wmw4CQB9oJ+e/QJ4oaVtrRS4S3QZ4C6JpaOSe9b4BiXM6afrSldc6xLS/57ArZvN
+    a8mOm5XNgdwBbp23loChR4+FyuMge3zKGpBF03KJLeXdJBrbdgZ98AEG5OgJr2er2+Ar/n
+    MbeWGOSs2dH9KbBaZ5VdXpAAAAQQCmjPZWZuONcnoxWHIW9TuLnexrE621M0MKmMWlhxRo
+    akTsa3921b3WRwv5wVzlYviL/KFxVxlo0+yrHsyCdJ3XAAAAQQDZfO5DDn/dXXrMtt5IyH
+    zfGcKW061FRK1Pogu1O89t3UzfKDgl3EVvf7Omkx1yi71rECk8YE4IVH0UXlUAYen7AAAA
+    QQDUWQjEXLs0LF9yePVc6PLkSTwxwAYc6HXJtWRRBgL/J1OHkIBJUj+GaFLg2IgVC6mYaS
+    Kab8ygcWxO+omqd4ODAAAAE3NhbUByc2ExMDI0LmV4YW1wbGUBAgMEBQYH
+    -----END OPENSSH PRIVATE KEY-----
+    """
+
+    /// An imported file is parsed by the engine in use, whose connections alone log in with it: the driver's cached key
+    /// is read again once Settings picked the other engine. A key that signs in Swift is kept whatever the engine.
+    /// Needs two engines (`russh()`).
+    func testAKeyFileIsReadAgainOnTheOtherEngine() async throws {
+        let russh = try Self.russh()
+        let engine = SSHTransportEngine.preferred
+        defer { SSHTransportEngine.preferred = engine }
+        let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false)
+        let file = try keys.importKey(Data(KeyStoreTests.ecdsaFile.utf8), label: "laptop")
+        let phone = try keys.generateED25519(label: "phone")
+        let hosts = [HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .key(file.id)),
+                     HostRecord(name: "mba2", address: "mba2.local", user: "alex", auth: .key(phone.id))]
+        let driver = ContextRecorder()
+        let sessions = HostSessions(store: HostStore(url: nil, hosts: hosts), keys: keys, knownHosts: KnownHostStore(url: nil),
+                                    driver: driver)
+        func parsedBy(_ key: SSHKey) -> String {
+            switch key.backing {
+            // The app names no russh type (it builds without russh): the parsed key's type by name.
+            case .engine(let parsed): parsed is SwiftEngineKey ? "swift" : "\(type(of: parsed))" == "RusshKey" ? "russh" : "?"
+            case .signer: "swift code"
+            }
+        }
+        sessions.ordered[0].connect()
+        let fileContext = try XCTUnwrap(driver.context)
+        sessions.ordered[1].connect()
+        let phoneContext = try XCTUnwrap(driver.context)
+        let fileCache = KeyCache(), phoneCache = KeyCache()
+        SSHTransportEngine.preferred = russh
+        let first = try await fileCache.key(fileContext)
+        XCTAssertEqual(parsedBy(first), "russh")
+        let signer = try await phoneCache.key(phoneContext)
+        XCTAssertEqual(parsedBy(signer), "swift code")
+        SSHTransportEngine.preferred = .swift
+        let again = try await fileCache.key(fileContext)
+        XCTAssertEqual(parsedBy(again), "swift", "read again for the Swift engine's connections")
+        XCTAssertEqual(again.fingerprint, file.fingerprint)
+        let kept = try await fileCache.key(fileContext)
+        XCTAssertEqual(parsedBy(kept), "swift", "then kept")
+        let sameSigner = try await phoneCache.key(phoneContext)
+        XCTAssertEqual(sameSigner.publicKey, signer.publicKey)
+        SSHTransportEngine.preferred = russh
+        let back = try await fileCache.key(fileContext)
+        XCTAssertEqual(parsedBy(back), "russh")
+    }
+
+    /// The app's Import key checks a file it keeps for the engine with the engine in use: on the Swift engine a key it
+    /// refuses is refused at import, saying what to do; on russh (a `DISPATCH_RUSSH=1` build) it imports as before. A
+    /// wrong passphrase shows at import on every engine, and an Ed25519 file kept as its seed needs no engine.
+    func testImportChecksTheFileWithTheEngineInUse() throws {
+        let engine = SSHTransportEngine.preferred
+        defer { SSHTransportEngine.preferred = engine }
+        func store() -> KeyStore {
+            KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, parser: EngineCheckedKeyParser(), secureEnclaveAvailable: false)
+        }
+        SSHTransportEngine.preferred = .swift
+        XCTAssertThrowsError(try store().importKey(Data(Self.rsa1024File.utf8), label: nil)) {
+            XCTAssertEqual(($0 as? LocalizedError)?.errorDescription,
+                           "Invalid private key: RSA keys must have 2048 to 16384 bits; make a new key, such as with “ssh-keygen -t ed25519”, and add it to the host.")
+        }
+        for chosen in SSHTransportEngine.allCases {
+            SSHTransportEngine.preferred = chosen
+            let keys = store()
+            XCTAssertThrowsError(try keys.importKey(Data(KeyStoreTests.encryptedFile.utf8), label: "work", passphrase: "wrong"), "\(chosen)") {
+                XCTAssertEqual($0 as? OpenSSHKeyError, .wrongPassphrase)
+            }
+            XCTAssertTrue(keys.keys.isEmpty)
+            XCTAssertEqual(try keys.importKey(Data(KeyStoreTests.encryptedFile.utf8), label: "work", passphrase: "secret").fingerprint,
+                           KeyStoreTests.encryptedFingerprint)
+            XCTAssertEqual(try keys.importKey(Data(KeyStoreTests.ecdsaFile.utf8), label: nil).fingerprint, KeyStoreTests.ecdsaFingerprint)
+            XCTAssertEqual(try keys.importKey(Data(KeyStoreTests.ed25519File.utf8), label: nil).kind, .ed25519)
+        }
+        if let russh = SSHTransportEngine(rawValue: "russh") {
+            SSHTransportEngine.preferred = russh
+            XCTAssertEqual(try store().importKey(Data(Self.rsa1024File.utf8), label: nil).typeLabel, "RSA 1024")
+        }
+    }
+
     func testTransportStatesMapOneToOne() {
         let since = Date(timeIntervalSince1970: 1_800_000_000)
         let pairs: [(MobileTransport.HostConnectionState, HostLink)] = [
@@ -588,6 +731,24 @@ extension SSHDriverTests {
         }
         XCTAssertNil(plain(events))
         XCTAssertFalse(events.values.contains { if case .link(.failed) = $0 { true } else { false } })
+    }
+
+    /// A server that offers nothing the engine accepts (too old for a safe connection, or no algorithm in common) fails
+    /// every connection the same way: a final failure showing its sentence, never retried. Other protocol errors retry.
+    func testAnIncompatibleServerIsFinal() async throws {
+        XCTAssertFalse(HostConnectionPolicy.refused(SSHTransportError.protocolError("packet: integrity")))
+        let refusal = SSHTransportError.incompatibleServer(
+            "The server's SSH is too old for a safe connection (it offers chacha20-poly1305@openssh.com without strict "
+                + "key exchange); update the SSH server.")
+        XCTAssertTrue(HostConnectionPolicy.refused(refusal))
+        let (events, _, task) = run(host(), login: { _, _, _, _, _, _ in throw refusal })
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") {
+            events.values.contains { if case .link(.failed) = $0 { true } else { false } }
+        }
+        XCTAssertTrue(events.values.contains(.link(.failed(try XCTUnwrap(refusal.errorDescription)))), "\(events.values)")
+        XCTAssertFalse(events.values.contains { if case .link(.reconnecting) = $0 { true } else { false } })
+        XCTAssertNil(plain(events))
     }
 
     /// The failure → reason mapping: the bootstrap's text, a refused channel, the exited helper's text; nothing for a

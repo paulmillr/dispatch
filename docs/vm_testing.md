@@ -120,6 +120,19 @@ Lima forwards SSH on a port that changes at every start: read `sshLocalPort` fro
 
 `--agent claude|pi` with `--claude`/`--pi PATH` pairs another agent. Pairing installs only the client's test key, pins the host key, and relays through a temporary encrypted tunnel restricted to the client VM. Once paired, Linux classes join the full suite. Under QEMU emulation, three native-identity cases are excluded, so emulated runs do not establish native x86-64 coverage.
 
+### Swift SSH interop servers
+
+The Swift SSH engine's interop tests (`Mobile/Transport/Tests/SSHEngineTests/Interop/`) run against unmodified servers in a Lima VM of their own (default `dispatch-swift-ssh-interop`): Ubuntu's sshd and Dropbear, and from the publishers' tarballs (SHA-256 pinned in the script, checked before building) OpenSSH 9.5p1 and 8.9p1 (statically linked to OpenSSL 3.0, since their configure refuses Ubuntu's 3.5), OpenSSH 7.9p1 `--without-openssl` (Ed25519, curve25519, ChaCha20-Poly1305 and AES-CTR only) and Dropbear 2022.83. The old releases predate strict key exchange; the source builds use `--with-sandbox=no`. Each server runs as its own process (pid file) on a loopback port with its own host keys, which Lima forwards to the same port on the host's 127.0.0.1 only. Fictional accounts `interop`, `interop-mfa` (OpenSSH: a key, then a password or keyboard-interactive) and `interop-latin1` (a Latin-1 banner) share a generated password; it, the generated user keys and the ports are in the ignored `build/ssh-interop/`.
+
+```sh
+python3 scripts/ssh-vm.py dispatch-swift-ssh-interop --cpus 2 --memory-gib 2
+python3 scripts/ssh-interop-vm.py provision   # packages, builds, accounts, keys (idempotent)
+python3 scripts/ssh-interop-vm.py start       # (re)start the servers, write build/ssh-interop/profile.json
+cd Mobile/Transport && SSHENGINE_INTEROP_REQUIRED=1 swift test --scratch-path ../../build/spm --filter 'Interop(Engine|Session)Tests'
+```
+
+`InteropSessionTests` runs each case on every engine the build has: the Swift engine, and russh too in a build with `DISPATCH_RUSSH=1` (`SSHENGINE_INTEROP_ENGINES=russh` or `swift` for one; naming one the build lacks fails) and prints an `INTEROP SUMMARY` table; `InteropEngineTests` walks every algorithm each server offers on the Swift engine. Without a profile, or with no server answering, they skip (fail with `SSHENGINE_INTEROP_REQUIRED=1`). After a VM restart run `start` again: the ports are chosen per start. `stop` and `status` take only the servers the script started; it never stops or reconfigures the guest's sshd on port 22. `start` does add one drop-in to that service's unit (`RuntimeDirectoryPreserve=yes`) and makes `/run/sshd`: Ubuntu's sshd binary, which `openssh-system` also runs, separates privileges there, and systemd otherwise removes the directory whenever the guest's service stops (a package upgrade does it), after which `openssh-system` ends every connection before the login. `status` says when the directory is missing.
+
 ## Existing local test resources
 
 Ignored, host-local `build/test-environment.json` can rename VMs and move archives: `macos_vm`, `macos_shard_vm`, `manual_ssh_vm`, `linux_test_vm`, `linux_image`, `linux_herdr` (absolute paths; `~` isn't expanded). `--vm`/`DISPATCH_VM` take precedence. It never changes the fixed macOS herdr/Codex paths.

@@ -45,7 +45,9 @@ struct SSHHostSessionDriver: HostSessionDriver {
     var firstTopology: Duration = .seconds(2)
     /// Between `backends.open` attempts while no multiplexer server runs (New space starts one).
     var reopenDelay: Duration = .seconds(2)
-    /// Silence before a connection counts as lost: `keepalive × keepaliveMax`.
+    /// A keepalive after each `keepalive` of silence from the server; the one falling due while `keepaliveMax` are
+    /// unanswered ends the connection, so a silent link counts as lost after (`keepaliveMax` + 1) × `keepalive`
+    /// (60 s at 15 s × 3) on either engine.
     var keepalive: Duration = .seconds(15)
     var keepaliveMax = 3
     /// How long a connected link may take to answer `echo` after a network change before it counts as lost.
@@ -80,7 +82,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         let states = await connection.states()
         let probeTimeout = probeTimeout
         // retryNow (network change, foregrounding) races the policy's wait; while connected it checks the link, which a
-        // change of network can leave dead until the keepalive gives up (45 s).
+        // change of network can leave dead until the keepalive gives up (60 s after the server's last packet).
         let retrying = Task {
             for await _ in context.retries {
                 var session: DriverLink?
@@ -573,19 +575,23 @@ extension HostKeyOffer {
 }
 
 /// The host's key, read from the Keychain once per run (Face ID asks once per foreground session, not per reconnect).
-/// A key deleted since is dropped, never used for another login.
+/// A key deleted since is dropped, never used for another login. An imported file is parsed by the SSH engine, whose
+/// connections alone can use it: once Settings picked the other engine, the next connection reads the file again.
 actor KeyCache {
     private var cached: SSHKey?
+    /// The engine that parsed `cached`; nil for a key that signs in Swift (either engine takes it).
+    private var parsedBy: SSHTransportEngine?
     static var missing: String { "This host's key is no longer on this \(MobileDevice.name). Choose another in Edit." }
 
     func key(_ context: HostSessionContext) async throws -> SSHKey {
-        if let cached {
+        if let cached, parsedBy == nil || parsedBy == SSHTransportEngine.preferred {
             guard await context.keyAvailable() else {
                 self.cached = nil
                 throw HostRefusal(Self.missing)
             }
             return cached
         }
+        cached = nil
         var material: KeyMaterial?
         do { material = try await context.key() } catch { throw HostRefusal(error.localizedDescription) }
         guard let read = material else { throw HostRefusal(Self.missing) }
@@ -598,14 +604,42 @@ actor KeyCache {
             material = nil
         }
         let key: SSHKey
+        var engine: SSHTransportEngine?
         switch read {
         case .ed25519(let value): key = SSHKey(ed25519: value)
         case .secureEnclaveP256(let value): key = SSHKey(secureEnclave: value)
         case .openSSH(let file, let passphrase):
+            engine = SSHTransportEngine.preferred
             do { key = try SSHKey.openSSH(file.data, passphrase: passphrase?.data) } catch { throw HostRefusal(error.localizedDescription) }
         }
         cached = key
+        parsedBy = engine
         return key
+    }
+}
+
+/// Import key's parser in the app (`KeyStore.parser`): the built-in reader, then, for a file the store keeps for the
+/// engine (every key but an unencrypted Ed25519 one, whose seed it keeps), the SSH engine in use, so a file that engine
+/// refuses (a key type, an RSA key under 2048 bits, too many bcrypt rounds) or a wrong passphrase shows at import, with
+/// the engine's text, rather than at the first connection.
+struct EngineCheckedKeyParser: OpenSSHPrivateKeyParsing {
+    var builtIn = BuiltInOpenSSHKeyParser()
+
+    func parse(_ file: Data, passphrase: String?) throws -> ParsedOpenSSHKey {
+        let parsed = try builtIn.parse(file, passphrase: passphrase)
+        guard parsed.ed25519Seed == nil else { return parsed }
+        let key: SSHKey
+        do {
+            key = try SSHKey.openSSH(file, passphrase: passphrase)
+        } catch SSHTransportError.wrongPassphrase {
+            throw OpenSSHKeyError.wrongPassphrase
+        } catch {
+            throw OpenSSHKeyError.unsupported(error.localizedDescription)
+        }
+        // The engine read the same key the file names.
+        guard SSHKeyEncoding.fingerprint(parsed.publicKeyBlob) == key.fingerprint else { throw OpenSSHKeyError.malformed }
+        return ParsedOpenSSHKey(algorithm: parsed.algorithm, publicKeyBlob: parsed.publicKeyBlob, comment: parsed.comment,
+                                encrypted: parsed.encrypted, ed25519Seed: nil, passphraseVerified: true)
     }
 }
 

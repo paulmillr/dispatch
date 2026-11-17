@@ -125,9 +125,18 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertThrowsError(try parser.parse(Data(Self.ed25519Public.utf8), passphrase: nil)) {
             XCTAssertEqual($0 as? OpenSSHKeyError, .notOpenSSH)
         }
-        XCTAssertThrowsError(try parser.parse(Data("-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----".utf8),
-                                              passphrase: nil)) {
-            guard case .unsupported = $0 as? OpenSSHKeyError else { return XCTFail("\($0)") }
+        // What is refused and what to do, in one sentence.
+        for pem in ["-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----",
+                    "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----"] {
+            XCTAssertThrowsError(try parser.parse(Data(pem.utf8), passphrase: nil)) {
+                XCTAssertEqual(($0 as? OpenSSHKeyError)?.errorDescription,
+                               "Only OpenSSH key files can be imported: run “ssh-keygen -p -f <file>” on this one, which saves it in OpenSSH format, and import it again.")
+            }
+        }
+        let ppk = "\u{FEFF}PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: sam@ppk.example\n"
+        XCTAssertThrowsError(try parser.parse(Data(ppk.utf8), passphrase: nil)) {
+            XCTAssertEqual(($0 as? OpenSSHKeyError)?.errorDescription,
+                           "PuTTY key files (.ppk) can’t be imported: in PuTTYgen, choose Conversions › Export OpenSSH key and import that file.")
         }
         var damaged = Self.ed25519File
         damaged.replace("AAAAD3ZlY3Rvck", with: "AAAAD3ZlY3RvcL")
@@ -197,6 +206,24 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertEqual(ecdsa.label, "id_ecdsa")
         XCTAssertEqual(ecdsa.typeLabel, "ECDSA P-256")
         XCTAssertEqual(keys.keys.map(\.id), [ed25519.id, encrypted.id, ecdsa.id])
+    }
+
+    /// Importing a key already here keeps its record (its hosts keep it); a key imported as a file takes the new file and
+    /// passphrase, so a file rewritten as an error asked (`ssh-keygen -p`) works once imported again.
+    func testImportingAKeyAgainReplacesItsFile() async throws {
+        let vault = MemoryVault()
+        let keys = store(vault)
+        let encrypted = try keys.importKey(Data(Self.encryptedFile.utf8), label: "work", passphrase: "secret")
+        let rewritten = "  " + Self.encryptedFile + "\n"  // as a rewrite with other rounds would be: another file, the same key
+        XCTAssertEqual(try keys.importKey(Data(rewritten.utf8), label: "other", passphrase: "new secret"), encrypted)
+        XCTAssertEqual(keys.keys.map(\.label), ["work"])
+        guard case .openSSH(let file, let passphrase)? = try await keys.material(for: encrypted.id) else { return XCTFail() }
+        XCTAssertEqual(file.data, Data(rewritten.utf8))
+        XCTAssertEqual(passphrase?.data, Data("new secret".utf8))
+        let plain = try keys.importKey(Data(Self.ecdsaFile.utf8), label: "laptop")
+        try vault.set(Data("old".utf8), for: KeyStore.passphraseAccount(plain.id), protection: .none)
+        XCTAssertEqual(try keys.importKey(Data(Self.ecdsaFile.utf8), label: nil), plain)
+        XCTAssertNil(try vault.secret(for: KeyStore.passphraseAccount(plain.id), reason: ""), "a plain file has no passphrase")
     }
 
     /// A secret read from the Keychain lives in one buffer of the app's own: a `Data` passed on shares it (no copy of
@@ -487,5 +514,116 @@ extension KeyStoreTests {
         try vault.set(Data("seed".utf8), for: KeyStore.movingPrefix + orphan, protection: .none)
         _ = try await keys.material(for: kept.id)
         XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(kept.id)], "the orphan copy dropped, nothing restored")
+    }
+}
+
+/// Import key off the main actor (`importKeyOffMain`): an encrypted file's passphrase derivation runs on another
+/// thread, a dismissed sheet's import stores nothing, and errors and the stored result are the synchronous path's.
+extension KeyStoreTests {
+    /// A parser that holds its parse until the test releases it, recording where it ran: a slow derivation without a
+    /// real 1024-round file.
+    final class GatedParser: OpenSSHPrivateKeyParsing, @unchecked Sendable {
+        let result: Result<ParsedOpenSSHKey, OpenSSHKeyError>
+        private let release = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var startedOnMain: Bool?
+
+        init(_ result: Result<ParsedOpenSSHKey, OpenSSHKeyError>) { self.result = result }
+
+        /// nil until the parse started; then whether it ran on the main thread.
+        var started: Bool? { lock.withLock { startedOnMain } }
+
+        func open() { release.signal() }
+
+        func parse(_ file: Data, passphrase: String?) throws -> ParsedOpenSSHKey {
+            lock.withLock { startedOnMain = Thread.isMainThread }
+            release.wait()
+            return try result.get()
+        }
+    }
+
+    /// What `BuiltInOpenSSHKeyParser` and the engine report for an encrypted P-256 file.
+    static var encryptedP256: ParsedOpenSSHKey {
+        let blob = Data(base64Encoded: String(p256Public.split(separator: " ")[1]))!
+        return ParsedOpenSSHKey(algorithm: "ecdsa-sha2-nistp256", publicKeyBlob: blob, comment: "", encrypted: true,
+                                ed25519Seed: nil, passphraseVerified: true)
+    }
+
+    /// While the parse is held the main actor goes on (this test runs on it), the parse runs elsewhere, and nothing is
+    /// stored until it ends; then the record and its Keychain items are what the synchronous import stores.
+    func testImportDoesNotBlockTheMainActor() async throws {
+        let vault = MemoryVault()
+        let parser = GatedParser(.success(Self.encryptedP256))
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .none, parser: parser, secureEnclaveAvailable: false)
+        let file = Data("fictional encrypted key file".utf8)
+        let importing = Task { try await keys.importKeyOffMain(file, label: "work", passphrase: "fictional passphrase") }
+        try await TestSupport.eventually(diagnostic: "the parse never started") { parser.started != nil }
+        XCTAssertEqual(parser.started, false, "the parse ran on the main thread")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertTrue(keys.keys.isEmpty, "stored before the parse ended")
+        parser.open()
+        let record = try await importing.value
+        XCTAssertEqual(record.kind, .imported("ecdsa-sha2-nistp256"))
+        XCTAssertEqual(record.fingerprint, Self.p256Fingerprint)
+        XCTAssertEqual(keys.keys, [record])
+        XCTAssertEqual(try vault.secret(for: KeyStore.privateAccount(record.id), reason: ""), file)
+        XCTAssertEqual(try vault.secret(for: KeyStore.passphraseAccount(record.id), reason: ""), Data("fictional passphrase".utf8))
+    }
+
+    /// The sheet dismissed while the parse runs: the import is cancelled, the parse ends on its own, and nothing is
+    /// stored (no record, no Keychain item); the error is `CancellationError`, which the sheet shows nothing for.
+    func testAnImportAbandonedWhileParsingStoresNothing() async throws {
+        let vault = MemoryVault()
+        let parser = GatedParser(.success(Self.encryptedP256))
+        let keys = KeyStore(url: nil, vault: vault, keyProtection: .none, parser: parser, secureEnclaveAvailable: false)
+        let importing = Task { try await keys.importKeyOffMain(Data("fictional".utf8), label: nil, passphrase: "fictional") }
+        try await TestSupport.eventually(diagnostic: "the parse never started") { parser.started != nil }
+        importing.cancel()
+        parser.open()
+        do {
+            _ = try await importing.value
+            XCTFail("an abandoned import stored its key")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertTrue(keys.keys.isEmpty)
+        XCTAssertEqual(vault.accounts, [])
+    }
+
+    /// Errors come back as they were, with their text (the sheet shows `localizedDescription`), and a real file goes
+    /// through the same store step: the records and the re-import replacing the file match `importKey`'s.
+    func testImportOffMainKeepsErrorsAndTheStoredResult() async throws {
+        for expected in [OpenSSHKeyError.wrongPassphrase, .unsupported("RSA keys under 2048 bits aren't supported.")] {
+            let parser = GatedParser(.failure(expected))
+            parser.open()
+            let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, parser: parser, secureEnclaveAvailable: false)
+            do {
+                _ = try await keys.importKeyOffMain(Data("fictional".utf8), label: nil, passphrase: "fictional")
+                XCTFail("imported")
+            } catch {
+                XCTAssertEqual(error as? OpenSSHKeyError, expected)
+                XCTAssertEqual(error.localizedDescription, expected.errorDescription)
+            }
+        }
+        let vault = MemoryVault()
+        let keys = store(vault)
+        do {
+            _ = try await keys.importKeyOffMain(Data(Self.encryptedFile.utf8), label: "work")
+            XCTFail("imported without a passphrase")
+        } catch {
+            XCTAssertEqual(error as? OpenSSHKeyError, .passphraseRequired)
+        }
+        let encrypted = try await keys.importKeyOffMain(Data(Self.encryptedFile.utf8), label: "work", passphrase: "secret")
+        XCTAssertEqual(encrypted.kind, .imported("ssh-ed25519"))
+        XCTAssertEqual(encrypted.fingerprint, Self.encryptedFingerprint)
+        let rewritten = "  " + Self.encryptedFile + "\n"
+        let again = try await keys.importKeyOffMain(Data(rewritten.utf8), label: "other", passphrase: "new secret")
+        XCTAssertEqual(again, encrypted)
+        XCTAssertEqual(try vault.secret(for: KeyStore.privateAccount(encrypted.id), reason: ""), Data(rewritten.utf8))
+        XCTAssertEqual(try vault.secret(for: KeyStore.passphraseAccount(encrypted.id), reason: ""), Data("new secret".utf8))
+        let ed25519 = try await keys.importKeyOffMain(Data(Self.ed25519File.utf8), label: nil)
+        XCTAssertEqual(ed25519.kind, .ed25519)
+        XCTAssertEqual(ed25519.label, "vector@dispatch")
+        XCTAssertEqual(keys.keys.map(\.id), [encrypted.id, ed25519.id])
     }
 }

@@ -1,4 +1,3 @@
-import DispatchMobileSSHCore
 import Foundation
 
 /// A remote command on its own session channel. The engine hands over one end of a socketpair: stdin
@@ -20,24 +19,9 @@ public final class SSHExec: AsyncSequence, Sendable {
   let state: ExecState
   let descriptor: Descriptor
 
-  static func start(_ command: String, on session: SessionHandle) async throws -> SSHExec {
+  static func start(_ command: String, on session: any EngineSession) async throws -> SSHExec {
     let state = ExecState()
-    command.withCString { command in
-      dms_exec(session.pointer, command, Engine.retain(state), { context, fd, code, message in
-        let state = Engine.borrow(context, as: ExecState.self)
-        if fd >= 0 {
-          state.started.finish(.success(fd))
-        } else {
-          state.started.finish(.failure(Engine.error(code, message)))
-          // No `exited` follows a failed start: release the context here.
-          _ = Engine.release(context, as: ExecState.self)
-        }
-      }, { context, bytes, length in
-        Engine.borrow(context, as: ExecState.self).stderr(Data(bytes: bytes!, count: length))
-      }, { context, kind, status, signal in
-        Engine.release(context, as: ExecState.self).exited(kind: kind, status: status, signal: signal.map { String(cString: $0) } ?? "")
-      })
-    }
+    session.exec(command, events: state)
     let fd = try await state.started.value
     return SSHExec(state: state, fd: fd)
   }
@@ -109,9 +93,9 @@ public final class SSHExec: AsyncSequence, Sendable {
   public func makeAsyncIterator() -> AsyncIterator { AsyncIterator(exec: self) }
 }
 
-/// The exec's context for the engine's callbacks; released by `exited` (or a failed start).
-final class ExecState: @unchecked Sendable {
-  enum Exit: Sendable { case status(UInt32), signal(String), lost, refused(String) }
+/// An exec's or a shell's channel events from the engine, kept for the exec, its iterator and `exitStatus()`.
+final class ExecState: EngineChannelEvents, @unchecked Sendable {
+  typealias Exit = EngineExit
 
   let started = Completion<Int32>()
   private let lock = NSLock()
@@ -149,14 +133,11 @@ final class ExecState: @unchecked Sendable {
     lock.withLock { pendingStderr.isEmpty ? nil : pendingStderr.removeFirst() }
   }
 
-  func exited(kind: Int32, status: UInt32, signal: String) {
-    let exit: Exit = switch kind {
-    case DMS_EXIT_STATUS: .status(status)
-    case DMS_EXIT_SIGNAL: .signal(signal)
-    // The message travels in `signal`.
-    case DMS_EXIT_REFUSED: .refused(signal)
-    default: .lost
-    }
+  func opened(_ result: Result<Int32, SSHTransportError>) {
+    started.finish(result.mapError { $0 })
+  }
+
+  func exited(_ exit: EngineExit) {
     let waiters = lock.withLock { () -> [CheckedContinuation<Exit, Never>] in
       ending = exit
       defer { self.waiters = [] }

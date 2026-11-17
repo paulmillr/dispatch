@@ -36,9 +36,8 @@ enum OpenSSHKeyError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Reads OpenSSH private key files for Import key (M8a). The transport integration provides a Citadel-backed
-/// parser (RSA, ECDSA, PEM and PKCS#8 files, decryption); `BuiltInOpenSSHKeyParser` covers what the phone needs
-/// without it.
+/// Reads OpenSSH private key files for Import key (M8a). `BuiltInOpenSSHKeyParser` reads what the store keeps; the
+/// app's store checks with the SSH engine too (`EngineCheckedKeyParser` in Mobile/Transport/Integration).
 protocol OpenSSHPrivateKeyParsing: Sendable {
     /// Throws `OpenSSHKeyError.passphraseRequired` for an encrypted file when `passphrase` is nil.
     func parse(_ file: Data, passphrase: String?) throws -> ParsedOpenSSHKey
@@ -88,14 +87,19 @@ struct BuiltInOpenSSHKeyParser: OpenSSHPrivateKeyParsing {
         return reader.uint32() ?? 0
     }
 
+    /// PEM and PKCS#8 files, encrypted or not: what is refused and what to do, in one sentence.
+    static let pemRefused = "Only OpenSSH key files can be imported: run “ssh-keygen -p -f <file>” on this one, which saves it in OpenSSH format, and import it again."
+    static let puttyRefused = "PuTTY key files (.ppk) can’t be imported: in PuTTYgen, choose Conversions › Export OpenSSH key and import that file."
+
     /// The base64 between the armor lines (pasted text may carry other whitespace or CRLF).
     static func unarmor(_ file: Data) throws -> Data {
         guard let text = String(data: file, encoding: .utf8) else { throw OpenSSHKeyError.notOpenSSH }
         let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         guard let start = lines.firstIndex(of: "-----BEGIN OPENSSH PRIVATE KEY-----") else {
             if lines.contains(where: { $0.hasPrefix("-----BEGIN ") && $0.hasSuffix("PRIVATE KEY-----") }) {
-                throw OpenSSHKeyError.unsupported("Only OpenSSH key files can be imported yet. Convert this one with “ssh-keygen -p -f <file>”.")
+                throw OpenSSHKeyError.unsupported(pemRefused)
             }
+            if lines.contains(where: { $0.contains("PuTTY-User-Key-File-") }) { throw OpenSSHKeyError.unsupported(puttyRefused) }
             throw OpenSSHKeyError.notOpenSSH
         }
         guard let end = lines[start...].firstIndex(of: "-----END OPENSSH PRIVATE KEY-----"),

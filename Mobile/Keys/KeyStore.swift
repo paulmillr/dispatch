@@ -83,11 +83,43 @@ final class KeyStore {
     }
 
     /// Imports an OpenSSH private key file. Throws `OpenSSHKeyError.passphraseRequired` for an encrypted file without
-    /// `passphrase`; ask for it and call again.
+    /// `passphrase`; ask for it and call again. A key already here stays the same record (its hosts keep it); when it
+    /// was imported as a file, this file and passphrase replace the stored ones, so a file rewritten as an error asked
+    /// (`ssh-keygen -p`: other rounds, cipher or format) takes effect by importing it again. Parses on the calling
+    /// (main) actor: for a file known to be cheap (the demo key, tests); Import key uses `importKeyOffMain`.
     @discardableResult
     func importKey(_ file: Data, label: String?, passphrase: String? = nil) throws -> KeyRecord {
-        let parsed = try parser.parse(file, passphrase: passphrase)
-        if let existing = keys.first(where: { $0.blob == parsed.publicKeyBlob }) { return existing }
+        try store(try parser.parse(file, passphrase: passphrase), file: file, label: label, passphrase: passphrase)
+    }
+
+    /// `importKey`, with the parse off the main actor: an encrypted file's passphrase derivation (bcrypt_pbkdf in the
+    /// engine, 16 rounds to tens of milliseconds, the 1024-round maximum seconds) never freezes the UI. The file and
+    /// passphrase go to the parser as they are (the task shares their storage; no copy of the bytes), and the store
+    /// step is `importKey`'s, on the main actor, so the record and Keychain items are the same. Cancelled while the
+    /// parse runs (the sheet was dismissed), it stores nothing and throws `CancellationError` once the parse ended (the
+    /// derivation cannot be interrupted).
+    @discardableResult
+    func importKeyOffMain(_ file: Data, label: String?, passphrase: String? = nil) async throws -> KeyRecord {
+        let parser = parser
+        let parsed = try await Task.detached(priority: .userInitiated) {
+            try parser.parse(file, passphrase: passphrase)
+        }.value
+        try Task.checkCancellation()
+        return try store(parsed, file: file, label: label, passphrase: passphrase)
+    }
+
+    /// The store step of an import: a parsed file's record and Keychain items.
+    private func store(_ parsed: ParsedOpenSSHKey, file: Data, label: String?, passphrase: String?) throws -> KeyRecord {
+        if let existing = keys.first(where: { $0.blob == parsed.publicKeyBlob }) {
+            guard case .imported = existing.kind else { return existing }
+            try vault.set(file, for: Self.privateAccount(existing.id), protection: .none)
+            if parsed.encrypted, let passphrase {
+                try vault.set(Data(passphrase.utf8), for: Self.passphraseAccount(existing.id), protection: .none)
+            } else {
+                try? vault.remove(Self.passphraseAccount(existing.id))
+            }
+            return existing
+        }
         let label = [label, parsed.comment].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? Self.defaultLabel(parsed.algorithm)
         let record: KeyRecord

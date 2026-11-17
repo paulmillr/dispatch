@@ -870,7 +870,8 @@ class ConsentTests(unittest.TestCase):
         rust, mobile = Mock(), Mock()
         rust.available.return_value = False
         mobile.downloads.return_value = True
-        # The Mac app's project has no iPhone package: only --mobile prepares its SSH engine.
+        mobile.enabled.return_value = True
+        # The Mac app's project has no iPhone package: only --mobile prepares its russh engine.
         with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
             self.assertEqual(consent.plan(), ['xcodegen', 'rust'])
             mobile.downloads.assert_not_called()
@@ -878,11 +879,33 @@ class ConsentTests(unittest.TestCase):
             self.assertEqual(consent.plan(mobile=True), ['xcodegen', 'rust', 'ssh-engine'])
             for call in tools.resolve.call_args_list:
                 self.assertTrue(call.kwargs['offline'])
+        # Without DISPATCH_RUSSH=1 the iPhone app's SSH engine is the Swift one: nothing to fetch for it.
+        mobile.downloads.reset_mock()
+        mobile.enabled.return_value = False
+        with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
+            self.assertEqual(consent.plan(mobile=True), ['xcodegen', 'rust'])
+            mobile.downloads.assert_not_called()
+
+    def testTheRusshSwitchIsDispatchRussh(self):
+        mobile = consent.load_script('setup_mobile')
+        self.assertFalse(mobile.enabled({}))
+        self.assertFalse(mobile.enabled({'DISPATCH_RUSSH': '0'}))
+        self.assertTrue(mobile.enabled({'DISPATCH_RUSSH': '1'}))
+        # Without it, setup prepares nothing for the iPhone's SSH engine (no toolchain run, no build).
+        with patch.dict(os.environ, {}, clear=False), patch.object(mobile.subprocess, 'run') as run:
+            os.environ.pop('DISPATCH_RUSSH', None)
+            mobile.ensure(offline=True)
+            run.assert_not_called()
+        rust = consent.load_script('setup-ssh-rust')
+        self.assertNotIn('aarch64-apple-ios', rust.targets({}))
+        self.assertIn('aarch64-apple-ios-sim', rust.targets({'DISPATCH_RUSSH': '1'}))
+        self.assertIn('x86_64-unknown-linux-musl', rust.targets({}))
 
     def testWarmPlanHasNothingToApprove(self):
         tools, rust, mobile = Mock(), Mock(), Mock()
         rust.available.return_value = True
         mobile.downloads.return_value = False
+        mobile.enabled.return_value = True
         with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
             self.assertEqual(consent.plan(mobile=True), [])
             self.assertEqual(tools.resolve.call_args_list, [call('xcodegen', offline=True)])

@@ -27,9 +27,20 @@ func report(_ line: String) {
   print("MEASURE " + line)
 }
 
-/// Bytes allocated in all malloc zones (more precise than resident size for small deltas).
+/// Bytes allocated in all malloc zones (more precise than resident size for small deltas). Under the address
+/// sanitizer, its allocator's own count of live bytes: the zone statistics it reports there are not live bytes (they
+/// grow with every allocation made, freed or not).
 func heapBytes() -> Int {
+  if let live = sanitizerLiveBytes { return live() }
   var stats = malloc_statistics_t()
   malloc_zone_statistics(nil, &stats)
   return Int(stats.size_in_use)
 }
+
+/// `__sanitizer_get_current_allocated_bytes` when the address sanitizer's runtime is loaded.
+private let sanitizerLiveBytes: (@Sendable () -> Int)? = {
+  guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__sanitizer_get_current_allocated_bytes") else { return nil }
+  typealias Function = @convention(c) () -> Int
+  let function = unsafeBitCast(symbol, to: Function.self)
+  return { function() }
+}()

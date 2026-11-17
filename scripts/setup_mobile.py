@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""What a fresh checkout needs before Xcode resolves the iPhone app's SSH package (docs/ios.md, Building and running):
-the pinned Rust with its iOS targets (scripts/setup-ssh-rust.py), the patched russh the engine's Cargo.toml names by
-path (scripts/vendor-russh.py, build/mobile-ssh/russh) and the engine's XCFramework (scripts/build-mobile-ssh.py, which
-fetches the locked crates once). SwiftPM resolves the binary target before any pre-build script runs, for every scheme
-of DispatchMobile.xcodeproj (the Mac's project has no such package), so `scripts/setup.sh --mobile` calls this, as do
-`test/run.sh --platform ios` and test/ios-release.py.
+"""What a checkout needs before Xcode resolves the iPhone app's SSH package when it is built with the optional russh
+engine, DISPATCH_RUSSH=1 (docs/ios.md, Transport): the pinned Rust with its iOS targets (scripts/setup-ssh-rust.py),
+the patched russh the engine's Cargo.toml names by path (scripts/vendor-russh.py, build/mobile-ssh/russh) and the
+engine's XCFramework (scripts/build-mobile-ssh.py, which fetches the locked crates once). SwiftPM resolves that binary
+target before any pre-build script runs, for every scheme of DispatchMobile.xcodeproj (the Mac's project has no such
+package), so `scripts/setup.sh --mobile` calls this, as do `test/run.sh --platform ios` and test/ios-release.py.
+Without DISPATCH_RUSSH=1 (the default: the Swift engine alone) there is nothing to prepare and nothing runs.
 
 Offline-aware like the Mac's setup: with DISPATCH_SETUP_OFFLINE=1 nothing is downloaded; a missing toolchain or
 crate cache then fails with the command to run online once."""
@@ -18,6 +19,13 @@ ROOT = Path(__file__).resolve().parent.parent
 FRAMEWORK = ROOT / 'build/mobile-ssh/DispatchMobileSSHCore.xcframework'
 HEADERS = ROOT / 'Mobile/Transport/Core/include'
 CARGO = ROOT / 'build/rust/bin/cargo'
+# The build-time switch that adds the russh engine to the iPhone app (Mobile/Transport/Package.swift reads the same).
+SWITCH = 'DISPATCH_RUSSH'
+
+
+def enabled(environ=os.environ):
+    """Whether this build includes the russh engine: DISPATCH_RUSSH=1."""
+    return environ.get(SWITCH) == '1'
 
 
 def current(framework=FRAMEWORK, headers=HEADERS):
@@ -67,14 +75,16 @@ def downloads():
 
 
 def ensure(offline=None, quiet=False):
-    """Prepares what is missing; quick when everything is there."""
+    """Prepares what is missing; quick when everything is there. Nothing without DISPATCH_RUSSH=1."""
+    if not enabled():
+        return
     if offline is None:
         offline = os.environ.get('DISPATCH_SETUP_OFFLINE') == '1'
     run = lambda arguments: subprocess.run([sys.executable, *map(str, arguments)], cwd=ROOT, check=True,
                                            stdout=subprocess.DEVNULL if quiet else None)
     # Returns at once when the pinned toolchain (with aarch64-apple-ios and -ios-sim) is ready; links a matching
     # rustup toolchain without the network; downloads only online.
-    run([ROOT / 'scripts/setup-ssh-rust.py', *(['--offline'] if offline else [])])
+    run([ROOT / 'scripts/setup-ssh-rust.py', *(['--offline'] if offline else [])])  # with the iOS targets (enabled)
     if current():
         # A bare `cargo test` and Xcode's pre-build step need russh staged even when the framework is current.
         if not russh(offline):

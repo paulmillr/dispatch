@@ -548,9 +548,10 @@ Replay rules (I/O through `System`, waits, ids, teardown) are in
 ## Worktrees
 
 A second checkout (`git worktree add`) builds and tests like the main one once it has the main tree's tools. Link or
-`cp -cR` `build/{rust,rust-downloads,cargo,tools,test-tools,downloads}` from the main tree; for the iPhone and Watch
-apps also copy `build/mobile-ssh` (the XCFramework *and* its `target`; `Mobile/Transport/Frameworks` links there, and
-without `target` the next simulator build recreates the framework with one slice). Keep worktrees outside `/tmp`: a
+`cp -cR` `build/{rust,rust-downloads,cargo,tools,test-tools,downloads}` from the main tree. The iPhone and Watch apps
+need nothing more; only for a build with the optional russh engine (`DISPATCH_RUSSH=1`, docs/ios.md) also copy
+`build/mobile-ssh` (the XCFramework *and* its `target`; `Mobile/Transport/Frameworks` links there, and without
+`target` the next simulator build recreates the framework with one slice). Keep worktrees outside `/tmp`: a
 `/tmp` vs `/private/tmp` executable path fails SSH consent's origin check in every SSH-login test. A worktree has no
 `replays/`, so it runs everything live and the build's corpus check only warns.
 

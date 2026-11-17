@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Offline setup preflight and one consent shared by its child downloaders.
 
-`--setup` prepares what the Mac app builds with; `--setup --mobile` also the iPhone app's SSH engine
-(scripts/setup_mobile.py), which only DispatchMobile.xcodeproj resolves."""
+`--setup` prepares what the Mac app builds with; `--setup --mobile` also, in a build with the optional russh engine
+(DISPATCH_RUSSH=1), that engine (scripts/setup_mobile.py), which only DispatchMobile.xcodeproj resolves. The iPhone
+app's default SSH engine is Swift and needs nothing more."""
 import importlib.util
 from contextlib import contextmanager
 import json
@@ -38,8 +39,8 @@ def describe(component):
                     '      Generates the Xcode project · build/tools',
         'rust': f'Rust       {LOCK["rust"]["version"]}\n'
                 '      SSH helper compiler and tools; macOS + Linux targets · build/rust',
-        'ssh-engine': 'iPhone SSH engine crates  Mobile/Transport/Core/Cargo.lock\n'
-                      '      The iPhone app\'s SSH transport · build/cargo, build/mobile-ssh',
+        'ssh-engine': 'iPhone russh engine crates  Mobile/Transport/Core/Cargo.lock\n'
+                      '      The iPhone app\'s optional russh engine (DISPATCH_RUSSH=1) · build/cargo, build/mobile-ssh',
     }[component]
 
 
@@ -105,8 +106,11 @@ def plan(mobile=False):
         missing.append('xcodegen')
     if not rust.available():
         missing.append('rust')
-    if mobile and load_script('setup_mobile').downloads():
-        missing.append('ssh-engine')
+    if mobile:
+        # Only a build with the optional russh engine (DISPATCH_RUSSH=1) has anything of its own to fetch.
+        engine = load_script('setup_mobile')
+        if engine.enabled() and engine.downloads():
+            missing.append('ssh-engine')
     return missing
 
 
@@ -131,9 +135,9 @@ def main():
         with progress(f'Rust {LOCK["rust"]["version"]} · preparing SSH helper toolchain'):
             subprocess.run([sys.executable, str(ROOT / 'scripts/setup-ssh-rust.py')], check=True)
         mobile = load_script('setup_mobile')
-        if wants_mobile and not mobile.current():
-            # SwiftPM resolves the iPhone package's binary target before any build script runs.
-            with progress('iPhone SSH engine · building build/mobile-ssh'):
+        if wants_mobile and mobile.enabled() and not mobile.current():
+            # SwiftPM resolves the iPhone package's russh binary target before any build script runs.
+            with progress('iPhone russh engine · building build/mobile-ssh'):
                 mobile.ensure()
         return
     if len(sys.argv) > 1:
