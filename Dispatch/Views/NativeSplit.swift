@@ -7,7 +7,7 @@ struct NativeSplit: NSViewRepresentable {
     @Environment(\.appTypography) private var typography
     private var styledFirst: AnyView { AnyView(first.environment(\.appTypography, typography)) }
     private var styledSecond: AnyView { AnyView(second.environment(\.appTypography, typography)) }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let first: AnyView
     let second: AnyView
     let axis: SplitAxis

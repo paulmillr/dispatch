@@ -6,7 +6,7 @@ import SwiftUI
 /// position.
 struct ChatQueueView: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let session: ChatSession
     let coordinator: ChatCoordinator
     /// The opened list's height; more rows scroll.

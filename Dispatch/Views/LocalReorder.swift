@@ -21,6 +21,9 @@ struct LocalReorder: NSViewRepresentable {
     var spaceHover: SpaceHoverDetails?
     var hoverFontSize: CGFloat = 12
     var dragLabel: String?
+    /// The pointer entering and leaving: this view's tracking area takes it from SwiftUI's `onHover` beneath, so a row
+    /// that highlights on hover learns it here (`pointerOver`).
+    var hovering: ((Bool) -> Void)? = nil
     var select: () -> Void = {}
     var accepts: (ReorderItem) -> Bool
     var drop: (ReorderItem, Bool) -> Void
@@ -62,10 +65,12 @@ final class ReorderTrackingView: NSView {
     // No hover fill of its own: the row or tab under it draws one in its own shape (a rectangle here would show past
     // their rounded corners).
     override func mouseEntered(with event: NSEvent) {
+        configuration.hovering?(true)
         if configuration.spaceHover != nil { hover.schedule(from: self) }
     }
-    override func mouseExited(with event: NSEvent) { hover.dismiss() }
+    override func mouseExited(with event: NSEvent) { configuration.hovering?(false); hover.dismiss() }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { configuration.hovering?(false) }
         hover.dismiss()
         super.viewWillMove(toWindow: newWindow)
     }
@@ -205,5 +210,18 @@ final class ReorderTrackingView: NSView {
         }
         return candidates.filter { $0.configuration.accepts(item) }
             .min { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }.map(destination)
+    }
+}
+
+private struct PointerOverRowKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The pointer is over this control, as an AppKit view laid over it reports it (a sidebar row's reorder view,
+    /// `LocalReorder.hovering`; the mode switch's press tracker): that view's tracking takes it from SwiftUI's `onHover`.
+    var pointerOver: Bool {
+        get { self[PointerOverRowKey.self] }
+        set { self[PointerOverRowKey.self] = newValue }
     }
 }

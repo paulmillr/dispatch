@@ -15,7 +15,7 @@ struct ShortcutRow: Identifiable {
     static var splitDigits: String { LayoutPreset.allCases.filter { $0.shortcutKey != nil }.map(\.title).joined(separator: " · ") }
 
     /// What you reach for most, in groups the sheet sets apart: the digit chords, in Settings › Keyboard' order and
-    /// following it; stepping through tabs, panes and spaces (⌃⇥ and search are under More); making, closing and
+    /// following it; stepping through tabs and spaces (⌃⇥ and search are under More); making, closing and
     /// splitting; the tab's modes and the sidebar; voice. A chord a row, so its modifiers and its key line up with the
     /// rows' around it (`ShortcutRow.chord`); the words are brief, so each row keeps to one line.
     @MainActor static var navigationGroups: [[ShortcutRow]] {
@@ -24,14 +24,13 @@ struct ShortcutRow: Identifiable {
         let groups: [[ShortcutRow?]] = [
             [
                 // An unbound group has no shortcut, so no row.
-                keys.shortcut(\.tabs, "1…9").map { .init($0, "tab, or pane when split · 9 the last") },
-                keys.shortcut(\.spaces, "1…9").map { .init($0, "space · 9 the last") },
+                keys.shortcut(\.tabs, "1…9").map { .init($0, "tab, or pane when split") },
+                keys.shortcut(\.spaces, "1…9").map { .init($0, "space") },
                 // A layout's key is its pane count (`LayoutPreset.shortcutKey`).
                 keys.shortcut(\.splits, "1…4, 6, 8").map { .init($0, "layout with that many panes") },
             ],
             [
                 steps.tabs.map { .init(brackets($0), "previous / next tab") },
-                .init(brackets(KeyGroups.paneStep), "previous / next pane"),
                 steps.spaces.map { .init(brackets($0), "previous / next space") },
             ],
             [
@@ -39,7 +38,6 @@ struct ShortcutRow: Identifiable {
                 .init("⇧⌘N", "new local space"),
                 .init("⌘T", "new tab"),
                 .init("⌘W", "close tab"),
-                .init("⇧⌘W", "close space"),
                 .init("⌘D", "split right"),
                 .init("⇧⌘D", "split down"),
             ],
@@ -47,7 +45,6 @@ struct ShortcutRow: Identifiable {
                 .init("⇧⌘C", "switch terminal / chat"),
                 .init("⇧⌘F", "switch terminal / files"),
                 .init("⌘\\", "show or hide the sidebar"),
-                .init("⌃⌘S", "also"),
             ],
             [voiceNavigation],
         ]

@@ -129,7 +129,7 @@ final class ChatScrollbar: NSView {
         self.hideAt = nil
         revealed = false
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
+            context.duration = MotionStore.reduced ? 0 : 0.2
             thumb.animator().alphaValue = 0
         }
     }

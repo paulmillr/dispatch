@@ -99,7 +99,7 @@ struct TerminalContentView: View {
     /// Full screen with one tab: the floating switch centers on the row leading the window (`Chrome.bareLeadingRowHeight`)
     /// beside the edge reveal's host mark, at the strip's trailing inset, as it would sit on a strip.
     var switchRow: CGFloat?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Environment(\.appTypography) private var typography
     /// A glass strip over the pane's top: the terminal always sits below it, so switching to chat never resizes
     /// the PTY; chat scrolls under it.

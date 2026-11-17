@@ -91,8 +91,25 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     struct Effects: Equatable { var passes = 0, badges = 0, removals = 0 }
     @ObservationIgnored private(set) var effects = Effects()
     var notificationError: String?
+    /// macOS refuses Dispatch's banners (System Settings › Notifications): Settings says so in the card, with a link there.
+    var notificationsDenied = false
 
     init(controller: AppDelegate) { self.controller = controller }
+
+    /// Dispatch's page in System Settings › Notifications.
+    static var systemSettingsURL: URL? {
+        URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+            + (Bundle.main.bundleIdentifier.map { "?id=" + $0 } ?? ""))
+    }
+
+    /// Reads whether macOS allows banners now, without asking: after a visit to System Settings the card follows.
+    func refreshAuthorization() {
+        Task { [weak self] in
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            self?.notificationsDenied = status == .denied
+            if status == .authorized { self?.notificationError = nil }
+        }
+    }
 
     var entries: [AttentionEntry] {
         guard let controller else { return [] }
@@ -107,8 +124,28 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     }
     /// ⌘J and ⇧⌘J have somewhere to go (`navigate`): an approval or question waiting, or a reply ready.
     var navigable: Bool { entries.contains { $0.urgency == .waiting || ($0.urgency == .unread && eventKey($0) != nil) } }
+    /// The first agent waiting outside the active terminal, unless its banner was dismissed for this very wait.
     var banner: AttentionEntry? {
-        entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID }
+        entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID && dismissed[$0.id] != waitKey($0.id) }
+    }
+
+    /// Waits whose banner the user dismissed (its ×), by terminal: what each waited on (`waitKey`). A new wait of the same
+    /// terminal shows again; the terminal's own marks (sidebar, ⌘J) are unaffected.
+    private(set) var dismissed: [UUID: String] = [:]
+
+    /// What a waiting terminal waits on: its pending approval, else the agent's own words (`ChatSession.agentAttention`,
+    /// e.g. a failed turn's error), else the program's blocked report.
+    func waitKey(_ id: UUID) -> String {
+        let session = TerminalRuntime.shared.chat.sessions[id]
+        if let approval = session?.approvals.first(where: \.pending) { return "approval-" + approval.id.uuidString }
+        if let attention = session?.agentAttention { return "attention-" + attention }
+        let blocked = TerminalRuntime.shared.programs.visible(id).first { $0.state == .blocked }
+        return "program-" + (blocked.map { $0.id + ":" + ($0.message ?? "") } ?? "")
+    }
+
+    /// The banner's ×: hides it for what this terminal waits on now.
+    func dismissBanner(_ id: UUID) {
+        dismissed[id] = waitKey(id)
     }
 
     /// With previews hidden (System Settings › Notifications › Show previews), a banner shows only the placeholder: no
@@ -160,7 +197,10 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
                 Task { [weak self] in
                     do {
                         let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert])
-                        self?.notificationError = allowed ? nil : "Notifications are disabled in macOS System Settings → Notifications → Dispatch."
+                        self?.notificationsDenied = !allowed; self?.notificationError = nil
+                    } catch let error as UNError where error.code == .notificationsNotAllowed {
+                        // macOS's own words ("Notifications are not allowed for this application") say less than the card.
+                        self?.notificationsDenied = true; self?.notificationError = nil
                     } catch { self?.notificationError = error.localizedDescription }
                 }
             }

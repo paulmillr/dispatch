@@ -527,6 +527,30 @@ final class TmuxEdgeCaseTests: XCTestCase {
         XCTAssertNil(app.runtime.helpers[.local]?.error)
     }
 
+    /// The attention banner for an agent waiting in the other pane of the shown tmux window: its click focuses that
+    /// pane, which stays focused, and the banner goes (it names only an agent outside the active terminal).
+    func testAttentionBannerFocusesAWaitingPaneOfTheShownWindow() async throws {
+        let app = try TmuxWalkthrough()
+        defer { app.close() }
+        _ = try app.server(["split-window", "-h", "-t", "%0", "/bin/sh"])
+        try await app.attach()
+        try await app.ready()
+        let window = try XCTUnwrap(app.workspace.current?.activeWindow)
+        XCTAssertEqual(window.terminals.count, 2)
+        let active = try XCTUnwrap(app.workspace.activeSurfaceID)
+        let waiting = try XCTUnwrap(window.terminals.first { $0.id != active }).id
+        let session = app.runtime.chat.session(for: waiting)
+        session.approvals = [PendingApproval(key: "approval", operation: "Run tests?") { _ in }]
+        defer { app.runtime.chat.close(waiting) }
+        XCTAssertEqual(app.controller.attention.banner?.id, waiting)
+        app.controller.attention.focus(waiting)
+        try await app.wait { app.workspace.activeSurfaceID == waiting }
+        try await app.ready()
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(app.workspace.activeSurfaceID, waiting, "the waiting pane keeps the focus")
+        XCTAssertNil(app.controller.attention.banner, "no banner for the active terminal")
+    }
+
     func testWindowTabsOwnLayoutsAndCommandShortcuts() async throws {
         let app = try TmuxWalkthrough()
         let oldMenu = NSApp.mainMenu

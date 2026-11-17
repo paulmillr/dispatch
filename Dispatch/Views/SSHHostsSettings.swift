@@ -9,7 +9,7 @@ import SwiftUI
 struct SSHHostsSettings: View {
     typealias Entry = SSHIntegrationPermissions.Entry
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let workspace: Workspace
     let permissions: SSHIntegrationPermissions
     var resetting = false
@@ -402,20 +402,20 @@ struct SSHHostsSettings: View {
                     Button("Forget") {
                         TerminalRuntime.shared.hosts.reset(host.id)
                         forgetting = nil; expanded = nil
-                    }.buttonStyle(.plain).font(typography, .label, weight: .semibold).foregroundStyle(.red)
+                    }.buttonStyle(.borderedProminent).controlSize(.small).tint(.red).font(typography, .label, weight: .semibold)
                         .accessibilityIdentifier("settings-reset-host-confirm-\(id)")
                 }
             } else {
                 HStack(spacing: 14) {
-                    actionLink("Forget host…", identifier: "settings-reset-host-\(id)", destructive: true,
-                               disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) { forgetting = id }
-                        .help("Disconnect and remove this host’s saved tabs, helper choices and caches")
-                    actionLink("Remove Dispatch…", identifier: "settings-remove-host-\(id)", destructive: true,
+                    actionLink("Remove helper…", identifier: "settings-remove-host-\(id)", destructive: true,
                                disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) {
                         let machine = workspace.newSpaceMachine(on: host.id)
                             ?? host.destinations.first.map { .ssh(SSHShell(destination: $0)) }
                         preview(Removal(id: id, machine: machine))
                     }.help("Forget this host, then remove Dispatch’s hooks, Pi extension and helper files from it")
+                    actionLink("Forget host…", identifier: "settings-reset-host-\(id)", destructive: true,
+                               disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) { forgetting = id }
+                        .help("Disconnect and remove this host’s saved tabs, helper choices and caches")
                 }
             }
         } else if let entry {
@@ -440,7 +440,7 @@ struct SSHHostsSettings: View {
         let small = typography.font(.body)
         return VStack(alignment: .leading, spacing: 8) {
             Text(local ? "Remove Dispatch from this Mac? Dispatch quits, then removes:"
-                 : "Remove Dispatch from \(name)? This disconnects and forgets the host, then removes there:")
+                 : "Remove the helper from \(name)? This disconnects and forgets the host, then removes there:")
                 .font(small).foregroundStyle(SettingsControlStyle.detail).fixedSize(horizontal: false, vertical: true)
             Group {
                 if removal?.machine == nil {
@@ -474,8 +474,8 @@ struct SSHHostsSettings: View {
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
                 actionLink("Cancel", identifier: "settings-removal-cancel") { removal = nil }
-                Button(local ? "Remove & Quit" : "Remove", action: remove).buttonStyle(.plain)
-                    .font(typography, .label, weight: .semibold).foregroundStyle(.red)
+                Button(local ? "Remove & Quit" : "Remove", action: remove).buttonStyle(.borderedProminent).controlSize(.small)
+                    .tint(.red).font(typography, .label, weight: .semibold)
                     .accessibilityIdentifier("settings-removal-confirm")
             }
         }
@@ -483,9 +483,10 @@ struct SSHHostsSettings: View {
 
     private func actionLink(_ title: String, identifier: String, destructive: Bool = false, disabled: Bool = false,
                             action: @escaping () -> Void) -> some View {
-        Button(title, action: action).buttonStyle(.plain)
+        // A small bordered button, not coloured text: it acts, it does not go anywhere (docs/architecture.md, Hover).
+        Button(title, action: action).buttonStyle(.bordered).controlSize(.small)
             .font(typography, .body)
-            .foregroundStyle(disabled ? SettingsControlStyle.detail.opacity(0.6) : destructive ? Color.red : Chrome.accent)
+            .foregroundStyle(destructive && !disabled ? Color.red : Chrome.ink)
             .disabled(disabled).accessibilityIdentifier(identifier)
     }
 
@@ -533,7 +534,8 @@ struct SSHHostsSettings: View {
                 }
             }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
-            Text("Install adds Dispatch’s hooks to that agent’s own configuration on this Mac, after asking. Remove takes Claude Code’s out of its settings and deletes Pi’s extension; Codex’s entries stay in hooks.json, unused, so its /hooks trust is kept. Features › Chat mode turns an agent off everywhere.")
+            // Short: what Install and Remove do to each agent is in their help.
+            Text("Hooks let Chat follow each agent on this Mac. To turn an agent off everywhere, use Features › Chat mode.")
                 .font(typography, .body).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
             if removal?.id == Self.localID {
@@ -600,7 +602,7 @@ struct SSHHostsSettings: View {
                 if installed {
                     Button("Remove") { chat.setLocalHooks(launch.key, allowed: false) }
                         .accessibilityIdentifier("settings-remove-hooks-\(launch.key)")
-                        .help(launch.key == "codex" ? "Stop using \(launch.label)’s hooks on this Mac; its entries stay in hooks.json"
+                        .help(launch.key == "codex" ? "Stop using \(launch.label)’s hooks on this Mac; its entries stay in hooks.json, unused, so its /hooks trust is kept"
                               : "Take Dispatch’s hooks out of \(launch.label)’s configuration on this Mac")
                 } else if chat.localCLIs == nil {
                     // The login shell is being asked which CLIs it runs (up to 30 s).
@@ -611,6 +613,7 @@ struct SSHHostsSettings: View {
                     Button(failure == nil ? "Install…" : "Try Again") {
                         if chat.localHooksAllowed(launch.key) { chat.setLocalHooks(launch.key, allowed: true) } else { installing = launch }
                     }.accessibilityIdentifier("settings-install-\(launch.key)")
+                        .help("Add Dispatch’s hooks to \(launch.label)’s own configuration on this Mac, after asking")
                 }
             }
         }

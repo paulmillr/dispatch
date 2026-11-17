@@ -8,6 +8,9 @@ struct FileFolderPreview: View {
     let path: String
     let entry: FileEntry?
     let summary: FolderSummary?
+    /// The size waits for Count size: counting reads a place macOS guards (`ProtectedFolders`) and may ask first.
+    var countOnRequest = false
+    var count: () -> Void = {}
     let openFolder: () -> Void
     let changeDirectory: () -> Void
     let copyPath: () -> Void
@@ -32,6 +35,12 @@ struct FileFolderPreview: View {
                 GridRow {
                     label("items")
                     if let summary { Text(Self.items(summary)).accessibilityIdentifier("file-preview-folder-items") }
+                    else if countOnRequest {
+                        Button("Count size", action: count)
+                            .buttonStyle(FilePreviewButtonStyle(prominent: false))
+                            .help("Reads every folder inside. macOS may first ask to let Dispatch read \(FilesPath.name(path)).")
+                            .accessibilityIdentifier("file-preview-folder-count")
+                    }
                     else { HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("counting…").foregroundStyle(theme.muted) } }
                 }
                 GridRow {

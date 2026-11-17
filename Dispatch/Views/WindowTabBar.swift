@@ -106,10 +106,10 @@ struct WindowTabBar: View {
                     }
                 })
                 Divider()
-                // Close is the ×'s: it ends idle work and detaches busy work; Detach keeps it; Terminate… ends it.
-                Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
+                // Detach keeps it; Terminate… ends it; Close is the ×'s: it ends idle work and asks about busy work.
                 Button("Detach") { controller.detachWindow(tab.id) }.help(MoveTargetsSection.detachHelp)
                 Button("Terminate…") { controller.terminateWindow(tab.id) }
+                Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
             }
             .contentShape(Rectangle())
     }
@@ -122,31 +122,25 @@ struct MoveTarget: Identifiable {
     let action: () -> Void
 }
 
-/// A tab's (or window's) move targets under one "Move to" header, each by its bare name so a space's name never reads
-/// as a verb ("Move to release"): the other panes of its space, a new space, then the other spaces, which fold into a
-/// submenu past `inlineSpaces` so the menu stays short however many there are.
+/// A tab's (or window's) move targets in one "Move to" submenu, each by its bare name so a space's name never reads as a
+/// verb ("Move to release"): the other panes of its space, a new space, then the other spaces. The menu stays short
+/// however many spaces there are.
 struct MoveTargetsSection: View {
     var panes: [MoveTarget] = []
     let newSpace: () -> Void
     let spaces: [MoveTarget]
 
-    static let inlineSpaces = 4
     static let detachHelp = "Keep it running on the server; it is listed under Detached"
     static let closeHelp = "Ends it if nothing runs there; otherwise asks: Terminate or Detach"
 
     var body: some View {
-        Section("Move to") {
+        Menu("Move to") {
             ForEach(panes) { Button($0.title, action: $0.action) }
             Button("New Space", action: newSpace)
-            if spaces.count > Self.inlineSpaces {
-                Menu("Other Spaces") { targets }
-            } else {
-                targets
+            if !spaces.isEmpty {
+                Divider()
+                ForEach(spaces) { Button($0.title, action: $0.action) }
             }
         }
-    }
-
-    private var targets: some View {
-        ForEach(spaces) { Button($0.title, action: $0.action) }
     }
 }

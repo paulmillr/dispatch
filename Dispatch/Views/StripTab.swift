@@ -195,7 +195,7 @@ struct StripHost {
 /// for the sidebar toggle, which the picker carries.
 struct StripHostMark: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let host: StripHost
     let workspace: Workspace
     let controller: AppDelegate
@@ -296,7 +296,7 @@ struct HostMarkEffects: View {
     let trigger: String
     let color: Color
     let connecting: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     var body: some View {
         ZStack {

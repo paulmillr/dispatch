@@ -524,7 +524,8 @@ extension FilesCoordinator {
             }
             let status = GitStatus(branch: porcelain.branch, head: porcelain.head.map { String($0.prefix(7)) },
                                    upstream: porcelain.upstream, ahead: porcelain.ahead, behind: porcelain.behind,
-                                   changes: changes, loadedAt: Date(timeIntervalSince1970: 0), truncated: porcelain.truncated)
+                                   changes: changes, loadedAt: Date(timeIntervalSince1970: 0), truncated: porcelain.truncated,
+                                   unscanned: porcelain.unscanned)
             return .success(StatusRead(status: status, marks: GitMarks(porcelain), counted: next, sized: sizes))
         } catch let error as GitError {
             return .failure(error)

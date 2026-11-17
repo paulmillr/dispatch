@@ -51,13 +51,21 @@ import ImageIO
     /// reload there would blank content the user is reading). A folder whose count a cancelled load left unfinished
     /// counts again. With previews off in Settings (`FilesSession.previews`) a file is not read at all: it stays
     /// `.loading`, and the pane shows what its listing entry says of it.
-    static func load(_ preview: FilePreviewState, from source: any FilesSource) async {
+    /// `countsFolder` false: a folder's size waits for `countFolder` (a protected place, `FilesSession.countNeedsConsent`).
+    static func load(_ preview: FilePreviewState, from source: any FilesSource, countsFolder: Bool = true) async {
         switch preview.kind {
         case .loading, .error, .folder(nil): break
         default: return
         }
         if let entry = preview.entry {
-            if entry.isDirectory { return await loadFolder(preview, from: source) }
+            if entry.isDirectory {
+                if !countsFolder {
+                    preview.kind = .folder(nil)
+                    preview.countOnRequest = true
+                    return
+                }
+                return await loadFolder(preview, from: source)
+            }
             if entry.kind == .other {
                 preview.kind = .error("A socket, pipe or device has no preview")
                 return
@@ -168,6 +176,12 @@ import ImageIO
         // than show hex as if the file were a program or an archive.
         let format = FileFormat.describe(head, tail: tail) ?? (!head.isEmpty && !head.contains(0) ? "Not UTF-8 text" : nil)
         return .binary(size: size, head: head, format: format)
+    }
+
+    /// Count size: the walk the folder preview held back, asked for.
+    static func countFolder(_ preview: FilePreviewState, from source: any FilesSource) async {
+        preview.countOnRequest = false
+        await loadFolder(preview, from: source)
     }
 
     private static func loadFolder(_ preview: FilePreviewState, from source: any FilesSource) async {

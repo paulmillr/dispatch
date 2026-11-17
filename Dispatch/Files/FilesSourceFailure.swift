@@ -35,6 +35,8 @@ struct FilesSourceFailure: Sendable {
         }
         switch kind {
         case .notFound: return .notFound(path)
+        // The helper passes the system's words on: EPERM ("os error 1") is the system refusing, not the file's modes.
+        case .permissionDenied where message.contains("(os error 1)"): return .privacyBlocked(path, host: context.host)
         case .permissionDenied: return .permissionDenied(path)
         case .notDirectory: return .notDirectory(path)
         case .isDirectory: return .isDirectory(path)

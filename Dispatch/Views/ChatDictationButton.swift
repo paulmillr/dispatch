@@ -30,7 +30,7 @@ struct ChatDictationButton: View {
         let active = dictation.active(session.id)
         HStack(spacing: 6) {
             if active || dictation.error(for: session.id) != nil { status(active: active) }
-            Button(action: toggle) { glyph(active: active) }
+            Button(action: toggle) { glyph(active: active).hoverFill(RoundedRectangle(cornerRadius: 5)) }
                 .buttonStyle(.plain)
                 .help(help(active: active))
                 .accessibilityLabel(active ? (ChatDictation.shared.conversation ? "End conversation mode" : "Stop dictation") : "Dictate")
@@ -50,6 +50,7 @@ struct ChatDictationButton: View {
             Button { dictation.dismissError() } label: {
                 Label(error, systemImage: "exclamationmark.triangle.fill").labelStyle(.titleAndIcon)
                     .foregroundStyle(theme.red)
+                    .hoverFill(RoundedRectangle(cornerRadius: 4), outset: 3)
             }.buttonStyle(.plain).help("Dismiss")
                 .font(theme.typography.detail).lineLimit(1).truncationMode(.tail).frame(maxWidth: 360, alignment: .trailing)
                 .accessibilityIdentifier("chat-dictation-error")

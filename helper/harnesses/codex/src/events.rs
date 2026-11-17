@@ -1,5 +1,4 @@
 use super::Codex;
-use crate::channel::failure;
 use dispatch_helper_core::{api::*, json::Value};
 
 const APPROVAL: &str = "Codex needs approval in Terminal.";
@@ -253,17 +252,14 @@ impl Codex {
         } else if matches!(method, "turn/started" | "turn/completed" | "thread/status/changed") {
             let mut states = self.states.borrow_mut();
             let state = states.entry(binding.session.clone()).or_default();
-            let turn = params.get("turn");
             let live = self.live.borrow();
             let live = live.get(&binding.session);
             state.activity = live.and_then(crate::live::Live::running);
             state.busy = live.and_then(|live| live.active).unwrap_or(state.activity.is_some());
+            // A turn's end clears what asked for the terminal. Its error is not asked: the rollout's
+            // notice says it in the transcript (history.rs, task_complete).
             if method == "turn/completed" {
-                state.attention = turn
-                    .and_then(|turn| turn.get("error"))
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::string)
-                    .map(str::to_owned);
+                state.attention = None;
             }
             // An approval the TUI asks itself (its PermissionRequest hook is off, untrusted, or fell
             // back): Chat cannot answer it, so it points to Terminal, as Claude's permission prompt
@@ -281,20 +277,8 @@ impl Codex {
                 binding,
                 state: state.clone(),
             });
-        } else if method == "error" {
-            let message = params
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::string)
-                .unwrap_or("The Codex request failed");
-            let error = failure("native", message);
-            let mut states = self.states.borrow_mut();
-            let state = states.entry(binding.session.clone()).or_default();
-            state.attention = Some(error.message);
-            ui.update(Update::State {
-                binding,
-                state: state.clone(),
-            });
         }
+        // `error`: a retry's progress, or a failure the turn's end carries too (its notice, history.rs).
+        // Neither asks anything of the terminal, so neither raises attention.
     }
 }

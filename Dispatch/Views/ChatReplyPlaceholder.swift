@@ -6,7 +6,7 @@ import SwiftUI
 /// its place without moving.
 struct ChatReplyPlaceholderStatus: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let session: ChatSession
     let coordinator: ChatCoordinator
     @State private var appeared = Date()

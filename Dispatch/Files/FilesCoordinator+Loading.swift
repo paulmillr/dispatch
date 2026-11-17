@@ -324,7 +324,7 @@ extension FilesCoordinator {
                 // A folder that is gone or unreadable shows the error, not its old entries; a transient failure
                 // keeps them beside the error.
                 let keep: Bool = switch error {
-                case .notFound, .notDirectory, .permissionDenied: false
+                case .notFound, .notDirectory, .permissionDenied, .privacyBlocked: false
                 default: true
                 }
                 let next = FileListingState(listing: keep ? previous?.listing : nil, loadedAt: previous?.loadedAt, error: error,

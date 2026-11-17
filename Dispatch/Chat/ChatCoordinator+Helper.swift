@@ -235,7 +235,11 @@ extension ChatCoordinator {
             if session.shells != shells { session.shells = shells }
             let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
             if session.busy != busy {
-                if session.busy, !busy { ChatAnnouncement.post("\(session.agentTitle) finished", for: session) }
+                if session.busy, !busy {
+                    ChatAnnouncement.post("\(session.agentTitle) finished", for: session)
+                    // Unseen, the finished turn keeps its mark through a queued message that starts the next one.
+                    if !session.latestOutputIsVisible { session.finishedUnseen = true }
+                }
                 session.busy = busy
             }
             if session.starting { session.starting = false }
@@ -701,7 +705,7 @@ extension ChatCoordinator {
             // The reply placeholder (ChatPendingReply), for a prompt that starts a turn (a steered message joins the
             // running one). Without motion, or in the radio log, the composer keeps the activity.
             if session.awaitingPromptAck, !session.busy, !ChatThemeStore.shared.current.radioLog,
-               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+               !MotionStore.reduced {
                 session.armPendingReply()
             }
             if let prompt = session.optimisticPrompt {

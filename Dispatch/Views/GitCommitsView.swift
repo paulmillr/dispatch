@@ -297,7 +297,7 @@ private struct GitCommitsList: View {
     @Environment(\.appTypography) private var typography
     /// One column: a chosen row's detail takes the list's place (`FilesSplit`).
     @Environment(\.filesSplitNarrow) private var narrow
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// The first commit the list last showed, and the commits that arrived above it still drawing their graph in.
     @State private var shownTop: String?
     @State private var arriving: Set<String> = []
@@ -1029,7 +1029,7 @@ private struct GitCommitDetailPane: View {
     var focus: FocusState<GitCommitsFocus?>.Binding
     @Environment(\.filesSplitNarrow) private var narrow
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     var body: some View {
         // Another commit's detail crossfades with the last one's rather than replacing it in a frame.

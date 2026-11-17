@@ -74,7 +74,7 @@ extension StripTab {
 /// the mode switch (terminal, chat, files) and the layout picker. Callers supply each tab's row and what selecting and creating tabs means.
 struct TabBar<Row: View>: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let ids: [UUID]
     let selected: UUID?
     let space: Space

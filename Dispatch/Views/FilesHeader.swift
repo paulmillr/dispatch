@@ -78,7 +78,7 @@ struct FilesHeader: View {
                 searchSlot
                 if session.tab == .commits { GitLogFilterButton(session: session) }
                 // Nothing to switch where two views do not fit.
-                if session.canShowBoth { viewsToggle }
+                if session.canShowBoth { FilesViewsToggle(session: session) }
             }
             .glassControlGroup()
             .layoutPriority(1)
@@ -516,11 +516,17 @@ struct FilesHeader: View {
         DispatchQueue.main.async { filterFocused = true }
     }
 
-    /// ⌥⌘P: Single view, one view at a time, or the list with its detail (the preview, the change's diff, the commit's
-    /// detail) beside or under it. Arrows drawn in while one view shows (lit), drawn out while both do, on every tab.
-    private var viewsToggle: some View {
+}
+
+/// ⌥⌘P: Single view, one view at a time, or the list with its detail (the preview, the change's diff, the commit's
+/// detail) beside or under it. Arrows drawn in while one view shows (lit), drawn out while both do, on every tab. In the
+/// files header, and in a previewed file's bar when that takes the header's place, at the same trailing spot.
+struct FilesViewsToggle: View {
+    let session: FilesSession
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
         let single = session.splitNarrow
-        let both = !single
         let pane = session.tab == .files ? "preview" : session.showsLog ? "details" : "diff"
         return Button {
             session.toggleViews()
@@ -532,7 +538,7 @@ struct FilesHeader: View {
         }
         .buttonStyle(FilesHeaderButtonStyle(on: single))
         .help("Single view · ⌥⌘P")
-        .accessibilityLabel(both ? "Show one view" : "Show list and \(pane)")
+        .accessibilityLabel(single ? "Show list and \(pane)" : "Show one view")
         .accessibilityValue(single ? "on" : "off")
         .accessibilityIdentifier("files-views-toggle")
     }

@@ -357,7 +357,7 @@ struct ReviewHeaderButton: View {
     let focused: Bool
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @State private var finishing = false
     /// The view is under 900 pt, where list and detail stack or show one at a time (`FilesView.shape`): the header has
     /// no room to spare, and the quiet button gives way.
@@ -537,6 +537,7 @@ private struct ReviewCreateButtonStyle: ButtonStyle {
                 .fixedSize()
                 .padding(.horizontal, 10)
                 .frame(height: typography.expanded(22))
+                .hoverFill(Capsule(), color: quiet ? nil : Color.white.opacity(0.14))
                 .background {
                     if quiet {
                         Capsule().strokeBorder(theme.border).background(Capsule().fill(theme.ink.opacity(configuration.isPressed ? 0.08 : 0)))

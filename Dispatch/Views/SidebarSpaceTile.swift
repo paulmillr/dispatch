@@ -166,6 +166,7 @@ struct SidebarSpaceTile: View {
     var metrics = SidebarMetrics.large(contentSize: 14)
     var selection: Namespace.ID?
     @State private var hovered = false
+    @Environment(\.pointerOver) private var pointerOver
 
     private var selectedFill: Color { host.tint.map { $0.foreground.opacity(0.16) } ?? Chrome.palette.selection }
     private var label: SpaceBranchName {
@@ -279,7 +280,7 @@ struct SidebarSpaceTile: View {
                 } else {
                     shape.fill(selectedFill)
                 }
-            } else if hovered {
+            } else if hovered || pointerOver {
                 shape.fill(Chrome.palette.hover)
             }
         }
@@ -306,7 +307,7 @@ struct SidebarSpaceCard: View {
     var showBranch = true
     let metrics: SidebarMetrics
     var selection: Namespace.ID?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     private var dark: Bool { Chrome.palette.isDark }
     /// The host's color; local cards stay neutral.
@@ -481,8 +482,10 @@ struct SidebarCardChrome: ViewModifier {
     let host: HostRecord
     let metrics: SidebarMetrics
     var selection: Namespace.ID?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
+    @MotionReduced private var reduceMotion
+    @Environment(\.pointerOver) private var pointerOver
+    @State private var pointerHovered = false
+    private var hovered: Bool { pointerHovered || pointerOver }
 
     private var glass: Bool { LiquidGlassStore.shared.active }
     private var dark: Bool { Chrome.palette.isDark }
@@ -497,7 +500,7 @@ struct SidebarCardChrome: ViewModifier {
             .scaleEffect(hovered && !selected && !reduceMotion ? 1.012 : 1)
             .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: hovered)
             .modifier(AttentionMotion(pending: pending, cornerRadius: metrics.cornerRadius, bar: false))
-            .onHover { hovered = $0 }
+            .onHover { pointerHovered = $0 }
     }
 
     @ViewBuilder private var surface: some View {

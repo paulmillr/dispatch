@@ -246,7 +246,8 @@ fn a_summary_counts_below_the_path_without_following_symlinks() {
         }
     );
 
-    // An unreadable folder is counted, its contents are not, and the walk goes on.
+    // An unreadable folder is counted, its contents are not, and the walk goes on; the totals say
+    // they are short ("at least"), as a Mac refusing a place it guards leaves them.
     tree.file("locked/hidden", &[0; 100]);
     if tree.lock("locked") {
         let totals = walk(&tree.root, 100, far).unwrap();
@@ -254,7 +255,7 @@ fn a_summary_counts_below_the_path_without_following_symlinks() {
             (totals.files, totals.folders, totals.bytes),
             (6 + u64::from(fifo), 4, 22)
         );
-        assert!(!totals.truncated);
+        assert!(totals.truncated);
     }
 }
 

@@ -215,6 +215,20 @@ import Foundation
 
     var source: (any FilesSource)? { availability.source }
 
+    /// Counting `path`'s size would be this Mac's first read of a place macOS guards with a consent prompt
+    /// (`ProtectedFolders`): the folder preview then waits for Count size rather than raise the prompt on a selection.
+    /// A place counts as allowed once this session listed something inside it, which macOS only allows once asked;
+    /// each child of a place guarded child by child (a container, a volume) can never be known allowed that way.
+    func countNeedsConsent(_ path: String) -> Bool {
+        guard source?.endpoint.isLocal == true, let home else { return false }
+        return ProtectedFolders.places(walking: path, home: home).contains { place in
+            guard case .folder(let folder) = place else { return true }
+            return !listings.contains { key, state in
+                state.listing != nil && (key == folder || key.hasPrefix(folder + "/"))
+            }
+        }
+    }
+
     /// The host a copy in was just refused on, because its grant has Files without Copy files in: shown over the
     /// list while attempts keep coming (a drag hovering, ⌘V again), then gone (`FilesWriteRefusal`).
     var writeRefusal: String?

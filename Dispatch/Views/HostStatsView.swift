@@ -170,7 +170,7 @@ struct LocalHostStatsPopover: View {
 
 private struct HostStatsPresentation: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let host: HostRecord
     let sample: HostStatisticsSnapshot
     let source: HostStatisticsStore.Source
@@ -180,6 +180,7 @@ private struct HostStatsPresentation: View {
     let showsIdentity: Bool
     private enum Metric { case cpu, memory }
     @State private var selectedMetric: Metric?
+    @State private var hoveredMetric: Metric?
     private var memorySelected: Bool { selectedMetric == .memory }
     private let accent = Color(red: 126/255, green: 166/255, blue: 201/255)
     var body: some View {
@@ -246,7 +247,7 @@ private struct HostStatsPresentation: View {
             HStack(alignment: .top, spacing: 12) {
                 metricButton(memory: false, title: "cpu", value: sample.cpu,
                     detail: sample.load?.first.map { String(format: "%.2f load", $0) } ?? "load unavailable")
-                metricButton(memory: true, title: "mem", value: sample.memoryPercent,
+                metricButton(memory: true, title: "memory", value: sample.memoryPercent,
                     detail: "\(gib(sample.memoryUsed)) / \(gib(sample.memoryTotal)) GB")
                 HostMetricSummary(title: "disk", value: sample.diskPercent,
                     detail: "\(gib(sample.diskFree)) GB free", warning: (sample.diskPercent ?? 0) > 80)
@@ -336,6 +337,15 @@ private struct HostStatsPresentation: View {
                               selectionColor: selectedMetric == metric ? accent : nil)
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
+            .background {
+                RoundedRectangle(cornerRadius: 6).fill(hoveredMetric == metric ? Chrome.palette.hover : .clear).padding(-5)
+            }
+            .onHover { inside in
+                if inside { hoveredMetric = metric } else if hoveredMetric == metric { hoveredMetric = nil }
+            }
+            .help(selectedMetric == metric ? "Hide the top processes and history"
+                  : memory ? "Show the top processes by memory and memory's 15-minute history"
+                  : "Show the top processes by CPU and CPU's 15-minute history")
             .accessibilityLabel(memory ? "Show memory processes and history" : "Show CPU processes and history")
             .accessibilityIdentifier(memory ? "stats-select-memory" : "stats-select-cpu")
             .accessibilityAddTraits(selectedMetric == metric ? .isSelected : [])

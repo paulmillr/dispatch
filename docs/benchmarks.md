@@ -95,7 +95,7 @@ unchanged, and stays hidden in a bounded cache after it leaves the lookahead. A 
 nothing invalidated does no work. The 10,000-row regression verifies that initial bottom layout constructs only the
 two required rows. A large-arrival regression exposed 461 constructions for a 1,000-row burst; short arrivals now glide over at most two viewports, while larger bursts pin directly with viewport-sized hosting work.
 
-Measured 2026-11-03 on the same Apple M5 Pro / 64 GiB, macOS 27.2, Xcode 27.2, AC power. Baseline
+Measured 2026-11-03 on macOS 27.2, Xcode 27.2, AC power. Baseline
 `d7f0cbc5` has only the identical harness added. Each renderer ran three fresh Release processes, six ten-second
 phases per process, serially without concurrent builds or tests. The 1,000×740 window at 2× scale used the 120 Hz
 virtual display, alongside the unchanged 60 Hz main display. Its screen display link delivers 120 Hz; AppKit's
@@ -417,7 +417,7 @@ work (idle loops, terminal output) ran on the efficiency cores at about 0.4 W a 
 on the performance cores at 3.5–4.6 W. The VM has no energy counters; on a Mac, `proc_pid_rusage` v6 (`ri_energy_nj`)
 reads a process's CPU energy without sudo, and summing it over the app's coalition (`proc_pidinfo`
 `PROC_PIDCOALITIONINFO`: the app, its helper, tmux and shells) gives what Activity Monitor puts on the app's row.
-Measured on an M5 Pro on AC power with a 60 Hz headless display, Release (`scripts/benchmark.py`) unless noted:
+Measured on AC power with a 60 Hz headless display, Release (`scripts/benchmark.py`) unless noted:
 
 | Sustained | Coalition power | CPU |
 |---|---:|---:|

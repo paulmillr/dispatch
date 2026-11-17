@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ChatSideSheet: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Bindable var side: ChatSideConversation
     let close: () -> Void
     var maximumHeight: CGFloat = 360

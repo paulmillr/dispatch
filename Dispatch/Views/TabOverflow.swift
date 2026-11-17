@@ -103,7 +103,7 @@ struct TabOverflowControl: View {
     }
 
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let items: [Item]
     let selected: UUID?
     let edges: TabStripEdges

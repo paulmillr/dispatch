@@ -113,7 +113,9 @@ pub(super) fn summary(path: &Path, limit: u64) -> io::Result<Output> {
 }
 
 /// Depth-first with an explicit stack (no recursion limit) that holds paths, not open
-/// directories, so a deep tree costs no descriptors. Only `path` itself must be readable.
+/// directories, so a deep tree costs no descriptors. Only `path` itself must be readable: a folder
+/// below it that cannot be read (its permissions, or a Mac refusing a place it guards) is left out
+/// and the totals are `truncated`, so they read as "at least", never as the whole.
 pub(super) fn walk(path: &Path, limit: u64, deadline: Instant) -> io::Result<FolderSummary> {
     let mut totals = FolderSummary::default();
     let mut visited = 0u64;
@@ -125,10 +127,17 @@ pub(super) fn walk(path: &Path, limit: u64, deadline: Instant) -> io::Result<Fol
                 return Ok(totals);
             };
             listing = std::fs::read_dir(folder).ok();
+            if listing.is_none() {
+                totals.truncated = true;
+            }
             continue;
         };
-        // An entry that fails to read ends this directory, not the walk.
-        for entry in entries.map_while(Result::ok) {
+        // An entry that fails to read ends this directory, not the walk, and leaves the totals short.
+        for entry in entries {
+            let Ok(entry) = entry else {
+                totals.truncated = true;
+                break;
+            };
             if visited == limit || Instant::now() >= deadline {
                 totals.truncated = true;
                 return Ok(totals);

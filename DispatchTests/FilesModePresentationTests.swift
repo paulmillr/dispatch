@@ -66,6 +66,55 @@ final class FilesModePresentationTests: XCTestCase {
         XCTAssertEqual(files.mode(for: agent.id), .files, "a click alone switches nothing")
     }
 
+    /// The mode button's press tracker lies over it and takes the pointer from SwiftUI: it reports it, so the button
+    /// still lights under the pointer and goes back as it leaves. Flat: a window capture cannot draw Liquid Glass.
+    func testModeButtonLightsUnderThePointerThroughItsTracker() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let glass = LiquidGlassStore.shared.enabled
+        LiquidGlassStore.shared.enabled = false
+        defer { LiquidGlassStore.shared.enabled = glass }
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: nil)
+        // Paired with Files, as the app is: a shell tab's switch offers Files, so it is not dimmed (a dimmed one never lights).
+        let files = FilesCoordinator { [weak chat] in chat }
+        chat.pairedFiles = files
+        let shell = chat.session(for: System.uuid())
+        defer { chat.close(shell.id) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 160, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        window.contentView = NSHostingView(rootView: ChatModeSwitch(session: shell, coordinator: chat).fixedSize()
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Chrome.window).preferredColorScheme(.dark))
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        let root = try XCTUnwrap(window.contentView)
+        var tracker: ModeSwitchPressTracker.TrackerView?
+        try await TestSupport.eventually {
+            root.layoutSubtreeIfNeeded()
+            tracker = PresentationTestSupport.views(of: ModeSwitchPressTracker.TrackerView.self, in: root).first
+            return tracker != nil
+        }
+        let button = try XCTUnwrap(tracker).convert(try XCTUnwrap(tracker).bounds, to: nil)
+        // Inside the button, clear of its glyph.
+        let point = NSPoint(x: button.minX + 3, y: button.midY)
+        func pixel(_ name: String) async throws -> NSColor {
+            try await System.sleep(for: .seconds(0.2), "mode.switch.hover")
+            let bitmap = try await PresentationTestSupport.capture(window, named: name, in: "mode-switch-hover").bitmap
+            let scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
+            return try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int((root.bounds.height - point.y) * scale))?
+                .usingColorSpace(.sRGB))
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent), abs(a.greenComponent - b.greenComponent), abs(a.blueComponent - b.blueComponent))
+        }
+        let idle = try await pixel("idle")
+        let event = try PresentationTestSupport.mouseEvent(.mouseMoved, in: window, at: point)
+        try XCTUnwrap(tracker).mouseEntered(with: event)
+        let hovered = try await pixel("hovered")
+        XCTAssertGreaterThan(distance(idle, hovered), 0.005, "the button lights under the pointer")
+        try XCTUnwrap(tracker).mouseExited(with: event)
+        let left = try await pixel("left")
+        XCTAssertLessThan(distance(idle, left), 0.005, "and goes back as it leaves")
+    }
+
     /// The menu a hold (or a right-click) opens lists the modes and the three files tabs, the shown one checked; Changes
     /// and Commits are enabled only where the View menu's ⇧⌘U and ⇧⌘L are (F1a).
     func testModeMenuListsTheFilesTabsInsideARepository() async throws {

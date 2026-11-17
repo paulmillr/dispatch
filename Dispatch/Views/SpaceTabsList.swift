@@ -389,7 +389,8 @@ struct SpaceTabRow: View {
                 LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical,
                              leadingButtonWidth: hovered ? 6 + 14 + 3 : 0,
                              spaceHover: SpaceTabLabel.hover(tab, name: name, host: host, in: workspace, space: space),
-                             hoverFontSize: metrics.nameSize, dragLabel: name, select: { select() }, accepts: accepts, drop: drop)
+                             hoverFontSize: metrics.nameSize, dragLabel: name, hovering: { hovered = $0 }, select: { select() },
+                             accepts: accepts, drop: drop)
             }
             if tab.members.count > 1 {
                 VStack(alignment: .leading, spacing: 3) {
@@ -519,11 +520,12 @@ struct SpaceTabCard: View {
         .frame(minHeight: metrics.rowHeight)
         .modifier(SidebarCardChrome(selected: selected, pending: SpaceSidebar.needsAttention(tab.surfaceIDs), host: host,
                                     metrics: metrics))
+        .environment(\.pointerOver, hovered)
         .overlay {
             LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical,
                          leadingButtonWidth: hovered ? 9 + metrics.discSize : 0,
                          spaceHover: SpaceTabLabel.hover(tab, name: name, host: host, in: workspace, space: space),
-                         hoverFontSize: metrics.nameSize, dragLabel: name, select: {
+                         hoverFontSize: metrics.nameSize, dragLabel: name, hovering: { hovered = $0 }, select: {
                 if tab.window { workspace.selectWindow(tab.id) } else { workspace.selectTab(tab.id) }
             }, accepts: { item in
                 switch item {
@@ -550,7 +552,7 @@ struct SpaceTabCard: View {
     }
 }
 
-/// A listed tab's actions, as its strip tab offers them: rename, the "Move to" section (another pane, a new space,
+/// A listed tab's actions, as its strip tab offers them: rename, the "Move to" submenu (another pane, a new space,
 /// another space), close; a window detaches or terminates.
 struct SpaceTabMenu: View {
     let tab: SidebarTab
@@ -576,9 +578,9 @@ struct SpaceTabMenu: View {
                 }
             })
             Divider()
-            Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
             Button("Detach") { controller.detachWindow(tab.id) }.help(MoveTargetsSection.detachHelp)
             Button("Terminate…") { controller.terminateWindow(tab.id) }
+            Button("Close Tab") { controller.closeWindow(tab.id) }.help(MoveTargetsSection.closeHelp)
         } else {
             MoveTargetsSection(
                 panes: space.panes.filter { $0.id != tab.pane }.map { target in

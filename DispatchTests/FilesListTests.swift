@@ -391,14 +391,41 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesView.shape(width: 1_180, height: 700, preference: session.previewWidth, oneView: session.oneView),
                        .columns(FilesSplitColumns(list: 760, preview: 420)))
 
-        // One view opens on the list, and a preview that had the keyboard hands it to the list.
+        // One view opens on what the detail shows: the file being previewed takes the list's place, keeping the keyboard.
         session.splitNarrow = false
+        session.narrowDetail = false
+        session.previewFocused = true
+        session.toggleViews()
+        XCTAssertTrue(session.narrowDetail, "the file, not the list it was opened from")
+        XCTAssertTrue(session.previewFocused)
+        // With nothing previewed it opens on the list, and a preview that had the keyboard hands it to the list.
+        session.splitNarrow = true
+        session.toggleViews()
+        session.splitNarrow = false
+        session.narrowDetail = false
+        session.preview = nil
         session.previewFocused = true
         let request = session.focusRequest
         session.toggleViews()
         XCTAssertFalse(session.narrowDetail)
         XCTAssertFalse(session.previewFocused)
         XCTAssertNotEqual(session.focusRequest, request)
+        // The git tabs alike: a change's diff, a commit.
+        session.tab = .changes
+        session.changesSelection = "src/app.ts"
+        session.splitNarrow = false; session.narrowDetail = false
+        session.toggleViews()
+        XCTAssertTrue(session.narrowDetail, "the diff being read")
+        session.tab = .commits
+        session.selectedCommit = nil
+        session.splitNarrow = false; session.narrowDetail = false
+        session.toggleViews()
+        XCTAssertFalse(session.narrowDetail, "no commit picked: the log")
+        session.selectedCommit = "a1b2c3d"
+        session.splitNarrow = false; session.narrowDetail = false
+        session.toggleViews()
+        XCTAssertTrue(session.narrowDetail, "the commit being read")
+        session.tab = .files
 
         // Where both do not fit, the button does nothing.
         session.splitNarrow = true

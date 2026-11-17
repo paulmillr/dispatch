@@ -34,7 +34,7 @@ struct GitDiffView: View {
 
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     /// Narrower than `FilesView.columnsWidth`: one gutter in Diff, lines wrapped unless the wrap button said otherwise,
     /// Diff | Source as glyphs.
     @Environment(\.filesCompact) private var compact

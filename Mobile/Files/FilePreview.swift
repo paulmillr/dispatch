@@ -314,6 +314,7 @@ final class FilePreview {
         case .cancelled?: return
         case .notFound?: content = .failed("\(name) is not on \(host) any more.")
         case .permissionDenied?: content = .failed("\(host) does not let this account read \(name).")
+        case .privacyBlocked?: content = .failed(failure?.message ?? "")
         case .changed?: content = .failed("\(name) keeps changing while it is read.")
         case .offline?: content = .failed("\(host) is offline.")
         default: content = .failed(failure?.message ?? error.localizedDescription)

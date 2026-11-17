@@ -87,7 +87,7 @@ private struct LiquidGlassBackground<S: Shape>: ViewModifier {
 /// carries everything drawn in the glass with it, the tabs' layout included.
 private struct TabStripGlass: ViewModifier {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let tint: HostTint?
     var bare = false
 
@@ -210,9 +210,10 @@ private struct StripGlassButton: ViewModifier {
 struct GlassHover<S: Shape>: ViewModifier {
     let shape: S
     @State private var hovering = false
+    @Environment(\.pointerOver) private var pointerOver
     func body(content: Content) -> some View {
         content
-            .overlay { shape.fill(Chrome.ink.opacity(Chrome.palette.isDark ? 0.08 : 0.06)).opacity(hovering ? 1 : 0).allowsHitTesting(false) }
+            .overlay { shape.fill(Chrome.ink.opacity(Chrome.palette.isDark ? 0.08 : 0.06)).opacity(hovering || pointerOver ? 1 : 0).allowsHitTesting(false) }
             .onHover { hovering = $0 }
     }
 }
@@ -224,8 +225,9 @@ extension View {
 /// A button on a strip's shared glass: no glass of its own, a faint circle while the pointer is over it.
 struct StripActionHover: ViewModifier {
     @State private var hovering = false
+    @Environment(\.pointerOver) private var pointerOver
     func body(content: Content) -> some View {
-        content.background(hovering ? Chrome.palette.hover : .clear, in: Capsule())
+        content.background(hovering || pointerOver ? Chrome.palette.hover : .clear, in: Capsule())
             .onHover { hovering = $0 }
     }
 }

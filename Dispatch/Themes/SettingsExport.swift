@@ -138,7 +138,7 @@ enum SettingsExport {
         "startingDirectory": "Starting folder", "shell": "Shell", "startupCommand": "Startup command", "rememberHosts": "Reopen spaces",
         "restoreTerminalOutput": "Reopen history", "enableDiagnostics": "Diagnostics", "outputWindow": "Slow connection mode", "modelTracks": "Model sliders",
         "sidebarStyle": "Space size", "showGitBranches": "Show git branch in spaces", "liquidGlass": "Liquid Glass",
-        "hostColors": "Host colors", "showHostColors": "Color-code remote hosts", "textContrast": "Improve text contrast",
+        "hostColors": "Host colors", "showHostColors": "Color-code remote hosts", "animations": "Enable animations", "textContrast": "Improve text contrast",
         "colorVision": "Colorblind-friendly", "terminalOpacity": "Terminal opacity", "spaces": "Tmux & herdr sessions as spaces",
         "enableKittyGraphics": "Kitty graphics", "filesEnabled": "Files", "filesDragAndDrop": "Drag and drop",
         "filesPreviews": "File previews", "filesLineNumbers": "Line numbers", "filesWrapLines": "Wrap lines",

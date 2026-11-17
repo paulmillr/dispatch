@@ -137,7 +137,7 @@ struct CodeDocumentControls: View {
 struct CodeDocumentView: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.chatSearchQuery) private var query
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let document: ToolDocument
     let directory: String
     @Environment(\.sshSource) private var sshSource

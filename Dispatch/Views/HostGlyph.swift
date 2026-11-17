@@ -222,7 +222,11 @@ struct HostInformationView: View {
                     // The popover's inherited ink would otherwise override the role's red.
                     Text(action.title).font(typography, .label).frame(maxWidth: .infinity)
                         .foregroundStyle(action.destructive ? Color(nsColor: .systemRed) : Chrome.ink)
-                }.buttonStyle(.bordered).controlSize(.large).padding(.top, 4)
+                }.buttonStyle(.bordered).controlSize(.large)
+                    // The bordered button shows no hover of its own.
+                    .overlay { Capsule().fill(Chrome.ink.opacity(footerHovered == action.title ? 0.06 : 0)).allowsHitTesting(false) }
+                    .onHover { footerHovered = $0 ? action.title : (footerHovered == action.title ? nil : footerHovered) }
+                    .padding(.top, 4)
             } else {
                 flatFooterButton(action.title, action: action.action)
             }
@@ -377,6 +381,7 @@ struct HostConnectionDetails: View {
 /// Automatic, or one fixed color for this machine in every theme, in one row.
 struct HostColorPicker: View {
     let tint: HostTint
+    @State private var hovered: HostColor??
     var body: some View {
         HStack(spacing: 4) {
             swatch(nil)
@@ -386,6 +391,7 @@ struct HostColorPicker: View {
 
     private func swatch(_ color: HostColor?) -> some View {
         let selected = tint.choice == color, title = color?.title ?? "Automatic (\(tint.automatic.title))"
+        let pointed = hovered == .some(color)
         return Button { HostColorStore.shared.choose(color, for: tint.machine) } label: {
             Circle().fill(tint.showing(color).edge)
                 .frame(width: 14, height: 14)
@@ -394,10 +400,14 @@ struct HostColorPicker: View {
                     if color == nil { Image(systemName: "wand.and.stars").font(.system(size: 7, weight: .bold)).foregroundStyle(.white) }
                 }
                 .padding(2)
-                .overlay { Circle().strokeBorder(selected ? Chrome.ink : .clear, lineWidth: 1.5) }
+                // The pointer's swatch gets a fainter ring than the chosen one's.
+                .overlay { Circle().strokeBorder(selected ? Chrome.ink : pointed ? Chrome.muted : .clear, lineWidth: 1.5) }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { hovered = .some(color) } else if hovered == .some(color) { hovered = nil }
+        }
         .help(title)
         .accessibilityLabel("\(title) host color")
         .accessibilityAddTraits(selected ? .isSelected : [])

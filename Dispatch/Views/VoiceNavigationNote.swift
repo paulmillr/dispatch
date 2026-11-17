@@ -6,7 +6,7 @@ import SwiftUI
 /// (`dictationErrorTimeout`).
 struct VoiceNavigationNote: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     private var navigation: VoiceNavigation { .shared }
     private var dictation: Dictation { .shared }
 

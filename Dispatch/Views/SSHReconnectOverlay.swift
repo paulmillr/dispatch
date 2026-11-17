@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SSHReconnectOverlay: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let surface: UUID
     let workspace: Workspace
     @State private var lastState: SSHReconnectController.State?
@@ -329,7 +329,7 @@ struct SSHReconnectLogPanel: View {
 /// glass with the strip buttons' faint hover capsule.
 struct SSHReconnectGlassRow: View {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let state: SSHReconnectController.State
     let hostName: String
     var login = SSHReconnectLoginPresentation()
@@ -411,7 +411,7 @@ struct SSHReconnectGlassRow: View {
 /// The status mark: filled while offline or connected, a sweeping three-quarter ring while reconnecting (still with
 /// reduced motion), drawn as the flat bar's.
 struct ReconnectIndicator: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let color: Color
     let reconnecting: Bool
 
@@ -434,7 +434,7 @@ struct ReconnectIndicator: View {
 
 struct SSHReconnectControl: NSViewRepresentable {
     @Environment(\.appTypography) private var typography
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     private let themes = ChatThemeStore.shared
     let state: SSHReconnectController.State
     let reconnect: () -> Void

@@ -95,6 +95,8 @@ struct GitStatus: Hashable, Sendable {
     var loadedAt: Date
     /// The status was cut at the helper's bound: `changes` holds the first of them only.
     var truncated = false
+    /// Folders the status leaves out, relative to the top (`GitQueries.unscanned`): Review says so.
+    var unscanned: [String] = []
 
     func changes(in area: GitChangeArea) -> [GitChange] { changes.filter { $0.area == area } }
     var additions: Int { changes.reduce(0) { $0 + ($1.additions ?? 0) } }

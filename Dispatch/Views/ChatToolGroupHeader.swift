@@ -5,7 +5,7 @@ import SwiftUI
 /// this view.
 struct ChatToolGroupHeader: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let group: ChatToolGroup
     var replyTime: Date? = nil
     var replyInfo: ChatMessageInfo? = nil
@@ -33,6 +33,7 @@ struct ChatToolGroupHeader: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: theme.typography.detailLineHeight, alignment: .leading)
                 .contentShape(Rectangle())
+                .hoverFill(RoundedRectangle(cornerRadius: 5), outset: 4)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(thoughts == 0 ? "\(group.children.count) tool runs" : "\(group.children.count - thoughts) tool runs, \(ChatTurnSummary.count(thoughts, "thought"))")
@@ -217,7 +218,7 @@ struct ChatStepChart: View {
 /// shows each step being added. Only the live group's header uses it (one per chat); finished headers stay static.
 struct ChatLiveStepChart: View {
     @Environment(\.chatTheme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     let steps: [ChatToolStep]
     let disclosure: ChatToolGroupDisclosure
     var width: CGFloat

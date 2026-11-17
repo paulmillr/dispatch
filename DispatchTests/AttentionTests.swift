@@ -342,9 +342,11 @@ final class AttentionTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "settings-1o", in: "attention-validation")
         // AppKit fits the window to the desktop, which clips the page, and with the Files group the page outgrows a
         // 1080 pt display, so a capture of the whole scroll document cannot read it: the text drawn there can.
-        for title in ["Notifications", "dock badge and banner below tabs"] {
-            try PresentationTestSupport.assertRendered(title, in: root)
-        }
+        try PresentationTestSupport.assertRendered("Notifications", in: root)
+        // Its detail, or where macOS refuses Dispatch's banners (a test VM may), what says so in its place.
+        let texts = try PresentationTestSupport.renderedText(root)
+        XCTAssertTrue(texts.contains { $0.contains("dock badge and banner below tabs")
+                                       || $0.contains("Notifications are off for Dispatch in System Settings.") }, "Rendered: \(texts)")
     }
 }
 

@@ -76,9 +76,75 @@ import SwiftUI
     private var query = ""
     private(set) var occurrences: [Int] = []
 
+    /// The whole text as the view shows it, one attributed string, and where each line starts in it (UTF-16).
+    final class Document {
+        let text: NSAttributedString
+        let lineStarts: [Int]
+        init(text: NSAttributedString, lineStarts: [Int]) { self.text = text; self.lineStarts = lineStarts }
+    }
+    private var built: Document?
+
+    /// The code font as AppKit draws it, ligatures as Settings has them.
+    static func font(_ typography: ChatTypography) -> NSFont {
+        typography.unligated(typography.codeFontName, typography.size)
+            ?? NSFont(name: typography.codeFontName, size: typography.size)
+            ?? .monospacedSystemFont(ofSize: typography.size, weight: .regular)
+    }
+
+    /// The prepared lines joined into one text, each line in its row (the preview's metrics) and its syntax colours;
+    /// built once per file and theme. Cut lines keep their " …", and nothing hidden is in it (`prepare`).
+    func document(theme: ChatTheme, metrics: FilePreviewMetrics.Metrics) -> Document {
+        if let built { return built }
+        let font = Self.font(theme.typography)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = metrics.rowHeight
+        paragraph.maximumLineHeight = metrics.rowHeight
+        let ink = NSColor(theme.ink)
+        // The row's spare height above the text as below it, as the rows centred their line.
+        let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink, .paragraphStyle: paragraph,
+                                                   .baselineOffset: (metrics.rowHeight - metrics.lineHeight) / 2]
+        let result = NSMutableAttributedString()
+        var starts: [Int] = []
+        starts.reserveCapacity(lines.count)
+        result.beginEditing()
+        for index in lines.indices {
+            starts.append(result.length)
+            if let highlighted, cut[index] == nil {
+                for run in highlighted[index].runs {
+                    var attributes = base
+                    if let color = run.swiftUI.foregroundColor { attributes[.foregroundColor] = NSColor(color) }
+                    result.append(NSAttributedString(string: String(highlighted[index][run.range].characters), attributes: attributes))
+                }
+            } else {
+                result.append(NSAttributedString(string: cut[index] ?? lines[index], attributes: base))
+            }
+            if index < lines.count - 1 { result.append(NSAttributedString(string: "\n", attributes: base)) }
+        }
+        result.endEditing()
+        let document = Document(text: result, lineStarts: starts.isEmpty ? [0] : starts)
+        built = document
+        return document
+    }
+
+    /// Where `query` occurs in `text`, case-insensitively, in reading order; at most `occurrencesLimit`.
+    static func matches(of query: String, in text: String) -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        let string = text as NSString
+        var result: [NSRange] = []
+        var start = 0
+        while start < string.length, result.count < occurrencesLimit {
+            let found = string.range(of: query, options: .caseInsensitive, range: NSRange(location: start, length: string.length - start))
+            guard found.location != NSNotFound, found.length > 0 else { break }
+            result.append(found)
+            start = NSMaxRange(found)
+        }
+        return result
+    }
+
     func prepare(_ key: Key, text: () -> String) {
         guard key != self.key else { return }
         self.key = key
+        built = nil
         // Swift treats "\r\n" as one character, so CRLF text is normalized before it is split or highlighted.
         let source = TextRendering.visible(Self.normalized(text()))
         let shown = source.hasSuffix("\n") ? String(source.dropLast()) : source
@@ -169,84 +235,33 @@ struct FileTextPreview: View {
     var highlightsQuery = true
     /// Keeps the scroll while the view goes and comes back.
     var keeper: FilePreviewScrollKeeper?
+    /// The text has the keyboard, or gave it up (the pane's focus follows).
+    var focusChanged: (Bool) -> Void = { _ in }
+    /// The pane asks the text for the keyboard.
+    var wantsFocus = false
+    /// Esc in the text: true when the pane took it.
+    var escape: () -> Bool = { false }
     @State private var model = FileTextLines()
 
     var body: some View {
         let metrics = FilePreviewMetrics.metrics(theme.typography)
-        let numbered = lineNumbers
         switch content {
         case .text(let text, let language):
             model.prepare(.init(owner: owner, count: text.utf8.count, language: language, theme: theme)) { text }
         }
         let query = highlightsQuery ? (find?.query ?? "") : ""
-        let occurrences = model.occurrences(of: query)
-        let currentLine = find.flatMap { find in
-            occurrences.indices.contains(find.current) ? occurrences[find.current] : nil
-        }
-        let gutter = CGFloat(max(2, String(model.lines.count).count)) * metrics.digitWidth
-        return GeometryReader { geometry in
-            ScrollViewReader { proxy in
-                ScrollView(wrap ? .vertical : [.horizontal, .vertical]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        // Row identities are the line indexes: since macOS 27, scrollTo matches only ForEach identities.
-                        ForEach(0..<model.lines.count, id: \.self) { index in
-                            row(index, numbered: numbered, gutter: gutter, query: query, current: index == currentLine,
-                                width: geometry.size.width, metrics: metrics)
-                        }
-                    }
-                    .padding(.vertical, 10)
-                    // At least the pane's height, from the top: a two-axis scroll view centres content smaller than
-                    // itself, which drew a short file in the middle of the pane.
-                    .frame(minWidth: wrap ? nil : geometry.size.width, minHeight: geometry.size.height,
-                           alignment: .topLeading)
-                    .background { keeper }
-                    .background(alignment: .topLeading) {
-                        if numbered {
-                            Rectangle().fill(theme.border).frame(width: 1)
-                                .padding(.leading, 14 + gutter + 10)
-                        }
-                    }
-                }
-                .onChange(of: find?.step) { scroll(proxy, to: currentLine) }
-                .onChange(of: query) { scroll(proxy, to: currentLine) }
-            }
-            .onChange(of: occurrences.count, initial: true) {
-                guard let find else { return }
-                if find.total != occurrences.count { find.total = occurrences.count }
-                if find.current >= occurrences.count, find.current != 0 { find.current = 0 }
+        return FileTextDocument(document: model.document(theme: theme, metrics: metrics), theme: theme, metrics: metrics,
+                                wrap: wrap, lineNumbers: lineNumbers, query: query, current: find?.current ?? 0,
+                                step: find?.step ?? 0, keeper: keeper, focusChanged: focusChanged, wantsFocus: wantsFocus,
+                                escape: escape) { count in
+            guard let find else { return }
+            // After this update: find's count is SwiftUI state.
+            DispatchQueue.main.async {
+                if find.total != count { find.total = count }
+                if find.current >= count, find.current != 0 { find.current = 0 }
             }
         }
-        .font(theme.typography.codeFont())
         .accessibilityIdentifier("file-preview-text")
-    }
-
-    private func row(_ index: Int, numbered: Bool, gutter: CGFloat, query: String, current: Bool, width: CGFloat,
-                     metrics: FilePreviewMetrics.Metrics) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            if numbered {
-                Text(verbatim: String(index + 1)).foregroundStyle(theme.muted)
-                    .frame(width: gutter, alignment: .trailing)
-                    .padding(.trailing, 10 + 14)
-            }
-            Text(ChatSearchHighlight.text(model.attributed(index, theme: theme), query: query, theme: theme))
-                .foregroundStyle(theme.ink)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: !wrap, vertical: true)
-                .frame(maxWidth: wrap ? .infinity : nil, alignment: .leading)
-            if !wrap { Spacer(minLength: 0) }
-        }
-        // The line sits centred in its row: 2.5 pt above and below 15 pt text on a 20 pt row.
-        .padding(.vertical, (metrics.rowHeight - metrics.lineHeight) / 2)
-        .frame(minHeight: metrics.rowHeight, alignment: .topLeading)
-        .padding(.horizontal, 14)
-        .frame(minWidth: wrap ? nil : width, maxWidth: wrap ? width : nil, alignment: .leading)
-        .background(current ? theme.yellow.opacity(0.18) : .clear)
-        .accessibilityIdentifier("file-preview-line-\(index + 1)")
-    }
-
-    private func scroll(_ proxy: ScrollViewProxy, to line: Int?) {
-        guard let line else { return }
-        proxy.scrollTo(line, anchor: .center)
     }
 }
 

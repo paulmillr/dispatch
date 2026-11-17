@@ -554,7 +554,7 @@ final class FilesOutlineView: NSOutlineView {
             // A file or two appearing or going in a folder already listed (a build's output, an agent's edit) fades
             // and slides; a first listing, a checkout's worth of change, or Reduce Motion stays instant.
             let animated = refresh && !old.isEmpty && removals.count + insertions.count <= 20
-                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                && !MotionStore.reduced
             if !removals.isEmpty { outline.removeItems(at: removals, inParent: parentNode, withAnimation: animated ? [.effectFade, .slideUp] : []) }
             if !insertions.isEmpty { outline.insertItems(at: insertions, inParent: parentNode, withAnimation: animated ? [.effectFade, .slideDown] : []) }
         }

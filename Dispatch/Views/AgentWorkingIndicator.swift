@@ -134,7 +134,7 @@ struct AgentWorkingIndicator: View {
     var stop: () -> Void = {}
     @State private var retained: AgentWorkingState?
     @State private var expanded = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
 
     var body: some View {
         let current = AgentWorkingState(session)

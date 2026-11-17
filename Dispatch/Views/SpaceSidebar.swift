@@ -47,7 +47,7 @@ struct SpaceSidebar: View {
     /// Outside full screen the sidebar's top row carries the traffic lights, sidebar toggle, and header buttons.
     var windowControls = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MotionReduced private var reduceMotion
     @Namespace private var selection
     @State private var searchQuery = ""
     /// ⌘P opens the search field above the footer; a query keeps it open.
@@ -783,7 +783,8 @@ struct SpaceSidebar: View {
 
     /// The body of `SpaceSidebarRow`. It reads selection and branch only through its arguments,
     /// so a space switch re-renders the two rows whose selection changed, not every row.
-    fileprivate func rowContent(_ space: Space, selected: Bool, pending: Bool, shortcut: String, branch: String?, selection: Namespace.ID) -> some View {
+    fileprivate func rowContent(_ space: Space, selected: Bool, pending: Bool, shortcut: String, branch: String?, selection: Namespace.ID,
+                                hovered: Bool, hovering: @escaping (Bool) -> Void) -> some View {
         let flat = settings.values.spaceOrder != .tree
         let hover = SpaceHoverDetails.make(space: space, host: workspace.hosts.record(space.hostID), runtime: .shared)
         return Button { workspace.selectSpace(space.id) } label: {
@@ -796,13 +797,14 @@ struct SpaceSidebar: View {
                              branch: branch,
                              showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection)
         }
+        .environment(\.pointerOver, hovered)
         .background(SpaceBranchObserver(space: space, enabled: settings.values.showsGitBranches))
         .accessibilityHint(hover.summary)
         .accessibilityIdentifier("space-\(space.id)")
         .overlay {
             LocalReorder(item: .space(space.id), edge: .vertical,
                          reorderGroup: flat ? nil : space.hostID.rawValue, spaceHover: hover,
-                         hoverFontSize: metrics.nameSize,
+                         hoverFontSize: metrics.nameSize, hovering: hovering,
                          select: { workspace.selectSpace(space.id) }, accepts: { item in
                 switch item {
                 case .space(let id):
@@ -1036,7 +1038,8 @@ private struct FooterHostCell: ViewModifier {
     let height: CGFloat
     func body(content: Content) -> some View {
         let cell = content.frame(maxWidth: .infinity).frame(minHeight: height)
-        if glass { cell.modifier(StripActionHover()).contentShape(Capsule()) } else { cell.contentShape(Rectangle()) }
+        if glass { cell.modifier(StripActionHover()).contentShape(Capsule()) }
+        else { cell.hoverFill(RoundedRectangle(cornerRadius: 5)).contentShape(Rectangle()) }
     }
 }
 
@@ -1050,11 +1053,12 @@ private struct SpaceSidebarRow: View, Equatable {
     let shortcut: String
     let branch: String?
     let selection: Namespace.ID
+    @State private var hovered = false
 
     var body: some View {
         // Live: its tabs' titles and directories re-render this row, not the sidebar.
         sidebar.rowContent(sidebar.workspace.liveSpace(space), selected: selected, pending: pending, shortcut: shortcut,
-                           branch: branch, selection: selection)
+                           branch: branch, selection: selection, hovered: hovered) { hovered = $0 }
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {

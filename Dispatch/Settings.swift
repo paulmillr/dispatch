@@ -250,6 +250,8 @@ struct Preferences: Codable, Equatable {
     var hostColors: [String: HostColor] = [:]
     /// Off draws remote hosts in neutral gray: they stay marked, but not by hue.
     var showHostColors = true
+    /// Enable animations (Theme › Appearance): off, the app moves as under the system's Reduce Motion (`MotionStore`).
+    var animations = true
     var sidebarMetrics: SidebarMetrics { sidebarMetrics(glass: false) }
     func sidebarMetrics(glass: Bool) -> SidebarMetrics {
         switch sidebarStyle {
@@ -417,7 +419,7 @@ struct Preferences: Codable, Equatable {
         case verticalTabs = "tabsOnly"
         case hideSingleSpace, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
         case enableDiagnostics, outputWindow, modelTracks
-        case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
+        case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors, animations
         case textContrast, colorVision, typicalTheme, typicalLightTheme, terminalOpacity
         case spaces, enableKittyGraphics
         case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, filesRenderMarkdown, gitEnabled
@@ -466,6 +468,7 @@ struct Preferences: Codable, Equatable {
         hostColors = try fields.decodeIfPresent([String: String].self, forKey: .hostColors)?
             .compactMapValues(HostColor.init(rawValue:)) ?? hostColors
         showHostColors = try fields.decodeIfPresent(Bool.self, forKey: .showHostColors) ?? showHostColors
+        animations = try fields.decodeIfPresent(Bool.self, forKey: .animations) ?? animations
         // A removed or unknown theme resets only this choice, preserving the rest of the file.
         appTheme = try fields.decodeIfPresent(String.self, forKey: .appTheme).flatMap(AppTheme.init(rawValue:)) ?? appTheme
         theme = try fields.decodeIfPresent(String.self, forKey: .theme) ?? theme
