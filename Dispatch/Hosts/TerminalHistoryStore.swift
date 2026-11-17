@@ -100,12 +100,16 @@ struct TerminalHistoryStore {
 /// Owner-only files replaced whole: created 0600 under a temporary name beside the target,
 /// synced, then renamed over it, so no reader or crash sees a partial or more readable file.
 enum PrivateFile {
-    static func write(_ data: Data, to url: URL, excludedFromBackup: Bool = false) throws {
-        try write(to: url, excludedFromBackup: excludedFromBackup) { try $0.write(contentsOf: data) }
+    static func write(_ data: Data, to url: URL, excludedFromBackup: Bool = false, unreadableWhileLocked: Bool = false) throws {
+        try write(to: url, excludedFromBackup: excludedFromBackup, unreadableWhileLocked: unreadableWhileLocked) {
+            try $0.write(contentsOf: data)
+        }
     }
 
-    /// `body` writes the contents in parts.
-    static func write(to url: URL, excludedFromBackup: Bool = false, _ body: (FileHandle) throws -> Void) throws {
+    /// `body` writes the contents in parts. `unreadableWhileLocked` (iPhone): class B instead of C, written whenever
+    /// but read only while the phone is unlocked (the chat history, `ChatHistoryArchive`, which nothing reads locked).
+    static func write(to url: URL, excludedFromBackup: Bool = false, unreadableWhileLocked: Bool = false,
+                      _ body: (FileHandle) throws -> Void) throws {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var temporary = directory.appendingPathComponent(prefix(url) + System.uuid().uuidString)
@@ -118,8 +122,8 @@ enum PrivateFile {
             // with the phone locked reads the hosts, keys and trusted host keys and writes the queue, markers and
             // cache (class A failed every read then, and a store moved its unreadable file aside). Set on the
             // temporary inode before content is written; the atomic rename retains the protection class.
-            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
-                                                  ofItemAtPath: temporary.path)
+            let protection: FileProtectionType = unreadableWhileLocked ? .completeUnlessOpen : .completeUntilFirstUserAuthentication
+            try FileManager.default.setAttributes([.protectionKey: protection], ofItemAtPath: temporary.path)
             #endif
             try body(handle)
             try handle.synchronize()

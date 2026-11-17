@@ -229,7 +229,7 @@ final class ChatSessionTests: XCTestCase {
         // Held on the device: its add is refused as not sent, so it waits.
         _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "later"))
         chat.stop()
-        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 }
         XCTAssertEqual(chat.queueItems.first?.state, .paused(MobileChatSession.stopped))
         XCTAssertTrue(chat.queueStopped)
         let row = try XCTUnwrap(chat.queueRows.first)
@@ -264,8 +264,25 @@ final class ChatSessionTests: XCTestCase {
         script(helper) { request in request.method == "chat.stop" ? .result(ChatFixture.sent()) : nil }
         let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
         chat.stop()
-        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        XCTAssertTrue(chat.stopping, "the row says stopping at once")
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 }
         XCTAssertEqual(helper.requests("chat.stop").first?.params["session"] as? String, conversation)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(chat.stopping, "taken: still stopping while the agent works")
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        try await TestSupport.eventually { !chat.working && !chat.stopping }
+    }
+
+    /// A refused Stop gives the row back at once, with the reason.
+    func testARefusedStopGivesTheRowBack() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in request.method == "chat.stop" ? .failure(code: "input", message: "No.") : nil }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        chat.stop()
+        XCTAssertTrue(chat.stopping)
+        try await TestSupport.eventually { !chat.stopping && chat.failure != nil }
+        XCTAssertTrue(chat.working)
     }
 
     func testApprovalChipsComeFromTheAdvertisedOptions() throws {
@@ -397,11 +414,30 @@ final class ChatSessionTests: XCTestCase {
         try await TestSupport.eventually { helper.requests("queue.reorder").count == 1 && !chat.queueBusy }
         XCTAssertEqual(helper.requests("queue.reorder").first?.params["items"] as? [String], ["held-3", "held-1", "held-2"])
         chat.removeQueued(chat.queueRows[1])
+        XCTAssertEqual(chat.queueRows.map(\.id), ["helper:held-3", "helper:held-2"], "The row goes at once")
         try await TestSupport.eventually { helper.requests("queue.remove").count == 1 && !chat.queueBusy }
         XCTAssertEqual(helper.requests("queue.remove").first?.params["item"] as? String, "held-1")
+        XCTAssertEqual(chat.queueRows.map(\.id), ["helper:held-3", "helper:held-2"], "Removed: gone before the snapshot")
         chat.sendQueuedNow(chat.queueRows[0])
+        XCTAssertEqual(chat.queueRows.map(\.id), ["helper:held-2"], "Send now: the row leaves at once")
         try await TestSupport.eventually { helper.requests("queue.start").count == 1 && !chat.queueBusy }
         XCTAssertEqual(helper.requests("queue.start").first?.params["mode"] as? String, "steer", "Send now interrupts the turn")
+        XCTAssertEqual(chat.queueRows.map(\.id), ["helper:held-2"])
+    }
+
+    /// A refused remove brings the row back, with the reason.
+    func testARefusedQueueRemoveBringsTheRowBack() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in request.method == "queue.remove" ? .failure(code: "busy", message: "It is being typed.") : nil }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.queue", ["terminal": 7, "session": conversation, "error": NSNull(), "items": [
+            ChatFixture.queued("held-1", "Also cover invoice.paid", revision: 1)]])
+        try await TestSupport.eventually { chat.queue.count == 1 }
+        chat.removeQueued(chat.queueRows[0])
+        XCTAssertTrue(chat.queueRows.isEmpty, "The row goes at once")
+        try await TestSupport.eventually { chat.failure != nil && !chat.queueBusy }
+        XCTAssertEqual(chat.queueRows.map(\.id), ["helper:held-1"], "Refused: back")
     }
 
     /// The loading line says what the conversation waits for: the helper's answer, then the agent's transcript being

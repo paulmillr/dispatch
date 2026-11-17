@@ -399,6 +399,7 @@ struct MobileRoot: View {
                     navigator.actions.failure = "\(conversation.name) is no longer on \(conversation.hostName)."
                 }
             },
+            closing: { composition.tabs.workspace($0.key.host)?.closes(pane: $0.key.node) == true },
             status: { MobileComposition.status($0, session: conversations.sessions[$0.key], detail: false) },
             folder: { row in
                 guard let tab = composition.tab(for: row.key), let host = composition.tabs.workspace(tab.host)?.host else {

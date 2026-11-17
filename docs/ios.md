@@ -106,7 +106,9 @@ the build that catches a Mac-only type leaking in. `Mobile/Shared/System.swift` 
 
 - Chat transcript merge rules (`ChatTranscript`), displayed items and prompt confirmation; helper notification
   decoding, interaction replies and model menu/readback (`HelperChatTransport`). A model selection is confirmed only
-  by the agent's subsequent state; a failed read never substitutes the requested choice. An uncertain question reply
+  by the agent's subsequent state; a failed read never substitutes the requested choice. The phone's model sheet
+  opens on the lists last seen for the agent (`ChatModelMemory`), a small spinner by its heading while the live ones
+  load and replace them. An uncertain question reply
   stays blocked until the helper resolves it.
 - A turn's summary, steps and their folding (`ChatTurnSummary`, `ChatStep`, `ChatStepFold` in
   `ChatTurnSteps.swift`), with the times and token counts message details word: the phone's message details and bubble
@@ -445,9 +447,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   turn over (idle, or a result not yet seen, as Chat knows it live) is terminated at once; otherwise `close.request`
   `check` asks the helper, and verified idle work is closed through `prompt`, while busy work, or a check the
   multiplexer cannot answer, asks first ("Close “name”?" naming the agent and its state or the program; Terminate).
+  The tab leaves the lists (and its own screen) at once, while the check runs: busy or not verified, it comes back
+  for the question; a lost connection brings it back with the failure.
   A phone's Detach only hides the tab on that connection (the helper's per-connection selection; the Mac keeps it,
-  and it is back after a reconnect), so the swipe offers Close alone and Detach stays in the tab's menu. A space
-  offers Detach and Terminate… and never ends by itself. Tab names, space names
+  and it is back after a reconnect), so the swipe offers Close alone and Detach stays in the row's menu (not the tab's
+  header's: the tab shown would leave). A space
+  offers Detach and Terminate… and never ends by itself. A rename (Rename…, Edit's fields) shows at once wherever the
+  name shows (`MobileWorkspace.renaming`) until a snapshot after the answer names it, the server's name winning; a
+  refusal or a lost connection puts the server's back. Tab names, space names
   (`usesDirectoryName`, kept on the server) and the Activity sort follow the Mac. New tab sends no folder, so the
   multiplexer opens it in its focused pane's directory. New chat, beside New tab at the foot of a space's screen
   (a multiplexer's space once the host's agents are known), starts the agent New chat started last
@@ -457,19 +464,28 @@ The policies below are the ones a change must keep; the screens themselves are d
   for, one left in an existing space is closed again), so a space with the same folder or name is never reused. A space
   lists its tabs by activity (their times, below): most recent first, tabs with no time yet last, ties in server order;
   or, by its header's sort menu (By time, Manual; `MobileTabs.tabSort`, this device's for every space; the switcher's
-  rows follow it), in server order; the iPad strip keeps server order. A tab row's long press offers Move to, the host's
-  other spaces while it is connected: `memberships.move` with that space as parent and no `before` (after its last
+  rows follow it), in server order; the iPad strip keeps server order. A tab row's long press is the tab's menu
+  (`TabsTabMenu`) with the space's Edit in Rename…'s place: Edit, Move to, then Detach and Close Tab. Move to (also
+  under Rename… in the tab's header and Agents' rows) offers the host's other spaces while it is connected: `memberships.move` with that space as parent and no `before` (after its last
   tab), as a tab dragged into another space on the Mac; a refusal (tmux across sessions) shows as other failures do. A
   space's Edit renames the space and its tabs in place (`entities.rename`) beside reorder and close, its rows in server
   order. Reorders go to the server (`memberships.move`) and the rows
   keep the new order until the answer or a snapshot naming the moved tab. A space's screen is headed as a tab is
   (B7): Back's circle, then one glass capsule with the host's disc, the name with its branch and `host · folder`, whose
-  tap is the space's menu without New tab (Edit, then Detach and Terminate…; a Shell space: Close all shells), and the
+  tap is the space's menu without New tab, headed by `space · host` in full (Edit, Stats (the host's), then Detach and
+  Terminate…; a Shell space: Stats, then Close all shells), and the
   sort menu trailing. In the Spaces list a space's long press is
-  its menu, as a tab's is (`SpaceMenuItems`): New tab, Rename…, Edit Spaces, then Detach and
+  its menu, as a tab's is (`SpaceMenuItems`): New tab, Edit (the list's, in Rename…'s place), then Detach and
   Terminate… (a Shell space: Close all shells); dragged from there, without Edit, a space dropped on another of its
-  host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The spaces' order is this device's, as Edit's
-  handles keep it. Paths shorten to `~` by
+  host's takes that one's place (`SpaceDrag`, `MobileTabs.moveSpace`). The list's Edit renames a multiplexer's spaces
+  in place (`entities.rename`, while the host is connected and live), and each space has a red minus before its name
+  that asks as Terminate… does (a Shell space: Close all shells; dimmed while not connected): its own button, as a
+  host's is, since a list's delete takes the row away before the question is answered. The spaces' order is this
+  device's, as Edit's handles keep it. Edit is one list (`SpacesEditRow`): each host's header a row, its spaces on a
+  card under it, so a space dropped outside its host (past its last space, the next host's rows) goes to that host's
+  nearer end rather than back, and a header's handle moves the host with its spaces (a list moves rows only within
+  one `ForEach`, and refuses a drop onto a row that cannot move). A host's header folds or unfolds its spaces from anywhere on it but its
+  glyph disc, which opens its stats. Paths shorten to `~` by
   `hello.account.home` and `login_home`, never by guessing `/Users/<name>`. A host shows one multiplexer's spaces at
   a time; hosts not connected nor on their way go to the OFFLINE group.
 - **A tab's header** (phone stack, B7), as Messages heads a conversation. Back is its own glass circle at the leading
@@ -479,7 +495,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   reads all of it); a tap opens the tab's one menu (`TabMenuItems`, the landscape rail's and iPad's disc opens the
   same): on Chat Search, the host's Stats, Side Conversation (read-only; one with changes is the composer's `/side`)
   or the open one, and Manage goal; elsewhere Stats first; the pane picker when the segment can show more than one pane
-  (on Chat only the panes running an agent, the shown one checked); the tab's row menu (Rename…, Detach, Close Tab). The
+  (on Chat only the panes running an agent, the shown one checked); the tab's (Rename…, Move to, Close Tab; Detach is
+  the rows'). Its first line names the tab and its host in full (`name · host`), which the capsule may cut. The
   folder in `host · folder` is its last component;
   Terminal adds `· shell`. The same `host · folder` (the
   folder's name, never its path) heads a space's screen, the switcher's space and the iPad's header beside its sidebar,
@@ -508,7 +525,10 @@ The policies below are the ones a change must keep; the screens themselves are d
   its siblings, so every tab beside the one just opened read "now".
 - **Files, Review and Commits** read only, through `MobileFilesSource` and `ReviewGitReader` (never `file.write`),
   only with a connected helper and the Files & git grant; their exact commands, bounds and cadences are the ones
-  [security](security.md#dispatch-for-iphone) lists, and the Mac's shared parsers and placement rules apply. The
+  [security](security.md#dispatch-for-iphone) lists, and the Mac's shared parsers and placement rules apply. Files'
+  listing row has Search, the sort menu (its own button: Name, Date or Size, then which way in its words, A to Z or Z
+  to A, Oldest or Newest first, Smallest or Largest first; another sort starts at its usual way, Finder's; folders
+  first either way; one choice for every tab while the app runs) and "…" (Show hidden files, Refresh, Copy path). The
   repository and branch of a folder are `SpaceGitFacts`, once per folder and connection, the branch on the shared 15 s
   ticks (Traffic) only while something shows it. A review is one per host and repository root
   (`ReviewPlace`, `reviews.json`, the Mac's format); Send finds every comment's lines again first, goes through the composer's routing, and leaves the comments
@@ -523,15 +543,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   no answer or an uncertain one that it may have; neither is retried. The phone checks the screen the helper had sent
   when it answered: a program that takes the pane after that (a command typed just before) still gets the `cd`, a
   window only the helper could close. A binary shows what its first bytes say it is (`FileFormat`, the Mac's: "ELF
-  64-bit LSB pie executable, arm64"), else its kind by name, and its size. Share, Save to Photos and Attach to chat take
+  64-bit LSB pie executable, arm64"), else its kind by name, and its size. Share and Save to Photos take
   only the whole revision the preview read, with the helper's metadata (off while loading, failed, offline or a
   folder): a file past the limit, a short read or a file changed since fail instead of sharing part of it. Share and
   Save to Photos copy it to the phone first (`FilePreview.download`: up to 4 GB, in 8 MB reads of that revision, the
   More button spinning meanwhile, cancelled by leaving the preview, the copy removed after); Save to Photos is offered
   for images and for videos by name (`.mp4`, `.mov`, `.m4v`), which Photos imports from the copy. Such a video shows
   its name and size with Play: nothing is read until it is tapped, then the same copy is made and plays in the system
-  player (`VideoPlayer`); leaving the preview stops it and removes the copy. Attach to chat reads the file
-  into memory (up to its attachment limit). A path that
+  player (`VideoPlayer`); leaving the preview stops it and removes the copy. A path that
   turns out to be a folder (the helper's `is_directory`) shows its listing. A folder row's item count waits while the
   host is offline and is asked again when it reconnects, for every row still on screen in their order (four at a
   time, none dropped).
@@ -542,7 +561,7 @@ The policies below are the ones a change must keep; the screens themselves are d
   headings and goes to one (opening the folded sections around it); unlike the Mac's it has no Fold All or Unfold
   All. Folds belong to the screen. Show source still shows the file's text, with Find, Wrap lines and Line
   numbers. Code's "…" has Wrap lines (per screen) and Line numbers (kept as `files.lineNumbers`, on by default); there is
-  no Copy contents (Copy path, Share and Attach to chat stay).
+  no Copy contents (Copy path and Share stay), and no Attach to chat.
 - **Agents** (`Mobile/Agents`). One row per agent-bound terminal on every host with Chat on, a machine reached
   through two host entries listed once, under the connected one (`sameMachine`, also while the other entry
   reconnects). Sections: Needs you, Working, Recent (by newest record, else when the row first appeared, so a new
@@ -550,17 +569,24 @@ The policies below are the ones a change must keep; the screens themselves are d
   naming each host's last update and problem). Group by the title (an icon where Spaces has Edit; a disc in the iPad's
   sidebar), kept as `agents.grouping`: Status (those sections), Host (a section per host, in the hosts' order), or
   Host and Space (one per host and space, a host's spaces by their most pressing row); an offline host's last
-  section's footer says its update and problem. A row, three lines at most: the dot, its name (as the Mac names the
-  tab) and the time; then a line from `MobileComposition.status` with `detail` off, in two lines, beside the host's
-  name (in its colour) under the time (no host when grouped by host; the section's host name takes the colour): while
-  working the step's kind only and the elapsed time ("Running shell command… · 48s", "Reading file…", never the
-  command or file; Spaces' tab lines and the watch's tab rows too, while the watch's agent rows keep the step's words), over it what the agent last said in the turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is newer than the row's newest record when the list first saw it busy, a mark in the host's clock; one-line rows show the note in the step's place, the time after it, which counts from that mark only when the list saw the turn begin), the question or approval in the primary colour while
-  it waits, else the last message. A row whose data is not live (the cache's, the
+  section's footer says its update and problem. A row is always three lines (`AgentRow`): the mark, its name (as the
+  Mac names the tab) and the time; then two lines, the host's name (grey, as the lines) beside the first (no host when
+  grouped by host; the section's host name takes the colour). Working, the mark is the chat's thinking glyph (still
+  under Reduce Motion), the time column counts the turn in amber (with no thread open, from the list's mark only when it saw the turn begin;
+  else the row's time), and the lines are what the agent last said in the
+  turn (`TabsStatus.note`: the open thread's newest message, else the host's list's preview when its `reply_ms` is
+  newer than the row's newest record when the list first saw it busy, a mark in the host's clock), else the turn's
+  prompt, then the step inline in the line's grey (its kind's symbol, "Run · 12 steps": the steps since the agent
+  last wrote), the running subagents after ("· 2 agents"); with no thread open, "Working". Spaces' tab lines and the watch's tab
+  rows keep the step's kind and the elapsed time ("Running shell command… · 48s"), the watch's agent rows the step's
+  words. Otherwise the question or approval in the primary colour while it waits, else the last message, on two
+  lines, the room for two kept when it is shorter. A row whose data is not live (the cache's, the
   previous connection's until the first `chat.list` over the new one answers, or a read the helper could not complete)
-  dims whole, dot included. Chips: All, Needs you (live rows, with the count), Unread (needs you or a result not
+  dims whole, dot included. Chips, Spaces' own (All's symbol one bubble, as Spaces' Agents): All, Needs you (live rows, with the count), Unread (needs you or a result not
   seen), kept as `agents.filter`. The tab item shows the needs-you count. A row's menu: Open Chat, Open Terminal (both
-  on the row's own pane in a split tab), Mark as Read, Mute, and the tab's Rename, Detach and Close; swipes: Read
-  (leading), Close and Mute (trailing; no Close on an offline host). The empty state says why: no host (Add host),
+  on the row's own pane in a split tab), Mark as Read, Mute, and the tab's Rename, Move to, Detach and Close; swipes: Read
+  (leading), Close and Mute (trailing, a full swipe closing; no Close nor full swipe on an offline host). A closing
+  row leaves at once with its tab (`MobileWorkspace.closes`) and comes back with it. The empty state says why: no host (Add host),
   connecting, no host reached (each problem, Try Again), Chat off or plain SSH, or no agent running (New chat).
   Rows not open as a thread come from `chat.list`: on every new connection or binding change, the helper's activity
   push, pull to refresh, the foreground, and every 20 s while the app is in the foreground. A request made while one
@@ -572,9 +598,18 @@ The policies below are the ones a change must keep; the screens themselves are d
   screen) keep their `chat.open`; older ones are released unless sending, queueing, holding a side conversation or an
   open approval, and read `chat.list` again. A thread whose agent exits stays readable on the Chat segment. Release
   builds reopen the section the user left (`section.selected`).
-  A released thread's transcript (and where it was read) stays in memory for its next open (`ChatTranscriptStore`,
-  never written): 8 MiB by an estimate of what it holds, the least recently kept going first, a host's going with the host
-  and all of them on Remove all data or a memory warning. While the list shows in the foreground, its first six rows as
+  A released thread's transcript (and where it was read) stays in memory for its next open (`ChatTranscriptStore`):
+  8 MiB by an estimate of what it holds, the least recently kept going first, a host's going with the host
+  and all of them on Remove all data or a memory warning. With Settings › Chat › Keep history on this iPhone (on by
+  default) it is also saved (`ChatHistoryArchive`): what the thread showed (the pages it was sent, earlier ones scrolled
+  to, full outputs opened; never fetched for the save, never the agent's state, requests or queue), as the Mac's saved
+  chats keep it (turns and merge index), compressed, one file per chat, written as the thread is let go and as the
+  app goes to the background when it changed; at most 32 MiB per chat (its oldest turns go first) and 512 MiB in all
+  (the least recently used chat first). A chat with nothing in memory whose host is not reached opens on that copy,
+  "Saved copy · 7:12" under it until the host's history reconciles it (`MobileChatSession.seed`, as an in-memory one);
+  a reached host's history comes at once instead. One with no copy says its host is not connected rather than showing
+  the new chat's intro. A host's copies go with the host, all of them on Remove all data or when the setting is turned
+  off; a memory warning leaves them. While the list shows in the foreground, its first six rows as
   drawn (its sections or groups, about one iPhone screen) are opened ahead of a tap, one `chat.open` at a time and none
   while a thread the user opened is still opening, on hosts reached now, never for a row with messages in the device's
   queue: so a first open from Agents is a reopen. Such a warm session is no thread shown: it attaches no terminal until
@@ -597,7 +632,8 @@ The policies below are the ones a change must keep; the screens themselves are d
   is an open approval or question or the agent's own attention, as on the Mac. A command (`/…`, `!…`) goes at once
   when the agent is idle, otherwise queues (`/…` in the helper's queue, `!…` on the device until it reaches the head
   of an idle queue). Queued messages belong to the agent process they were typed for; Stop pauses the device's own
-  until Resume, and Send now refuses paused or uncertain ones. Side conversations (`/btw`, `/side`) are forks the
+  until Resume, and Send now refuses paused or uncertain ones. Remove and Send now take the row out at once
+  (`leaving`), back if the helper refuses. Side conversations (`/btw`, `/side`) are forks the
   helper lists; a lost link ends one on the phone and the next verified connection closes the orphaned fork
   (`closeOrphanedSides`). Background shells the agent reports (`State.shells`, Claude Code) show as a line over the
   composer while any runs (one names what it does, more say how many); a tap opens a sheet with each shell's
@@ -605,21 +641,29 @@ The policies below are the ones a change must keep; the screens themselves are d
   conversation is verified; images lose their metadata before upload, uploads are session state, and a queued
   message counts as delivered after a reconnect only with as many attachments. Times stay out of the bubbles' corners
   and appear on a swipe (`ChatReveal`, below). A turn's last reply shows its step count above its time; changed files
-  and line counts stay in message details. VoiceOver still reads the full summary (changed files, read files or steps, then when the turn
+  and line counts stay in message details (an agent's message tapped, or Info in any message's long press: a user's
+  message's details, titled You, are the turn it started; none for a prompt still on its way). Reply (a message's
+  long press, message details' ⋯) puts "Replying to Claude" and the message's first sentence over the composer
+  (`ChatReplyBar`, ✕ cancels) and leaves the draft as it is; the send puts that excerpt before the draft as one
+  `> ` quote line (`ChatReplyQuote`: the first prose line's first sentence, marks dropped, at most 140 characters;
+  the agent has the whole message already), a command going without it. A user's message that starts with a quote
+  shows it as a small card at the top of the bubble, the agent named, so a reply read back from the transcript does too. VoiceOver still reads the full summary (changed files, read files or steps, then when the turn
   ended) as the bubble's value (`ChatCorner.swiped`, `spokenOnly`); other replies read their own time, and Claude's
   and Pi's thinking has none. Once a turn ends on a reply its thinking leaves the thread (`ChatThinkingFold`, shared with the Mac and the watch) and message details list each thought as a `Think` step that pushes its whole text, counted apart from the tools ("4 · 1 thought"); a turn stopped or failed before a reply keeps it, and a side conversation, which has no details, keeps it too. A turn seen ending live holds its thoughts for 1.2 s, then they fade; a reader scrolled up holds them until they return to the end or the next turn starts. Message details keep "12 steps · 2m 4s"; a steps summary's time under 5 s is left out ("2 steps", `ChatTranscript.summaryElapsed`), on the Mac's step groups and the watch too, while a step's own row keeps its time. While a turn runs the
   working row (M5a) stays under the thread, its answer begun or not; its count and unfolded log are the steps since the
   agent last wrote (a message or Claude's or Pi's thinking), as the Mac's live tool group counts them, and it holds Stop
   beside the elapsed time, away from the trailing controls (the composer's slot stays the mic; Esc from a hardware
   keyboard still stops). Stop does not stop at a tap: it stops once held 3 s where it is, the thumb never
-  moving. A touch on it raises a "Hold to stop" capsule over the row (`ChatStopHold`, only a sign) that fills as Stop
+  moving; the row then reads "stopping" (no shimmer, no clock) until the agent is idle, a refused stop or one the
+  agent still works through 15 s later giving it back. A touch on it raises a "Hold to stop" capsule over the row (`ChatStopHold`, only a sign) that fills as Stop
   is held, empties if it is let go early and goes after 4 s untouched (VoiceOver: a double tap and hold passes the hold
-  through, a double tap shows the capsule, which then stays, and the Stop Now action stops at once). The chevron, or a tap on the thinking line, unfolds the
+  through, a double tap shows the capsule, which then stays, and the Stop Now action stops at once). The chevron, or a tap anywhere on the thinking line but Stop (the room before the chevron and the steps' count too), unfolds the
   row as a click on the Mac's Thinking opens its activity: a line counting the steps and how many lie above and below,
   with the session's tokens in and out and Pi's cost after them (`ChatUsageText`, as `ChatSessionStats`; nothing with
   the agent's token counter off), and the plan's limits at its end (`ChatLimitsLine`, N4a): the week (the longest
-  window still running) as a ring with its share and "Resets Thu 9:40am", or, for an account that still reports the
-  5-hour window, that window's ring in the reset's place; the week's name goes where the line is too narrow. Rings
+  window still running) as a ring with its share, its name and its reset ("64% weekly · resets 11pm mon": the time before the day, all lowercase), or, for an
+  account that still reports the 5-hour window, that window's ring and share ("42% 5-hour") in the reset's place; the
+  week's name goes where the line is too narrow. Rings
   and shares stay as dim as the line until a window passes 80% (`LimitCaution`, an orange in light), then 95% (red).
   The limits are read through `chat.limits` as the row unfolds (`ChatLimitsReader`): Claude Code and Codex only,
   after Show Limits there (its alert says what reading does; kept on the device, per agent; Not Now until the next
@@ -632,9 +676,11 @@ The policies below are the ones a change must keep; the screens themselves are d
   summary says it, changed files' diffs, the output (a read's source at its own line numbers) with Copy, and Tool
   details with the raw input and output. Queued messages (M5c) are the user's own bubbles, faded, at the thread's end under the working row, as
   Messages' Send Later (`ChatQueuedBubbles`; while the link is down the same bubbles, held): under the last, "3 queued ·
-  sends after this turn" (with Resume after Stop), under one that waits for the user its status. A tap or long press
-  on one is its menu, each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
-  agent works), Edit, Move Up and Move Down, Delete. Edit loads it into the composer (`beginQueueEdit`): the draft
+  sends after this turn" (with Resume after Stop), under one that waits for the user its status. A long press on one
+  is its menu (a tap in passing opens nothing; VoiceOver has the items as actions), each action named: Send (paused or uncertain), Send Now ("Interrupts the current turn" while the
+  agent works), Edit, Move Up and Move Down, Delete; the hold is felt, as Send's (`menuHoldHaptic`). The
+  composer says Message whether a send goes out or queues (the queued bubbles say what waits), "Edit the queued
+  message…" while editing one and "Steer the current turn…" when Send steers. Edit loads it into the composer (`beginQueueEdit`): the draft
   there is set aside among the saved drafts, a bar says "Editing queued message" with Cancel, and send is ✓, which
   saves the text in its place (`queue.update` by revision) and brings the draft back; a message that went out
   meanwhile keeps the edit as the draft, with a note. Leaving the conversation cancels the edit. An agent this phone starts (New chat, New
@@ -674,10 +720,14 @@ The policies below are the ones a change must keep; the screens themselves are d
   (steer by default, queue when ordinary send steers). A draft starts out of editor mode; a multi-line paste or ⌘E turns
   it on, and a typed newline leaves it as it is. Settings ›
   Chat's other options, as the Mac's Chat mode: Open agents in (an agent tab's first segment,
-  `TabSegment.initial`; a pick on the tab sticks). A hardware keyboard's first Esc arms the stop for a second, shown
-  above the field; a second Esc stops the agent. There is no Escape setting, and its removed saved choice is ignored. The code keys above
-  the field show only once picked under "+" (Show code keys, `MobileSettings.composerCodeKeysKey`, kept app-wide; not
-  offered with a hardware keyboard). Dragging the thread down onto the composer, or on into the keyboard, takes a
+  `TabSegment.initial`; a pick on the tab sticks), and Keep history on this iPhone (`MobileSettings.chatKeepHistoryKey`,
+  above). A hardware keyboard's first Esc arms the stop for a second, shown
+  above the field; a second Esc stops the agent. There is no Escape setting, and its removed saved choice is ignored. "+" holds Photo or screenshot and File, then one group
+  titled Toggle: Code keys, Mine only and Dialog. The code keys above the field show only once picked there (Code
+  keys, checked while on; `MobileSettings.composerCodeKeysKey`, kept app-wide; not offered with a hardware keyboard).
+  Mine only (checked while on, `MobileChatSession.mineOnly`, this conversation's while the app runs) leaves the user's
+  own messages in the thread, the agent's replies and thinking hidden (approvals, questions and the working row stay,
+  and a search sees everything); "Your messages only · Show all" over the composer says so and ends it. Dragging the thread down onto the composer, or on into the keyboard, takes a
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
   light on "thinking": one 2.2 s ease-in-out sweep, leading to trailing, the label lit where and while the glint passes
   over it (`ChatThinkingSweep`, `ChatSweepTrack`). The thread's loops (the ◆'s breathing and satellite, the glint and
@@ -692,7 +742,9 @@ The policies below are the ones a change must keep; the screens themselves are d
   The thread runs on under the header and the composer (a bottom `safeAreaBar`), with the soft scroll edge at both,
   as the side conversation's: left to the system, an iPhone drew the header's edge as the hard one (an opaque band
   ending in a line) where the simulator drew the soft one.
-  Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
+  The composer's mic starts dictation only once held a second, as Stop asks for its hold: a touch raises "Hold to
+  dictate" over it, filling while held, gone after 4 s untouched (VoiceOver activates it directly); a tap stops it.
+  Conversation mode starts from "+" (Dialog), or the mic's VoiceOver action
   (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Read Aloud, in a
   message's long press and in message details' ⋯, reads that one message in the system's voice
   (`MobileMessageReader`): all of it, Markdown's marks gone, each code block and table said in a few words instead of

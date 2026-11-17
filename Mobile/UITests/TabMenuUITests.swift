@@ -41,7 +41,7 @@ final class TabMenuUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Rename…"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Search"].exists, "no conversation's items off Chat")
         XCTAssertTrue(app.buttons["Close Tab"].exists)
-        XCTAssertTrue(app.buttons["Detach"].exists)
+        XCTAssertFalse(app.buttons["Detach"].exists, "Detach is the rows'")
         XCTAssertTrue(app.buttons["Stats"].exists)
     }
 }

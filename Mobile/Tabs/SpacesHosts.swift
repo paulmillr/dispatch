@@ -99,6 +99,61 @@ struct SpacesSection: Identifiable {
     }
 }
 
+/// Edit's list (M1e): every host's header and then its spaces, one list so a handle can be dropped anywhere. A list
+/// moves rows only within one `ForEach`, so with a section per host a drop past a host's last space (the gap under it
+/// is the next host's) went back; here a space dropped outside its host goes to that host's nearer end, and a host's
+/// header, the list's handle too, takes its spaces to where it is dropped.
+enum SpacesEditRow: Identifiable {
+    case host(SpacesSection)
+    /// `first` and `last` in its host: the card's rounded ends.
+    case space(SpacesSpaceRow, host: UUID, first: Bool, last: Bool)
+
+    var id: String {
+        switch self {
+        case .host(let section): "host:" + section.id.uuidString
+        case .space(let row, let host, _, _): "space:" + host.uuidString + ":" + row.id.key
+        }
+    }
+
+    /// The rows for `sections`: each header, then its spaces unless folded.
+    static func rows(_ sections: [SpacesSection]) -> [SpacesEditRow] {
+        sections.flatMap { section -> [SpacesEditRow] in
+            let spaces = section.collapsed ? [] : section.spaces
+            return [.host(section)] + spaces.enumerated().map { index, row in
+                .space(row, host: section.host.id, first: index == 0, last: index == spaces.count - 1)
+            }
+        }
+    }
+
+    enum Move: Equatable {
+        /// `MobileTabs.moveSpaces`: the space's host, its shown spaces' keys, and the offsets among them.
+        case spaces(host: UUID, visible: [String], from: Int, to: Int)
+        /// `MobileTabs.moveHost`: the host before the one it now precedes, nil for last.
+        case host(UUID, before: UUID?)
+    }
+
+    /// The move `onMove` reports (offsets into `rows`): a space's within its host, a destination outside the host
+    /// clamped to its nearer end; a header's among the hosts, where it lands among the other headers. Nil for several
+    /// rows or no change of order.
+    static func move(_ rows: [SpacesEditRow], from source: IndexSet, to destination: Int) -> Move? {
+        guard source.count == 1, let index = source.first, rows.indices.contains(index) else { return nil }
+        if case .host(let section) = rows[index] {
+            var moved = rows
+            moved.move(fromOffsets: source, toOffset: destination)
+            let hosts = moved.compactMap { if case .host(let section) = $0 { section.id } else { nil } }
+            guard hosts != rows.compactMap({ if case .host(let section) = $0 { section.id } else { nil } }),
+                  let at = hosts.firstIndex(of: section.id) else { return nil }
+            return .host(section.id, before: at + 1 < hosts.count ? hosts[at + 1] : nil)
+        }
+        guard case .space(_, let host, _, _) = rows[index] else { return nil }
+        let block = rows.indices.filter { if case .space(_, host, _, _) = rows[$0] { true } else { false } }
+        guard let start = block.first, let end = block.last else { return nil }
+        let keys = block.compactMap { if case .space(let row, _, _, _) = rows[$0] { row.id.key } else { nil } }
+        let to = min(max(destination, start), end + 1) - start
+        return .spaces(host: host, visible: keys, from: index - start, to: to)
+    }
+}
+
 /// One space row of the tree: the tabs that need you (Mail's unread count) and the amber dot when something works.
 struct SpacesSpaceRow: Identifiable {
     let space: MobileSpace

@@ -94,6 +94,11 @@ final class MobileChatSession: Identifiable {
     private(set) var currentStepGist: String?
     /// What the agent last said in the open turn, its first line (`TabsStatus.note`); nil before it has written in it.
     private(set) var currentNote: String?
+    /// The open turn's prompt, its first line: Agents' row says what the agent works on before it has written.
+    private(set) var currentPrompt: String?
+    /// The current step's kind (Agents' badge) and the steps since the agent last wrote, as the working row counts them.
+    private(set) var currentStepKind: ChatStep.Kind?
+    private(set) var currentStepCount = 0
     private(set) var openTurnStarted: Date?
     private(set) var loadingHistory = false {
         didSet {
@@ -174,12 +179,16 @@ final class MobileChatSession: Identifiable {
     /// The helper's queue snapshot (`chat.queue`, `queue.list`); what the phone shows is `queueRows`.
     private(set) var queue: [HelperChat.Queued] = []
     private(set) var queueBusy = false { didSet { reportSending() } }
+    /// Queue rows a remove or Send now is on its way for (`QueueRow.id`): out of `queueRows` at once, back if refused.
+    private(set) var leaving: Set<String> = []
     private(set) var queueError: String?
 
     // Sending.
     private(set) var optimisticPrompt: ChatItem?
     private(set) var sending = false { didSet { reportSending() } }
+    /// Stop went (`stop`): from the press until the agent is idle, so the row says so at once.
     private(set) var stopping = false
+    @ObservationIgnored private var stopToken: UUID?
     /// Why the last send, answer or queue change failed; cleared by the next one.
     var failure: String?
     /// A command's own result (chat.command, or the output it printed), shown until the next send.
@@ -308,6 +317,11 @@ final class MobileChatSession: Identifiable {
         let note = turn.flatMap { $0.items.last { $0.kind == .assistant && !$0.text.isEmpty } }
             .flatMap { TabsNote.line($0.text) }
         if currentNote != note { currentNote = note }
+        let prompt = turn.flatMap { $0.items.first { $0.kind == .user && !$0.text.isEmpty } }.flatMap { TabsNote.line($0.text) }
+        if currentPrompt != prompt { currentPrompt = prompt }
+        if currentStepKind != current?.kind { currentStepKind = current?.kind }
+        let count = turn.map { ChatStep.current($0, directory: nil).filter { $0.kind != .think }.count } ?? 0
+        if currentStepCount != count { currentStepCount = count }
         let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
         if openTurnStarted != started { openTurnStarted = started }
     }
@@ -390,12 +404,15 @@ final class MobileChatSession: Identifiable {
         let readingPosition: ChatReadingPosition?
         /// `MobileTranscript.estimatedBytes`, for the store's bound.
         let bytes: Int
+        /// When it was kept: the "saved" line of a thread showing it without its host (`savedAt`).
+        var saved = Date()
     }
 
     /// The seeded transcript's origin until the helper's history reconciles it (`receive(history:)`).
     private struct Seed {
         let conversation: String
         let reachedStart: Bool
+        let saved: Date
     }
     @ObservationIgnored private var seed: Seed?
     /// Live records that came while the seed waited for the helper's page (`history_pending` already made the
@@ -407,14 +424,17 @@ final class MobileChatSession: Identifiable {
     /// helper answers the conversation is not live (`opening` or `detached`); while it reads the transcript
     /// (`history_pending`) it is, but the kept cursor is not used (`canLoadEarlier`).
     var seeded: Bool { seed != nil }
+    /// When the transcript shown was kept, while it shows unreconciled (`seeded`).
+    var savedAt: Date? { seed?.saved }
 
     /// What this session read, for the conversation's next one; nil with nothing to keep.
     func kept() -> Kept? {
         guard !transcript.isEmpty, let conversation = conversation ?? seed?.conversation else { return nil }
         var transcript = transcript
         transcript.releaseHeldThinking()
+        // A copy shown without its host keeps its own time: nothing newer came.
         return Kept(transcript: transcript, conversation: conversation, earlier: earlier, readingPosition: readingPosition,
-                    bytes: transcript.estimatedBytes)
+                    bytes: transcript.estimatedBytes, saved: seed?.saved ?? Date())
     }
 
     /// A new session, before its first `chat.open`: the kept transcript shows (and the place it was read at) while the
@@ -425,7 +445,7 @@ final class MobileChatSession: Identifiable {
         transcript = kept.transcript
         earlier = kept.earlier
         readingPosition = kept.readingPosition
-        seed = Seed(conversation: kept.conversation, reachedStart: kept.earlier == nil)
+        seed = Seed(conversation: kept.conversation, reachedStart: kept.earlier == nil, saved: kept.saved)
     }
 
     /// Opened ahead of a tap (the Agents list's prewarming): the terminal is not attached until the thread shows
@@ -794,6 +814,7 @@ final class MobileChatSession: Identifiable {
     }
 
     private func updateWorkingSince() {
+        if !working, stopping { stopping = false; stopToken = nil }
         if !working {
             if workingSince != nil { stoppedWorking = Date() }
             workingSince = nil
@@ -981,7 +1002,10 @@ final class MobileChatSession: Identifiable {
                 : "Retry or remove the attachment that did not upload."
             return
         }
-        _ = submit(draft.text, attachments: draft.attachments, steer: steer) { self.drafts.prepareDelivery(consume: true) }
+        let command = AgentInput.isCommand(draft.text, multiline: draft.text.contains("\n"))
+        let text = replyQuote.flatMap { command ? nil : ChatReplyQuote.compose(quote: $0, text: draft.text) } ?? draft.text
+        let route = submit(text, attachments: draft.attachments, steer: steer) { self.drafts.prepareDelivery(consume: true) }
+        if route != nil, !command { replyQuote = nil }
     }
 
     /// Text from elsewhere (the watch, docs/watch.md), routed exactly as the composer's but without its draft: the
@@ -1165,20 +1189,32 @@ final class MobileChatSession: Identifiable {
         }
     }
 
+    /// Stop: the row says "stopping" at once and keeps saying it until the agent is idle (`updateWorkingSince`); a
+    /// refused stop, or an agent still working `stopGrace` after the helper took it, gives the row back.
     func stop() {
         guard phase == .verified, working, !stopping else { return }
         stopping = true
+        let token = System.uuid()
+        stopToken = token
         // As the Mac's stopQueue: what the device still holds waits for Resume. Adds already sent reach the helper
         // before this stop, which pauses its own queue.
         for item in queueItems where item.state == .waiting { outbox.update(item.id) { $0.state = .paused(Self.stopped) } }
         Task {
-            defer { self.stopping = false }
             do {
                 let sent: HelperChat.Sent = try await call("chat.stop", route())
                 try sent.confirmed()
-            } catch { self.failure = self.explain(error) }
+            } catch {
+                if self.stopToken == token { self.stopping = false; self.stopToken = nil }
+                self.failure = self.explain(error)
+                return
+            }
+            try? await Task.sleep(for: Self.stopGrace)
+            if self.stopToken == token { self.stopping = false; self.stopToken = nil }
         }
     }
+
+    /// How long a taken Stop says "stopping" while the agent still works.
+    static let stopGrace: Duration = .seconds(15)
 
     /// Helper refusals in the thread's words.
     private func explain(_ error: any Error) -> String {
@@ -1233,7 +1269,7 @@ final class MobileChatSession: Identifiable {
                             status: queued.paused.map(Self.pauseText), editable: queued.editable && attachments.isEmpty,
                             attachments: attachments, steerable: queued.editable)
         }
-        return rows
+        return leaving.isEmpty ? rows : rows.filter { !leaving.contains($0.id) }
     }
 
     private static func pauseText(_ pause: String) -> String {
@@ -1533,6 +1569,7 @@ final class MobileChatSession: Identifiable {
         return false
     }
 
+    /// Remove: the row goes at once; one the helper's queue holds comes back if `queue.remove` is refused.
     func removeQueued(_ row: QueueRow) {
         switch row.source {
         case .device(let id):
@@ -1540,7 +1577,12 @@ final class MobileChatSession: Identifiable {
             if case .queued(let helperID, let revision, _) = item.state, phase == .verified {
                 var input = route()
                 input.item = helperID; input.revision = revision
-                changeQueue("queue.remove", input, item: id, succeeded: { self.outbox.remove(id) })
+                leaving.insert(row.id)
+                changeQueue("queue.remove", input, item: id, succeeded: {
+                    self.outbox.remove(id)
+                    self.queue.removeAll { $0.id == helperID }
+                    self.leaving.remove(row.id)
+                }, failed: { self.leaving.remove(row.id) })
             } else {
                 outbox.remove(id)
                 // What waited behind it (a shell command, Stop's paused items) may go now.
@@ -1550,7 +1592,11 @@ final class MobileChatSession: Identifiable {
             guard let native = queue.first(where: { $0.id == helperID }) else { return }
             var input = route()
             input.item = native.id; input.revision = native.revision
-            changeQueue("queue.remove", input)
+            leaving.insert(row.id)
+            changeQueue("queue.remove", input, succeeded: {
+                self.queue.removeAll { $0.id == helperID }
+                self.leaving.remove(row.id)
+            }, failed: { self.leaving.remove(row.id) })
         }
     }
 
@@ -1567,7 +1613,8 @@ final class MobileChatSession: Identifiable {
     }
 
     /// A queue row's Send now (interrupts the turn: steer while working). A device-only message goes by `chat.send`, a
-    /// device-only command by `chat.command`.
+    /// device-only command by `chat.command`. The row leaves the queue at once; a failure brings it back (a device row
+    /// paused or uncertain, saying why).
     func sendQueuedNow(_ row: QueueRow) {
         guard canSendNow(row) else { return }
         let mode = working ? "steer" : "prompt"
@@ -1589,9 +1636,14 @@ final class MobileChatSession: Identifiable {
         } else { return }
         queueBusy = true
         if let device { inFlight.insert(device) }
+        leaving.insert(row.id)
         let generation = generation
         Task {
-            defer { self.queueBusy = false; if let device { self.inFlight.remove(device) } }
+            defer {
+                self.queueBusy = false
+                if let device { self.inFlight.remove(device) }
+                self.leaving.remove(row.id)
+            }
             do {
                 if method == "chat.command" {
                     let outcome: HelperChat.Outcome = try await call(method, input, generation: generation)
@@ -1602,6 +1654,7 @@ final class MobileChatSession: Identifiable {
                     try sent.confirmed()
                 }
                 if let device { self.outbox.remove(device) }
+                if method == "queue.start", let helperID { self.queue.removeAll { $0.id == helperID } }
             } catch {
                 let uncertain = ChatInputNotSent.deliveryUncertain(error, started: true)
                 if let device {
@@ -1674,6 +1727,12 @@ final class MobileChatSession: Identifiable {
     private(set) var queueEdit: QueueEdit?
     /// Why the last edit's save did not land in the queue (the message had gone out meanwhile); the text stays a draft.
     var queueEditNote: String?
+    /// Reply (Y1, `ChatReplyQuote`): the excerpt of the message answered, over the composer until sent or cancelled;
+    /// the send puts it before the draft as one quote line (a command goes without it, the reply kept).
+    var replyQuote: String?
+    /// "+" › Mine only: the thread shows the user's own messages, the agent's replies and thinking hidden (approvals,
+    /// questions and the working row stay); for this conversation while the app runs.
+    var mineOnly = false
 
     /// Whether a queued message can be edited in the composer: text only (the helper's queue refuses a change to one
     /// with attachments), and one the helper's queue holds only while the link is verified.

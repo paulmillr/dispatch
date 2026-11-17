@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// M5b: tapping an agent message (or its steps caption) pushes its details (redesigned as the mockups' M1). The agent
-/// and when it wrote are the title, the message's actions the ⋯ menu. The whole message raw (as the agent wrote it, one
+/// M5b: tapping an agent message (or its steps caption), or a message's Info (the user's too: the turn it started),
+/// pushes its details (redesigned as the mockups' M1). Who wrote it (the agent, or You) and when are the title, the message's actions the ⋯ menu. The whole message raw (as the agent wrote it, one
 /// selection across all of it), how the turn went and when, the conversation's facts (the turn's changes, tokens so far,
 /// its model now), then the turn's steps, folded past `ChatStepFold.threshold` (each step pushes its output, a patch
 /// its diff). Where it ran is the caption at the end. Back returns to the thread; the back pill names the space, as
@@ -51,7 +51,7 @@ struct ChatMessageDetails: View {
             .padding(.bottom, 24)
         }
         .background(Color.canvas)
-        .navigationTitle(session.agentName)
+        .navigationTitle(Self.author(row, agent: session.agentName))
         .navigationSubtitle(row.time.map { Self.moment($0) } ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
@@ -119,6 +119,12 @@ struct ChatMessageDetails: View {
         .font(.subheadline)
         .labelStyle(ChatDetailsLabelStyle())
         .accessibilityElement(children: .combine)
+    }
+
+    /// Who wrote it: You for the user's own message, else the agent.
+    static func author(_ row: ChatThreadRow, agent: String) -> String {
+        if case .user = row.kind { return "You" }
+        return agent
     }
 
     /// The turn's times (`ChatTurnSummary.span`, shared with the Mac's message info).
@@ -679,7 +685,9 @@ struct ChatEffortChoices: Equatable {
     func shown(for selected: String?) -> Bool { !choices.isEmpty || loading(for: selected) }
 }
 
-/// M3b's pickers: the agent's models and the chosen model's efforts, from the helper's verified menus.
+/// M3b's pickers: the agent's models and the chosen model's efforts, from the helper's verified menus. It opens on the
+/// lists last seen for the agent (`ChatModelMemory`, as New chat's), a small spinner by the heading while the live ones
+/// load and take their place; nothing remembered, a spinner where the list goes.
 struct ChatSettingsSheet: View {
     let session: MobileChatSession
     var memory: ChatModelMemory?
@@ -689,12 +697,14 @@ struct ChatSettingsSheet: View {
     @State private var effort: String?
     @State private var error: String?
     @State private var applying = false
+    /// The live models are loading over remembered ones.
+    @State private var refreshing = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Model") {
+                Section {
                     if models.isEmpty && error == nil { ProgressView() }
                     ForEach(models) { choice in
                         Button {
@@ -706,6 +716,11 @@ struct ChatSettingsSheet: View {
                                 if choice.name == model { Image(systemName: "checkmark").foregroundStyle(Color.dispatchPink) }
                             }
                         }
+                    }
+                } header: {
+                    HStack(spacing: 6) {
+                        Text("Model")
+                        if refreshing { ProgressView().controlSize(.mini) }
                     }
                 }
                 if efforts.shown(for: model) {
@@ -740,23 +755,61 @@ struct ChatSettingsSheet: View {
         }
         .tint(Color.dispatchPink)
         .task {
+            let seen = Self.choices(remembered.models)
+            if models.isEmpty, !seen.isEmpty {
+                models = seen
+                model = session.model.flatMap { AgentModelMenu.row(for: $0, in: seen)?.name }
+                refreshing = true
+            }
+            defer { refreshing = false }
             do {
-                models = try await session.models()
-                if let agent = session.agentKey { memory?.remember(agent: agent, models: models) }
-                // The agent reports the model's ID (claude-opus-5-5); the picker takes its menu row ("Opus 5.5").
-                model = session.model.flatMap { AgentModelMenu.row(for: $0, in: models)?.name } ?? models.first { $0.current }?.name
+                let live = try await session.models()
+                if let agent = session.agentKey { memory?.remember(agent: agent, models: live) }
+                models = live
+                // The agent reports the model's ID (claude-opus-5-5); the picker takes its menu row ("Opus 5.5"). A
+                // pick made on the remembered list stays while the live one has it.
+                if model == nil || !live.contains(where: { $0.name == model }) {
+                    model = session.model.flatMap { AgentModelMenu.row(for: $0, in: live)?.name } ?? live.first { $0.current }?.name
+                }
             } catch { self.error = error.localizedDescription }
         }
         .task(id: model) {
             guard let model else { return }
-            let loaded = (try? await session.efforts(for: model)) ?? []
-            guard !Task.isCancelled else { return }
-            if let agent = session.agentKey, !loaded.isEmpty { memory?.remember(agent: agent, efforts: loaded, for: model) }
-            // The choices and the selection change in the same update: no frame pairs a model with another's effort.
-            efforts = ChatEffortChoices(choices: loaded, model: model)
-            if effort == nil || !loaded.contains(where: { $0.name == effort }) {
-                effort = loaded.first { $0.current }?.name ?? (loaded.contains { $0.name == session.effort } ? session.effort : loaded.first?.name)
+            let seen = Self.choices(remembered.efforts[model] ?? [])
+            if efforts.model != model, !seen.isEmpty { show(seen, for: model) }
+            do {
+                let loaded = try await session.efforts(for: model)
+                guard !Task.isCancelled else { return }
+                if let agent = session.agentKey, !loaded.isEmpty { memory?.remember(agent: agent, efforts: loaded, for: model) }
+                show(loaded, for: model)
+            } catch {
+                // Not read: the remembered efforts stay, else none show.
+                guard !Task.isCancelled, efforts.model != model else { return }
+                show([], for: model)
             }
+        }
+    }
+
+    /// What the phone last saw for this agent.
+    private var remembered: ChatModelMemory.Agent {
+        guard let agent = session.agentKey, let memory else { return ChatModelMemory.Agent() }
+        return memory.agent(agent)
+    }
+
+    /// Remembered choices as the menus' rows.
+    static func choices(_ remembered: [ChatModelMemory.Choice]) -> [AgentModelMenu.Choice] {
+        remembered.enumerated().map { index, choice in
+            AgentModelMenu.Choice(number: index + 1, name: choice.id, detail: choice.label == choice.id ? "" : choice.label,
+                                  current: false, isDefault: false)
+        }
+    }
+
+    /// `loaded` as `model`'s efforts, the selection kept while they have it.
+    private func show(_ loaded: [AgentModelMenu.Choice], for model: String) {
+        // The choices and the selection change in the same update: no frame pairs a model with another's effort.
+        efforts = ChatEffortChoices(choices: loaded, model: model)
+        if effort == nil || !loaded.contains(where: { $0.name == effort }) {
+            effort = loaded.first { $0.current }?.name ?? (loaded.contains { $0.name == session.effort } ? session.effort : loaded.first?.name)
         }
     }
 

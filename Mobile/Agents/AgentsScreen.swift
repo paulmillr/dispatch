@@ -30,6 +30,8 @@ struct AgentsContext {
     var openTerminal: (@MainActor (ChatConversation) -> Void)? = nil
     /// Closes the conversation's tab; Tabs owns the close policy (`close.request` with check).
     var close: (@MainActor (ChatConversation) -> Void)? = nil
+    /// Its tab (or space) is closing: out of the list at once, as out of Spaces', back if it stays.
+    var closing: @MainActor (ChatConversation) -> Bool = { _ in false }
     /// Line two: what the agent is doing, the question it waits on, or its last message (`MobileComposition.status`).
     var status: @MainActor (ChatConversation) -> TabsStatus? = { MobileComposition.status($0, session: nil) }
     /// The folder it runs in, as the tab's header names it ("app", "~").
@@ -64,9 +66,16 @@ struct AgentsScreen: View {
     /// Between the list's appearance and disappearance (a change of its first rows meanwhile is reported too).
     @State private var listOnScreen = false
 
+    /// The filter's rows less those whose tab is closing.
+    private var visible: [ChatConversation] {
+        let rows = conversations.visible
+        return rows.contains(where: context.closing) ? rows.filter { !context.closing($0) } : rows
+    }
+
     var body: some View {
         let all = conversations.conversations
         let hosts = context.hosts()
+        let visible = visible
         TimelineView(.everyMinute) { timeline in
             List {
                 if !all.isEmpty {
@@ -83,7 +92,7 @@ struct AgentsScreen: View {
                     .listSectionSpacing(4)
                 }
                 if grouping == .status {
-                    let sections = AgentsSections(rows: conversations.visible, offline: { offline($0) })
+                    let sections = AgentsSections(rows: visible, offline: { offline($0) })
                     section("Needs you", sections.needsYou, now: timeline.date)
                     section("Working", sections.working, now: timeline.date)
                     section(sections.needsYou.isEmpty && sections.working.isEmpty ? nil : "Recent", sections.recent, now: timeline.date)
@@ -91,11 +100,11 @@ struct AgentsScreen: View {
                         offlineSection(sections.offline, hosts: hosts, now: timeline.date)
                     }
                 } else {
-                    ForEach(AgentsGroup.groups(conversations.visible, by: grouping, hosts: hosts.map(\.id))) { group in
+                    ForEach(AgentsGroup.groups(visible, by: grouping, hosts: hosts.map(\.id))) { group in
                         hostGroup(group, hosts: hosts, now: timeline.date)
                     }
                 }
-                if !all.isEmpty, conversations.visible.isEmpty {
+                if !all.isEmpty, visible.isEmpty {
                     filteredEmpty
                 }
             }
@@ -105,7 +114,7 @@ struct AgentsScreen: View {
             .scrollContentBackground(.hidden)
             .hostsRefreshable(refresh)
             .background { SectionScrollLink().accessibilityHidden(true) }
-            .animation(.default, value: conversations.visible.map(\.id))
+            .animation(.default, value: visible.map(\.id))
         }
         .overlay {
             if all.isEmpty { AgentsEmptyState(hosts: hosts, context: context, refresh: refresh) }
@@ -128,7 +137,7 @@ struct AgentsScreen: View {
 
     /// The keys of the rows the list shows first, in its order (`shownOrder`).
     private func firstRows(hosts: [AgentsHost]) -> [ChatConversationKey] {
-        Self.shownOrder(conversations.visible, grouping: grouping, hosts: hosts.map(\.id), offline: { offline($0) },
+        Self.shownOrder(visible, grouping: grouping, hosts: hosts.map(\.id), offline: { offline($0) },
                         offlineFolded: offlineFolded).prefix(ChatConversations.prewarmCount).map(\.key)
     }
 
@@ -225,7 +234,7 @@ struct AgentsScreen: View {
         let selected = shownTab != nil && tab == shownTab
         return Button { context.open(row) } label: {
             AgentRow(row: row, status: context.status(row), location: location(row),
-                     host: grouping == .status ? row.hostName : nil, tint: look.tint(row.key.host), now: now, selected: selected)
+                     host: grouping == .status ? row.hostName : nil, now: now, selected: selected)
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("agents-row")
@@ -235,11 +244,12 @@ struct AgentsScreen: View {
         .alignmentGuide(.listRowSeparatorLeading) { _ in 36 }
         .listRowBackground(selected ? Color.primary.opacity(0.08) : nil)
         .contextMenu { menu(row, tab: tab) }
-        // Close as Spaces' rows have it, without the delete role: the row stays while Tabs asks (a working agent) or
-        // the host refuses, instead of sliding out and back. Not on a host not reached: there is nothing to close.
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        // Close as Spaces' rows have it, also by a full swipe: the row goes at once (`closing`) while Tabs checks, and
+        // comes back for the question (a working agent) or a refusal. Not on a host not reached: there is nothing to
+        // close, and no full swipe (it would mute).
+        .swipeActions(edge: .trailing, allowsFullSwipe: context.close != nil && !offline(row)) {
             if let close = context.close, !offline(row) {
-                Button { close(row) } label: { Label("Close", systemImage: "xmark") }
+                Button(role: .destructive) { close(row) } label: { Label("Close", systemImage: "xmark") }
                     .tint(Color.destructive)
             }
             Button { conversations.setMuted(!row.muted, row) } label: {
@@ -380,27 +390,28 @@ struct AgentsGroup: Identifiable {
     }
 }
 
-/// One conversation: the gutter dot (blue needs you or unread, amber working), its name and time, what it is doing
-/// in two lines (the question in the primary colour when it waits on the user), and its host under the time in the
-/// host's colour (none when
-/// the list groups by host: the section names it). Three lines at most (A1). A row whose data is not live dims whole,
-/// dot included, until its host answers.
+/// One conversation, always three lines (A1): the gutter mark, its name and the time; then two lines of what it is
+/// doing, with its host beside the first, in grey (none when the list groups by host: the section names
+/// it). Working, the mark is the chat's thinking glyph and the time column counts the turn (amber); the lines are what
+/// the agent last said in the turn (else its prompt), then the step (its symbol, kind and the steps since it last
+/// wrote) and its running subagents. Otherwise its message or question (in the primary colour while it waits) on two lines, room for
+/// two kept when it is shorter. A row whose data is not live dims whole, mark included, until its host answers.
 struct AgentRow: View {
     let row: ChatConversation
     let status: TabsStatus?
     /// "studio · app", for VoiceOver.
     let location: String
-    /// The host's name under the time, in the host's colour.
+    /// The host's name under the time, in the lines' grey (the colour is the working glyph's and time's alone).
     var host: String?
-    var tint: Color = .secondary
     var now = Date()
     var selected = false
 
+    /// The turn runs and its start is known: the time column counts it.
+    private var running: Date? { row.urgency == .running ? status?.since : nil }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Circle()
-                .fill(row.dot?.color ?? .clear)
-                .frame(width: 10, height: 10)
+            mark
                 .frame(width: 14)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 2) {
@@ -413,38 +424,25 @@ struct AgentRow: View {
                             .accessibilityHidden(true)
                     }
                     Spacer(minLength: 2)
-                    if let time = TabsTime.label(row.summary.lastActivity, now: now) {
-                        Text(time)
+                    time
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+                // The host beside the first line, not under it: the lines stay in their column.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    lines
+                        .font(.subheadline)
+                        .foregroundStyle(needsYou ? Color.primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let host {
+                        Text(host)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .fixedSize()
+                            .truncationMode(.middle)
                             .layoutPriority(1)
-                    }
-                }
-                if status != nil || host != nil {
-                    // Beside the status, not under it: its second line stays in the status's column.
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Group {
-                            if let status {
-                                TabsStatusText(status: TabsStatus(text: Self.capitalized(status.text), since: status.since,
-                                                                  note: status.note), lines: 2)
-                            } else {
-                                Text(verbatim: "")
-                            }
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(needsYou ? Color.primary : .secondary)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        if let host {
-                            Text(host)
-                                .font(.subheadline)
-                                .foregroundStyle(tint)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .layoutPriority(1)
-                        }
                     }
                 }
             }
@@ -457,6 +455,65 @@ struct AgentRow: View {
         .accessibilityValue(Self.value(row, status: status, location: location, now: now))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
+
+    /// Working (live, not muted): the chat's thinking glyph; else the dot (blue needs you or unread, amber working).
+    @ViewBuilder private var mark: some View {
+        if row.urgency == .running, !row.muted, !row.stale {
+            ChatThinkingGlyph(size: 14)
+        } else {
+            Circle()
+                .fill(row.dot?.color ?? .clear)
+                .frame(width: 10, height: 10)
+        }
+    }
+
+    /// The turn's elapsed time while it runs (amber, every second), else when it last changed.
+    @ViewBuilder private var time: some View {
+        if let since = running {
+            TimelineView(.periodic(from: since, by: 1)) { context in
+                Text(TabsTime.elapsed(context.date.timeIntervalSince(since)))
+                    .monospacedDigit()
+                    .foregroundStyle(row.stale ? Color.secondary : Color.stateWorking)
+            }
+        } else if let time = TabsTime.label(row.summary.lastActivity, now: now) {
+            Text(time).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Two lines, always: whatever they hold sits over two lines' room.
+    private var lines: some View {
+        ZStack(alignment: .topLeading) {
+            Text(verbatim: " ").lineLimit(2, reservesSpace: true).hidden().accessibilityHidden(true)
+            if row.urgency == .running, let status {
+                VStack(alignment: .leading, spacing: 0) {
+                    if let said = status.note ?? status.asked { Text(said).lineLimit(1) }
+                    progress(status)
+                }
+            } else if let status {
+                Text(Self.capitalized(status.text)).lineLimit(2)
+            }
+        }
+    }
+
+    /// The step inline, in the line above's colour: its kind's symbol, then "Run · 12 steps" (the steps
+    /// since the agent last wrote), else the step in words; its running subagents after. No badge: the log's badges are
+    /// as wide as the widest word to line up their rows, which a row here has none to line up with.
+    private func progress(_ status: TabsStatus) -> some View {
+        HStack(spacing: 5) {
+            if let kind = status.kind, status.steps > 0 {
+                Image(systemName: kind.symbol)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
+                Text(kind.label + " · " + Self.count(status.steps, "step")
+                     + (status.agents > 0 ? " · " + Self.count(status.agents, "agent") : ""))
+            } else {
+                Text(Self.capitalized(status.text) + (status.agents > 0 ? " · " + Self.count(status.agents, "agent") : ""))
+            }
+        }
+        .lineLimit(1)
+    }
+
+    static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
 
     private var needsYou: Bool { row.urgency == .waiting }
 
@@ -473,6 +530,14 @@ struct AgentRow: View {
         case .running: "Working"
         case .unread: "Unread"
         case .idle: nil
+        }
+        if row.urgency == .running, let status {
+            let since = status.since.map { "for " + ChatWorkingAccessibility.spoken(now.timeIntervalSince($0)) }
+            let step = status.kind.flatMap { kind in status.steps > 0 ? "\(kind.label), \(count(status.steps, "step"))" : nil }
+                ?? capitalized(status.text)
+            return [state, since, row.muted ? "Muted" : nil, status.note ?? status.asked, step,
+                    status.agents > 0 ? count(status.agents, "agent") : nil, location, row.stale ? "Not up to date" : nil]
+                .compactMap { $0 }.joined(separator: ", ")
         }
         return [state, row.muted ? "Muted" : nil, status?.note, status.map { capitalized($0.text) }, location,
                 TabsTime.label(row.summary.lastActivity, now: now), row.stale ? "Not up to date" : nil]

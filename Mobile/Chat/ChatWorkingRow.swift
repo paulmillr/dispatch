@@ -241,8 +241,10 @@ struct ChatWorkingRow: View {
         return ChatStep.current(turn, directory: directory)
     }
 
-    /// What the agent waits for, when it waits for the user (the Mac's AgentWorkingIndicator).
+    /// What the agent waits for, when it waits for the user (the Mac's AgentWorkingIndicator); "stopping" once Stop
+    /// went, until the agent is idle.
     private var waiting: String? {
+        if session.stopping { return "stopping" }
         guard session.waitingForUser else { return nil }
         let question = session.questions.contains { $0.blocking && !$0.submitted }
             || session.approvals.contains { $0.pending.pending && $0.pending.questions != nil }
@@ -275,7 +277,7 @@ struct ChatWorkingRow: View {
                 HStack(spacing: 8) {
                     ChatThinkingGlyph(size: glyph)
                     if let waiting {
-                        // Blocked on the user, as the Mac's indicator says: no thinking shimmer, no clock.
+                        // Blocked on the user, as the Mac's indicator says, or stopping: no thinking shimmer, no clock.
                         Text(waiting)
                     } else {
                         ChatShimmerText(text: "thinking",
@@ -285,6 +287,10 @@ struct ChatWorkingRow: View {
                         ChatElapsed(since: started)
                     }
                 }
+                .lineLimit(1)
+                // The line has the first claim on the row: the room after it (and its tap) takes what is left, and the
+                // steps' count wraps before the clock does.
+                .layoutPriority(1)
                 .frame(minHeight: 44)
                 // A tap on the line unfolds the row, as a click on the Mac's Thinking opens its activity.
                 .contentShape(Rectangle())
@@ -331,22 +337,29 @@ struct ChatWorkingRow: View {
                     .accessibilityAction(named: "Stop Now") { stop() }
                     .accessibilityIdentifier("chat-stop")
                 }
-                Spacer(minLength: 8)
-                if !expanded, !session.subagents.isEmpty {
-                    // The running subagents, as the Mac's footer badge: unfolded, their row over the steps line.
-                    ChatAgentsBadge(count: session.subagents.count)
+                // The room after the line (and Stop) up to the chevron, the agents' badge and the steps' count in it:
+                // a tap anywhere there unfolds the row too. Stop keeps its own touch (its hold, its capsule).
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    if !expanded, !session.subagents.isEmpty {
+                        // The running subagents, as the Mac's footer badge: unfolded, their row over the steps line.
+                        ChatAgentsBadge(count: session.subagents.count)
+                    }
+                    if !expanded, !tools.isEmpty {
+                        // Folded, the count; open, the log's own line counts (`ChatStepWindow`).
+                        Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(1)
+                            .accessibilityHidden(true)
+                    }
                 }
-                if !expanded, !tools.isEmpty {
-                    // Folded, the count; open, the log's own line counts (`ChatStepWindow`).
-                    Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .layoutPriority(1)
-                        .accessibilityHidden(true)
-                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .onTapGesture { expanded.toggle() }
                 Button {
                     // The rows below appear in place; nothing else in the thread moves.
                     expanded.toggle()
@@ -460,11 +473,28 @@ struct ChatStopHold: View {
     static let idle: Duration = .seconds(4)
 
     var body: some View {
+        ChatHoldCapsule(title: "Hold to stop", symbol: "stop.fill", tint: .destructive, pressing: pressing,
+                        progress: progress, identifier: "chat-stop-hold")
+    }
+}
+
+/// What a hold does, over the control being held (Stop's, the mic's): a glass capsule with its symbol and "Hold to …",
+/// "Keep holding…" while held, filling as the hold goes (`progress`, 0 to 1) and emptying if let go early. It only
+/// says; the control itself is held, so the thumb never moves.
+struct ChatHoldCapsule: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    let pressing: Bool
+    let progress: Double
+    let identifier: String
+
+    var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "stop.fill")
+            Image(systemName: symbol)
                 .font(.footnote)
-                .foregroundStyle(Color.destructive)
-            Text(pressing ? "Keep holding…" : "Hold to stop")
+                .foregroundStyle(tint)
+            Text(pressing ? "Keep holding…" : title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .contentTransition(.opacity)
@@ -474,7 +504,7 @@ struct ChatStopHold: View {
         .background(alignment: .leading) {
             GeometryReader { proxy in
                 Rectangle()
-                    .fill(Color.destructive.opacity(0.28))
+                    .fill(tint.opacity(0.28))
                     .frame(width: proxy.size.width * progress)
             }
         }
@@ -482,7 +512,7 @@ struct ChatStopHold: View {
         .glassEffect(.regular, in: Capsule())
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat-stop-hold")
+        .accessibilityIdentifier(identifier)
     }
 }
 
@@ -588,10 +618,15 @@ struct ChatLimitsLine: View {
         return (main, running.dropFirst().last)
     }
 
-    /// "Resets Thu 9:40am", "Resets in 2h 18m".
-    static func resets(_ window: ChatLimitWindow, now: Date) -> String {
-        let text = window.resetText(now: now)
-        return text.prefix(1).uppercased() + text.dropFirst()
+    /// "resets 9:40am thu", "resets in 2h 18m": after the share, the time first, all lowercase (the Mac's popover says
+    /// "resets Thu 9:40am").
+    static func resets(_ window: ChatLimitWindow, now: Date, timeZone: TimeZone = .current) -> String {
+        window.resetText(now: now, timeZone: timeZone, timeFirst: true).lowercased()
+    }
+
+    /// "64% weekly", "42% 5-hour": the share first, the window's name after it ("64%" where the line is narrow).
+    static func share(_ window: ChatLimitWindow, named: Bool = true) -> String {
+        named ? "\(window.used)% \(window.title.lowercased())" : "\(window.used)%"
     }
 
     static func tone(_ used: Int) -> AnyShapeStyle {
@@ -626,11 +661,11 @@ struct ChatLimitsLine: View {
             if let (main, short) = Self.windows(all, now: now) {
                 HStack(spacing: 5) {
                     ChatLimitRing(used: main.used)
-                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(tone(main.used))
+                    Text(Self.share(main, named: named)).foregroundStyle(tone(main.used))
                     if let short {
                         Text("·")
                         ChatLimitRing(used: short.used)
-                        Text("\(short.title) \(short.used)%").foregroundStyle(tone(short.used))
+                        Text(Self.share(short)).foregroundStyle(tone(short.used))
                     } else {
                         Text((named ? "· " : "") + Self.resets(main, now: now))
                     }
@@ -961,6 +996,8 @@ struct ChatElapsed: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(Self.text(since.map { context.date.timeIntervalSince($0) } ?? 0, reduceMotion: reduceMotion))
                 .monospacedDigit()
+                // "1m 16s" never breaks between its parts.
+                .fixedSize()
         }
     }
 

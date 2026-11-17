@@ -91,6 +91,9 @@ enum Screens {
         case "Z1-night-outline": NightThemeScreen(palette: .outline)
         case "Z2-night-dim": NightThemeScreen(palette: .dim)
         case "Z3-night-red": NightThemeScreen(palette: .red)
+        // Reply as the app ships it: a bar over the composer, the excerpt quoted on the sent bubble.
+        case "Y1a-reply-bar": ReplyBarScreen()
+        case "Y1b-reply-sent": ReplyBarScreen(sent: true)
         // Message details.
         case "M1-message-info": MessageInfoScreen()
         case "M1b-message-info-unfolded": MessageInfoScreen(variant: .unfolded)

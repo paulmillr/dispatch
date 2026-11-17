@@ -597,7 +597,7 @@ extension WatchRequestServerTests {
         try await TestSupport.eventually { helper.requests("queue.add").count == 1 && chat.queueItems.first?.helperID != nil }
         let held = try XCTUnwrap(chat.queueItems.first?.helperID)
         _ = try page(await serve(.stop(key)))
-        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 }
         try notify("chat.queue", ["error": NSNull(), "items": [ChatFixture.queued(held, "Then lint", paused: "stopped")]])
         try await TestSupport.eventually { chat.queueRows.first?.status == "Paused after Stop." }
         let row = try XCTUnwrap(chat.queueRows.first)

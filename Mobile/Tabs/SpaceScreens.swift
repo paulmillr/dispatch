@@ -88,7 +88,8 @@ struct SpaceTabsScreen: View {
     /// opens the space's menu, without New tab (the capsule at the bottom is New tab).
     private func capsule(_ space: MobileSpace?, host: TabsHost?) -> TabsTitleCapsule? {
         guard let space, let host else { return nil }
-        let menu = SpaceMenuItems(navigator: navigator, space: space, newTab: false, edit: ("Edit", { editing = true }))
+        let menu = SpaceMenuItems(navigator: navigator, space: space, newTab: false, edit: ("Edit", { editing = true }),
+                                  header: true)
         return TabsTitleCapsule(glyph: AnyView(TabHostDisc(host: host)), menu: AnyView(menu), branch: branch,
                                 hint: "Opens the space's menu", identifier: "space-menu")
     }
@@ -135,18 +136,13 @@ struct SpaceTabsScreen: View {
                     }
                     .accessibilityIdentifier("space-tab")
                     .contextMenu {
-                        TabsTabMenu(actions: actions, tab: entry.id)
-                        if !shells {
-                            Button("Edit", systemImage: "pencil") { editing = true }
-                        }
-                        SpaceMoveMenu(targets: workspace.moveTargets(from: space)) { target in
-                            move(entry.id, to: target, in: workspace)
-                        }
+                        // Edit in Rename…'s place: it renames the space's tabs in place, beside reorder and close.
+                        TabsTabMenu(actions: actions, tab: entry.id, edit: shells ? nil : { editing = true })
                     }
-                    // Close alone, also by a full swipe: it ends the tab, asking first while work runs (Detach, which
-                    // only hides it on this connection, is in the tab's menu).
+                    // Close alone, also by a full swipe: the row goes at once and the tab ends, after asking (the row
+                    // back) while work runs (Detach, which only hides it on this connection, is in the tab's menu).
                     .swipeActions(edge: .trailing) {
-                        Button { actions.close(.tab(entry.id), .close) } label: { Label("Close", systemImage: "xmark") }
+                        Button(role: .destructive) { actions.close(.tab(entry.id), .close) } label: { Label("Close", systemImage: "xmark") }
                             .tint(Color.destructive)
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 16))
@@ -199,16 +195,6 @@ struct SpaceTabsScreen: View {
         let moved = rows[first].id.key
         Task {
             do { try await workspace.reorder(space: space, keys: keys, moved: moved) } catch {
-                actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-    }
-
-    /// Move to: the tab goes to `target` on the server; the topology takes its row away from here.
-    private func move(_ ref: TabRef, to target: MobileSpace, in workspace: MobileWorkspace) {
-        guard let tab = workspace.tab(ref.key) else { return }
-        Task {
-            do { try await workspace.move(tab: tab, to: target) } catch {
                 actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
@@ -269,8 +255,8 @@ struct SpaceSortMenu: View {
     }
 }
 
-/// A tab row's Move to (in its long press, P2): the host's other spaces; picking one moves the tab there
-/// (`MobileWorkspace.move(tab:to:)`). Nothing without another space or a connection.
+/// A tab's Move to (`TabsTabMenu`: a row's long press, P2, and the tab's header): the host's other spaces; picking one
+/// moves the tab there (`TabsActions.move`). Nothing without another space or a connection.
 struct SpaceMoveMenu: View {
     let targets: [MobileSpace]
     let move: (MobileSpace) -> Void
@@ -289,8 +275,8 @@ struct SpaceMoveMenu: View {
 }
 
 /// A space's menu items, the header's capsule and a space row's long press alike: New tab (the row's only: the space's
-/// screen has its capsule), then the way to change it (the header's Edit, for the space and its tabs; the list's
-/// Rename… and Edit Spaces, which reorders them), then Detach and Terminate… (a Shell space: Close all shells). As a
+/// screen has its capsule), then the way to change it (the header's Edit, for the space and its tabs; the list's Edit,
+/// which renames, reorders and deletes its spaces), then Detach and Terminate… (a Shell space: Close all shells). As a
 /// tab's menu: what it is called, then how it ends.
 struct SpaceMenuItems: View {
     let navigator: SpacesNavigator
@@ -299,28 +285,48 @@ struct SpaceMenuItems: View {
     var newTab = true
     /// The header's Edit: a title and what it does.
     var edit: (title: String, action: () -> Void)? = nil
-    /// The list's: Rename… and Edit Spaces.
+    /// The list's Edit (`SpacesNavigator.editing`).
     var list = false
+    /// The space's header: headed by its name and host in full (the capsule cuts a long name), Stats under Edit.
+    var header = false
 
     var body: some View {
         let workspace = navigator.model.workspace(space.ref.host)
+        if header {
+            Section(Self.label(space, host: workspace?.host)) { changes(workspace) }
+        } else {
+            changes(workspace)
+            Divider()
+        }
+        ending(workspace)
+    }
+
+    /// "app · mba2": the header menu's first line.
+    static func label(_ space: MobileSpace, host: TabsHost?) -> String {
+        [space.name, host?.name].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// New tab, the way to change the space, and in the header the host's Stats.
+    @ViewBuilder private func changes(_ workspace: MobileWorkspace?) -> some View {
         let connected = workspace?.client != nil
-        let shells = space.kind == .plainShell
         if newTab, workspace?.canAddTab(to: space) == true {
             Button("New tab", systemImage: "plus") { navigator.newTab(in: space) }
         }
-        if !shells {
-            if let edit {
-                Button(edit.title, systemImage: "pencil", action: edit.action).disabled(!connected)
-            }
-            if list {
-                Button("Rename…", systemImage: "pencil") { navigator.actions.rename(.space(space.ref)) }.disabled(!connected)
-            }
+        if space.kind != .plainShell, let edit {
+            Button(edit.title, systemImage: "pencil", action: edit.action).disabled(!connected)
         }
         if list {
-            Button("Edit Spaces", systemImage: "arrow.up.arrow.down") { navigator.editing = true }
+            Button("Edit", systemImage: "pencil") { navigator.editing = true }
         }
-        Divider()
+        if header {
+            Button("Stats", systemImage: "gauge.with.dots.needle.33percent") { navigator.statsHost = space.ref.host }
+        }
+    }
+
+    /// How the space ends: Detach and Terminate…, a Shell space's Close all shells.
+    @ViewBuilder private func ending(_ workspace: MobileWorkspace?) -> some View {
+        let connected = workspace?.client != nil
+        let shells = space.kind == .plainShell
         if shells {
             Button(role: .destructive) { navigator.actions.close(.space(space.ref), .close) } label: {
                 Text("Close all shells"); Text("ends every shell of this host"); Image(systemName: "xmark")

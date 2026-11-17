@@ -3,11 +3,9 @@ import Photos
 import SwiftUI
 import UIKit
 
-/// What F2 can do beyond showing the file, from the tab it was opened in: Attach to chat (the file into the tab's chat
-/// composer; nil without an agent), Open in terminal (a cd in the tab's shell; nil when the tab's pane is not at a
-/// shell), and Back.
+/// What F2 can do beyond showing the file, from the tab it was opened in: Open in terminal (a cd in the tab's shell;
+/// nil when the tab's pane is not at a shell), and Back.
 struct FilesPreviewActions {
-    var ask: ((FilePreview) -> Void)?
     /// Types the `cd` and, once the helper took it, shows the tab's terminal; returns why it did not ("The terminal is
     /// busy."), nil when it did.
     var openInTerminal: (() async -> String?)?
@@ -18,8 +16,7 @@ struct FilesPreviewActions {
 
 /// F2: a file pushed over the tab (its header, capsule and the modes' bar go with the push). The back pill names the
 /// screen it returns to; the title is the file's name, the subtitle its folder, size, age and kind; "…" holds Wrap lines
-/// and Line numbers (or Markdown's source), Copy path, Share, Save to Photos (an image's), Attach to chat and Open in
-/// terminal. Code has line numbers (unless turned off, kept as `files.lineNumbers`) and the syntax palette, scrolls both
+/// and Line numbers (or Markdown's source), Copy path, Share, Save to Photos (an image's) and Open in terminal. Code has line numbers (unless turned off, kept as `files.lineNumbers`) and the syntax palette, scrolls both
 /// ways and zooms with a pinch (kept as the diff viewer's, `CodeFontSize`); Find counts and steps through matches.
 /// Markdown renders as a page, as the Mac's preview does (`FileMarkdownReader`), its Outline in "…"; images zoom with a
 /// pinch or a double tap, a binary shows its kind and size with Share, a long text its head with Load all. On a phone's
@@ -442,14 +439,6 @@ struct FilePreviewScreen: View {
         }
     }
 
-    /// Attach to chat: for what has loaded and is not a binary (which offers Share only).
-    private var asks: Bool {
-        switch preview.content {
-        case .loading, .binary, .failed, .folder: false
-        default: true
-        }
-    }
-
     private var isImage: Bool {
         if case .image = preview.content { return true }
         return false
@@ -571,9 +560,6 @@ struct FilePreviewScreen: View {
                 }
             }
             Section {
-                if let ask = actions.ask, asks {
-                    Button("Attach to chat", systemImage: "paperclip") { ask(preview) }
-                }
                 if let open = actions.openInTerminal {
                     Button("Open in Terminal", systemImage: "apple.terminal") {
                         opening = Task {

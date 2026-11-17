@@ -43,6 +43,7 @@ final class MobileSettings {
     /// Send's tap (and Return) while the agent works, as the Mac's Settings › Chat mode; the composer reads it
     /// (`@AppStorage`).
     nonisolated static let chatSendWhileWorkingKey = "chat.sendWhileWorking"
+    nonisolated static let chatKeepHistoryKey = "chat.keepHistory"
     /// What an agent tab opens on (`TabSegment.initial`), as the Mac's Settings › Chat mode.
     nonisolated static let chatAgentStartKey = "chat.agentStart"
     /// The composer's code keys row ("+" › Show code keys), off by default; the composer reads it (`@AppStorage`).
@@ -167,6 +168,11 @@ final class MobileSettings {
         }
     }
 
+    /// What chats showed is saved on this iPhone, so a chat reads while its host is offline (`ChatHistoryArchive`).
+    var chatKeepHistory: Bool {
+        didSet { if chatKeepHistory != oldValue { defaults.set(chatKeepHistory, forKey: Self.chatKeepHistoryKey) } }
+    }
+
     /// What the notifications say (G5, `AgentAlerts`): an agent that needs you (approvals and questions notify
     /// whatever this says), one that finished its turn, one that stopped while working.
     var notifyNeedsYou: Bool {
@@ -256,6 +262,7 @@ final class MobileSettings {
         chatTextSize = defaults.string(forKey: Self.chatTextSizeKey).flatMap(ChatTextSize.init(rawValue:)) ?? .standard
         chatSendWhileWorking = defaults.string(forKey: Self.chatSendWhileWorkingKey).flatMap(ChatSendWhileWorking.init(rawValue:)) ?? .queue
         chatAgentStart = defaults.string(forKey: Self.chatAgentStartKey).flatMap(ChatAgentStart.init(rawValue:)) ?? .chat
+        chatKeepHistory = defaults.object(forKey: Self.chatKeepHistoryKey) as? Bool ?? true
         notifyNeedsYou = defaults.object(forKey: Self.notifyNeedsYouKey) as? Bool ?? true
         notifyFinished = defaults.object(forKey: Self.notifyFinishedKey) as? Bool ?? true
         notifyFailed = defaults.object(forKey: Self.notifyFailedKey) as? Bool ?? true
@@ -314,6 +321,7 @@ final class MobileSettings {
         take(\.chatTextSize)
         take(\.chatSendWhileWorking)
         take(\.chatAgentStart)
+        take(\.chatKeepHistory)
         take(\.notifyNeedsYou)
         take(\.notifyFinished)
         take(\.notifyFailed)

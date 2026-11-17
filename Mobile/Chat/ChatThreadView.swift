@@ -511,6 +511,10 @@ struct ChatThreadView: View {
                 }
                 if session.queueEdit != nil {
                     ChatQueueEditBar { session.endQueueEdit(save: false) }
+                } else if session.mineOnly, !session.search.active {
+                    ChatMineOnlyBar { session.mineOnly = false }
+                } else if let quote = session.replyQuote {
+                    ChatReplyBar(agent: session.agentName, excerpt: quote) { session.replyQuote = nil }
                 } else if let note = session.queueEditNote {
                     Button { session.queueEditNote = nil } label: { ChatCaption(text: note).padding(.horizontal, 10) }
                         .buttonStyle(.plain)
@@ -535,7 +539,8 @@ struct ChatThreadView: View {
                              saving: editing,
                              attachments: attachments,
                              dictationOwner: ObjectIdentifier(session), multiline: multiline,
-                             converse: session.phase == .verified ? { voice.start(session) } : nil)
+                             converse: session.phase == .verified ? { voice.start(session) } : nil,
+                             mineOnly: Binding(get: { session.mineOnly }, set: { session.mineOnly = $0 }))
                 }
             }
         }
@@ -544,7 +549,7 @@ struct ChatThreadView: View {
     /// The composer is the rail's Reply (a phone on its side): empty, nothing attached or uploading, not focused, not
     /// unfolded by Reply.
     private var composerFolded: Bool {
-        guard rail != nil, !replying, !focused else { return false }
+        guard rail != nil, !replying, !focused, session.replyQuote == nil else { return false }
         let draft = session.drafts.current
         return draft.text.isEmpty && draft.attachments.isEmpty && session.draftUploads.isEmpty
     }
@@ -613,13 +618,14 @@ struct ChatThreadView: View {
         focused = true
     }
 
-    /// The composer's hint (M4a, M4c, M5a, M5c).
+    /// The composer's hint (M4a, M4c, M5a, M5c): Message, queued or not (the queue's card says what waits), but editing
+    /// a queued message or steering the turn.
     private var placeholder: String {
         if session.queueEdit != nil { return "Edit the queued message…" }
-        if session.route(steer: false) == .outbox { return "Queue a message…" }
-        if sendWhileWorking == .steer, session.route(steer: true) == .steer { return "Steer the current turn…" }
-        if !session.queueRows.isEmpty { return "Queue another…" }
-        return session.working ? "Queue a message…" : "Message"
+        if session.route(steer: false) != .outbox, sendWhileWorking == .steer, session.route(steer: true) == .steer {
+            return "Steer the current turn…"
+        }
+        return "Message"
     }
 
     /// The shown search match, when the search is open.
@@ -651,7 +657,19 @@ struct ChatThreadView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
         } else if session.transcript.isEmpty, session.optimisticPrompt == nil, session.queueRows.isEmpty, session.approvals.isEmpty {
-            ChatIntro(session: session, space: space, directory: directory, homes: homes) { settings = true }
+            if session.link.isConnected {
+                ChatIntro(session: session, space: space, directory: directory, homes: homes) { settings = true }
+            } else {
+                // Nothing kept for it on this iPhone: not a new chat, its host is away.
+                Text("\(session.hostName) is not connected. This chat shows once it is.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                    .padding(.horizontal, 24)
+                    .accessibilityIdentifier("chat-offline-empty")
+            }
         }
         ForEach(drawn(entries, from: start)) { entry in
             switch entry {
@@ -686,10 +704,15 @@ struct ChatThreadView: View {
         case .user:
             VStack(spacing: 5) {
                 ChatRevealSent(reveal: reveal, corner: sentCorner(row)) {
-                    ChatUserMessage(text: row.item.text, attachments: row.item.attachments, host: session.key.host, read: read)
+                    ChatUserMessage(text: row.item.text, attachments: row.item.attachments, host: session.key.host, read: read,
+                                    quoteAuthor: session.agentName)
                         .contextMenu {
                             Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }
                             readAloud(row)
+                            // The turn it started (M5b), as an agent's message has; not while it is still on its way.
+                            if !row.turnID.isEmpty {
+                                Button("Info", systemImage: "info.circle") { details = row }
+                            }
                         }
                 }
                 readingFootnote(row)
@@ -739,10 +762,10 @@ struct ChatThreadView: View {
                                   reply: { details = nil; reply(to: row) }, showTerminal: terminal)
     }
 
-    /// Quotes a message into the composer above the draft, and focuses it (the bubble menu's and message details' Reply).
+    /// Replies to a message (the bubble menu's and message details' Reply, Y1): its excerpt over the composer
+    /// (`ChatReplyBar`), the draft left as it is, and the composer focused.
     private func reply(to row: ChatThreadRow) {
-        let quote = row.item.text.split(separator: "\n").map { "> " + $0 }.joined(separator: "\n")
-        session.drafts.edit(text: quote + "\n\n" + session.drafts.current.text)
+        session.replyQuote = ChatReplyQuote.excerpt(row.item.text)
         focused = true
     }
 
@@ -801,6 +824,15 @@ struct ChatThreadView: View {
     }
 
     @ViewBuilder private var notices: some View {
+        // A copy kept on this iPhone, shown while its host has not answered (`ChatHistoryArchive`).
+        if let saved = session.savedAt, session.phase != .verified {
+            Text("Saved copy · " + (TabsTime.label(saved, now: Date()) ?? ""))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
+                .accessibilityIdentifier("chat-saved-copy")
+        }
         if session.approvalInTerminal, session.phase == .verified {
             ChatNote(text: "Codex is asking for approval in its terminal. To get its approvals here, pick Trust all under “Hooks need review” there.")
         }
@@ -825,6 +857,8 @@ struct ChatThreadView: View {
     /// else after the turn that was last when it arrived, else at the end. A pending one stays last, where it is answered;
     /// a decided one whose turn is not loaded waits for that earlier history instead of sitting at the end.
     private func entries(_ rows: [ChatThreadRow]) -> [Entry] {
+        // Mine only: the user's messages alone, but while searching (a match may be anywhere).
+        let rows = session.mineOnly && !session.search.active ? rows.filter { if case .user = $0.kind { true } else { false } } : rows
         var placed: [String: [MobileChatSession.Approval]] = [:]
         var unplaced: [MobileChatSession.Approval] = []
         let turns = session.transcript.turns

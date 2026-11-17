@@ -428,6 +428,12 @@ final class MobileComposition {
         let composition = MobileComposition(hosts: hosts, tabs: saving ? MobileTabs() : MobileTabs(defaults: Self.ephemeralDefaults),
                                             cache: HostCache(url: saving ? HostCache.file : nil),
                                             splitMemory: saving ? .standard : nil)
+        if saving {
+            let archive = ChatHistoryArchive()
+            let settings = composition.settings
+            archive.enabled = { settings.chatKeepHistory }
+            composition.conversations.archive = archive
+        }
         let notifier = SystemNotifier()
         let alerts = AgentAlerts(notifier: notifier, settings: composition.settings)
         let conversations = composition.conversations
@@ -477,6 +483,9 @@ final class MobileComposition {
         if phase == .background {
             conversations.markers.flush()
             cache.flush()
+            // What the open threads show, saved for reading offline: finished in the background time iOS gives.
+            let task = UIApplication.shared.beginBackgroundTask(withName: "chat-history")
+            conversations.saveHistory { UIApplication.shared.endBackgroundTask(task) }
             // The overall comment is written 300 ms after typing stops: going away writes it now.
             review.repository.flush()
             refresh?.schedule()
@@ -629,7 +638,8 @@ final class MobileComposition {
                 let step = !detail ? session.currentStepGist ?? "working" : session.currentStep
                     ?? session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "working"
                 return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince,
-                                  note: session.currentNote)
+                                  note: session.currentNote, kind: session.currentStepKind, steps: session.currentStepCount,
+                                  agents: session.subagents.count, asked: session.currentPrompt)
             }
         }
         if row.summary.waiting { return TabsStatus(text: row.summary.attention ?? "needs you") }

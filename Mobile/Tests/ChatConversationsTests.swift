@@ -454,6 +454,21 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertFalse(efforts.shown(for: "haiku"), "a model without efforts has no section")
     }
 
+    /// The model sheet opens on the lists last seen for the agent: remembered choices read back as the menus' rows, and
+    /// the agent's reported model finds its row among them.
+    func testTheModelSheetOpensOnTheRememberedLists() {
+        let memory = ChatModelMemory(url: nil)
+        memory.remember(agent: "claude", models: [
+            AgentModelMenu.Choice(number: 1, name: "Opus 5.5", detail: "", current: true, isDefault: true),
+            AgentModelMenu.Choice(number: 2, name: "Sonnet 5.5", detail: "Sonnet 5.5 · fast", current: false, isDefault: false),
+        ])
+        let rows = ChatSettingsSheet.choices(memory.agent("claude").models)
+        XCTAssertEqual(rows.map(\.name), ["Opus 5.5", "Sonnet 5.5"])
+        XCTAssertEqual(rows.map(\.detail), ["", "Sonnet 5.5 · fast"])
+        XCTAssertEqual(AgentModelMenu.row(for: "claude-opus-5-5", in: rows)?.name, "Opus 5.5")
+        XCTAssertTrue(ChatSettingsSheet.choices(memory.agent("codex").models).isEmpty, "nothing seen: the spinner")
+    }
+
     func testTimeLabelsFollowMessages() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
@@ -933,6 +948,76 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertFalse(tapped === waiting)
         XCTAssertEqual(tapped.phase, .opening)
         _ = try await subscription(3, count: 2)
+    }
+
+    /// With history kept, a thread let go is saved on the phone; after a relaunch (a new list, nothing in memory) the chat
+    /// opens on it while its host is offline, with when it was saved, and its host's history replaces it when reached;
+    /// a removed host's saved chats go.
+    func testASavedThreadOpensWhileItsHostIsOffline() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chat-history-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let conversations = opening()
+        let archive = ChatHistoryArchive(directory: directory)
+        conversations.archive = archive
+        conversations.keptSessions = 0
+        let conversation = "00000000-0000-4000-8000-000000000201"
+        let bound = try topology(agents: [3: conversation])
+        conversations.update(snapshot(bound))
+        let key = k3(host)
+        let first = conversations.session(for: key)
+        answer(try await subscription(3), terminal: 3, session: conversation, records: try ChatFixture.records("claude-thread"))
+        try await TestSupport.eventually { first.phase == .verified && !first.loadingHistory }
+        let rows = first.transcript.rows
+        conversations.shown(key)
+        conversations.hidden(key)
+        await withCheckedContinuation { done in archive.flush { done.resume() } }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archive.file(key).path), "saved as it was let go")
+
+        // A relaunch: a new list, the host offline with its last topology.
+        let relaunched = opening()
+        let reread = ChatHistoryArchive(directory: directory)
+        relaunched.archive = reread
+        relaunched.update(snapshot(bound, link: .disconnected))
+        let offline = relaunched.session(for: key)
+        try await TestSupport.eventually { offline.seeded }
+        XCTAssertEqual(offline.transcript.rows.map(\.id), rows.map(\.id), "what it showed")
+        XCTAssertNotNil(offline.savedAt)
+        relaunched.remove(host: host)
+        await withCheckedContinuation { done in reread.flush { done.resume() } }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: reread.file(key).path), "gone with its host")
+    }
+
+    /// A saved chat larger than its share loses its oldest turns, not the newest; the copy then no longer reaches the
+    /// conversation's start. Off, nothing is written or read.
+    func testASavedChatOverItsShareKeepsItsNewestTurns() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chat-history-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var transcript = MobileTranscript()
+        transcript.apply(try JSONDecoder().decode([HelperChat.Record].self, from: JSONSerialization.data(
+            withJSONObject: try ChatFixture.records("claude-thread"))), historical: true)
+        let turns = transcript.turns.filter { !$0.items.isEmpty }
+        XCTAssertGreaterThan(turns.count, 1)
+        let kept = MobileChatSession.Kept(transcript: transcript, conversation: "c", earlier: nil, readingPosition: nil,
+                                          bytes: transcript.estimatedBytes)
+        let whole = try XCTUnwrap(ChatHistoryArchive.encode(
+            ChatHistoryArchive.Saved(node: "n", conversation: "c", reachedStart: true, saved: Date(), turns: transcript.saved.turns,
+                                     index: transcript.saved.index), limit: .max))
+        let archive = ChatHistoryArchive(directory: directory, chatLimit: whole.count - 1)
+        let key = ChatConversationKey(host: host, node: "n")
+        archive.save(kept, for: key)
+        let maybe = await archive.load(key)
+        let loaded = try XCTUnwrap(maybe)
+        XCTAssertLessThan(loaded.transcript.turns.count, transcript.turns.count)
+        XCTAssertEqual(loaded.transcript.turns.last?.id, transcript.turns.last?.id, "the newest turn stays")
+        XCTAssertNotNil(loaded.earlier, "no longer from the start")
+
+        let off = ChatHistoryArchive(directory: directory.appendingPathComponent("off"))
+        off.enabled = { false }
+        off.save(kept, for: key)
+        await withCheckedContinuation { done in off.flush { done.resume() } }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: off.file(key).path))
+        let none = await off.load(key)
+        XCTAssertNil(none)
     }
 
     /// A kept transcript waits while the topology names no conversation for its pane (a new helper's first snapshots,

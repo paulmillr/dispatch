@@ -3,7 +3,7 @@ import UIKit
 
 /// The Terminal segment of a tab (M6a): the terminal fills the space under Tabs' header, the glass key capsule sits
 /// at the bottom (above the keyboard while it is docked; at the bottom under a floating or split one), and the
-/// d-pad's arrow cluster pops up over the terminal's bottom right while held or pinned. On an iPad with a hardware
+/// d-pad's arrow cluster pops up over its key while held or pinned. On an iPad with a hardware
 /// keyboard the capsule collapses to a small button over the terminal's bottom right, and the terminal gets its rows.
 /// On a phone's side (`MobileLandscape`, L14) the terminal keeps the whole window: the capsule shows only riding a
 /// docked keyboard, and the rail's keyboard button (`TabRailKeyboardButton`) raises it.
@@ -57,11 +57,9 @@ struct TerminalSegmentView: View {
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
                 Group {
-                    if ended != nil || searching || (rail != nil && !full) {
+                    if ended != nil || searching || (rail != nil && !full) || full {
+                        // With the capsule, the cluster rises over its d-pad key (below).
                         EmptyView()
-                    } else if full {
-                        TerminalDPadCluster(controller: controller)
-                            .padding(.trailing, 14)
                     } else {
                         TerminalKeysButton(controller: controller)
                             .padding(.trailing, 10)
@@ -95,6 +93,17 @@ struct TerminalSegmentView: View {
             // SwiftUI keeps a keyboard inset for a floating (or split) keyboard too, lifting the capsule under it; the
             // capsule rides only a docked keyboard.
             .ignoresSafeArea(.keyboard, edges: controller.keyboard == .floating ? .bottom : [])
+            // The arrow cluster over the d-pad key that raises it, its bottom a little above the capsule, kept on screen.
+            .overlayPreferenceValue(TerminalDPadKeyAnchor.self) { anchor in
+                if full, !searching, let anchor {
+                    GeometryReader { proxy in
+                        let place = TerminalDPadCluster.place(over: proxy[anchor], in: proxy.size)
+                        TerminalDPadCluster(controller: controller)
+                            .position(place)
+                            .environment(\.colorScheme, .dark)
+                    }
+                }
+            }
             .coordinateSpace(.named(TerminalDPadCluster.space))
             .background(Color(controller.hostView.backgroundColor ?? .black))
             .onAppear {
@@ -263,7 +272,14 @@ struct TerminalKeyCapsule: View {
             )
             .accessibilityLabel("Arrow keys")
             .accessibilityAddTraits(.isButton)
+            .anchorPreference(key: TerminalDPadKeyAnchor.self, value: .bounds) { $0 }
     }
+}
+
+/// The d-pad key's bounds, which the arrow cluster rises over (`TerminalSegmentView`).
+struct TerminalDPadKeyAnchor: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
 }
 
 /// The collapsed capsule (an iPad with a hardware keyboard): one glass key over the terminal's bottom right that
@@ -302,8 +318,8 @@ struct TerminalDPadGlyph: View {
     }
 }
 
-/// The arrow cluster (M6a): round keys in a cross around Return, 52 points each with 6 point gaps, over the
-/// terminal's bottom right. Shown while the d-pad key is held (keys are entered by dragging) or pinned by a tap
+/// The arrow cluster (M6a): round keys in a cross around Return, 52 points each with 6 point gaps, over the d-pad key
+/// that raises it (`place`). Shown while the d-pad key is held (keys are entered by dragging) or pinned by a tap
 /// (keys are tapped); a held key repeats. Reduce Motion: it fades instead of popping up.
 struct TerminalDPadCluster: View {
     let controller: TerminalController
@@ -314,6 +330,16 @@ struct TerminalDPadCluster: View {
     nonisolated static var side: Double { 3 * key + 2 * gap }
     /// The cluster's frame in the segment's coordinate space, for the holding finger's hit test.
     @MainActor static var frame = CGRect.zero
+    /// Between the cluster's bottom and the top of the d-pad key's capsule, and its least distance from the sides.
+    nonisolated static let lift = 12.0, margin = 8.0
+
+    /// The cluster's centre over the d-pad key at `key` (in a space `size` wide): centred on the key, its bottom `lift`
+    /// above the key, moved in to keep `margin` from either side.
+    nonisolated static func place(over key: CGRect, in size: CGSize) -> CGPoint {
+        let half = side / 2
+        let x = min(max(key.midX, half + margin), max(half + margin, size.width - half - margin))
+        return CGPoint(x: x, y: key.minY - lift - half)
+    }
 
     var body: some View {
         ZStack {

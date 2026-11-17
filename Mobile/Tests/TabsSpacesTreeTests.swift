@@ -90,6 +90,44 @@ final class TabsSpacesTreeTests: XCTestCase {
         XCTAssertEqual(model.sections()[0].spaces.map(\.space.name), ["c", "b", "a"], "The hidden space kept its place")
     }
 
+    /// Edit's one list (`SpacesEditRow`): a space's drop within its host moves it there; past its host's last space (the
+    /// next host's rows) it lands last, above its first (the host's own header or the host before) first. A host's
+    /// header moves the host among the others.
+    func testEditListClampsADropToTheSpacesOwnHost() {
+        let defaults = UserDefaults(suiteName: "tabs-tree-\(#function)")!
+        defaults.removePersistentDomain(forName: "tabs-tree-\(#function)")
+        let model = MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults)
+        func sketch(_ names: [String], first: UInt64) -> TopologySketch {
+            TopologySketch(backend: 1, first: first, spaces: names.map { name in
+                .init(key: "s:\(name)", name: name, tabs: [.init(key: "t:\(name)", name: name, panes: [.init(key: "p:\(name)", cwd: "/")])])
+            })
+        }
+        model.sync([TabsHostInput(host: TabsFixtures.host, client: nil, topology: sketch(["a", "b", "c"], first: 10).topology),
+                    TabsHostInput(host: ai, client: nil, topology: sketch(["x", "y"], first: 50).topology)])
+        func names(_ host: Int) -> [String] { model.sections(filter: .all)[host].spaces.map(\.space.name) }
+        func drop(_ from: Int, _ to: Int) {
+            let rows = SpacesEditRow.rows(model.sections(filter: .all))
+            guard case .spaces(let host, let visible, let from, let to)? = SpacesEditRow.move(rows, from: [from], to: to)
+            else { return XCTFail("no move of a space") }
+            model.moveSpaces(of: host, visible: visible, from: [from], to: to)
+        }
+        // Rows: 0 host, 1 a, 2 b, 3 c, 4 host, 5 x, 6 y.
+        let rows = SpacesEditRow.rows(model.sections(filter: .all))
+        XCTAssertEqual(rows.count, 7)
+        XCTAssertNil(SpacesEditRow.move(rows, from: [0], to: 3), "a header among its own spaces: no change")
+        XCTAssertEqual(SpacesEditRow.move(rows, from: [0], to: 7), .host(TabsFixtures.host.id, before: nil), "last")
+        XCTAssertEqual(SpacesEditRow.move(rows, from: [4], to: 0), .host(ai.id, before: TabsFixtures.host.id), "first")
+        drop(1, 3)
+        XCTAssertEqual(names(0), ["b", "a", "c"], "within its host")
+        drop(2, 6)
+        XCTAssertEqual(names(0), ["b", "c", "a"], "past the last space, into the next host: last")
+        drop(5, 2)
+        XCTAssertEqual(names(1), ["x", "y"], "the second host's first space above its header: first (no move)")
+        drop(6, 1)
+        XCTAssertEqual(names(1), ["y", "x"], "into the host before: first")
+        XCTAssertEqual(names(0), ["b", "c", "a"], "the other host untouched")
+    }
+
     /// Mail's counts: tabs that need you or hold an unseen result; amber when something works; a collapsed section
     /// rolls them up.
     func testUnreadCountsWorkingDotAndRollUp() {

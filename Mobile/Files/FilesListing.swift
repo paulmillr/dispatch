@@ -66,8 +66,9 @@ enum FilesText {
     }
 }
 
-/// H1's row under the capsule: the folder glyph and the breadcrumb (each crumb opens its folder), Search and the "…"
-/// menu (sort, hidden files, Refresh, Copy path). While searching: the search field and Cancel.
+/// H1's row under the capsule: the folder glyph and the breadcrumb (each crumb opens its folder), Search, the sort menu
+/// (Name, Date or Size, and which way) and the "…" menu (hidden files, Refresh, Copy path). While searching: the search
+/// field and Cancel.
 struct FilesListingBar: View {
     @Bindable var browser: FilesBrowser
     /// The crumbs until the browser follows the tab's folder (the bar's first frame).
@@ -91,19 +92,40 @@ struct FilesListingBar: View {
                     browser.searching = true
                     focused = true
                 }
+                sortMenu
                 menu
             }
         }
     }
 
-    private var menu: some View {
+    /// The sort: Name, Date or Size, then its two ways in its own words (A to Z, Newest first); another sort starts at
+    /// its usual way (`FilesBrowser.sort`).
+    private var sortMenu: some View {
         Menu {
             Picker("Sort by", selection: $browser.sort) {
-                Text("Name").tag(FilesSort.name)
-                Text("Date").tag(FilesSort.modified)
-                Text("Size").tag(FilesSort.size)
+                ForEach(FilesSort.allCases, id: \.self) { sort in Text(sort.title).tag(sort) }
             }
             .pickerStyle(.inline)
+            Picker("Order", selection: $browser.ascending) {
+                Text(browser.sort.ways.ascending).tag(true)
+                Text(browser.sort.ways.descending).tag(false)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            MobileBarGlyph(symbol: "arrow.up.arrow.down")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .contentShape(.hoverEffect, Circle())
+        .hoverEffect(.highlight)
+        .accessibilityLabel("Sort")
+        .accessibilityValue("\(browser.sort.title), \(browser.ascending ? browser.sort.ways.ascending : browser.sort.ways.descending)")
+        .accessibilityIdentifier("files-sort")
+    }
+
+    private var menu: some View {
+        Menu {
             Section {
                 Toggle(isOn: Binding(get: { browser.showsHidden }, set: { browser.showsHidden = $0 })) {
                     Label("Show hidden files", systemImage: "eye")

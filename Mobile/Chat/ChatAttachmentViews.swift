@@ -27,6 +27,8 @@ struct ChatUserMessage: View {
     var host: UUID? = nil
     var read: (@MainActor (String) async throws -> Data?)? = nil
     var faded = false
+    /// Who a reply's leading quote answers (`ChatReplyQuote`), named on its card.
+    var quoteAuthor: String? = nil
     @Environment(\.chatSearchMarks) private var marks
     @Environment(\.chatSearchCurrent) private var current
 
@@ -37,11 +39,25 @@ struct ChatUserMessage: View {
             }
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachments.isEmpty {
                 ChatBubble(side: .user, faded: faded) {
-                    if var marker = ChatSearchMarker(marks, current: current) { Text(marker.mark(text)) } else { Text(text) }
+                    // A reply (Y1b): its quote as a card on top, the user's words under it.
+                    if let reply = ChatReplyQuote.split(text) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ChatReplyQuoteCard(quote: reply.quote, author: quoteAuthor)
+                            message(reply.body)
+                        }
+                    } else {
+                        message(text)
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// The text, with the search's marks.
+    private func message(_ text: String) -> Text {
+        if var marker = ChatSearchMarker(marks, current: current) { return Text(marker.mark(text)) }
+        return Text(text)
     }
 }
 

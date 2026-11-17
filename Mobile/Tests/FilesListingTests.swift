@@ -107,6 +107,28 @@ final class FilesListingTests: XCTestCase {
         XCTAssertEqual(FilesBrowser.sorted(entries, by: .modified).map(\.name), ["zeta", "c10.ts", "c9.ts", "b.ts", "A.ts"])
         XCTAssertEqual(FilesBrowser.sorted(entries, by: .size).map(\.name), ["zeta", "A.ts", "c9.ts", "c10.ts", "b.ts"],
                        "Equal sizes by name, numbers as numbers")
+        // The other way of each, folders still first, ties still by name A to Z.
+        XCTAssertEqual(FilesBrowser.sorted(entries, by: .name, ascending: false).map(\.name), ["zeta", "c10.ts", "c9.ts", "b.ts", "A.ts"])
+        XCTAssertEqual(FilesBrowser.sorted(entries, by: .modified, ascending: true).map(\.name), ["zeta", "A.ts", "b.ts", "c9.ts", "c10.ts"])
+        XCTAssertEqual(FilesBrowser.sorted(entries, by: .size, ascending: true).map(\.name), ["zeta", "b.ts", "c9.ts", "c10.ts", "A.ts"])
+    }
+
+    /// Another sort starts at its usual way (names A to Z, newest first, largest first); its way is the user's after.
+    @MainActor func testAnotherSortStartsAtItsUsualWay() {
+        let preferences = FilesPreferences()
+        let browser = FilesBrowser(tab: Self.ref, host: "mba2", preferences: preferences) { nil }
+        XCTAssertEqual(browser.sort, .name)
+        XCTAssertTrue(browser.ascending, "A to Z")
+        browser.ascending = false
+        browser.sort = .name
+        XCTAssertFalse(browser.ascending, "the same sort keeps its way")
+        browser.sort = .modified
+        XCTAssertFalse(browser.ascending, "newest first")
+        browser.sort = .size
+        XCTAssertFalse(browser.ascending, "largest first")
+        browser.sort = .name
+        XCTAssertTrue(browser.ascending, "A to Z again")
+        XCTAssertEqual(FilesSort.modified.ways.descending, "Newest first")
     }
 
     /// Show hidden files lists again with `hidden`, kept apart from the listing without; the choice is every tab's.

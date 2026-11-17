@@ -76,7 +76,6 @@ struct FilePreviewScreen: View {
                 Button("Copy contents", systemImage: "doc.on.clipboard") {}
                 Button("Share", systemImage: "square.and.arrow.up") {}
                 Divider()
-                Button("Attach to chat", systemImage: "paperclip") {}
                 Button("Open in Terminal", systemImage: "apple.terminal") {}
             } label: {
                 Image(systemName: "ellipsis").font(.body.weight(.semibold)).frame(width: 44, height: 44)

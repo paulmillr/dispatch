@@ -292,6 +292,48 @@ final class ChatIPadTests: XCTestCase {
         XCTAssertEqual(AgentsEmptyState.list(["mba2", "studio", "ai", "vps"]), "mba2, studio and 2 more")
     }
 
+    private func agentRow(waiting: Bool = false, working: Bool = false) -> ChatConversation {
+        ChatConversation(key: ChatConversationKey(host: UUID(), node: "a"), terminal: 1, hostName: "studio", name: "Billing webhooks",
+                         space: nil, spaceNode: nil, cwd: nil,
+                         binding: HelperTopology.Binding(session: "a", transcript: nil, pid: nil, start: nil, executable: nil),
+                         summary: ChatConversationSummary(),
+                         urgency: PaneUrgency(waiting: waiting, working: working, unread: false), muted: false, unread: false)
+    }
+
+    /// Every row is three lines tall, whatever it says: a short message, a long one, a question, and a working agent
+    /// with or without a note.
+    func testAgentsRowsAreAlwaysThreeLines() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let since = now.addingTimeInterval(-130)
+        let long = String(repeating: "Webhook retries are now keyed on the Stripe event id. ", count: 4)
+        let rows: [(String, ChatConversation, TabsStatus?)] = [
+            ("short", agentRow(), TabsStatus(text: "Done.")),
+            ("long", agentRow(), TabsStatus(text: long)),
+            ("none", agentRow(), nil),
+            ("question", agentRow(waiting: true), TabsStatus(text: "Allow cargo test?")),
+            ("working, a note", agentRow(working: true),
+             TabsStatus(text: "Running shell command…", since: since, note: "Tests pass, now the docs", kind: .run, steps: 12, agents: 2)),
+            ("working, nothing said", agentRow(working: true), TabsStatus(text: "working", since: since)),
+        ]
+        var heights: [String: CGFloat] = [:]
+        for (name, row, status) in rows {
+            let view = AgentRow(row: row, status: status, location: "studio · app", host: "studio", now: now).frame(width: 370)
+            heights[name] = UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 370, height: 1000)).height
+        }
+        let short = heights["short"]!
+        for (name, height) in heights { XCTAssertEqual(height, short, accuracy: 1.5, "\(name): \(heights)") }
+    }
+
+    /// Working, VoiceOver reads how long, what it last said, the step and its count, and the subagents.
+    func testAWorkingAgentsRowReadsItsProgress() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let status = TabsStatus(text: "Reading file…", since: now.addingTimeInterval(-130), note: nil, kind: .read, steps: 1,
+                                agents: 2, asked: "Make billing webhook retries idempotent")
+        XCTAssertEqual(AgentRow.value(agentRow(working: true), status: status, location: "studio · app", now: now),
+                       "Working, for 2 minutes, 10 seconds, Make billing webhook retries idempotent, Read, 1 step, 2 agents, studio · app")
+        XCTAssertEqual(AgentRow.count(12, "step"), "12 steps")
+    }
+
     /// Group by host: the hosts in their list's order; by host and space: a host's spaces by their first row, the
     /// host's last group marked (where an offline host says why).
     func testAgentsGroupByHostKeepsTheHostsOrderAndBySpaceTheRowsOrder() {

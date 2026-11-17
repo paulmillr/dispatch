@@ -754,8 +754,12 @@ private struct SpacesTree: View {
                     }
                     .listSectionSpacing(4)
                 }
-                ForEach(sections) { section in
-                    hostSection(section, now: context.date)
+                if editing {
+                    editSection(sections, now: context.date)
+                } else {
+                    ForEach(sections) { section in
+                        hostSection(section, now: context.date)
+                    }
                 }
                 if !editing, !groups.offline.isEmpty {
                     SpacesOfflineGroup(model: model, hosts: groups.offline, now: context.date,
@@ -783,30 +787,27 @@ private struct SpacesTree: View {
         }
     }
 
+    /// A host's section outside Edit (Edit's list is `editSection`): its header, its spaces, then the Detached row, the
+    /// same-machine note or New space.
     @ViewBuilder private func hostSection(_ section: SpacesSection, now: Date) -> some View {
         Section {
-            if !section.collapsed, !(section.offline && !editing) {
+            if !section.collapsed, !section.offline {
                 ForEach(section.spaces) { row in
-                    SpacesSpaceLine(row: row, editing: editing, gitFacts: navigator.gitFacts)
+                    spaceLine(row, live: false)
                         // As a tab row's long press: the space's menu (`SpaceMenuItems`); dragged out of it, the space
                         // moves among its host's (`SpaceDrag`). Edit has its own handles.
-                        .contextMenu {
-                            if !editing { SpaceMenuItems(navigator: navigator, space: row.space, list: true) }
-                        }
-                        .modifier(SpaceDrag(row: row.space, visible: section.spaces.map(\.id.key), model: model, on: !editing))
+                        .contextMenu { SpaceMenuItems(navigator: navigator, space: row.space, list: true) }
+                        .modifier(SpaceDrag(row: row.space, visible: section.spaces.map(\.id.key), model: model, on: true))
                 }
-                .onMove { source, destination in
-                    model.moveSpaces(of: section.host.id, visible: section.spaces.map(\.id.key), from: source, to: destination)
-                }
-                if section.detached > 0, !editing, !model.query.filtering {
+                if section.detached > 0, !model.query.filtering {
                     SpacesDetachedLine(host: section.host, count: section.detached)
                 }
             }
-            if let other = section.host.sameMachine, !section.collapsed, !editing {
+            if let other = section.host.sameMachine, !section.collapsed {
                 Text("Same machine as \(other): its spaces show there.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
-            if section.offersNewSpace(editing: editing, filter: model.query.filter) {
+            if section.offersNewSpace(editing: false, filter: model.query.filter) {
                 SpacesNewSpaceLine(host: section.host,
                                    destinations: NewSpaceDestination.all(model.workspaces, host: section.host.id),
                                    creating: navigator.creatingSpace.contains(section.host.id),
@@ -814,16 +815,71 @@ private struct SpacesTree: View {
                                    quick: { navigator.quickSpace($0) })
             }
         } header: {
-            SpacesHostHeader(section: section, editing: editing, toggle: { model.toggle(section.host.id) },
-                             remove: {
-                if let question = hostActions.removalConfirmation(for: section.host.id) { removing = (section.host.id, question) }
-            }, stats: { navigator.statsHost = section.host.id }, updated: model.updated.map { updated in { updated(section.host.id) } },
-               now: now)
-                .dropDestination(for: String.self) { items, _ in
-                    guard let item = items.first, let id = UUID(uuidString: item) else { return false }
-                    model.moveHost(id, before: section.host.id, actions: hostActions)
-                    return true
+            header(section, now: now)
+        }
+    }
+
+    /// Edit's list (`SpacesEditRow`): each host's header as a row of its own, its spaces under it on a card of their
+    /// own, every handle in one list: a space dropped outside its host lands at that host's nearer end, a host's header
+    /// takes its spaces along. Every row stays movable: a list refuses a drop onto a row that is not.
+    @ViewBuilder private func editSection(_ sections: [SpacesSection], now: Date) -> some View {
+        let rows = SpacesEditRow.rows(sections)
+        Section {
+            ForEach(rows) { item in
+                switch item {
+                case .host(let section):
+                    header(section, now: now)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 18, leading: 20, bottom: 6, trailing: 20))
+                case .space(let row, let host, let first, let last):
+                    let live = model.workspace(host)?.client != nil && model.workspace(host)?.host.live == true
+                    spaceLine(row, live: live)
+                        .listRowBackground(SpacesEditCard(first: first, last: last))
+                        .listRowSeparator(.hidden, edges: first && last ? .all : first ? .top : last ? .bottom : [])
                 }
+            }
+            .onMove { source, destination in
+                switch SpacesEditRow.move(rows, from: source, to: destination) {
+                case .spaces(let host, let visible, let from, let to)?:
+                    model.moveSpaces(of: host, visible: visible, from: [from], to: to)
+                case .host(let id, let before)?:
+                    model.moveHost(id, before: before, actions: hostActions)
+                case nil: break
+                }
+            }
+        }
+    }
+
+    /// A space's row in the tree or Edit: Edit renames a multiplexer's spaces in place, as a space's Edit does its tabs,
+    /// and its delete is Terminate… (it asks first; Detach is the row's menu), a Shell space's Close all shells: its own
+    /// button, as a host's is, since a list's delete takes the row away before the question.
+    private func spaceLine(_ row: SpacesSpaceRow, live: Bool) -> some View {
+        SpacesSpaceLine(row: row, editing: editing, gitFacts: navigator.gitFacts, renameLive: live,
+                        rename: row.space.kind == .plainShell ? nil : { await rename(row.space, to: $0) },
+                        delete: live ? {
+                            navigator.actions.close(.space(row.space.ref), row.space.kind == .plainShell ? .close : .terminate)
+                        } : nil)
+    }
+
+    /// A host's header: the section's outside Edit, a row of Edit's list in it.
+    private func header(_ section: SpacesSection, now: Date) -> some View {
+        SpacesHostHeader(section: section, editing: editing, toggle: { model.toggle(section.host.id) },
+                         remove: {
+            if let question = hostActions.removalConfirmation(for: section.host.id) { removing = (section.host.id, question) }
+        }, stats: { navigator.statsHost = section.host.id }, updated: model.updated.map { updated in { updated(section.host.id) } },
+           now: now)
+    }
+
+    /// A rename from Edit's name field: the server's answer, a refusal shown as the screen's other failures are.
+    private func rename(_ space: MobileSpace, to name: String) async -> Bool {
+        guard let workspace = model.workspace(space.ref.host) else { return false }
+        do {
+            try await workspace.rename(space: space, to: name)
+            return true
+        } catch {
+            navigator.actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
         }
     }
 
@@ -843,11 +899,6 @@ private struct SpacesTree: View {
                         .frame(minHeight: 50)
                 }
                 .buttonStyle(MobileCallToAction())
-                .dropDestination(for: String.self) { items, _ in
-                    guard let item = items.first, let id = UUID(uuidString: item) else { return false }
-                    model.moveHost(id, before: nil, actions: hostActions)
-                    return true
-                }
                 if let settings {
                     // Not in the mockup: the app's settings, beside Add host where hosts are managed (docs/ios.md).
                     Button(action: settings) {
@@ -1002,7 +1053,7 @@ struct SpacesHostDisc: View {
 }
 
 /// A host's section header (P1, M1e): the name, the multiplexer its spaces come from (`SpacesHostChip`) and, folded,
-/// "2 spaces · 1"; the glyph disc at the end opens its stats. The name (the whole row but the disc) folds or unfolds the
+/// "2 spaces · 1"; the glyph disc at the end opens its stats. The rest of the row (the name and the room after it) folds or unfolds the
 /// host's spaces: one button outside edit mode (VoiceOver: the host's name, a heading, the multiplexer and "Expanded"
 /// or "Collapsed" with the unread it rolls up); in edit mode its remove, Info and reorder controls keep their own taps
 /// and the rest of the row toggles.
@@ -1030,7 +1081,14 @@ struct SpacesHostHeader: View {
             } else {
                 HStack(spacing: 8) {
                     // A button reads its label as one element: the name replaces it (the chip and the note would be read).
-                    Button(action: toggle) { identity(note: true).contentShape(Rectangle()) }
+                    // The whole row up to the disc: the name's line and the room after it.
+                    Button(action: toggle) {
+                        HStack(spacing: 0) {
+                            identity(note: true)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
                         .buttonStyle(.plain)
                         .accessibilityLabel(section.host.name)
                         .accessibilityValue(Self.value(collapsed: section.collapsed, unread: section.unread,
@@ -1038,7 +1096,6 @@ struct SpacesHostHeader: View {
                                                        freshness: freshness))
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityHint(section.collapsed ? "Shows its spaces" : "Hides its spaces")
-                    Spacer(minLength: 0)
                     SpacesHostDisc(host: section.host, action: stats)
                 }
                 .textCase(nil)
@@ -1056,15 +1113,7 @@ struct SpacesHostHeader: View {
 
     private func row(_ freshness: String?) -> some View {
         HStack(spacing: 8) {
-            Button(action: remove) {
-                Image(systemName: "minus")
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(Color(uiColor: .systemRed), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(section.host.name)")
+            SpacesRemoveButton(label: "Remove \(section.host.name)", action: remove)
             VStack(alignment: .leading, spacing: 2) {
                 if column != nil, UIDevice.current.userInterfaceIdiom == .pad {
                     // An iPad's sidebar (320 points, 280 beside the window controls): the chip gives way before the
@@ -1095,17 +1144,7 @@ struct SpacesHostHeader: View {
             Button(action: toggle) { disclosure }
                 .buttonStyle(.plain)
                 .accessibilityLabel(section.collapsed ? "Show \(section.host.name)" : "Hide \(section.host.name)")
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 17))
-                .foregroundStyle(.tertiary)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-                // The handle drags; a tap on it is not the row's.
-                .onTapGesture {}
-                .draggable(section.host.id.uuidString) {
-                    Text(section.host.name).font(.title3.bold()).padding(8)
-                }
-                .accessibilityLabel("Reorder \(section.host.name)")
+            // The reorder handle is the list's (Edit's list, `SpacesEditRow`).
         }
         .textCase(nil)
         .padding(.bottom, 2)
@@ -1199,6 +1238,39 @@ struct SpacesNewSpaceLine: View {
     }
 }
 
+/// Edit's card under a host's spaces, drawn by the rows (`SpacesEditRow`: one section for every host): the inset grouped
+/// list's fill, rounded at the host's first and last space.
+struct SpacesEditCard: View {
+    let first: Bool
+    let last: Bool
+    static let radius: CGFloat = 26
+
+    var body: some View {
+        let top = first ? Self.radius : 0, bottom = last ? Self.radius : 0
+        UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom, bottomTrailingRadius: bottom,
+                               topTrailingRadius: top, style: .continuous)
+            .fill(Color(uiColor: .secondarySystemGroupedBackground))
+    }
+}
+
+/// Edit's red minus (a host's header, a space's row): what removes it, which asks first.
+struct SpacesRemoveButton: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "minus")
+                .font(.system(size: 11, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Color(uiColor: .systemRed), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
 /// A space in the tree (P1): its name, its branch (Settings › Hosts › Show git branches, off by default), the amber dot
 /// while something works, the unread count (blue, as Mail's), a chevron. The branch is the space's folder's
 /// (`SpaceGitFacts`, read once per folder and connection, and not at all while branches are off).
@@ -1206,6 +1278,12 @@ struct SpacesSpaceLine: View {
     let row: SpacesSpaceRow
     let editing: Bool
     var gitFacts: SpaceGitFacts? = nil
+    /// Edit's name field sends (connected and live); it stays, disabled, meanwhile.
+    var renameLive = true
+    /// Edit's rename (`entities.rename`); nil: the name alone (a Shell space).
+    var rename: ((String) async -> Bool)? = nil
+    /// Edit's red minus before the name; nil: dimmed (not connected).
+    var delete: (() -> Void)? = nil
     @AppStorage(MobileSettings.gitBranchesKey) private var showsBranches = false
     /// The iPad sidebar: the row selects the space (its tab beside the sidebar) and is marked while it shows.
     @Environment(\.tabsSelectSpace) private var select
@@ -1213,7 +1291,16 @@ struct SpacesSpaceLine: View {
 
     var body: some View {
         if editing {
-            Text(row.space.name).font(.body).lineLimit(2)
+            HStack(spacing: 12) {
+                SpacesRemoveButton(label: "Delete \(row.space.name)", action: delete ?? {})
+                    .disabled(delete == nil)
+                    .opacity(delete == nil ? 0.4 : 1)
+                if let rename {
+                    SpaceNameField(name: row.space.name, prompt: "Space name", live: renameLive, rename: rename)
+                } else {
+                    Text(row.space.name).font(.body).lineLimit(2)
+                }
+            }
         } else if let select {
             let selected = shown == row.space.ref
             Button { select(row.space.ref) } label: {
@@ -1333,7 +1420,7 @@ struct TabsNothing: View {
 
 /// A space dragged straight from the Spaces list (no Edit): a long press lifts it (its menu shows until it moves), and
 /// dropped on another space of its host it takes that one's place (`MobileTabs.moveSpace`). The payload names the
-/// space so a host's header, which takes dragged hosts, refuses it.
+/// space (its host and key), so a drop of anything else is refused.
 struct SpaceDrag: ViewModifier {
     let row: MobileSpace
     let visible: [String]

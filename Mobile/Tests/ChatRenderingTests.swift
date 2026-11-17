@@ -27,6 +27,28 @@ final class ChatRenderingTests: XCTestCase {
         return box
     }
 
+    /// Reply (Y1): the excerpt is the first sentence of the first prose line, marks dropped, cut at a word; a reply
+    /// sends it as one quote line before the draft, and a message that starts so splits back into quote and words.
+    func testReplyQuotesTheFirstSentenceAndSplitsBack() {
+        XCTAssertEqual(ChatReplyQuote.excerpt("Stripe retries the same event. I'll key on the id.\n\nMore."),
+                       "Stripe retries the same event.")
+        XCTAssertEqual(ChatReplyQuote.excerpt("## Plan\n\nFirst"), "Plan")
+        XCTAssertEqual(ChatReplyQuote.excerpt("```swift\nlet a = 1\n```\n- Use **the** `id` here"), "Use the id here")
+        XCTAssertEqual(ChatReplyQuote.excerpt("Version 1.2 ships today"), "Version 1.2 ships today", "a point inside a word")
+        let long = String(repeating: "word ", count: 60)
+        let cut = ChatReplyQuote.excerpt(long)
+        XCTAssertLessThanOrEqual(cut.count, ChatReplyQuote.limit)
+        XCTAssertTrue(cut.hasSuffix("word…"), cut)
+        let sent = ChatReplyQuote.compose(quote: "Stripe retries the same event.", text: "Keep them forever")
+        XCTAssertEqual(sent, "> Stripe retries the same event.\n\nKeep them forever")
+        XCTAssertEqual(ChatReplyQuote.split(sent)?.quote, "Stripe retries the same event.")
+        XCTAssertEqual(ChatReplyQuote.split(sent)?.body, "Keep them forever")
+        XCTAssertNil(ChatReplyQuote.split("> a quote alone"), "nothing after it")
+        XCTAssertNil(ChatReplyQuote.split("> no blank line\nthen words"))
+        XCTAssertNil(ChatReplyQuote.split("Plain words"))
+        XCTAssertEqual(ChatReplyQuote.name("claude"), "Claude")
+    }
+
     func testBubblesHugShortTextAndWrapAtTheirShareOfTheColumn() {
         func bubble(_ side: ChatBubble<Text>.Side, _ text: String) -> some View {
             ChatBubble(side: side) { Text(text) }.environment(\.chatColumnWidth, 370)
@@ -173,8 +195,16 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertNil(ChatLimitsLine.windows([], now: now))
         let codex = ChatLimitWindow(name: "window_10080", used: 10, resets_at: now.timeIntervalSince1970 + 86_400 * 2)
         XCTAssertEqual(codex.minutes, 10080)
-        XCTAssertEqual(ChatLimitsLine.resets(hours, now: now), "Resets in 2h 18m")
-        XCTAssertTrue(ChatLimitsLine.resets(week, now: now).hasPrefix("Resets "), ChatLimitsLine.resets(week, now: now))
+        XCTAssertEqual(ChatLimitsLine.resets(hours, now: now), "resets in 2h 18m")
+        XCTAssertTrue(ChatLimitsLine.resets(week, now: now).hasPrefix("resets "), ChatLimitsLine.resets(week, now: now))
+        // "64% weekly · resets 11pm mon": the share, the window's name, then the reset's time before its day, lowercase.
+        let utc = TimeZone(identifier: "UTC")!
+        let monday = ChatLimitWindow(name: "seven_day", used: 64, resets_at: 1_794_265_200)  // Mon 2026-11-09 23:00 UTC
+        XCTAssertEqual(ChatLimitsLine.resets(monday, now: Date(timeIntervalSince1970: 1_794_006_000), timeZone: utc),
+                       "resets 11:00pm mon")
+        XCTAssertEqual(ChatLimitsLine.share(week), "\(week.used)% weekly")
+        XCTAssertEqual(ChatLimitsLine.share(hours), "42% 5-hour")
+        XCTAssertEqual(ChatLimitsLine.share(week, named: false), "\(week.used)%")
         XCTAssertEqual(ChatLimitsLine.spoken([hours, week], now: now).components(separatedBy: ". ").count, 2)
         XCTAssertEqual(ChatUsageText.text(nil, cost: false), nil)
         let counted = ChatUsage(["info": ["total_token_usage": ["input_tokens": 182_400, "output_tokens": 12_350],

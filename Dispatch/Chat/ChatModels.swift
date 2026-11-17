@@ -2025,15 +2025,15 @@ struct ChatLimitWindow: Decodable, Equatable, Sendable {
         return Int(name.dropFirst("window_".count)).flatMap { $0 > 0 ? $0 : nil }
     }
 
-    /// "resets in 2h 18m" within a day, then "resets Thu 9:40am".
-    func resetText(now: Date, timeZone: TimeZone = .current) -> String {
+    /// "resets in 2h 18m" within a day, then "resets Thu 9:40am" (`timeFirst`: "resets 9:40am Thu", the phone's).
+    func resetText(now: Date, timeZone: TimeZone = .current, timeFirst: Bool = false) -> String {
         let left = resets.timeIntervalSince(now)
         if left < 24 * 3600 { return "resets in " + ChatTranscript.elapsed(max(0, left)) }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
         formatter.amSymbol = "am"; formatter.pmSymbol = "pm"
-        formatter.dateFormat = "EEE h:mma"
+        formatter.dateFormat = timeFirst ? "h:mma EEE" : "EEE h:mma"
         return "resets " + formatter.string(from: resets)
     }
 }

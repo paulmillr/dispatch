@@ -748,7 +748,7 @@ struct TabScreenHeader: ToolbarContent {
 /// A tab's menu: the host's glyph on a 44 point glass disc with a ⋯ badge on its lower trailing edge (a landscape rail,
 /// an iPad's header), as on an avatar that opens a menu; upright on a phone the title capsule opens the same menu
 /// (`TabMenuItems`): the conversation (Chat's items, on the Chat segment), the tab's panes when it has splits, the tab
-/// (its row's menu: Rename…, Close, Detach) and the host (Stats).
+/// (Rename…, Move to, Close Tab) and the host (Stats).
 struct TabHeaderMenu: View {
     let tab: MobileTab
     let host: TabsHost
@@ -800,9 +800,9 @@ struct TabHeaderMenu: View {
     }
 }
 
-/// The tab's one menu, from the title capsule (B7) or the menu disc (`TabHeaderMenu`): on Chat Search, the host's Stats
-/// and the conversation's other items; the panes the segment can show when there are several; the tab's (Rename…,
-/// Detach, Close Tab).
+/// The tab's one menu, from the title capsule (B7) or the menu disc (`TabHeaderMenu`), headed by the tab's name and host
+/// in full (the capsule cuts a long name): on Chat Search, the host's Stats and the conversation's other items; the
+/// panes the segment can show when there are several; the tab's (Rename…, Move to, Close Tab; Detach is the rows').
 struct TabMenuItems: View {
     let tab: MobileTab
     let host: TabsHost
@@ -810,18 +810,26 @@ struct TabMenuItems: View {
     var chat: AnyView? = nil
     @Environment(\.tabsNavigator) private var navigator
 
+    /// The menu's first line: the tab's shown name (`MobileTabs.label(of:)`) and its host.
+    private var label: String {
+        "\(navigator?.model.label(of: tab, host: host) ?? tab.name) · \(host.name)"
+    }
+
     var body: some View {
         // The host's Stats right under Search on Chat, else first.
-        if let chat {
-            chat.environment(\.chatMenuAfterSearch, stats.map { AnyView($0) })
-        } else if let stats {
-            stats
+        Section(label) {
+            if let chat {
+                chat.environment(\.chatMenuAfterSearch, stats.map { AnyView($0) })
+            } else if let stats {
+                stats
+            }
         }
         if TabScreenHeader.panes(tab, segment: segment).count > 1 {
             Section("Panes") { TabScreenHeader.panePicker(tab, host: host, segment: segment) }
         }
         if let navigator {
-            Section("Tab") { TabsTabMenu(actions: navigator.actions, tab: tab.ref) }
+            // Untitled: the menu's first line names the tab.
+            Section { TabsTabMenu(actions: navigator.actions, tab: tab.ref, detach: false) }
         }
     }
 

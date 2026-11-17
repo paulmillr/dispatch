@@ -47,6 +47,12 @@ struct TabsStatus: Equatable, Sendable {
     /// its own words, which `text` (the step's kind) does not carry. Two-line rows show it over the step, one-line
     /// rows instead of the step.
     var note: String? = nil
+    /// While the agent works, from its open thread: the current step's kind, the steps since it last wrote, its
+    /// running subagents, and the turn's prompt (Agents' rows: the badge line, and the prompt before any note).
+    var kind: ChatStep.Kind? = nil
+    var steps = 0
+    var agents = 0
+    var asked: String? = nil
 }
 
 /// How much a tab wants attention, from Chat's per-conversation state (`PaneUrgency`'s precedence: waiting, then

@@ -115,6 +115,11 @@ struct SettingsView: View {
                             ForEach(ChatAgentStart.allCases) { Text($0.title).tag($0) }
                         }
                         .accessibilityIdentifier("settings-chat-agent-start")
+                        Toggle("Keep history on this iPhone", isOn: $settings.chatKeepHistory)
+                            .accessibilityIdentifier("settings-chat-keep-history")
+                            .onChange(of: settings.chatKeepHistory) { _, keep in
+                                if !keep { composition.conversations.archive?.removeAll() }
+                            }
                         NavigationLink {
                             DictationSettingsView(settings: settings)
                         } label: {
@@ -137,6 +142,7 @@ struct SettingsView: View {
                             Text("Open agents in picks what an agent tab shows first; the tab's switch shows the other. Esc twice keeps a stray Esc from a hardware keyboard from stopping the agent.")
                             Text("Swipe the conversation to the left to see when each reply came and what a turn changed, as in Messages.")
                             Text("Voice is what conversation mode and Read Aloud speak in.")
+                            Text("Keep history saves what each chat showed, so it reads while its host is offline; turning it off deletes it.")
                         }
                     }
 
@@ -258,7 +264,7 @@ extension MobileComposition {
     }
 
     /// Settings' Remove all data: every host (its session ends, its password goes), every key and Keychain secret, the
-    /// trusted host keys, which keys logged in where (`key-logins.json`), the seen markers and mutes, the cache, drafts and the outbox, the transcripts kept in memory,
+    /// trusted host keys, which keys logged in where (`key-logins.json`), the seen markers and mutes, the cache, drafts and the outbox, the transcripts kept in memory and saved (`chat-history`),
     /// the review comments
     /// (`reviews.json`), the remembered agents and models (`chat-models.json`) and Spaces' per-host values (recent space, collapsed hosts, space order: `spaces.json`, and
     /// any left in UserDefaults by an older build); background refresh turns off and its notifications and the badge
@@ -282,8 +288,9 @@ extension MobileComposition {
         }
         conversations.markers.removeAll()
         conversations.outbox.removeAll()
-        // Gone with their hosts already (`ChatConversations.remove`); in memory only either way.
+        // Gone with their hosts already (`ChatConversations.remove`); the saved copies too, and any left.
         conversations.forgetTranscripts()
+        conversations.archive?.removeAll()
         for key in conversations.drafts.buckets.keys { conversations.drafts.remove(key) }
         conversations.drafts.flush()
         cache.removeAll()

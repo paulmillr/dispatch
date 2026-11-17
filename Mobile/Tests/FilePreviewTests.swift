@@ -237,7 +237,7 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(find.position, "No matches")
     }
 
-    // MARK: Attach to chat and Open in Terminal
+    // MARK: Open in Terminal
 
     func testAskAndTerminalWords() {
         XCTAssertEqual(FilesAsk.typing("/Users/sam/src/web", bracketed: false), Data("\u{15}cd '/Users/sam/src/web'\r".utf8),
@@ -269,18 +269,7 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertFalse(FilesAsk.ready(program: nil, agent: false, alternate: false), "A renamed window says nothing")
     }
 
-    /// Ask that the conversation never takes says so in the composer's strip.
-    func testAskThatCannotAttachSaysSo() async throws {
-        let chat = MobileChatSession(key: ChatConversationKey(host: UUID(), node: "tmux:s:$0:%0"), hostName: "mba2",
-                                     drafts: ChatDraftRepository(store: ChatDraftMemoryStore()),
-                                     outbox: ChatOutbox(store: ChatOutboxMemoryStore()))
-        XCTAssertFalse(chat.canAttach)
-        FilesAsk.attach(MobileAttachmentSource.data(Data("x".utf8), name: "theme.ts", kind: .file), to: chat, attempts: 1, pause: .zero)
-        try await TestSupport.eventually { chat.attachmentError != nil }
-        XCTAssertEqual(chat.attachmentError, FilesAsk.notReady("theme.ts"))
-    }
-
-    /// Ask switches the tab to Chat and takes the Files screens off the stack, back to the tab.
+    /// A switch to Chat (Files' way back to the conversation) takes the Files screens off the stack, back to the tab.
     func testAskReturnsToTheTabsChat() async throws {
         let model = MobileTabs(activity: TabActivityStore(url: nil), defaults: UserDefaults(suiteName: "files-ask-tests")!)
         let navigator = SpacesNavigator(model: model)
@@ -301,7 +290,7 @@ final class FilePreviewTests: XCTestCase {
 
     // MARK: Screen
 
-    /// The header names the file with its folder, size, age and kind; no Ask button under it (Attach to chat is in "…");
+    /// The header names the file with its folder, size, age and kind; no Ask button under it;
     /// Find counts the matches.
     func testTheScreensControls() async throws {
         AccessibilityLabelTests.enableAccessibility()
@@ -309,7 +298,7 @@ final class FilePreviewTests: XCTestCase {
         let host = TabsHost(id: FilesListingTests.ref.host, name: "mba2", tint: .blue, system: nil, home: "/Users/sam", order: 0)
         let screen = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/src/theme.ts", files), host: host, root: "/Users/sam/src/web",
-                              actions: FilesPreviewActions(ask: { _ in }), fonts: .memory())
+                              actions: FilesPreviewActions(), fonts: .memory())
         }
         let (window, view) = try show(screen)
         defer { window.isHidden = true }
@@ -332,7 +321,7 @@ final class FilePreviewTests: XCTestCase {
 
         let bare = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/src/theme.ts", files), host: host, root: nil,
-                              actions: FilesPreviewActions(ask: nil), fonts: .memory())
+                              actions: FilesPreviewActions(), fonts: .memory())
         }
         let (other, otherView) = try show(bare)
         defer { other.isHidden = true }
@@ -348,7 +337,7 @@ final class FilePreviewTests: XCTestCase {
         let host = TabsHost(id: FilesListingTests.ref.host, name: "mba2", tint: .blue, system: nil, home: "/Users/sam", order: 0)
         let screen = NavigationStack {
             FilePreviewScreen(preview: preview("/Users/sam/src/web/logo.png", files), host: host, root: "/Users/sam/src/web",
-                              actions: FilesPreviewActions(ask: { _ in }), fonts: .memory())
+                              actions: FilesPreviewActions(), fonts: .memory())
         }
         let (window, view) = try show(screen)
         defer { window.isHidden = true }

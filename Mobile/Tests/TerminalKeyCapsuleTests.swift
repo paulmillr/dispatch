@@ -133,6 +133,17 @@ final class TerminalKeyCapsuleTests: XCTestCase {
         XCTAssertEqual(KeyCapsuleModel.key(.left).keycode, 0x7B)
     }
 
+    /// The cluster rises over the d-pad key that raises it: centred on it, 12 points above it, kept 8 from the sides.
+    func testClusterSitsOverItsKey() {
+        let size = CGSize(width: 420, height: 800)
+        let key = CGRect(x: 250, y: 700, width: 57, height: 52)
+        let place = TerminalDPadCluster.place(over: key, in: size)
+        XCTAssertEqual(place.x, key.midX, "centred on its key")
+        XCTAssertEqual(place.y + TerminalDPadCluster.side / 2, key.minY - 12, "its bottom just above the key")
+        let edge = TerminalDPadCluster.place(over: CGRect(x: 380, y: 700, width: 40, height: 52), in: size)
+        XCTAssertEqual(edge.x + TerminalDPadCluster.side / 2, 420 - 8, "kept on screen")
+    }
+
     /// The cluster is 3 x 52 points with 6 point gaps: keys in a cross, corners empty, a little slack around each.
     func testClusterHitTest() {
         let frame = CGRect(x: 100, y: 200, width: TerminalDPadCluster.side, height: TerminalDPadCluster.side)

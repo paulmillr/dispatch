@@ -14,6 +14,15 @@ struct MobileTranscript {
 
     var isEmpty: Bool { transcript.isEmpty }
 
+    init() {}
+
+    /// A transcript saved on the phone (`ChatHistoryArchive`): its turns and merge state as they were kept, so a page
+    /// read later merges into them as into the live one.
+    init(saved: ChatTranscript) { transcript = saved }
+
+    /// The turns and merge state, for the phone's saved copy.
+    var saved: ChatTranscript { transcript }
+
     mutating func releaseThinking(_ turnID: String) {
         guard heldThinkingTurns.remove(turnID) != nil else { return }
         revision += 1

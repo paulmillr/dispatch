@@ -314,6 +314,13 @@ final class MobileWorkspace: Identifiable {
     private(set) var restoring: Set<String> = []
     /// Nodes a close is on its way for: hidden at once, shown again if the close fails.
     private(set) var closing: Set<UInt64> = []
+    /// Renames on their way, by node key (`renaming`): the new name shows at once.
+    private struct Rename {
+        let name: String
+        let token: UUID
+        var answered = false
+    }
+    @ObservationIgnored private var renames: [String: Rename] = [:]
     /// The phone's shell tabs on this host (`ShellSessions.tabs`), the Shell space's.
     @ObservationIgnored private var shellTabs: [ShellSessions.ShellTab] = []
     @ObservationIgnored private var shellSpaceObject: MobileSpace?
@@ -377,8 +384,9 @@ final class MobileWorkspace: Identifiable {
             self.client = client
             watched = []
         }
-        if client == nil, !closing.isEmpty {
+        if client == nil, !closing.isEmpty || !renames.isEmpty {
             closing = []
+            renames = [:]
             rebuild()
         }
     }
@@ -399,6 +407,10 @@ final class MobileWorkspace: Identifiable {
         snapshots[topology.backend] = topology
         // A snapshot that names a tab being reordered is the server's order from now on (whatever else changed).
         reorders = reorders.filter { !keys.contains($0.value.moved) }
+        // A rename gives way to the server's name once a snapshot shows it, or any snapshot after its answer does.
+        for node in topology.nodes {
+            if let rename = renames[node.key], rename.answered || rename.name == node.name { renames[node.key] = nil }
+        }
         stamping = host.live && watched.contains(topology.backend) ? topology.backend : nil
         rebuild()
         stamping = nil
@@ -422,6 +434,15 @@ final class MobileWorkspace: Identifiable {
     }
 
     /// The tabs a close request is pending for leave the lists at once.
+    /// Whether the tab running pane `key`, or its space, is hidden for a close on its way: Agents leaves the row out too.
+    func closes(pane key: String) -> Bool {
+        guard !closing.isEmpty else { return false }
+        return tabObjects.values.contains { tab in
+            tab.panes.contains { $0.key == key }
+                && (closing.contains(tab.node) || spaceObjects[tab.space.key].map { closing.contains($0.node) } == true)
+        }
+    }
+
     func hide(_ node: UInt64) {
         guard closing.insert(node).inserted else { return }
         rebuild()
@@ -482,16 +503,18 @@ final class MobileWorkspace: Identifiable {
                 let focused = focus(of: window.id) ?? topology.focus.flatMap { id in panes.contains { $0.id == id } ? id : nil }
                 let ref = TabRef(host: host.id, key: window.key)
                 liveTabs.insert(window.key)
-                let renamed = window.kind == .terminal ? true : window.renamed == true
+                let pending = renames[window.key]?.name
+                let name = pending ?? window.name
+                let renamed = window.kind == .terminal || pending != nil ? true : window.renamed == true
                 let numbered = host.multiplexer == "herdr" && !renamed
                 if let tab = tabObjects[window.key] {
-                    tab.update(node: window.id, space: space, name: window.name, renamed: renamed, numbered: numbered, panes: panes,
+                    tab.update(node: window.id, space: space, name: name, renamed: renamed, numbered: numbered, panes: panes,
                                focused: focused, activity: latest)
                     return tab
                 }
-                let tab = MobileTab(ref: ref, node: window.id, space: space, name: window.name, renamed: renamed, panes: panes,
+                let tab = MobileTab(ref: ref, node: window.id, space: space, name: name, renamed: renamed, panes: panes,
                                     focused: focused, activity: latest)
-                tab.update(node: window.id, space: space, name: window.name, renamed: renamed, numbered: numbered, panes: panes,
+                tab.update(node: window.id, space: space, name: name, renamed: renamed, numbered: numbered, panes: panes,
                            focused: focused, activity: latest)
                 tabObjects[window.key] = tab
                 return tab
@@ -516,11 +539,12 @@ final class MobileWorkspace: Identifiable {
                 guard !closing.contains(workspace.id) else { return }
                 liveSpaces.insert(workspace.key)
                 let cwd = workspace.cwd ?? tabs.first?.cwd
+                let name = renames[workspace.key]?.name ?? workspace.name
                 if let space = spaceObjects[workspace.key] {
-                    space.update(node: workspace.id, backend: topology.backend, name: workspace.name, tabs: tabs, cwd: cwd)
+                    space.update(node: workspace.id, backend: topology.backend, name: name, tabs: tabs, cwd: cwd)
                     spaces.append(space)
                 } else {
-                    let space = MobileSpace(ref: ref, node: workspace.id, backend: topology.backend, name: workspace.name, tabs: tabs, cwd: cwd)
+                    let space = MobileSpace(ref: ref, node: workspace.id, backend: topology.backend, name: name, tabs: tabs, cwd: cwd)
                     spaceObjects[workspace.key] = space
                     spaces.append(space)
                 }
@@ -634,6 +658,32 @@ final class MobileWorkspace: Identifiable {
             }
         }
         try await commands.move(tab.node, parent: space.node, before: before?.node)
+    }
+
+    /// A rename of the tab or space keyed `key`: its lists, header and title show `name` at once, until the topology
+    /// names it (the server's own name wins: a snapshot after the answer, or a few seconds after it when none comes); a
+    /// refusal or a lost connection puts the server's name back.
+    func renaming(_ key: String, to name: String, _ work: () async throws -> Void) async throws {
+        let token = System.uuid()
+        renames[key] = Rename(name: name, token: token)
+        rebuild()
+        do {
+            try await work()
+        } catch {
+            if renames[key]?.token == token {
+                renames[key] = nil
+                rebuild()
+            }
+            throw error
+        }
+        guard renames[key]?.token == token else { return }
+        renames[key]?.answered = true
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard self.renames[key]?.token == token else { return }
+            self.renames[key] = nil
+            self.rebuild()
+        }
     }
 
     /// `server`'s keys with the ones `order` names in `order`'s order, in the places they hold; a key `order` does not

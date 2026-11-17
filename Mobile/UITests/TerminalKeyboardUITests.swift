@@ -142,6 +142,37 @@ final class TerminalKeyboardUITests: XCTestCase {
 
     /// Without a hardware keyboard the full capsule shows; it rides above the docked software keyboard (whose
     /// shortcut bar is gone) and stays at the bottom under a floating one (an iPad: a pinch floats and docks it).
+    /// The arrow cluster rises over the d-pad key that raises it (a tap pins it), at rest and riding the keyboard.
+    func testTheArrowClusterSitsOverItsKey() {
+        let app = launch(hardwareKeyboard: false)
+        let terminal = terminal(app)
+        let dpad = app.buttons["Arrow keys"]
+        XCTAssertTrue(dpad.waitForExistence(timeout: 5))
+        for keyboard in [false, true] {
+            if keyboard {
+                terminal.tap()
+                XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the software keyboard")
+                Thread.sleep(forTimeInterval: 1)
+            }
+            dpad.tap()
+            let up = app.buttons["Up"], down = app.buttons["Down"]
+            XCTAssertTrue(up.waitForExistence(timeout: 3), "the pinned cluster")
+            Thread.sleep(forTimeInterval: 0.5)
+            let shot = XCUIScreen.main.screenshot()
+            attach(app, keyboard ? "Cluster over the keyboard" : "Cluster at rest")
+            if let folder = ProcessInfo.processInfo.environment["DISPATCH_UI_SHOTS"] {
+                try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+                try? shot.pngRepresentation.write(to: URL(fileURLWithPath: folder)
+                    .appendingPathComponent(keyboard ? "dpad-keyboard.png" : "dpad-rest.png"))
+            }
+            XCTAssertEqual(up.frame.midX, dpad.frame.midX, accuracy: 1.5, "centred over its key")
+            XCTAssertLessThan(down.frame.maxY, dpad.frame.minY, "above its key")
+            XCTAssertGreaterThan(down.frame.maxY, dpad.frame.minY - 30, "just above it")
+            dpad.tap()
+            XCTAssertTrue(up.waitForNonExistence(timeout: 3), "unpinned")
+        }
+    }
+
     func testCapsuleWithTheSoftwareKeyboard() {
         let app = launch(hardwareKeyboard: false)
         let terminal = terminal(app)

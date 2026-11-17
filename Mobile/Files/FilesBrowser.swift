@@ -41,8 +41,18 @@ final class FilesBrowser {
     private(set) var marksRoot: String?
     /// The last status was cut at its bound: the letters are the first files' only.
     private(set) var marksTruncated = false
-    /// Files' sort and hidden files: the store's, shared by every tab.
-    var sort: FilesSort { get { preferences.sort } set { preferences.sort = newValue } }
+    /// Files' sort and hidden files: the store's, shared by every tab. Another sort starts at its usual way
+    /// (`FilesSort.ascendingByDefault`): names A to Z, newest first, largest first.
+    var sort: FilesSort {
+        get { preferences.sort }
+        set {
+            guard newValue != preferences.sort else { return }
+            preferences.sort = newValue
+            preferences.ascending = newValue.ascendingByDefault
+        }
+    }
+    /// The sort's way: A to Z, oldest first, smallest first; false the other way.
+    var ascending: Bool { get { preferences.ascending } set { preferences.ascending = newValue } }
     var showsHidden: Bool {
         get { preferences.hidden }
         set {
@@ -193,7 +203,7 @@ final class FilesBrowser {
 
     /// The shown folder's entries in the sort, folders first; while searching, those whose name holds the query.
     var rows: [FileEntry] {
-        let entries = Self.sorted(current?.entries ?? [], by: sort)
+        let entries = Self.sorted(current?.entries ?? [], by: sort, ascending: ascending)
         let query = query.trimmingCharacters(in: .whitespaces)
         guard searching, !query.isEmpty else { return entries }
         return entries.filter { $0.name.localizedCaseInsensitiveContains(query) }
@@ -288,18 +298,21 @@ final class FilesBrowser {
         }
     }
 
-    /// Folders first (as Finder keeps them), then by name, newest first or largest first; ties by name.
-    static func sorted(_ entries: [FileEntry], by sort: FilesSort) -> [FileEntry] {
-        entries.sorted { a, b in
+    /// Folders first (as Finder keeps them) either way, then by name, date or size, `ascending` (nil: the sort's usual
+    /// way: A to Z, newest first, largest first) or not; ties by name A to Z (folders by size: by name).
+    static func sorted(_ entries: [FileEntry], by sort: FilesSort, ascending: Bool? = nil) -> [FileEntry] {
+        let ascending = ascending ?? sort.ascendingByDefault
+        return entries.sorted { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }
             let byName = a.name.localizedStandardCompare(b.name)
             switch sort {
-            case .name: return byName == .orderedAscending
+            case .name: return byName == (ascending ? .orderedAscending : .orderedDescending)
             case .modified:
                 let (x, y) = (a.modified ?? .distantPast, b.modified ?? .distantPast)
-                return x == y ? byName == .orderedAscending : x > y
+                return x == y ? byName == .orderedAscending : (ascending ? x < y : x > y)
             case .size:
-                return (a.size == b.size || a.isDirectory) ? byName == .orderedAscending : a.size > b.size
+                return (a.size == b.size || a.isDirectory) ? byName == .orderedAscending
+                    : (ascending ? a.size < b.size : a.size > b.size)
             }
         }
     }
@@ -523,6 +536,8 @@ final class FilesBrowser {
 @MainActor @Observable
 final class FilesPreferences {
     var sort: FilesSort = .name
+    /// The sort's way (`FilesBrowser.ascending`).
+    var ascending = true
     var hidden = false
 }
 
@@ -554,5 +569,29 @@ final class FilesBrowsers {
     /// Keeps only the tabs that still exist.
     func retain(_ tabs: Set<TabRef>) {
         for tab in browsers.keys where !tabs.contains(tab) { browsers[tab] = nil }
+    }
+}
+
+extension FilesSort {
+    /// The way a sort starts, as Finder's: names A to Z, dates newest first, sizes largest first.
+    var ascendingByDefault: Bool { self == .name }
+
+    /// The sort menu's name for the field.
+    var title: String {
+        switch self {
+        case .name: "Name"
+        case .modified: "Date"
+        case .size: "Size"
+        }
+    }
+
+    /// The sort menu's names for its two ways, ascending first: "A to Z" and "Z to A", "Oldest first" and "Newest first",
+    /// "Smallest first" and "Largest first".
+    var ways: (ascending: String, descending: String) {
+        switch self {
+        case .name: ("A to Z", "Z to A")
+        case .modified: ("Oldest first", "Newest first")
+        case .size: ("Smallest first", "Largest first")
+        }
     }
 }

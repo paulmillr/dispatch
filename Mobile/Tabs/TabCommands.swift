@@ -378,12 +378,15 @@ extension MobileWorkspace {
         return tab
     }
 
+    /// The new name shows at once (`renaming`), the server's back if it refuses.
     func rename(space: MobileSpace, to name: String) async throws {
-        try await commands().rename(space.node, to: name)
+        let commands = try commands()
+        try await renaming(space.ref.key, to: name) { try await commands.rename(space.node, to: name) }
     }
 
     func rename(tab: MobileTab, to name: String) async throws {
-        try await commands().rename(tab.node, to: name)
+        let commands = try commands()
+        try await renaming(tab.ref.key, to: name) { try await commands.rename(tab.node, to: name) }
     }
 
     /// Close, Detach or Terminate a tab. It leaves the list at once and comes back if the helper refuses.

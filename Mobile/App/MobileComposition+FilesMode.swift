@@ -59,8 +59,7 @@ extension MobileComposition {
         }
         if route.detail == FilesRoute.directory { return folder() }
         let tab = tabs.tab(ref)
-        let actions = FilesPreviewActions(ask: tab.flatMap(filesAsk),
-                                          openInTerminal: tab.flatMap { filesOpenInTerminal($0, folder: FilesPath.parent(path) ?? "/") },
+        let actions = FilesPreviewActions(openInTerminal: tab.flatMap { filesOpenInTerminal($0, folder: FilesPath.parent(path) ?? "/") },
                                           back: back, pop: pop)
         let preview = FilePreview(path: path, host: host.name) { browsers.source(ref.host) }
         return AnyView(FilePreviewScreen(preview: preview, host: host,
@@ -78,17 +77,6 @@ extension MobileComposition {
             guard previous.mode == .files else { return previous.mode.title }
             return previous.path.map(FilesPath.name) ?? "Files"
         default: return "Back"
-        }
-    }
-
-    /// Attach to chat: back to the tab on its Chat segment, the file on its way into the composer as an attachment (read through
-    /// `files.read`, stored with `attachments.put` as any attachment) once the conversation takes one.
-    private func filesAsk(_ tab: MobileTab) -> ((FilePreview) -> Void)? {
-        guard let pane = tab.agentPane else { return nil }
-        let ref = tab.ref, navigator = navigator, conversations = conversations
-        return { preview in
-            let session = conversations.session(for: ChatConversationKey(host: ref.host, node: pane.key))
-            FilesAsk.ask(preview, session: session, tab: ref, navigator: navigator)
         }
     }
 
@@ -183,35 +171,6 @@ extension TabSegment {
 /// Files' ways into the tab's other segments.
 @MainActor
 enum FilesAsk {
-    /// Attach to chat: the tab shows Chat, the Files screens over it go, and the file follows into the composer.
-    static func ask(_ preview: FilePreview, session: MobileChatSession, tab: TabRef, navigator: SpacesNavigator) {
-        let kind: ChatAttachment.Kind = if case .image = preview.content { .image } else { .file }
-        let source = MobileAttachmentSource(name: preview.name, kind: kind) {
-            try await preview.bytes(limit: UInt64(MobileAttachmentSource.readLimit))
-        }
-        TabSegment.requestSwitch(tab, to: .chat)
-        popToTab(tab, navigator: navigator)
-        attach(source, to: session)
-    }
-
-    /// Attaches `source` to the conversation's composer once it takes attachments (it opens when first asked for, and
-    /// verifies within a moment); one that does not within `attempts` × `pause` says so in the composer's strip.
-    static func attach(_ source: MobileAttachmentSource, to session: MobileChatSession, attempts: Int = 150,
-                       pause: Duration = .milliseconds(100)) {
-        Task { @MainActor in
-            for _ in 0..<attempts {
-                if session.canAttach {
-                    session.attach([source])
-                    return
-                }
-                try? await Task.sleep(for: pause)
-            }
-            session.attachmentError = notReady(source.name)
-        }
-    }
-
-    static func notReady(_ name: String) -> String { "Couldn’t attach \(name): the conversation isn’t ready." }
-
     /// The stack back to the tab: the Files screens pushed over it go.
     static func popToTab(_ ref: TabRef, navigator: SpacesNavigator) {
         var path = navigator.path

@@ -23,6 +23,8 @@ final class FilesMarkdownUITests: XCTestCase {
 
     private func outline(_ app: XCUIApplication, _ item: String) {
         app.buttons["More"].tap()
+        XCTAssertTrue(app.buttons["Copy path"].waitForExistence(timeout: 5), "the file's menu")
+        XCTAssertFalse(app.buttons["Attach to chat"].exists, "no Attach to chat")
         let outline = app.buttons["Outline"]
         XCTAssertTrue(outline.waitForExistence(timeout: 5), "rendered Markdown with headings has an Outline")
         outline.tap()

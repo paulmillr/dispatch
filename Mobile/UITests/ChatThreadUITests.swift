@@ -12,13 +12,13 @@ final class ChatThreadUITests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("iPhone only") }
     }
 
-    private func launch(echo seconds: Double, codeKeys: Bool = false) -> XCUIApplication {
+    private func launch(echo seconds: Double, codeKeys: Bool = false, demo: String = "M4a") -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-appearance", "dark", "-DispatchHardwareKeyboard", "NO"]
         // The code keys' choice is kept in the app's defaults; an argument would hide the choice the case makes, so only
         // a case that needs them on names it.
         if codeKeys { app.launchArguments += ["-composer.codeKeys", "YES"] }
-        app.launchEnvironment = ["DISPATCH_MOBILE_STORE": "memory", "DISPATCH_MOBILE_CHAT_DEMO": "M4a",
+        app.launchEnvironment = ["DISPATCH_MOBILE_STORE": "memory", "DISPATCH_MOBILE_CHAT_DEMO": demo,
                                  "DISPATCH_MOBILE_CHAT_DEMO_ECHO": String(seconds)]
         app.launch()
         return app
@@ -174,8 +174,8 @@ final class ChatThreadUITests: XCTestCase {
 
     private func keyRow(_ app: XCUIApplication) -> XCUIElement { app.buttons["Code block"] }
 
-    /// The code keys stay away by default, focused or not; "+" › Show code keys brings them above the field, and
-    /// Hide code keys takes them away again.
+    /// The code keys stay away by default, focused or not; "+" › Toggle › Code keys brings them above the field, and
+    /// again takes them away.
     func testTheCodeKeysShowOnlyAfterPickingThemUnderPlus() {
         let app = launch(echo: 1.5)
         type("Typed", in: app)
@@ -183,13 +183,13 @@ final class ChatThreadUITests: XCTestCase {
         if keyRow(app).exists {
             // An earlier run left them on: start from off.
             app.buttons["Attach"].tap()
-            app.buttons["Hide code keys"].tap()
+            app.buttons["Code keys"].tap()
             XCTAssertTrue(eventually { !keyRow(app).exists })
         }
         XCTAssertFalse(keyRow(app).exists, "no key row when not picked")
         shot("keys-default")
         app.buttons["Attach"].tap()
-        let show = app.buttons["Show code keys"]
+        let show = app.buttons["Code keys"]
         XCTAssertTrue(show.waitForExistence(timeout: 5))
         show.tap()
         XCTAssertTrue(keyRow(app).waitForExistence(timeout: 5), "picked: the row shows")
@@ -197,7 +197,7 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertLessThanOrEqual(keyRow(app).frame.maxY, field.frame.minY, "above the field")
         shot("keys-shown")
         app.buttons["Attach"].tap()
-        let hide = app.buttons["Hide code keys"]
+        let hide = app.buttons["Code keys"]
         XCTAssertTrue(hide.waitForExistence(timeout: 5))
         hide.tap()
         XCTAssertTrue(eventually { !keyRow(app).exists }, "hidden again")
@@ -210,7 +210,7 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         if !keyRow(app).exists {
             app.buttons["Attach"].tap()
-            app.buttons["Show code keys"].tap()
+            app.buttons["Code keys"].tap()
             XCTAssertTrue(keyRow(app).waitForExistence(timeout: 5))
         }
         app.terminate()
@@ -218,7 +218,7 @@ final class ChatThreadUITests: XCTestCase {
         type("Typed", in: app)
         XCTAssertTrue(keyRow(app).waitForExistence(timeout: 5), "kept across launches")
         app.buttons["Attach"].tap()
-        app.buttons["Hide code keys"].tap()
+        app.buttons["Code keys"].tap()
         XCTAssertTrue(eventually { !keyRow(app).exists })
         app.terminate()
         app = launch(echo: 1.5)
@@ -251,7 +251,7 @@ final class ChatThreadUITests: XCTestCase {
     func testALongPressOnSendOffersSendNowAndQueueWhileTheAgentWorks() {
         let app = launch(echo: 30)
         send("Check the retry path", in: app)
-        type("Also cover invoice.paid", in: app, placeholder: "Queue a message…")
+        type("Also cover invoice.paid", in: app)
         app.buttons["Send"].press(forDuration: 1.2)
         XCTAssertTrue(item(app, "Queue").waitForExistence(timeout: 5))
         XCTAssertTrue(item(app, "Send now").exists)
@@ -260,6 +260,106 @@ final class ChatThreadUITests: XCTestCase {
         XCTAssertEqual(app.textViews.firstMatch.value as? String, "Also cover invoice.paid", "the long press sent nothing")
         item(app, "Queue").tap()
         XCTAssertTrue(eventually { (app.textViews.firstMatch.value as? String) != "Also cover invoice.paid" }, "queued: the draft left")
+        // The queued bubble's menu opens on a hold only: a tap in passing opens nothing.
+        let queued = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Queued:'")).firstMatch
+        XCTAssertTrue(queued.waitForExistence(timeout: 5), "the queued bubble")
+        queued.tap()
+        XCTAssertFalse(item(app, "Delete").waitForExistence(timeout: 1.5), "a tap opens no menu")
+        queued.press(forDuration: 1.2)
+        XCTAssertTrue(item(app, "Delete").waitForExistence(timeout: 5), "the hold's menu")
+        shot("queued-menu")
+    }
+
+    /// Reply (Y1): the agent's message's Reply puts its first sentence over the composer, which stays empty; the sent
+    /// bubble shows it as a quote on top of the words, and the bar goes.
+    func testReplyQuotesTheExcerptOverTheComposer() {
+        let app = launch(echo: 1.5)
+        let message = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stripe retries the same event'")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10), "the demo's reply")
+        message.press(forDuration: 1.2)
+        XCTAssertTrue(item(app, "Reply").waitForExistence(timeout: 5), "the long press's Reply")
+        item(app, "Reply").tap()
+        let bar = app.descendants(matching: .any)["chat-reply-bar"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), "the reply bar")
+        XCTAssertEqual(app.textViews.firstMatch.value as? String ?? "", "", "the composer stays the user's")
+        type("Keep them forever", in: app)
+        shot("reply-bar")
+        app.buttons["Send"].tap()
+        XCTAssertTrue(bar.waitForNonExistence(timeout: 5), "sent: the bar goes")
+        let quote = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Replying to'")).firstMatch
+        XCTAssertTrue(quote.waitForExistence(timeout: 5), "the sent bubble's quote")
+        XCTAssertTrue(app.staticTexts["Keep them forever"].exists, "the words under it")
+        shot("reply-sent")
+    }
+
+    /// The working row unfolds from a tap anywhere along it but Stop: between Stop and the steps' count too, upright and
+    /// on a phone's side. A tap on Stop only brings up its capsule.
+    func testATapBetweenStopAndTheStepsUnfoldsTheRow() {
+        let app = launch(echo: 1.5, demo: "S6e")
+        addTeardownBlock { @MainActor in XCUIDevice.shared.orientation = .portrait }
+        let stop = app.descendants(matching: .any)["chat-stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), "the working row's Stop")
+        stop.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat-stop-hold"].waitForExistence(timeout: 3), "Stop's capsule")
+        XCTAssertFalse(app.buttons["Hide steps"].exists, "a tap on Stop does not unfold the row")
+        for side in [false, true] {
+            if side {
+                XCUIDevice.shared.orientation = .landscapeLeft
+                Thread.sleep(forTimeInterval: 2)
+            }
+            let show = app.buttons["Show steps"]
+            XCTAssertTrue(show.waitForExistence(timeout: 5), "folded")
+            // Midway between Stop and the chevron, on the line (which unfolding moves up).
+            func gap(_ chevron: XCUIElement) -> CGVector {
+                CGVector(dx: (stop.frame.maxX + chevron.frame.minX) / 2, dy: stop.frame.midY)
+            }
+            XCTAssertGreaterThan(show.frame.minX - stop.frame.maxX, 40, "room between Stop and the chevron")
+            app.coordinate(withNormalizedOffset: .zero).withOffset(gap(show)).tap()
+            let hide = app.buttons["Hide steps"]
+            XCTAssertTrue(hide.waitForExistence(timeout: 3), "unfolded from the gap")
+            Thread.sleep(forTimeInterval: 0.6)
+            shot(side ? "working-unfolded-side" : "working-unfolded")
+            app.coordinate(withNormalizedOffset: .zero).withOffset(gap(hide)).tap()
+            XCTAssertTrue(app.buttons["Show steps"].waitForExistence(timeout: 3), "folded again from the gap")
+        }
+    }
+
+    /// "+" groups Code keys, Mine only and Dialog under Toggle; Mine only leaves the user's messages in the thread and the
+    /// bar over the composer brings the agent's back.
+    func testMineOnlyHidesTheAgentsMessages() {
+        let app = launch(echo: 1.5)
+        let agent = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stripe retries the same event'")).firstMatch
+        let mine = app.staticTexts["Make billing webhook retries idempotent."].firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 10), "the agent's reply")
+        app.buttons["Attach"].tap()
+        let keys = app.buttons["Code keys"], only = app.buttons["Mine only"], dialog = app.buttons["Dialog"]
+        XCTAssertTrue(only.waitForExistence(timeout: 5), "Mine only")
+        XCTAssertTrue(app.staticTexts["Toggle"].exists, "the group's title")
+        // Between the two (the menu opens up from "+", which lists its first items nearest it).
+        XCTAssertEqual([keys, only, dialog].map(\.frame.minY).sorted()[1], only.frame.minY, "Mine only between Code keys and Dialog")
+        shot("plus-menu")
+        only.tap()
+        XCTAssertTrue(agent.waitForNonExistence(timeout: 5), "the agent's messages hidden")
+        XCTAssertTrue(mine.exists, "the user's stay")
+        let bar = app.descendants(matching: .any)["chat-mine-only"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 3), "the bar says so")
+        shot("mine-only")
+        app.buttons["chat-mine-only-show-all"].tap()
+        XCTAssertTrue(agent.waitForExistence(timeout: 5), "Show all brings them back")
+        XCTAssertFalse(bar.exists)
+    }
+
+    /// A user's message's long press has Info, as an agent's has: its details, titled You.
+    func testAUserMessagesInfoOpensItsDetails() {
+        let app = launch(echo: 1.5)
+        let message = app.staticTexts["Make billing webhook retries idempotent."].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10), "the demo's first message")
+        message.press(forDuration: 1.2)
+        XCTAssertTrue(item(app, "Info").waitForExistence(timeout: 5), "the long press's Info")
+        shot("user-message-menu")
+        item(app, "Info").tap()
+        XCTAssertTrue(app.navigationBars.staticTexts["You"].waitForExistence(timeout: 5), "its details, titled You")
+        shot("user-message-details")
     }
 
     /// With the slash list up, the tap completes the lit command into the draft: the long press says so and sends

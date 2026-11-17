@@ -926,3 +926,26 @@ extension EnvironmentValues {
     /// host's Stats there.
     @Entry var chatMenuAfterSearch: AnyView? = nil
 }
+
+/// Over the composer while "+" › Mine only hides the agent's messages: what the thread shows, and Show all.
+struct ChatMineOnlyBar: View {
+    let showAll: () -> Void
+    @Environment(\.chatPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.bubble").font(.caption.weight(.semibold))
+            Text("Your messages only").font(.footnote.weight(.semibold))
+            Spacer(minLength: 8)
+            Button("Show all", action: showAll)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .accessibilityIdentifier("chat-mine-only-show-all")
+        }
+        .foregroundStyle(palette.muted)
+        .padding(.horizontal, 16)
+        .frame(minHeight: 32)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-mine-only")
+    }
+}

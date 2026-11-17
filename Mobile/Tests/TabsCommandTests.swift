@@ -327,6 +327,33 @@ final class TabsCommandTests: XCTestCase {
                        [["node": sketch.ids["herdr:app:2"]!, "name": "server"], ["node": sketch.ids["herdr:app"]!, "name": "web"]])
     }
 
+    /// A rename shows before the topology does, in every list (the workspace's own name), until a snapshot after the
+    /// answer names it otherwise (the server's name wins); a refusal or a lost connection puts the server's name back.
+    func testRenameShowsTheNewNameUntilTheServerNamesIt() async throws {
+        let helper = ScriptedHelper.scripted { request in
+            guard request.method == "entities.rename" else { return nil }
+            return request.params["name"] as? String == "taken" ? .failure(code: "refused", message: "No.") : .empty
+        }
+        defer { helper.close() }
+        let workspace = TabsFixtures.workspace(client: helper.client)
+        workspace.apply(TabsFixtures.app().topology)
+        let dev = try XCTUnwrap(workspace.tab("herdr:app:2"))
+        try await workspace.rename(tab: dev, to: "server")
+        XCTAssertEqual(dev.name, "server", "no snapshot yet: the new name shows")
+        workspace.apply(TabsFixtures.app(devName: "server-1").topology)
+        XCTAssertEqual(dev.name, "server-1", "a snapshot after the answer: the server's name")
+        do {
+            try await workspace.rename(tab: dev, to: "taken")
+            XCTFail("refused")
+        } catch {}
+        XCTAssertEqual(dev.name, "server-1", "refused: the server's name back")
+        let space = try XCTUnwrap(workspace.space("herdr:app"))
+        try await workspace.rename(space: space, to: "web")
+        XCTAssertEqual(space.name, "web")
+        workspace.connect(nil)
+        XCTAssertEqual(space.name, "app", "the connection gone: the server's last name")
+    }
+
     /// backends.open: the subscription's topology updates reach the workspace.
     func testOpenFeedsTopology() async throws {
         let topology = try HelperBinary.value(encoding: TabsFixtures.app(backend: 3).topology)
@@ -875,14 +902,19 @@ extension TabsCommandTests {
         defer { helper.close() }
         let claude = ref(actions, "herdr:app:1")
         actions.close(.tab(claude), .close)
+        XCTAssertNil(actions.model.tab(claude), "the row leaves at once, before the check answers")
+        let workspace = try XCTUnwrap(actions.model.workspace(TabsFixtures.host.id))
+        XCTAssertTrue(workspace.closes(pane: "p:claude"), "Agents leaves its row out too")
+        XCTAssertFalse(workspace.closes(pane: "p:dev"))
+        XCTAssertEqual(closed(), [.tab(claude)])
         try await TestSupport.eventually { actions.closing == claude }
-        XCTAssertEqual(closed(), [], "nothing leaves before the answer")
-        XCTAssertNotNil(actions.model.tab(claude))
+        XCTAssertNotNil(actions.model.tab(claude), "busy: back in the lists for the question")
+        XCTAssertFalse(workspace.closes(pane: "p:claude"), "and in Agents'")
         XCTAssertEqual(actions.model.closeMessage(actions.model.tab(claude)!),
                        "Claude Code is still working. Terminating ends it. To keep it running, detach it from the tab’s menu.")
         actions.confirmClose(claude)
         XCTAssertNil(actions.closing)
-        XCTAssertEqual(closed(), [.tab(claude)])
+        XCTAssertEqual(closed(), [.tab(claude), .tab(claude)])
         try await TestSupport.eventually { helper.requests.count == 2 }
         XCTAssertEqual(helper.requests.map { params($0) },
                        [["node": sketch.ids["herdr:app:1"]!, "policy": "prompt", "check": true],
@@ -895,12 +927,27 @@ extension TabsCommandTests {
         defer { helper.close() }
         let dev = ref(actions, "herdr:app:2")
         actions.close(.tab(dev), .close)
-        try await TestSupport.eventually { closed() == [.tab(dev)] }
+        XCTAssertNil(actions.model.tab(dev), "the row leaves at once, before the check answers")
+        XCTAssertEqual(closed(), [.tab(dev)])
         try await TestSupport.eventually { helper.requests.count == 2 }
         XCTAssertNil(actions.closing)
         XCTAssertEqual(helper.requests.map { params($0) },
                        [["node": sketch.ids["herdr:app:2"]!, "policy": "prompt", "check": true],
                         ["node": sketch.ids["herdr:app:2"]!, "policy": "prompt", "check": false]])
+    }
+
+    /// A check that fails (the host gone mid-request) cannot say it is idle: the row comes back for the question, and
+    /// nothing is terminated.
+    func testAFailedCloseCheckBringsTheTabBackToAsk() async throws {
+        let (helper, actions, _, closed) = actions([.failure(code: "unavailable", message: "The host went away.")], state: nil)
+        defer { helper.close() }
+        let dev = ref(actions, "herdr:app:2")
+        actions.close(.tab(dev), .close)
+        XCTAssertNil(actions.model.tab(dev))
+        try await TestSupport.eventually { actions.closing == dev }
+        XCTAssertNotNil(actions.model.tab(dev))
+        XCTAssertEqual(closed(), [.tab(dev)])
+        XCTAssertEqual(helper.requests.count, 1)
     }
 
     func testCloseQuestionNamesWhatRuns() {

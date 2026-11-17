@@ -372,7 +372,8 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
         switch self { case .all: "All"; case .needsYou: "Needs you"; case .unread: "Unread" }
     }
     var symbol: String {
-        switch self { case .all: "bubble.left.and.bubble.right"; case .needsYou: "exclamationmark.bubble"; case .unread: "envelope.badge" }
+        // One bubble, as Spaces' Agents chip.
+        switch self { case .all: "text.bubble"; case .needsYou: "exclamationmark.bubble"; case .unread: "envelope.badge" }
     }
     func keeps(_ row: ChatConversation) -> Bool {
         switch self {
@@ -453,6 +454,9 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
     var pending: Set<ChatConversationKey> { Set(pendingSince.keys) }
     /// What released sessions read, for the next session of each conversation (`ChatTranscriptStore`).
     @ObservationIgnored let transcripts: ChatTranscriptStore
+    /// What threads showed, saved on the phone (`ChatHistoryArchive`): a chat with nothing in `transcripts` opens on it.
+    /// Nil keeps nothing on disk (tests, the samples, live test runs).
+    @ObservationIgnored var archive: ChatHistoryArchive?
     /// Sessions the Agents list opened ahead of a tap and nobody has asked for yet (the type's comment, Warm).
     @ObservationIgnored private(set) var warm: [ChatConversationKey: MobileChatSession] = [:]
     /// The Agents list's first rows, in the order it shows them, while it is on screen (`agentsListShown`).
@@ -621,12 +625,30 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
         listed.removeAll { $0.host == host }
         // After the releases, which keep what they read.
         transcripts.remove(host: host)
+        archive?.remove(host: host)
         rebuild()
     }
 
     /// Every kept transcript goes (Remove all data, memory pressure); open sessions keep theirs.
     func forgetTranscripts() {
         transcripts.removeAll()
+    }
+
+    /// What a released session read: kept in memory, and saved on the phone unless its host is going (`remove`).
+    private func keep(_ session: MobileChatSession, for key: ChatConversationKey) {
+        guard let kept = session.kept() else { return }
+        transcripts.keep(kept, for: key)
+        if hosts[key.host] != nil { archive?.save(kept, for: key) }
+    }
+
+    /// The app is going to the background: every open thread's transcript is saved too (released ones were saved as
+    /// they went); `done` once written.
+    func saveHistory(_ done: @escaping @MainActor @Sendable () -> Void) {
+        guard let archive else { return done() }
+        for (key, session) in Array(sessions) + Array(warm) where hosts[key.host] != nil {
+            if let kept = session.kept() { archive.save(kept, for: key) }
+        }
+        archive.flush(done)
     }
 
     /// The host's rows as the device last saw them (`HostCache`, at launch), by topology key; live summaries replace
@@ -743,6 +765,16 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                 transcripts.keep(kept, for: key)
             }
             // Another conversation's rows never show; they are dropped.
+        } else if let archive, host?.client == nil {
+            // Nothing in memory and the host not reached now (offline, or still connecting): the copy saved on the
+            // phone, read off the main thread, for a session still waiting for its host (`seed` takes it only before
+            // `chat.open`) and the conversation the topology binds. A reached host's history comes at once instead.
+            Task { [weak session] in
+                guard let kept = await archive.load(key), let session, session.transcript.isEmpty else { return }
+                let node = self.hosts[key.host]?.topology?.nodes.first { $0.key == key.node && $0.kind == .terminal }
+                guard kept.conversation == node?.agent?.session else { return }
+                session.seed(kept)
+            }
         }
         return session
     }
@@ -821,7 +853,7 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
         guard let session = sessions.removeValue(forKey: key) else { return }
         session.changed = nil
         session.phaseChanged = nil
-        if let kept = session.kept() { transcripts.keep(kept, for: key) }
+        keep(session, for: key)
         session.release()
         previews[key] = nil
         if let summary = conversation(key)?.summary { summaries[key] = summary }
@@ -976,7 +1008,7 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
         warmStarted[key] = nil
         guard let session = warm.removeValue(forKey: key) else { return }
         session.phaseChanged = nil
-        if let kept = session.kept() { transcripts.keep(kept, for: key) }
+        keep(session, for: key)
         session.release()
         if advancing { advancePrewarm() }
     }
