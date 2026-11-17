@@ -1,4 +1,6 @@
+import CryptoKit
 import Dictation
+import MobileTransport
 import XCTest
 @testable import DispatchMobile
 
@@ -208,8 +210,12 @@ final class SettingsTests: XCTestCase {
         let vault = MemoryVault()
         let known = KnownHostStore(url: nil)
         let studio = ResilienceFixture.host("studio")
-        let hosts = ResilienceFixture.sessions([studio], vault: vault, knownHosts: known)
+        let loginsFile = FileManager.default.temporaryDirectory.appendingPathComponent("key-logins-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: loginsFile) }
+        let hosts = ResilienceFixture.sessions([studio], vault: vault, knownHosts: known, keyLogins: KeyLogins(url: loginsFile))
         try hosts.keys.setPassword("secret", for: studio.id)
+        hosts.keyLogins.loggedIn(hosts.keyLogins.plan(SSHKey(ed25519: Curve25519.Signing.PrivateKey()), at: studio.endpoint), credential: 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: loginsFile.path))
         _ = try hosts.keys.generateED25519(label: "phone")
         known.trust(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1]))
         known.trust(host: "elsewhere", port: 2222, algorithm: "ssh-ed25519", key: Data([2]))
@@ -247,6 +253,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(hosts.keys.keys.isEmpty)
         XCTAssertTrue(vault.accounts.isEmpty, "every Keychain secret")
         XCTAssertTrue(known.entries.isEmpty, "every trusted host key, also of hosts no longer saved")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: loginsFile.path), "key-logins.json")
         XCTAssertNil(cache.entry(studio.id))
         XCTAssertEqual(markers.document, ChatMarkers.Document())
         XCTAssertTrue(outbox.items.isEmpty)
@@ -267,8 +274,12 @@ final class SettingsTests: XCTestCase {
         let vault = MemoryVault()
         let known = KnownHostStore(url: nil)
         let studio = ResilienceFixture.host("studio")
-        let hosts = ResilienceFixture.sessions([studio], vault: vault, knownHosts: known)
+        let loginsFile = FileManager.default.temporaryDirectory.appendingPathComponent("key-logins-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: loginsFile) }
+        let hosts = ResilienceFixture.sessions([studio], vault: vault, knownHosts: known, keyLogins: KeyLogins(url: loginsFile))
         try hosts.keys.setPassword("secret", for: studio.id)
+        hosts.keyLogins.loggedIn(hosts.keyLogins.plan(SSHKey(ed25519: Curve25519.Signing.PrivateKey()), at: studio.endpoint), credential: 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: loginsFile.path))
         let key = try hosts.keys.generateED25519(label: "phone")
         try vault.set(Data("words".utf8), for: KeyStore.passphraseAccount(key.id), protection: .none)
         try vault.set(Data("orphan".utf8), for: KeyStore.privateAccount(UUID()), protection: .none)

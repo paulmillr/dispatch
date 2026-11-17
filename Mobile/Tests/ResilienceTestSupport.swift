@@ -76,10 +76,10 @@ enum ResilienceFixture {
     @MainActor
     static func sessions(_ records: [HostRecord], driver: any HostSessionDriver = ScriptedHostSessionDriver(),
                          active: Bool = true, vault: MemoryVault = MemoryVault(),
-                         knownHosts: KnownHostStore = KnownHostStore(url: nil)) -> HostSessions {
+                         knownHosts: KnownHostStore = KnownHostStore(url: nil), keyLogins: KeyLogins = KeyLogins()) -> HostSessions {
         HostSessions(store: HostStore(url: nil, hosts: records),
                      keys: KeyStore(url: nil, vault: vault, keyProtection: .none, secureEnclaveAvailable: false),
-                     knownHosts: knownHosts, driver: driver, active: active)
+                     knownHosts: knownHosts, driver: driver, keyLogins: keyLogins, active: active)
     }
 
     @MainActor

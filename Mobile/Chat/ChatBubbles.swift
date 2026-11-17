@@ -13,21 +13,27 @@ struct ChatBubble<Content: View>: View {
     @Environment(\.chatMeasure) private var measure
     /// Settings' chat font and size (G3).
     @Environment(\.chatTypography) private var typography
+    /// The scheme's colours (`ChatPalette`): fills, or for the night schemes hairlines.
+    @Environment(\.chatPalette) private var palette
 
     var body: some View {
+        let shape = UnevenRoundedRectangle(cornerRadii: side == .user
+            ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
+            : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20), style: .continuous)
+        let fill = side == .user ? palette.userFill.map { $0.opacity(faded ? 0.55 : 1) } : palette.agentFill
+        let border = side == .user ? palette.userBorder : palette.agentBorder
         HStack(alignment: .bottom, spacing: 0) {
             if side == .user { Spacer(minLength: 0) }
             content
                 .font(typography.body)
                 .lineSpacing(typography.bodySpacing)
-                .foregroundStyle(side == .user ? Color.bubbleUserText : Color.primary)
+                .foregroundStyle(side == .user ? palette.userText : palette.ink)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .background(side == .user ? Color.bubbleUser.opacity(faded ? 0.55 : 1) : Color.bubbleAgent,
-                            in: UnevenRoundedRectangle(cornerRadii: side == .user
-                                ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
-                                : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
-                                style: .continuous))
+                .background {
+                    if let fill { shape.fill(fill) }
+                    if let border { shape.strokeBorder(border.opacity(faded ? 0.55 : 1), lineWidth: 1) }
+                }
                 // The swipe's room for a reply's time beside it (`ChatRevealReceived`).
                 .background {
                     if side == .agent {

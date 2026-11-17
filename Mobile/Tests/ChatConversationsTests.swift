@@ -315,6 +315,48 @@ final class ChatConversationsTests: XCTestCase {
         XCTAssertEqual(later.dot(host: host, terminal: 3), .unread, "A new conversation's first result is news")
     }
 
+    /// A busy row with no open thread says what the agent wrote in this turn (`workingNote`): the host's newest message
+    /// once it is newer than the turn's start as the list saw it, never the previous turn's answer; the time counts
+    /// from that start only when the list saw the row idle first.
+    func testABusyRowsNoteIsWhatItWroteInThisTurn() async throws {
+        let source = Source()
+        source.set(3, summary(record: 1, preview: "Done: the guard is in."))
+        let conversations = list(source)
+        conversations.update(snapshot(try topology(agents: [3: "conv-e2e"])))
+        try await TestSupport.eventually { conversations.conversations.first.map { !$0.stale } == true }
+        XCTAssertNil(conversations.conversations[0].workingNote)
+
+        // The next turn begins: the newest record is the prompt; the preview is still the last turn's answer.
+        var begun = summary(busy: true, record: 5, finished: false, preview: "Done: the guard is in.")
+        begun.reply = now.addingTimeInterval(1)
+        source.set(3, begun)
+        await conversations.refresh(host: host)
+        var row = try XCTUnwrap(conversations.conversations.first)
+        XCTAssertNil(row.workingNote, "the previous turn's answer is no progress")
+        XCTAssertEqual(row.workingSince, now.addingTimeInterval(5), "seen idle first: the turn's start")
+        XCTAssertEqual(MobileComposition.status(row, session: nil, detail: false), TabsStatus(text: "working", since: now.addingTimeInterval(5)))
+
+        // It writes: a message newer than the start.
+        var wrote = summary(busy: true, record: 9, finished: false, preview: "**Tests pass**, now updating the docs.\n\nMore.")
+        wrote.reply = now.addingTimeInterval(8)
+        source.set(3, wrote)
+        await conversations.refresh(host: host)
+        row = try XCTUnwrap(conversations.conversations.first)
+        XCTAssertEqual(row.workingNote, "Tests pass, now updating the docs.", "its first line")
+        XCTAssertEqual(MobileComposition.status(row, session: nil, detail: false)?.note, row.workingNote)
+
+        // A row first seen busy: no start to count from, and only what it writes after it was seen.
+        let fresh = Source()
+        var busy = summary(busy: true, record: 4, finished: false, preview: "Old answer")
+        busy.reply = now.addingTimeInterval(2)
+        fresh.set(5, busy)
+        let other = list(fresh)
+        other.update(snapshot(try topology(agents: [5: "conv-app"])))
+        try await TestSupport.eventually { other.conversations.first.map { !$0.stale } == true }
+        XCTAssertNil(other.conversations[0].workingSince)
+        XCTAssertNil(other.conversations[0].workingNote)
+    }
+
     /// An agent that has written nothing yet sorts by when it appeared: at the top, not under every other row.
     func testANewAgentWithNothingWrittenSortsByWhenItAppeared() async throws {
         let source = Source()

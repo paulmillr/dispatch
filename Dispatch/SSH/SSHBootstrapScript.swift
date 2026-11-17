@@ -281,6 +281,55 @@ enum SSHBootstrapScript {
         stderr.split(whereSeparator: \.isNewline).contains { $0.hasPrefix("DISPATCH_PLATFORM=") } ? platform(stderr) : nil
     }
 
+    // MARK: The iPhone's launch from the cache
+
+    /// The line a launch from the cache (`cachedLaunch`) writes to stderr right before it starts the helper, followed by
+    /// the root it starts from (`home` or `runtime`).
+    static let launchedLine = "DISPATCH_LAUNCH="
+
+    /// The iPhone's helper command when the helper may already be cached: the runtime probe, the platform's pick among
+    /// `candidates`, the cache check and the start in one exec channel instead of three, with the phone's `hello` already
+    /// written to it. Until the exec, stdout (the helper protocol's stream) is moved to stderr and stdin (where the `hello`
+    /// already waits) to `/dev/null`: the script reads none of the phone's bytes and writes none where the phone reads
+    /// frames. On stderr it says what the phone's `Installed` needs: `runtimeProbe`'s lines (`DISPATCH_PLATFORM=…`, and
+    /// `DISPATCH_RUNTIME=…` when that folder is usable), then, only once `verify` passed, `launchedLine` with the root,
+    /// and it `exec`s `./dispatch-helper <arguments>` from the digest's folder with the original stdin and stdout.
+    /// Home first; a home whose cached file is right but which cannot run programs (`blocked`, which prints
+    /// `DISPATCH_NOEXEC`) moves on to the runtime folder, entered through `runtimeEntry`, whose checks are the probe's.
+    /// Anything else (no candidate for the platform, a cache that lacks the helper or fails its checks, an unsafe
+    /// folder, no checksum tool) exits before any `launchedLine`: status 3, or 1 after a `dispatch-setup:` reason. A
+    /// helper that ran prints none of these lines.
+    static func cachedLaunch(_ candidates: [Candidate], arguments: String) -> String {
+        let cases = candidates.compactMap { candidate -> String? in
+            precondition(candidate.digest.utf8.count == 64
+                && candidate.digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
+            return pattern(candidate.name).map { "  \($0)) size='\(candidate.size)' digest='\(candidate.digest)';;\n" }
+        }.joined()
+        let size = "\"$size\"", digest = "\"$digest\""
+        func start(_ word: String) -> String {
+            """
+            if \(verify(sizeWord: size, digestWord: digest))
+            then
+            printf '\(launchedLine)%s\\n' \(word)
+            exec ./dispatch-helper \(arguments) 1>&3 3>&- 0<&4 4<&-
+            fi
+            """
+        }
+        return """
+        exec 3>&1 1>&2 4<&0 0</dev/null
+        \(runtimeProbe)
+        case "$(uname -s):$(uname -m)" in
+        \(cases)  *) exit 3;;
+        esac
+        \(cachePreamble(digestWord: digest, root: .home))
+        \(start("home"))
+        \(blocked(sizeWord: size, digestWord: digest)) || exit 3
+        \(cachePreamble(digestWord: digest, root: .runtimeDirectory))
+        \(start("runtime"))
+        exit 3
+        """
+    }
+
     /// The reason a setup command gave (`dispatch-setup: <reason>`, its last such line), if it gave one.
     static func reason(_ output: String) -> String? {
         output.split(whereSeparator: \.isNewline).last { $0.hasPrefix("dispatch-setup: ") }

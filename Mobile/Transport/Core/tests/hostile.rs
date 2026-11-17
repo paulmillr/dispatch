@@ -5,6 +5,8 @@
 //! channel streaming). Each must end in a bounded error: no abort, no unbounded memory, no writer left blocked.
 //!
 //! The server rekeys when the channel data it receives holds `rekey\n`, once per occurrence, with the plan's next key.
+//! For direct public key logins it can hold its service accept until the first USERAUTH_REQUEST, and logs whether each
+//! public key request was a query or signed, and whether it came before the accept.
 
 use dispatch_mobile_ssh::{AuthOutcome, Code, ConnectOptions, ExecEvents, Exit, Failure, HostKey, LoadedKey, Session, SessionEvents, exec, runtime, shell};
 use ring::{aead, agreement, digest, rand::SystemRandom};
@@ -201,11 +203,30 @@ struct Plan {
     after_first: Vec<Vec<u8>>,
     /// A packet length announced after the first exchange, followed by zeros until the client stops reading.
     announce: Option<u32>,
+    /// The answer to SERVICE_REQUEST, held until the first USERAUTH_REQUEST (or 500 ms without one): these payloads,
+    /// the accept among them. None: the accept goes at once.
+    held_accept: Option<Vec<Vec<u8>>>,
+    /// The public key blob the server accepts (`publickey`, with a valid signature).
+    user_key: Option<Vec<u8>>,
+    /// Close the connection on the first USERAUTH_REQUEST, without an answer.
+    close_on_userauth: bool,
+    /// Never answer a USERAUTH_REQUEST (the accept still goes): a server that drops a request sent before its accept.
+    silent_on_userauth: bool,
 }
 
 impl Plan {
     fn new(first: Identity) -> Plan {
-        Plan { first, rekeys: Vec::new(), max_packet: 32768, after_first: Vec::new(), announce: None }
+        Plan {
+            first,
+            rekeys: Vec::new(),
+            max_packet: 32768,
+            after_first: Vec::new(),
+            announce: None,
+            held_accept: None,
+            user_key: None,
+            close_on_userauth: false,
+            silent_on_userauth: false,
+        }
     }
 }
 
@@ -362,12 +383,19 @@ impl Hostile {
         let mut fields = Fields(body);
         match kind {
             1 => return Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "the client disconnected")),
+            5 if self.plan.held_accept.is_some() => self.hold_accept().await?,
             5 => {
                 let mut accept = vec![6];
                 put_string(&mut accept, fields.string());
                 self.wire.send(&accept).await?;
             }
             20 => self.exchange(self.current.clone(), Some(packet.clone())).await?,
+            50 if self.plan.close_on_userauth => {
+                self.note("userauth request: closing without an answer");
+                return Err(std::io::Error::new(std::io::ErrorKind::ConnectionAborted, "closed at the userauth request"));
+            }
+            50 if self.plan.silent_on_userauth => self.note("userauth request: no answer"),
+            50 if self.plan.user_key.is_some() => self.userauth(&packet).await?,
             50 => {
                 let (_user, _service, method) = (fields.string(), fields.string(), fields.string());
                 let accepted = method == b"password" && {
@@ -863,4 +891,278 @@ fn a_refused_rekey_while_input_streams_ends_the_writer() {
     let log = log.lock().unwrap();
     assert!(log.iter().any(|line| line == "rekey 2: the client uses the new keys"), "{log:?}");
     assert!(!log.iter().any(|line| line == "rekey 3: the client uses the new keys"), "{log:?}");
+}
+
+// MARK: - Direct public key logins
+
+/// SERVICE_ACCEPT for `ssh-userauth`.
+fn service_accept() -> Vec<u8> {
+    let mut accept = vec![6];
+    put_string(&mut accept, b"ssh-userauth");
+    accept
+}
+
+/// An EXT_INFO with `server-sig-algs`, as OpenSSH sends after its NEWKEYS (and again before USERAUTH_SUCCESS).
+fn server_sig_algs() -> Vec<u8> {
+    let mut payload = vec![7];
+    put_u32(&mut payload, 1);
+    put_string(&mut payload, b"server-sig-algs");
+    put_string(&mut payload, b"ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256");
+    payload
+}
+
+impl Hostile {
+    /// SERVICE_REQUEST with the accept held: a client that does not wait sends its USERAUTH_REQUEST now (answered with
+    /// the held payloads first); one that waits gets them after 500 ms.
+    async fn hold_accept(&mut self) -> std::io::Result<()> {
+        let mut byte = [0u8; 1];
+        // peek, not receive: a timeout must not cut a packet in half.
+        if tokio::time::timeout(Duration::from_millis(500), self.wire.stream.peek(&mut byte)).await.is_err() {
+            self.note("no request within 500 ms: accept sent");
+            self.release_accept().await?;
+        }
+        Ok(())
+    }
+
+    async fn release_accept(&mut self) -> std::io::Result<()> {
+        for payload in self.plan.held_accept.take().unwrap_or_default() {
+            self.wire.send(&payload).await?;
+        }
+        Ok(())
+    }
+
+    /// A USERAUTH_REQUEST: password as `handle` does; publickey logged as a query or signed (and whether before the
+    /// accept), a query of the user's key answered with PK_OK, a signed request checked against the session id.
+    async fn userauth(&mut self, packet: &[u8]) -> std::io::Result<()> {
+        let before = self.plan.held_accept.is_some();
+        self.release_accept().await?;
+        let mut fields = Fields(&packet[1..]);
+        let (_user, _service, method) = (fields.string(), fields.string(), fields.string());
+        let accepted = match method {
+            b"password" => {
+                fields.u8();
+                self.note(format!("userauth password{}", if before { " before the accept" } else { "" }));
+                fields.string() == b"s3cret"
+            }
+            b"publickey" => {
+                let signed = fields.u8() != 0;
+                let (algorithm, blob) = (fields.string().to_vec(), fields.string().to_vec());
+                let kind = if signed { "signed" } else { "query" };
+                self.note(format!("userauth publickey {kind}{}", if before { " before the accept" } else { "" }));
+                let known = self.plan.user_key.as_deref() == Some(&blob[..]);
+                if !signed {
+                    if known {
+                        let mut ok = vec![60];
+                        put_string(&mut ok, &algorithm);
+                        put_string(&mut ok, &blob);
+                        return self.wire.send(&ok).await;
+                    }
+                    false
+                } else {
+                    let signature = fields.string();
+                    let mut signed_data = Vec::new();
+                    put_string(&mut signed_data, self.session_id.as_deref().unwrap_or_default());
+                    signed_data.extend_from_slice(&packet[..packet.len() - 4 - signature.len()]);
+                    let verified = known && verify(&blob, &signed_data, signature);
+                    self.note(format!("signature {}", if verified { "verified" } else { "refused" }));
+                    verified
+                }
+            }
+            _ => false,
+        };
+        if accepted {
+            self.wire.send(&[52]).await
+        } else {
+            let mut failure = vec![51];
+            put_string(&mut failure, b"publickey,password");
+            failure.push(0);
+            self.wire.send(&failure).await
+        }
+    }
+}
+
+fn verify(blob: &[u8], data: &[u8], signature: &[u8]) -> bool {
+    use russh::keys::ssh_encoding::Decode;
+    use russh::keys::signature::Verifier;
+    let (Ok(key), Ok(signature)) = (russh::keys::PublicKey::from_bytes(blob), russh::keys::ssh_key::Signature::decode(&mut &signature[..]))
+    else {
+        return false;
+    };
+    Verifier::verify(&key, data, &signature).is_ok()
+}
+
+/// The user's key: one the server never presents as a host key.
+fn user_key() -> PrivateKey {
+    key("other")
+}
+
+fn direct_plan(held: Vec<Vec<u8>>) -> Plan {
+    let mut plan = Plan::new(Identity::Key(key("host")));
+    plan.held_accept = Some(held);
+    plan.user_key = Some(user_key().public_key().to_bytes().unwrap());
+    plan
+}
+
+/// What CryptoKit returns for Ed25519: the 64 bytes.
+fn ed25519_signer(key: PrivateKey) -> dispatch_mobile_ssh::SignCallback {
+    Box::new(move |data| {
+        use russh::keys::signature::Signer;
+        let signature: russh::keys::ssh_key::Signature = key.try_sign(&data).unwrap();
+        let raw = signature.as_bytes().to_vec();
+        Box::pin(async move { Some(raw) })
+    })
+}
+
+fn log_of(log: &Log) -> Vec<String> {
+    log.lock().unwrap().clone()
+}
+
+/// The signed request leaves right behind SERVICE_REQUEST: the server, holding its accept, gets it first (no query),
+/// then sends the accept and its answer. A file key and the external signer.
+#[test]
+fn a_direct_request_arrives_before_the_service_accept() {
+    for signer in [false, true] {
+        let (port, log) = serve(direct_plan(vec![service_accept()]));
+        let (session, events) = connect(port);
+        let session = session.expect("connects");
+        let key = user_key();
+        let outcome = if signer {
+            runtime().block_on(session.auth_signer_direct("phone", key.public_key().clone(), ed25519_signer(key)))
+        } else {
+            runtime().block_on(session.auth_key_direct("phone", Arc::new(key)))
+        };
+        assert!(matches!(outcome, AuthOutcome::Success), "signer {signer}: {outcome:?}");
+        let log = log_of(&log);
+        assert_eq!(log[1..], ["userauth publickey signed before the accept", "signature verified"], "signer {signer}");
+        // The connection works on: a channel's round trip.
+        let (mut socket, _) = echo_channel(&session);
+        round_trip(&mut socket, b"after\n");
+        assert!(events.ended.lock().unwrap().is_empty());
+    }
+}
+
+/// The same server and key without `direct`: the request waits for the accept, and the key is queried first.
+#[test]
+fn a_queried_request_waits_for_the_service_accept() {
+    let (port, log) = serve(direct_plan(vec![service_accept()]));
+    let (session, _) = connect(port);
+    let outcome = runtime().block_on(session.expect("connects").auth_key("phone", Arc::new(user_key())));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+    assert_eq!(log_of(&log)[1..], ["no request within 500 ms: accept sent", "userauth publickey query", "userauth publickey signed", "signature verified"]);
+}
+
+/// The accept arrives late, with EXT_INFO before or after it while the request is pending (OpenSSH sends one after
+/// its NEWKEYS and may send another before USERAUTH_SUCCESS): both are handled and the login succeeds.
+#[test]
+fn a_late_accept_and_ext_info_while_the_direct_request_is_pending() {
+    for held in [vec![server_sig_algs(), service_accept()], vec![service_accept(), server_sig_algs()], vec![server_sig_algs(), service_accept(), server_sig_algs()]] {
+        for signer in [false, true] {
+            let (port, log) = serve(direct_plan(held.clone()));
+            let (session, events) = connect(port);
+            let session = session.expect("connects");
+            let key = user_key();
+            let outcome = if signer {
+                runtime().block_on(session.auth_signer_direct("phone", key.public_key().clone(), ed25519_signer(key)))
+            } else {
+                runtime().block_on(session.auth_key_direct("phone", Arc::new(key)))
+            };
+            assert!(matches!(outcome, AuthOutcome::Success), "{} payloads, signer {signer}: {outcome:?}", held.len());
+            assert!(log_of(&log).iter().any(|line| line == "userauth publickey signed before the accept"));
+            let (mut socket, _) = echo_channel(&session);
+            round_trip(&mut socket, b"after\n");
+            assert!(events.ended.lock().unwrap().is_empty());
+        }
+    }
+}
+
+/// A refused direct request (another key) before the accept is an ordinary failure; the next credential on the same
+/// connection, sent after the accept arrived, logs in.
+#[test]
+fn a_refused_direct_request_before_the_accept_falls_through() {
+    let (port, log) = serve(direct_plan(vec![server_sig_algs(), service_accept()]));
+    let (session, _) = connect(port);
+    let session = session.expect("connects");
+    let outcome = runtime().block_on(session.auth_key_direct("phone", Arc::new(key("ecdsa"))));
+    assert!(matches!(outcome, AuthOutcome::Failure { remaining: 3, partial: false }), "{outcome:?}");
+    let outcome = runtime().block_on(session.auth_key_direct("phone", Arc::new(user_key())));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+    assert_eq!(
+        log_of(&log)[1..],
+        ["userauth publickey signed before the accept", "signature refused", "userauth publickey signed", "signature verified"]
+    );
+}
+
+/// A server that ends the connection at the direct request, before any answer (as one that cannot take a pipelined
+/// request might): the attempt ends promptly as the connection's end (`Closed`), not as a refusal, which would be
+/// final for the host, and the disconnect is reported once.
+#[test]
+fn a_connection_ending_before_the_direct_answer_does_not_hang() {
+    for signer in [false, true] {
+        let mut plan = direct_plan(vec![service_accept()]);
+        plan.close_on_userauth = true;
+        let (port, log) = serve(plan);
+        let (session, events) = connect(port);
+        let session = session.expect("connects");
+        let key = user_key();
+        let started = Instant::now();
+        let outcome = runtime().block_on(async {
+            let attempt = async {
+                if signer {
+                    session.auth_signer_direct("phone", key.public_key().clone(), ed25519_signer(key)).await
+                } else {
+                    session.auth_key_direct("phone", Arc::new(key)).await
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(10), attempt).await
+        });
+        let outcome = outcome.expect("bounded");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(matches!(&outcome, AuthOutcome::Error(failure) if failure.code == Code::Closed), "signer {signer}: {outcome:?}");
+        eventually("one disconnect", || events.ended.lock().unwrap().len() == 1);
+        assert!(log_of(&log).iter().any(|line| line == "userauth request: closing without an answer"));
+    }
+}
+
+/// A server that accepts the service and says nothing about the direct request (as one that dropped a request sent
+/// before its accept would): the attempt gives up after the answer's deadline as a timeout, not a refusal, and the
+/// engine closes the connection, reported once. A signer's own time does not count: it signs after 400 ms, longer than
+/// the deadline, and the request still goes.
+#[test]
+fn a_direct_request_nobody_answers_ends_the_connection() {
+    for signer in [false, true] {
+        let mut plan = direct_plan(vec![service_accept()]);
+        plan.silent_on_userauth = true;
+        let (port, log) = serve(plan);
+        let (session, events) = connect(port);
+        let session = session.expect("connects");
+        session.set_direct_answer(Duration::from_millis(300));
+        let key = user_key();
+        let started = Instant::now();
+        let outcome = runtime().block_on(async {
+            let attempt = async {
+                if signer {
+                    let public = key.public_key().clone();
+                    let sign: dispatch_mobile_ssh::SignCallback = Box::new(move |data| {
+                        use russh::keys::signature::Signer;
+                        let signature: russh::keys::ssh_key::Signature = key.try_sign(&data).unwrap();
+                        let raw = signature.as_bytes().to_vec();
+                        Box::pin(async move {
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            Some(raw)
+                        })
+                    });
+                    session.auth_signer_direct("phone", public, sign).await
+                } else {
+                    session.auth_key_direct("phone", Arc::new(key)).await
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(10), attempt).await
+        });
+        let outcome = outcome.expect("bounded");
+        let elapsed = started.elapsed();
+        assert!(matches!(&outcome, AuthOutcome::Error(failure) if failure.code == Code::Timeout), "signer {signer}: {outcome:?}");
+        assert!(elapsed >= Duration::from_millis(if signer { 700 } else { 300 }) && elapsed < Duration::from_secs(5), "signer {signer}: {elapsed:?}");
+        assert!(log_of(&log).iter().any(|line| line == "userauth request: no answer"), "signer {signer}: the request was sent");
+        eventually("one disconnect", || events.ended.lock().unwrap().len() == 1);
+    }
 }

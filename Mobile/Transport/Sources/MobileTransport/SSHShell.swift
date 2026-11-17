@@ -59,7 +59,8 @@ public final class SSHShell: AsyncSequence, Sendable {
     switch await state.exit {
     case .status(let status): return Int32(bitPattern: status)
     case .signal: return 128
-    case .lost: throw SSHTransportError.channelClosed
+    // A shell's requests are confirmed before it starts: the engine reports no refusal after that.
+    case .lost, .refused: throw SSHTransportError.channelClosed
     }
   }
 

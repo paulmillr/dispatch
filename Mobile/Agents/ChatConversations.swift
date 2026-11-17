@@ -342,6 +342,10 @@ struct ChatConversation: Identifiable, Equatable {
     var stale = false
     /// When the row first appeared in this run: its place in the list until the agent writes something.
     var since = Date.distantPast
+    /// While it works, read from the host's list (no open thread): what it said since the turn began, as far as the
+    /// phone can tell (`TabsStatus.note`), and when the turn began when the phone saw it begin.
+    var workingNote: String? = nil
+    var workingSince: Date? = nil
 
     /// What the list sorts by: the newest record, else when the row appeared (a new agent is at the top, not the end).
     var order: Date { summary.lastActivity ?? since }
@@ -431,6 +435,12 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
     @ObservationIgnored private var baselines: [UUID: Date] = [:]
     /// When each row first appeared in this run: the order of a conversation that has written nothing yet.
     @ObservationIgnored private var firstSeen: [ChatConversationKey: Date] = [:]
+    /// A busy row's turn as the list saw it begin (`workingNote`): the row's newest record then (the host's clock, so an
+    /// answer is compared with the host's times), and whether the row was seen idle before (its start is then the
+    /// turn's). A message newer than the mark is this turn's; the previous turn's answer is older.
+    @ObservationIgnored private var busyMarks: [ChatConversationKey: (mark: Date, begun: Bool)] = [:]
+    /// Rows seen idle in this run: a later busy one was seen to begin.
+    @ObservationIgnored private var seenIdle: Set<ChatConversationKey> = []
     /// The newest agent message's preview per open session, by transcript revision: Markdown is read once per change.
     @ObservationIgnored private var previews: [ChatConversationKey: (revision: Int, text: String?)] = [:]
     /// Threads on screen now, and the ones shown last (newest first): their sessions stay subscribed.
@@ -1063,6 +1073,23 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                     summaries[key] = summary
                 }
                 if firstSeen[key] == nil { firstSeen[key] = now }
+                var workingNote: String?, workingSince: Date?
+                if !stale {
+                    if summary.busy {
+                        let mark = busyMarks[key] ?? {
+                            let mark = (mark: summary.lastActivity ?? now, begun: seenIdle.contains(key))
+                            busyMarks[key] = mark
+                            return mark
+                        }()
+                        if let reply = summary.replied, reply > mark.mark, let preview = summary.preview {
+                            workingNote = TabsNote.line(preview)
+                        }
+                        workingSince = mark.begun ? mark.mark : nil
+                    } else {
+                        busyMarks[key] = nil
+                        seenIdle.insert(key)
+                    }
+                }
                 let conversation = binding.session.isEmpty ? nil : binding.session
                 var unread = false
                 if let conversation, !stale {
@@ -1091,7 +1118,7 @@ enum AgentsFilter: String, CaseIterable, Identifiable, Sendable {
                     spaceNode: space?.id, cwd: node.cwd, binding: binding, summary: summary,
                     urgency: PaneUrgency(waiting: summary.needsYou, working: summary.busy, unread: unread),
                     muted: markers.muted(host: host.id, node: node.key), unread: unread, stale: stale,
-                    since: firstSeen[key] ?? now))
+                    since: firstSeen[key] ?? now, workingNote: workingNote, workingSince: workingSince))
             }
         }
         rows.sort {

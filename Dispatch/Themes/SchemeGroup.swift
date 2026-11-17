@@ -68,6 +68,8 @@ enum SchemeGroup: String, CaseIterable, Sendable {
     /// whose file names carry their source. The files keep their names, which settings store.
     static let titles = [
         "dispatch-black": "Dispatch", "dispatch": "Dispatch Gray", "GitHub Dark Default": "GitHub Dark",
+        // The iPhone's night schemes (extras/ghostty; the Mac does not bundle them).
+        "dispatch-night": "Dispatch Night", "dispatch-darkroom": "Dispatch Darkroom",
         "iTerm2 Solarized Dark": "Solarized Dark", "iTerm2 Solarized Light": "Solarized Light",
         // Vim colorschemes ported to Ghostty, without the port's prefix.
         "vim-bubblegum": "Bubblegum", "vim-gotham": "Gotham", "vim-ice": "Ice", "vim-ir_black": "IR Black",

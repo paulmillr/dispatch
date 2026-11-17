@@ -587,7 +587,8 @@ struct SpaceTabRow: View {
         case .unseen?: "Unread"
         case nil: nil
         }
-        return [state, open ? "open" : nil, line?.text, TabsTime.label(entry.activity, now: now)].compactMap { $0 }.joined(separator: ", ")
+        return [state, open ? "open" : nil, line?.note, line?.text, TabsTime.label(entry.activity, now: now)]
+            .compactMap { $0 }.joined(separator: ", ")
     }
 
     /// The line under a tab's title: an ended shell's end ("Exited with status 1"); an agent's state from Chat (the
@@ -723,7 +724,7 @@ enum TabsTabLine {
     /// change every second.
     @MainActor static func line(_ tab: MobileTab, label: String, status: @MainActor (UUID, UInt64) -> TabsStatus?) -> String? {
         if let shell = tab.shell { return shell.summary }
-        if let pane = tab.agentPane, let text = status(tab.ref.host, pane.id)?.text { return text }
+        if let pane = tab.agentPane, let line = status(tab.ref.host, pane.id) { return line.note ?? line.text }
         if let program = tab.program, program != label, !tab.atShell { return program }
         return nil
     }
@@ -733,21 +734,39 @@ enum TabsTabLine {
 /// does the row redraw on its own).
 struct TabsStatusText: View {
     let status: TabsStatus
+    /// Two: a note (`TabsStatus.note`) on a line of its own over the step and time (Agents' rows); one: the note
+    /// instead of the step (Spaces, the switcher).
+    var lines = 1
 
     var body: some View {
-        if let since = status.since {
-            TimelineView(.periodic(from: since, by: 1)) { context in
-                Text(Self.text(status, now: context.date))
+        if lines > 1, let note = status.note {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(note).lineLimit(1)
+                line(status.text).lineLimit(1)
             }
         } else {
-            Text(status.text)
+            line(lines > 1 ? status.text : status.note ?? status.text)
         }
     }
 
-    /// "Editing Sidebar.tsx · 48s".
+    @ViewBuilder private func line(_ text: String) -> some View {
+        if let since = status.since {
+            TimelineView(.periodic(from: since, by: 1)) { context in
+                Text(Self.text(text, since: since, now: context.date))
+            }
+        } else {
+            Text(text)
+        }
+    }
+
+    /// "Editing Sidebar.tsx · 48s", or the note in the step's place on one line ("Tests pass, now the docs · 3m").
     static func text(_ status: TabsStatus, now: Date) -> String {
-        guard let since = status.since else { return status.text }
-        return status.text + " · " + TabsTime.elapsed(now.timeIntervalSince(since))
+        text(status.note ?? status.text, since: status.since, now: now)
+    }
+
+    static func text(_ text: String, since: Date?, now: Date) -> String {
+        guard let since else { return text }
+        return text + " · " + TabsTime.elapsed(now.timeIntervalSince(since))
     }
 }
 

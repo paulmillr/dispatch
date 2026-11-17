@@ -72,6 +72,9 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     @State private var segment: TabSegment?
     @State private var filesMode: FilesMode?
     @Environment(\.tabsColumnWidth) private var column
+    /// Chat's colours follow Settings › Terminal's scheme (`ChatPalette`): the tab's canvas under the header too.
+    @AppStorage(MobileSettings.terminalSchemeKey) private var schemeFile: String?
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tabsSplitDetail) private var splitDetail
     @Environment(\.tabsSidebarToggle) private var sidebar
     /// The iPad split's detail column: the strip above (`PadStrip`) owns the switch; this screen shows the mode's body,
@@ -185,6 +188,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                     .padding(.bottom, 10)
             }
         }
+        // Chat in a scheme's colours: the canvas under the header is the thread's (`ChatPalette`).
+        .background { chatCanvas(tab) }
         .tabsPushedScreen()
         // The strip is the iPad's header: no bar over the tab. Visible, not automatic, upright: turned back from its
         // side (whose screens hide it) the stack kept the bar hidden now and then.
@@ -254,6 +259,13 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         guard !strip else { model.setMode(mode, for: ref); return }
         choose(mode.segment)
         if let files = mode.filesMode { pick(files) }
+    }
+
+    @ViewBuilder private func chatCanvas(_ tab: MobileTab?) -> some View {
+        if let tab, current(tab) == .chat {
+            let palette = ChatPalette.current(file: schemeFile, dark: colorScheme == .dark)
+            if palette.themed { palette.canvas.ignoresSafeArea() }
+        }
     }
 
     private func current(_ tab: MobileTab) -> TabSegment {

@@ -301,7 +301,7 @@ struct ChatWorkingRow: View {
                     // Beside the clock, quiet as the chevron. Held 3 s it stops; a touch brings up the capsule that
                     // says so, which fills while it is held.
                     ChatWorkingDisc(size: disclosure) {
-                        RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(0.85)).frame(width: 9, height: 9)
+                        RoundedRectangle(cornerRadius: 2).fill(stopInk.opacity(0.85)).frame(width: 9, height: 9)
                     }
                     .opacity(session.stopping ? 0.5 : 1)
                     .scaleEffect(pressing ? 0.92 : 1)
@@ -332,6 +332,10 @@ struct ChatWorkingRow: View {
                     .accessibilityIdentifier("chat-stop")
                 }
                 Spacer(minLength: 8)
+                if !expanded, !session.subagents.isEmpty {
+                    // The running subagents, as the Mac's footer badge: unfolded, their row over the steps line.
+                    ChatAgentsBadge(count: session.subagents.count)
+                }
                 if !expanded, !tools.isEmpty {
                     // Folded, the count; open, the log's own line counts (`ChatStepWindow`).
                     Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")")
@@ -363,7 +367,7 @@ struct ChatWorkingRow: View {
             .padding(.horizontal, 16)
             if expanded {
                 ChatStepWindow(steps: steps, usage: ChatUsageText.text(session.usage, cost: session.agentKey == "pi"),
-                               limits: limitsLine, openStep: openStep)
+                               limits: limitsLine, agents: session.subagents, openStep: openStep)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 6)
             }
@@ -441,6 +445,9 @@ struct ChatWorkingRow: View {
 
     @ScaledMetric(relativeTo: .subheadline) private var glyph: CGFloat = 16
     @ScaledMetric(relativeTo: .subheadline) private var disclosure: CGFloat = 28
+    @Environment(\.chatPalette) private var palette
+    /// Stop's square: the thread's ink (`ChatPalette`).
+    private var stopInk: Color { palette.monochrome ?? palette.ink }
 }
 
 /// What holding Stop does, over the working row: a glass capsule saying "Hold to stop" that fills as Stop is held
@@ -570,6 +577,7 @@ struct ChatLimitsLine: View {
 
     let state: Shown
     let action: () -> Void
+    @Environment(\.chatPalette) private var palette
     var named = true
     var now = Date()
 
@@ -604,25 +612,25 @@ struct ChatLimitsLine: View {
         case .ask:
             Button("Show limits", action: action)
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.dispatchPink)
+                .foregroundStyle(palette.accent)
                 .accessibilityIdentifier("chat-limits-ask")
         case .reading:
             ProgressView().controlSize(.mini).accessibilityLabel("Reading limits")
         case .failed(let reason):
             Button("Retry limits", action: action)
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.dispatchPink)
+                .foregroundStyle(palette.accent)
                 .accessibilityHint("Couldn't read limits: \(reason)")
                 .accessibilityIdentifier("chat-limits-retry")
         case .windows(let all):
             if let (main, short) = Self.windows(all, now: now) {
                 HStack(spacing: 5) {
                     ChatLimitRing(used: main.used)
-                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(Self.tone(main.used))
+                    Text(named ? "\(main.title) \(main.used)%" : "\(main.used)%").foregroundStyle(tone(main.used))
                     if let short {
                         Text("·")
                         ChatLimitRing(used: short.used)
-                        Text("\(short.title) \(short.used)%").foregroundStyle(Self.tone(short.used))
+                        Text("\(short.title) \(short.used)%").foregroundStyle(tone(short.used))
                     } else {
                         Text((named ? "· " : "") + Self.resets(main, now: now))
                     }
@@ -633,6 +641,12 @@ struct ChatLimitsLine: View {
                 .accessibilityIdentifier("chat-limits")
             }
         }
+    }
+
+    /// `Self.tone`, in Darkroom's one hue (`ChatPalette.monochrome`) past the warning thresholds.
+    private func tone(_ used: Int) -> AnyShapeStyle {
+        guard used >= 80, let mark = palette.monochrome else { return Self.tone(used) }
+        return AnyShapeStyle(mark)
     }
 
     func named(_ named: Bool) -> Self {
@@ -646,12 +660,19 @@ struct ChatLimitsLine: View {
 struct ChatLimitRing: View {
     let used: Int
     @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 12
+    @Environment(\.chatPalette) private var palette
+
+    /// The filled part: one step brighter than the line's text under 80% (secondary over its tertiary), so it stands
+    /// apart from the track; the warning tones from there.
+    private var fill: AnyShapeStyle {
+        used >= 80 ? palette.monochrome.map { AnyShapeStyle($0) } ?? ChatLimitsLine.tone(used) : AnyShapeStyle(.secondary)
+    }
 
     var body: some View {
         ZStack {
-            Circle().stroke(Color.hairline, lineWidth: 2.5)
+            Circle().stroke(palette.themed ? palette.faint.opacity(0.35) : Color.hairline, lineWidth: 2.5)
             Circle().trim(from: 0, to: CGFloat(min(100, max(0, used))) / 100)
-                .stroke(ChatLimitsLine.tone(used), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .stroke(fill, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: size, height: size)
@@ -668,16 +689,24 @@ struct ChatStepWindow: View {
     var usage: String? = nil
     /// The plan's limits at the line's end.
     var limits: ChatLimitsLine? = nil
+    /// The running subagents: their row over the steps line, in the place of one step, so the window keeps its height.
+    var agents: [ChatSubagent] = []
     var openStep: (ChatStep) -> Void
     static let visible = 4
+    /// Steps the window shows: one fewer under the agents' row.
+    private var shown: Int { agents.isEmpty ? Self.visible : Self.visible - 1 }
     /// The window's scroll offset and one step's height with its rule: what lies above.
     @State private var offset: CGFloat = 0
     @State private var pitch: CGFloat = 0
     @State private var following = true
 
     var body: some View {
-        let hidden = Self.hidden(count: steps.count, offset: offset, pitch: pitch)
+        let hidden = Self.hidden(count: steps.count, offset: offset, pitch: pitch, visible: shown)
         VStack(spacing: 0) {
+            if !agents.isEmpty {
+                ChatAgentsLogRow(agents: agents)
+                Rectangle().fill(Color.hairline.opacity(0.6)).frame(height: Self.rule)
+            }
             let caption = [Self.caption(steps, above: hidden.above, below: hidden.below), usage].compactMap { $0 }
                 .joined(separator: " · ")
             // The limits keep their place; their name goes first, then the line's own end is cut.
@@ -690,8 +719,8 @@ struct ChatStepWindow: View {
             .foregroundStyle(.tertiary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
-            // Four empty rows set the window's height; the steps scroll over them.
-            rows(Array(repeating: nil, count: Self.visible))
+            // Four empty rows (three under the agents' row) set the window's height; the steps scroll over them.
+            rows(Array(repeating: nil, count: shown))
                 .hidden()
                 .accessibilityHidden(true)
                 .overlay {
@@ -743,7 +772,7 @@ struct ChatStepWindow: View {
     static let rule: CGFloat = 0.5
 
     /// How many steps lie wholly or mostly above the window and below it, scrolled `offset` with rows `pitch` apart.
-    static func hidden(count: Int, offset: CGFloat, pitch: CGFloat) -> (above: Int, below: Int) {
+    static func hidden(count: Int, offset: CGFloat, pitch: CGFloat, visible: Int = visible) -> (above: Int, below: Int) {
         guard count > visible, pitch > 0 else { return (0, 0) }
         let above = min(count - visible, max(0, Int((offset / pitch).rounded())))
         return (above, count - visible - above)
@@ -759,6 +788,65 @@ struct ChatStepWindow: View {
         if above > 0 { parts.append("\(above) above") }
         if below > 0 { parts.append("\(below) below") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// The running subagents' badge on the folded thinking line (the Mac's footer badge): the agents' symbol and count.
+struct ChatAgentsBadge: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2").imageScale(.small)
+            Text("\(count)").monospacedDigit()
+        }
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ChatAgentsLogRow.title(count))
+        .accessibilityIdentifier("chat-agents")
+    }
+}
+
+/// The running subagents in the unfolded log, a step's row in height (two lines): a badge with their count, "2 agents
+/// running", their tasks (else types) oldest first, and their tokens together.
+struct ChatAgentsLogRow: View {
+    let agents: [ChatSubagent]
+
+    /// "1 agent running", "2 agents running" (the Mac's `ChatComposerAgents.title`).
+    static func title(_ count: Int) -> String { count == 1 ? "1 agent running" : "\(count) agents running" }
+    /// "Find the timer · explorer": each agent's task, else its type.
+    static func detail(_ agents: [ChatSubagent]) -> String { agents.map { $0.name ?? $0.kind }.joined(separator: " · ") }
+    /// "24.6K tokens" for every agent that counts them; nil when none does.
+    static func tokens(_ agents: [ChatSubagent]) -> String? {
+        let counted = agents.compactMap(\.tokens)
+        guard !counted.isEmpty else { return nil }
+        return ChatUsage.count(Int(clamping: counted.reduce(0, +))) + " tokens"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ChatStepBadge(kind: .tool, custom: (symbol: "person.2", word: "\(agents.count)", tint: Color("StepTool")))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.title(agents.count))
+                    .scaledFont(13.5, relativeTo: .footnote)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(Self.detail(agents))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+            if let tokens = Self.tokens(agents) {
+                Text(tokens).font(.caption).monospacedDigit().foregroundStyle(.secondary).lineLimit(1).fixedSize()
+            }
+        }
+        .padding(.vertical, 9)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-agents-row")
     }
 }
 
@@ -810,6 +898,7 @@ struct ChatWorkingAccessibility: ViewModifier {
 struct ChatStepLogRow: View {
     let step: ChatStep?
     var live = false
+    @Environment(\.chatPalette) private var palette
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -844,7 +933,7 @@ struct ChatStepLogRow: View {
             let symbol = step.failed ? "exclamationmark.circle" : step.running ? "circle.dotted" : "checkmark.circle"
             Image(systemName: symbol)
                 .font(.footnote)
-                .foregroundStyle(step.failed ? Color.caution : step.running ? Color.secondary : Color.added)
+                .foregroundStyle(palette.monochrome ?? (step.failed ? Color.caution : step.running ? Color.secondary : Color.added))
                 .accessibilityLabel(step.failed ? "Failed" : step.running ? "Running" : "Completed")
         }
     }
@@ -853,10 +942,10 @@ struct ChatStepLogRow: View {
         guard let step else { return nil }
         switch step.kind {
         case .patch where step.additions + step.deletions > 0:
-            return Text("+\(step.additions)").foregroundStyle(ChatStep.added) + Text(" ")
-                + Text("−\(step.deletions)").foregroundStyle(ChatStep.removed)
+            return Text("+\(step.additions)").foregroundStyle(palette.monochrome ?? ChatStep.added) + Text(" ")
+                + Text("−\(step.deletions)").foregroundStyle(palette.monochrome ?? ChatStep.removed)
         case .run where step.failed:
-            return Text(step.detail ?? "failed").foregroundStyle(ChatStep.removed)
+            return Text(step.detail ?? "failed").foregroundStyle(palette.monochrome ?? ChatStep.removed)
         default:
             return step.detail.map { Text($0) }
         }

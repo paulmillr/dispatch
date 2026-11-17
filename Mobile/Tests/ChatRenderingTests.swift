@@ -222,6 +222,25 @@ final class ChatRenderingTests: XCTestCase {
         try await TestSupport.eventually { reads == 3 }
     }
 
+    /// Running subagents take one step's place in the unfolded log, over the steps line: the log keeps its height, at
+    /// any text size. Their row says how many, their tasks (else types) and their tokens together.
+    func testTheAgentsRowTakesAStepsPlace() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let agents = [ChatSubagent(id: "a1", kind: "Explore", name: "Find every webhook handler", tokens: 18_400, started: start),
+                      ChatSubagent(id: "a2", kind: "general-purpose", tokens: 6_200, started: start)]
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let plain = size(ChatStepWindow(steps: [], openStep: { _ in }).environment(\.dynamicTypeSize, typeSize)).height
+            let with = size(ChatStepWindow(steps: [], agents: agents, openStep: { _ in }).environment(\.dynamicTypeSize, typeSize)).height
+            XCTAssertEqual(with, plain, accuracy: 1, "\(typeSize)")
+        }
+        XCTAssertEqual(ChatAgentsLogRow.title(1), "1 agent running")
+        XCTAssertEqual(ChatAgentsLogRow.title(2), "2 agents running")
+        XCTAssertEqual(ChatAgentsLogRow.detail(agents), "Find every webhook handler · general-purpose")
+        XCTAssertEqual(ChatAgentsLogRow.tokens(agents), "24.6K tokens")
+        XCTAssertNil(ChatAgentsLogRow.tokens([ChatSubagent(id: "x", kind: "Explore", started: start)]))
+        XCTAssertTrue(ChatStepWindow.hidden(count: 5, offset: 0, pitch: 50, visible: 3) == (0, 2), "three shown under the agents")
+    }
+
     /// The log's line counts the steps and, once they outnumber the window, what lies above and below it.
     func testTheLogLineSaysWhatTheWindowHides() {
         func read(_ id: String) -> ChatStep {

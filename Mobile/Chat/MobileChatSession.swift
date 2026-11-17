@@ -92,6 +92,8 @@ final class MobileChatSession: Identifiable {
     private(set) var currentStep: String?
     /// The same step by its kind only ("Running shell command…"), for Agents' rows (`WatchSnapshotBuilder.gist`).
     private(set) var currentStepGist: String?
+    /// What the agent last said in the open turn, its first line (`TabsStatus.note`); nil before it has written in it.
+    private(set) var currentNote: String?
     private(set) var openTurnStarted: Date?
     private(set) var loadingHistory = false {
         didSet {
@@ -115,7 +117,8 @@ final class MobileChatSession: Identifiable {
 
     // The agent's reported state (chat.state).
     private(set) var busy = false
-    private(set) var subagents: [String] = []
+    /// The agent's running subagents (`State.agents`, the Mac's `ChatSubagent`): their task, type, tokens and start.
+    private(set) var subagents: [ChatSubagent] = []
     /// Background shells the agent reports running (`State.shells`); they outlive their turn and are no work of its.
     private(set) var shells: [ChatShell] = []
     private(set) var activity: String?
@@ -302,6 +305,9 @@ final class MobileChatSession: Identifiable {
         if currentStep != step { currentStep = step }
         let gist = current.map(WatchSnapshotBuilder.gist)
         if currentStepGist != gist { currentStepGist = gist }
+        let note = turn.flatMap { $0.items.last { $0.kind == .assistant && !$0.text.isEmpty } }
+            .flatMap { TabsNote.line($0.text) }
+        if currentNote != note { currentNote = note }
         let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
         if openTurnStarted != started { openTurnStarted = started }
     }
@@ -757,7 +763,8 @@ final class MobileChatSession: Identifiable {
 
     private func receive(state: HelperChat.State) {
         if let version = state.version { self.version = version }
-        subagents = (state.agents ?? []).map(\.kind)
+        let agents = ChatSubagent.merge(state.agents ?? [], previous: subagents)
+        if subagents != agents { subagents = agents }
         let shells = ChatShell.merge(state.shells ?? [], previous: shells)
         if self.shells != shells { self.shells = shells }
         if shells.isEmpty { showingShells = false }

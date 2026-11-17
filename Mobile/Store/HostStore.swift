@@ -7,6 +7,7 @@ enum MobileFiles {
     static var hosts: URL { Home.support.appendingPathComponent("hosts.json") }
     static var keys: URL { Home.support.appendingPathComponent("keys.json") }
     static var knownHosts: URL { Home.support.appendingPathComponent("known_hosts.json") }
+    static var keyLogins: URL { Home.support.appendingPathComponent("key-logins.json") }
 
     /// A versioned JSON document, or nil when missing, unreadable or from another version. A file that is there but
     /// cannot be read is moved aside (`<name>.unreadable-<time>`, still private and out of backups) unless `keep` is

@@ -17,8 +17,9 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 # ring rather than aws-lc-rs: no cmake, and cc cross-compiles it for iOS with Xcode's clang. The published 0.65.0 with
-# one patch (russh.patch: every rekey's host key goes through `check_server_key`), staged into build/mobile-ssh/russh by
-# scripts/vendor-russh.py (scripts/build-mobile-ssh.py runs it; run it once by hand before a bare `cargo test`).
+# a patch (russh.patch: every rekey's host key goes through `check_server_key`; direct public key requests,
+# `Handle::next_publickey_direct`), staged into build/mobile-ssh/russh by scripts/vendor-russh.py
+# (scripts/build-mobile-ssh.py runs it; run it once by hand before a bare `cargo test`).
 russh = { path = "../../../build/mobile-ssh/russh", version = "=0.65.0", default-features = false, features = ["ring", "rsa"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
 libc = "0.2"

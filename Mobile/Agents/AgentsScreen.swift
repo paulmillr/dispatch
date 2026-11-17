@@ -427,7 +427,8 @@ struct AgentRow: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Group {
                             if let status {
-                                TabsStatusText(status: TabsStatus(text: Self.capitalized(status.text), since: status.since))
+                                TabsStatusText(status: TabsStatus(text: Self.capitalized(status.text), since: status.since,
+                                                                  note: status.note), lines: 2)
                             } else {
                                 Text(verbatim: "")
                             }
@@ -473,7 +474,7 @@ struct AgentRow: View {
         case .unread: "Unread"
         case .idle: nil
         }
-        return [state, row.muted ? "Muted" : nil, status.map { capitalized($0.text) }, location,
+        return [state, row.muted ? "Muted" : nil, status?.note, status.map { capitalized($0.text) }, location,
                 TabsTime.label(row.summary.lastActivity, now: now), row.stale ? "Not up to date" : nil]
             .compactMap { $0 }.joined(separator: ", ")
     }

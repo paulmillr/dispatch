@@ -133,6 +133,47 @@ final class HelperChannelTests: XCTestCase {
     XCTAssertEqual(status, .some(0), "the helper exits on EOF")
   }
 
+  /// The reconnect's start: the real helper, cached, started straight from the cache in one remote command, with the
+  /// `hello` written as soon as the channel is handed over (before the exec request's reply, before the script checked
+  /// anything). The helper answers it, and `installed` names it.
+  func testHelloAtOnceFromTheCacheWithRealHelper() async throws {
+    guard FileManager.default.fileExists(atPath: Self.realHelpers.appendingPathComponent("darwin-arm64").path) else {
+      throw XCTSkip("No helper build at \(Self.realHelpers.path) (scripts/build-ssh-helper.py --build-only)")
+    }
+    let (fixture, log) = try CommandLog.fixture()
+    defer { fixture.stop(); log.stop() }
+    let connection = try await fixture.connect()
+    defer { Task { await connection.close() } }
+    let installed = try await HelperBootstrap.install(on: connection, binaries: Self.realHelpers)
+    log.clear()
+    let start = ContinuousClock.now
+    let session = try await SSHHostSession.bootstrapHelper(on: connection, binaries: Self.realHelpers,
+                                                           capabilities: "host.identity,stats.ping,events,cancel",
+                                                           fromCache: true, phase: { _ in })
+    let helper = HelperConnection(read: session.helper.read, write: session.helper.write)
+    let info: Hello
+    do {
+      info = try await helper.request("hello", params: [String: String]())
+    } catch {
+      let stderr = await session.helper.stderr()
+      XCTFail("hello failed: \(error); stderr: \(stderr)")
+      throw error
+    }
+    let hello = seconds(ContinuousClock.now - start)
+    XCTAssertEqual(info.version, HelperBinary.version)
+    XCTAssertEqual(info.os, "macos")
+    let commands = log.commands
+    XCTAssertEqual(commands.count, 1, commands.joined(separator: "\n----\n"))
+    XCTAssertTrue(commands.first?.contains("DISPATCH_LAUNCH=") == true)
+    XCTAssertEqual(session.installed, HelperBootstrap.Installed(platform: installed.platform, digest: installed.digest,
+                                                                size: installed.size, uploaded: false))
+    report(String(format: "helper from the cache, channel open + hello: %.0f ms", hello * 1000))
+    helper.close()
+    await session.helper.close()
+    let status = await Self.within(.seconds(10)) { await session.helper.exitStatus() }
+    XCTAssertEqual(status, .some(0), "the helper exits on EOF")
+  }
+
   /// `body`'s value, or nil when it takes longer than `limit` (a hang fails the test instead of the run).
   static func within<T: Sendable>(_ limit: Duration, _ body: @escaping @Sendable () async -> T) async -> T? {
     await withTaskGroup(of: T?.self) { group in

@@ -71,8 +71,8 @@ struct TerminalFontSettingsView: View {
 }
 
 /// Settings › Terminal › Color scheme: Ghostty's bundled themes and Dispatch's two, dark then light, each side by
-/// `SchemeGroup`, each with a swatch of its background, text and colours. Dispatch's lead their groups: Dispatch (true
-/// black) Dark · OLED, Dispatch Gray Dark · Graphite.
+/// `SchemeGroup`, each with a swatch of its background, text and colours. Dispatch's lead Dark · OLED: Dispatch (true
+/// black), Dispatch Night (dimmed) and Dispatch Darkroom (dim red).
 struct TerminalSchemeSettingsView: View {
     @Bindable var settings: MobileSettings
     @State private var schemes: [TerminalSchemes.Scheme] = []
@@ -113,14 +113,9 @@ struct TerminalSchemeSettingsView: View {
         }
     }
 
-    /// A scheme's section: Dispatch's by name (Dispatch is true black, Dispatch Gray a near-black grey), the rest by
-    /// `SchemeGroup`.
+    /// A scheme's section: Dispatch's own in Dark · OLED (all true black), the rest by `SchemeGroup`.
     static func group(_ scheme: TerminalSchemes.Scheme, light: Bool) -> SchemeGroup {
-        switch scheme.file {
-        case "dispatch-black": .oled
-        case "dispatch": .graphite
-        default: scheme.group(light: light)
-        }
+        TerminalSchemes.dispatch[scheme.file] != nil ? .oled : scheme.group(light: light)
     }
 
     private func rows(_ schemes: [TerminalSchemes.Scheme]) -> some View {

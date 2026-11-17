@@ -45,6 +45,7 @@ GROUPS = {
                  'C5-chat-conversation', 'C7a-jump-corner', 'C7b-jump-corner-new'],
         'queue': ['Q1-queue-bubbles', 'Q1b-queue-menu', 'Q1c-queue-editing', 'Q6-queue-paused'],
         'usage': ['N4a-usage-steps-ring', 'N4c-usage-steps-ring-5h', 'N4d-usage-steps-ring-low', 'N4e-usage-steps-ring-5h-low'],
+        'night': ['Z0-night-today', 'Z1-night-outline', 'Z2-night-dim', 'Z3-night-red'],
         'message': ['M1-message-info', 'M1b-message-info-unfolded', 'M1c-message-info-short', 'M1d-message-info-stopped'],
     },
     'ipad': {

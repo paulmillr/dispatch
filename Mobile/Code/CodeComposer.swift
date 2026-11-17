@@ -97,6 +97,9 @@ struct CodeComposer: View {
     @State private var choosingFiles = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var dropTargeted = false
+    /// The thread's colours (`ChatPalette`): the + glyph in its ink.
+    @Environment(\.chatPalette) private var palette
+    private var composerInk: Color { palette.monochrome ?? palette.ink }
     @State private var visible = false
     @AppStorage(MobileSettings.composerCodeKeysKey) private var codeKeys = false
     /// The first Esc only arms the stop; another within a second stops the turn.
@@ -195,14 +198,14 @@ struct CodeComposer: View {
                         // The mockups' glass disc beside the glass field (S6, C2).
                         Image(systemName: "plus")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(Color.primary)
+                            .foregroundStyle(composerInk)
                             .frame(width: 44, height: 44)
                             .contentShape(Circle())
                             .contentShape(.hoverEffect, Circle())
                             .hoverEffect(.highlight)
                     }
                     .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: Circle())
+                    .chatSurface(Circle())
                     .accessibilityLabel("Attach")
                     .accessibilityHint(converse == nil ? "Photos, files and the code keys" : "Photos, files, conversation mode and the code keys")
                     VStack(alignment: .trailing, spacing: 6) {
@@ -224,7 +227,7 @@ struct CodeComposer: View {
                     .padding(.bottom, stacked ? 10 : 4)
                     .frame(minHeight: 44)
                     // A glass field, a capsule while it holds one line (S6), its corners kept as it grows.
-                    .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .chatSurface(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     .overlay {
                         if dropTargeted {
                             RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.dispatchPink, lineWidth: 1.5)

@@ -54,6 +54,28 @@ final class ChatFollowTests: XCTestCase {
         XCTAssertFalse(follow.moved(offset: 210, atEnd: false), "and nothing pulls it back")
     }
 
+    /// A thread opened at its end settles into its window: until it has, a move toward older rows with no size change
+    /// (rows' estimates resolving, the working row or the queue arriving) is the layout's and the thread goes back to
+    /// its end; once settled, or as soon as the user drags, such a move is the user's again.
+    func testAThreadSettlingIntoItsWindowKeepsFollowing() {
+        var follow = ChatFollow()
+        follow.attached()
+        XCTAssertFalse(follow.moved(offset: 900, atEnd: true))
+        XCTAssertTrue(follow.moved(offset: 750, atEnd: false), "the layout's: back to the end")
+        XCTAssertTrue(follow.following)
+        XCTAssertFalse(follow.showsJump)
+        follow.openingSettled()
+        XCTAssertFalse(follow.moved(offset: 900, atEnd: true))
+        XCTAssertFalse(follow.moved(offset: 700, atEnd: false), "settled: the user's")
+        XCTAssertFalse(follow.following)
+
+        var dragged = ChatFollow()
+        dragged.attached()
+        dragged.dragBegan()
+        XCTAssertFalse(dragged.settling, "a drag ends the settling at once")
+        XCTAssertFalse(dragged.following)
+    }
+
     /// A pushed thread is laid out at its end before the navigation bar's inset arrives, which moves the offset up by
     /// the bar's height: that is the layout, so the thread goes back to its end.
     func testAnInsetArrivingIsNotAScrollUp() {

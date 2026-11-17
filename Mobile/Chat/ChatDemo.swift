@@ -114,6 +114,12 @@ enum ChatDemo {
                                        "last_token_usage": ["total_tokens": 158_000], "model_context_window": 250_000]]
             state["agents"] = ["explorer", "worker"]
         }
+        if screen == "M5f" {
+            // Two subagents running: the folded row's badge, the unfolded log's agents row.
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            state["agents"] = [["id": "a1", "kind": "Explore", "name": "Find every webhook handler", "tokens": 18_400, "started_ms": now - 74_000],
+                               ["id": "a2", "kind": "general-purpose", "name": "Audit the retry tests", "tokens": 6_200, "started_ms": now - 31_000]]
+        }
         if ["M5a", "M5f"].contains(screen) {
             // The working row's usage line, unfolded.
             state["usage"] = ["info": ["total_token_usage": ["input_tokens": 182_400, "output_tokens": 12_350],

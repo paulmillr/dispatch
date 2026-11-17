@@ -270,4 +270,17 @@ final class TabsFolderTimeTests: XCTestCase {
         XCTAssertEqual(ago(20 * 3600), "Yesterday")
         XCTAssertEqual(ago(6 * 86400), "Mon")
     }
+
+    /// A note is a message's first line of words, Markdown's marks left out; one-line rows show it in the step's place.
+    @MainActor func testANoteIsTheMessagesFirstLine() {
+        XCTAssertEqual(TabsNote.line("\n\n## Tests pass\nnow the docs"), "Tests pass")
+        XCTAssertEqual(TabsNote.line("`cargo test`   passes, **all** 12"), "cargo test passes, all 12")
+        XCTAssertNil(TabsNote.line("  \n "))
+        XCTAssertEqual(TabsNote.line(String(repeating: "a", count: 300))?.count, 161)
+        let since = Date(timeIntervalSince1970: 1000)
+        let status = TabsStatus(text: "Running shell command…", since: since, note: "Tests pass")
+        XCTAssertEqual(TabsStatusText.text(status, now: since.addingTimeInterval(48)), "Tests pass · 48s")
+        XCTAssertEqual(TabsStatusText.text(TabsStatus(text: "Reading file…", since: since), now: since.addingTimeInterval(48)),
+                       "Reading file… · 48s")
+    }
 }
